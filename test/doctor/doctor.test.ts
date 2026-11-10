@@ -319,6 +319,13 @@ describe('workflow owners (.github/workflows has a code owner)', () => {
     expect((await report('/.github/** @o\n')).state).toBe('unknown');
   });
 
+  it('reads CODEOWNERS with the policy check line parser: an inline comment, and a refused #', async () => {
+    expect((await report('/.github/workflows/ @o #the owners\n')).state).toBe('wired');
+    const refused = await report('/.github/workflows/ @o\n/.github/workflows/ci#1.yml @p\n');
+    expect(refused.state).toBe('unknown');
+    expect(refused.nextStep).toContain('#');
+  });
+
   it('is unknown when the last rule that could match a workflow file is a form GitHub does not document for it', async () => {
     // `workflows` with no slash may or may not own the files in a folder of that name.
     const found = await report('/.github/workflows/ @o\nworkflows @p\n', { '.github/workflows/deploy.yml': 'name: deploy\n' });
@@ -356,6 +363,9 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
           'usabl.config.json': configWith(['src/gate/', '.github/workflows/']),
           '.github/CODEOWNERS':
             '/src/gate/ @o\n/.github/workflows/ @o\n/usabl.config.json @o\n/.usabl-evidence.json @o\n/.usabl-waivers.json @o\n/usabl.docs.json @o\n/usabl.routes.json @o\n',
+          // A guarded entry names files that exist; one that names nothing guards nothing.
+          'src/gate/index.ts': 'gate',
+          '.github/workflows/usabl-gate.yml': 'name: gate\n',
         }),
         gh: GH_VERIFIED,
         configPath: 'usabl.config.json',
@@ -450,6 +460,67 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
       const report = await scope(`${LEDGERS}/src/gate/ @o\n/src/gate/index.ts\n`);
       expect(report.state).toBe('drifted');
       expect(report.nextStep).toContain('the last CODEOWNERS rule that matches src/gate/index.ts names no owner');
+    });
+
+    const policyScopeFor = async (guardedPaths: string[], codeowners: string, files: Record<string, string>) =>
+      byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({ 'usabl.config.json': configWith(guardedPaths), '.github/CODEOWNERS': codeowners, ...files }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+          }),
+        ),
+        'policy-scope',
+      );
+
+    it('reads a guarded entry in the canonical form the guard uses, so ./src/gate/ is not drift', async () => {
+      const report = await policyScopeFor(['./src/gate/'], `/src/gate/ @o\n${LEDGERS}`, { 'src/gate/index.ts': 'gate' });
+      expect(report).toMatchObject({ state: 'wired', nextStep: '' });
+    });
+
+    it('reports an entry the guard reads wide, with how to write it', async () => {
+      const report = await policyScopeFor(['policy/rule{1..3}.json'], `/policy/ @o\n${LEDGERS}`, { 'policy/rule1.json': '{}' });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('usabl read the guardedPaths entry "policy/rule{1..3}.json" as the folder policy/');
+      expect(report.nextStep).toContain('with commas');
+    });
+
+    it('reports a literal entry that matches no file as guarding nothing today', async () => {
+      // A typo, a wrong case, or a look-alike letter names a path that does not exist.
+      const report = await policyScopeFor(['src/gaet/'], `/src/ @o\n${LEDGERS}`, { 'src/gate/index.ts': 'gate' });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('src/gaet/');
+      expect(report.nextStep).toContain('guards nothing today');
+    });
+
+    it('reads the last commit for a literal entry when git is there', async () => {
+      const report = byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({
+              'usabl.config.json': configWith(['src/gate/']),
+              '.github/CODEOWNERS': `/src/gate/ @o\n${LEDGERS}`,
+              'src/gate/index.ts': 'gate',
+            }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+            // The file is on disk but in no commit.
+            headFiles: async () => [],
+          }),
+        ),
+        'policy-scope',
+      );
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('guards nothing today');
+    });
+
+    it('reads CODEOWNERS with the policy check line parser, so a # inside a pattern is refused', async () => {
+      const report = await policyScopeFor(['src/gate/'], `${LEDGERS}/src/gate/ @o #owner note\n/src/gate/a#1.ts @p\n`, {
+        'src/gate/index.ts': 'gate',
+      });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('holds a # that does not follow a space');
     });
 
     it('reports a glob entry with no file yet as not checkable, never as wired', async () => {

@@ -23,7 +23,7 @@ import { workflowTriggerBranch } from '../install/repo-git.js';
 import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { DOCS_GATE_BRANCHED, GATE_BRANCHED, earlierDraftPin, type BranchedWorkflow } from '../install/workflow-branch.js';
 import { HISTORY_BRANCHED } from '../install/history-ci.js';
-import { compileCodeownersPattern, type CodeownersMatch } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, readCodeownersLine, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -43,7 +43,8 @@ import {
 import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { readCodeownersLimits } from '../surfaces/policy-enforce.js';
-import { buildGuardedSet } from '../trust/guard.js';
+import { readGuardedEntries, readWideNotice, type GuardedEntry } from '../trust/guard.js';
+import { operatorText } from '../intake/config-error.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 import { collectEngineReports, formatEngineReports } from './engines.js';
 import type { InstalledPackage } from '../providers/engines/shared.js';
@@ -149,6 +150,10 @@ export interface DoctorDeps {
   // Finds an installed engine package the way the run's dynamic import would, without loading it.
   // Injected so tests never depend on what node_modules holds. Defaults to a read of node_modules.
   probeEnginePackage?: (packageName: string) => Promise<InstalledPackage>;
+  // The files in the last commit under a path ('' is the whole tree). The CLI passes a git listing.
+  // Without it, doctor reads the working tree, and says a literal guarded entry guards nothing
+  // only when no file is there either.
+  headFiles?: (prefix: string) => Promise<string[]>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -1007,11 +1012,20 @@ async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<
   }
   const rules: CodeownersRule[] = [];
   for (const line of raw.split('\n')) {
-    const trimmed = line.replace(/#.*$/, '').trim();
-    if (trimmed.length === 0) {
+    // The same line reader the policy check uses, so both read the same rules.
+    const read = readCodeownersLine(line);
+    if (read.kind === 'blank') {
       continue;
     }
-    const [pattern = '', ...owners] = trimmed.split(/\s+/);
+    if (read.kind === 'refused') {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${read.message}, so usabl cannot confirm .github/workflows/ has an owner. Put a space before an inline comment, or check it by hand.`,
+      };
+    }
+    const { pattern, owners } = read;
     const compiled = compileCodeownersPattern(pattern);
     if (!compiled.ok) {
       return {
@@ -1099,14 +1113,13 @@ function codeownersOwnedPaths(raw: string): CodeownersPatterns {
   const reconcilable: string[] = [];
   const unreconcilable: string[] = [];
   for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+    // The policy check's line reader. A line it refuses refuses the whole file, which the code
+    // owner limits below report in the policy check's words, so it is skipped here.
+    const read = readCodeownersLine(line);
+    if (read.kind !== 'rule') {
       continue;
     }
-    const token = trimmed.split(/\s+/)[0];
-    if (token === undefined) {
-      continue;
-    }
+    const token = read.pattern;
     const hasGlob = /[*?[\]]/.test(token);
     // A separator at the start or middle anchors the pattern to the repo root (gitignore rule). A
     // token with no separator matches its name at any depth, which a plain prefix cannot express.
@@ -1121,36 +1134,54 @@ function codeownersOwnedPaths(raw: string): CodeownersPatterns {
 }
 
 // A CODEOWNERS path is covered when the guarded set contains it or an ancestor directory of it, so
-// any change under the owned path is one usabl also treats as a policy change.
+// any change under the owned path is one usabl also treats as a policy change. The guarded paths
+// are in the guard's canonical form; the empty string is the whole tree.
 function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): boolean {
-  return guardedSet.some((guarded) => {
-    const g = normalizePolicyPath(guarded);
-    return codeownersPath === g || codeownersPath.startsWith(`${g}/`);
-  });
+  return guardedSet.some((g) => g === '' || codeownersPath === g || codeownersPath.startsWith(`${g}/`));
 }
 
 // The paths a change under each guarded entry can touch: the files present and, for a literal
 // entry, the entry itself or a new file in its folder. The code owner limits are read for these.
 // A glob entry with no file present has no path to read them for, so it is returned on its own:
 // usabl cannot name the first file a pull request adds there, and cannot check its owner yet.
+// A literal guardedPaths entry with no file in the last commit (or, without git, on disk) guards
+// nothing today, which is how a typo, a wrong case, or a look-alike letter shows.
 async function guardedPathSamples(
   deps: DoctorDeps,
-  guardedSet: string[],
-): Promise<{ samples: string[]; globsWithNoFile: string[] }> {
+  entries: GuardedEntry[],
+  configured: ReadonlySet<string>,
+): Promise<{ samples: string[]; globsWithNoFile: string[]; literalsWithNoFile: string[] }> {
   const samples: string[] = [];
   const globsWithNoFile: string[] = [];
-  for (const entry of guardedSet) {
-    const prefix = normalizePolicyPath(entry);
-    const present = await deps.fs.glob([prefix, `${prefix}/**`]);
+  const literalsWithNoFile: string[] = [];
+  for (const entry of entries) {
+    const prefix = entry.path;
+    const present = await deps.fs.glob(prefix === '' ? ['**'] : [prefix, `${prefix}/**`]);
     samples.push(...present);
-    if (!/[*{]/.test(prefix)) {
-      const folder = entry.endsWith('/') || present.some((path) => path.startsWith(`${prefix}/`));
-      samples.push(folder ? `${prefix}/new-file` : prefix);
+    if (!entry.glob) {
+      const folder =
+        prefix === '' || entry.text.endsWith('/') || present.some((path) => path.startsWith(`${prefix}/`));
+      samples.push(folder ? `${prefix === '' ? '' : `${prefix}/`}new-file` : prefix);
+      if (configured.has(entry.text) && entry.readWide === null && (await committedFiles(deps, prefix, present)).length === 0) {
+        literalsWithNoFile.push(entry.text);
+      }
     } else if (present.length === 0) {
-      globsWithNoFile.push(entry);
+      globsWithNoFile.push(entry.text);
     }
   }
-  return { samples, globsWithNoFile };
+  return { samples, globsWithNoFile, literalsWithNoFile };
+}
+
+// The files under a literal entry in the last commit, or on disk when git cannot say.
+async function committedFiles(deps: DoctorDeps, prefix: string, present: string[]): Promise<string[]> {
+  if (deps.headFiles === undefined) {
+    return present;
+  }
+  try {
+    return (await deps.headFiles(prefix)).filter((path) => prefix === '' || path === prefix || path.startsWith(`${prefix}/`));
+  } catch {
+    return present;
+  }
 }
 
 // Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
@@ -1181,7 +1212,9 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
       // empty here so the always-guarded ledgers still reconcile.
     }
   }
-  const guardedSet = buildGuardedSet({ guardedPaths });
+  // The guard's own reading of each entry, so doctor compares what the guard guards.
+  const entries = readGuardedEntries({ guardedPaths });
+  const guardedSet = entries.map((entry) => entry.path);
   const { reconcilable, unreconcilable } = codeownersOwnedPaths(codeownersRaw);
   const uncovered = [...new Set(reconcilable)].filter(
     (path) => !isPolicyPathCovered(path, guardedSet),
@@ -1189,15 +1222,25 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
   const unverifiable = [...new Set(unreconcilable)];
   // The limits of `usabl enforce policy`, in its own words, so a scope doctor reads as wired is
   // one the policy check can pass.
-  const { samples, globsWithNoFile } = await guardedPathSamples(deps, guardedSet);
+  const { samples, globsWithNoFile, literalsWithNoFile } = await guardedPathSamples(deps, entries, new Set(guardedPaths));
   const ownerLimits = readCodeownersLimits(codeownersRaw, samples);
   const limits = ownerLimits.ok ? ownerLimits.reasons : [ownerLimits.message];
   const notCheckableYet =
     globsWithNoFile.length === 0
       ? null
       : `These guardedPaths globs match no file yet: ${globsWithNoFile.join(', ')}. usabl cannot check their code owners, so this is not checkable yet. The first file added under each needs a CODEOWNERS rule that names a @user login, or usabl enforce policy refuses the pull request that adds it.`;
-  if (uncovered.length > 0 || unverifiable.length > 0 || limits.length > 0) {
-    const parts: string[] = [];
+  // Entries the guard reads wide, and literal entries that name nothing, are drift: the guard
+  // guards more, or nothing, where the entry meant something else.
+  const entryProblems = [
+    ...entries.filter((entry) => entry.readWide !== null).map(readWideNotice),
+    ...(literalsWithNoFile.length === 0
+      ? []
+      : [
+          `These guardedPaths entries match no file, so each guards nothing today: ${literalsWithNoFile.map((entry) => `"${operatorText(entry)}"`).join(', ')}. Check the spelling, the letter case, and look-alike letters, and name a file or folder that exists.`,
+        ]),
+  ];
+  if (uncovered.length > 0 || unverifiable.length > 0 || limits.length > 0 || entryProblems.length > 0) {
+    const parts: string[] = [...entryProblems];
     if (uncovered.length > 0) {
       parts.push(
         `CODEOWNERS gates ${uncovered.join(', ')}, but guardedPaths does not, so a change there reads as "no policy change" while GitHub still requires an owner. Add ${uncovered.join(', ')} to guardedPaths in ${deps.configPath}.`,

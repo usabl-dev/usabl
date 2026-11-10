@@ -4,7 +4,7 @@
  * Accessibility and policy checks split GitHub required status only.
  * GitHub review lookup is injected. `run()` stays GitHub-free.
  */
-import { compileCodeownersPattern, stripCodeownersComment, type CodeownersMatch } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, readCodeownersLine, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
 import { guardScopeAtRefs } from '../trust/guard.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
@@ -195,8 +195,8 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
 
   // Two different facts used to share one message. A path with owners who have not
   // approved is a request a reviewer can answer. A path no review can clear (no rule, a rule
-  // with no owner, or a team or email owner) is a limit, and it reads as one. Both refuse, so
-  // an unsatisfiable gate cannot pass for a busy one.
+  // with no owner, a team or email owner, or an unknown last match) is a limit, and it reads as
+  // one. Both refuse, so an unsatisfiable gate cannot pass for a busy one.
   const unapproved: string[] = [];
   for (const [path, owners] of limits.userOwners) {
     if (!ownerApprovedHead(owners, latest, author, deps.pr.headSha)) {
@@ -236,18 +236,14 @@ const OWNER_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | { ok: false; message: string } {
   const rules: CodeownersRule[] = [];
   for (const line of raw.split('\n')) {
-    const content = stripCodeownersComment(line);
-    if (!content.ok) {
-      return {
-        ok: false,
-        message: `CODEOWNERS token ${content.token} holds a # that does not follow a space, so usabl cannot tell whether GitHub reads it as part of the pattern or as a comment`,
-      };
+    const read = readCodeownersLine(line);
+    if (read.kind === 'refused') {
+      return { ok: false, message: read.message };
     }
-    const trimmed = content.text.trim();
-    if (trimmed.length === 0) {
+    if (read.kind === 'blank') {
       continue;
     }
-    const [pattern = '', ...owners] = trimmed.split(/\s+/);
+    const { pattern, owners } = read;
     // A pattern this matcher cannot honour would otherwise yield a rule that owns nothing, which
     // reads as "nobody owns this" instead of "usabl cannot tell".
     const compiled = compileCodeownersPattern(pattern);
@@ -292,8 +288,8 @@ export type CodeownersLimits =
  * What `usabl enforce policy` can and cannot accept for each path, from the last CODEOWNERS rule
  * that matches it. A path no rule matches, a path whose last rule names no owner, a path whose last
  * rule names a team or an email, and a path whose last match is unknown can never be approved, so
- * each is a limit. doctor reports the
- * same limits with the same words, so a repository doctor reads as wired is one this check can pass.
+ * each is a limit. doctor reports the same limits with the same words, so a repository doctor
+ * reads as wired is one this check can pass.
  */
 export function readCodeownersLimits(raw: string, paths: readonly string[]): CodeownersLimits {
   const parsed = parseCodeowners(raw);

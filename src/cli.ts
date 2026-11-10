@@ -718,6 +718,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       env: process.env,
       probePlaywrightChromium,
       probeChromiumSandbox: () => probeChromiumSandbox(),
+      // Read-only: a git listing of the last commit, so doctor can say a guarded entry names nothing.
+      headFiles: (prefix) => makeGitReader().lsFilesUnder('HEAD', [prefix]),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
       sessionFile: {
         ignoreState: (path) => gitIgnoreState(process.cwd(), path),

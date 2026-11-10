@@ -33,6 +33,33 @@ export function stripCodeownersComment(line: string): { ok: true; text: string }
   return { ok: true, text: line };
 }
 
+/** One CODEOWNERS line: nothing, a rule, or a line that refuses the whole file. */
+export type CodeownersLine =
+  | { kind: 'blank' }
+  | { kind: 'rule'; pattern: string; owners: string[] }
+  | { kind: 'refused'; message: string };
+
+/**
+ * The one line reader for CODEOWNERS, used by the policy check and by doctor, so both read the
+ * same rules. It strips the comment, refuses a `#` inside a token, and splits the pattern from
+ * the owners.
+ */
+export function readCodeownersLine(line: string): CodeownersLine {
+  const content = stripCodeownersComment(line);
+  if (!content.ok) {
+    return {
+      kind: 'refused',
+      message: `CODEOWNERS token ${content.token} holds a # that does not follow a space, so usabl cannot tell whether GitHub reads it as part of the pattern or as a comment`,
+    };
+  }
+  const trimmed = content.text.trim();
+  if (trimmed.length === 0) {
+    return { kind: 'blank' };
+  }
+  const [pattern = '', ...owners] = trimmed.split(/\s+/);
+  return { kind: 'rule', pattern, owners };
+}
+
 export type CompiledCodeownersPattern =
   | { ok: true; state: (path: string) => CodeownersMatch }
   | { ok: false; reason: string };
