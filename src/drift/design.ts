@@ -135,6 +135,13 @@ export async function runDesignDrift(
     return { exitCode: 2, stderr: `${scrubString(`usabl drift design: ${hidden} ${NOT_CHECKED}`)}\n` };
   };
 
+  if (config.requirements === undefined) {
+    return {
+      exitCode: 0,
+      stdout:
+        'No requirements folder is configured: usabl.config.json has no "requirements" path, so no requirement records a design source.\n',
+    };
+  }
   const loaded = await loadRequirements(fs, config);
   if (!loaded.ok) {
     return fail(loaded.reason);

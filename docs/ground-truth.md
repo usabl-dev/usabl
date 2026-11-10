@@ -4351,7 +4351,8 @@ size is a fetch failure that says so.
 the current version of each of their files, once per file, in sorted order. It lists the
 requirements whose recorded version differs from the current one, grouped by file and recorded
 version, and says when a requirement's node is no longer in the file. Unapproved drafts are left
-out. It exits 0 with no drift, 1 with drift, and 2 when it could not check: a missing token, a
+out. With no `requirements` path in the config, it says no requirements folder is configured and
+exits 0 without a network call. It exits 0 with no drift, 1 with drift, and 2 when it could not check: a missing token, a
 refused address, any fetch failure, or a file it has no version for. Exit 2 always says "Design
 drift was not checked." and never reads as no drift. It compares whole-file versions, so a change
 anywhere in a file lists every approved requirement drafted from that version.

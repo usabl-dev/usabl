@@ -144,6 +144,17 @@ requirements:
     expect(onlyDraft).toEqual({ exitCode: 0, stdout: 'No approved requirement records a design source.\n' });
   });
 
+  it('says so when no requirements folder is configured, and makes no network call', async () => {
+    const before = mock.seen.length;
+    const outcome = await runDesignDrift(fsWith(yaml), testConfig(), env());
+    expect(outcome).toEqual({
+      exitCode: 0,
+      stdout:
+        'No requirements folder is configured: usabl.config.json has no "requirements" path, so no requirement records a design source.\n',
+    });
+    expect(mock.seen.length).toBe(before);
+  });
+
   it('makes no network call when no approved requirement has a design source', async () => {
     const before = mock.seen.length;
     const outcome = await runDesignDrift(fsWith(yaml.replace(/\n {4}source:.*\n/u, '\n')), config, env());
