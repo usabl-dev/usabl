@@ -91,5 +91,7 @@ export function generatePageAltTextManifest(result: Result, screen: ScreenScan):
     entries,
     generatedAt: binding.generatedAt,
     ...(binding.boundToReceipt === undefined ? {} : { boundToReceipt: binding.boundToReceipt }),
+    // On the artifact too, so a screen that showed no images still reads as drafted from the page.
+    origin: 'page',
   };
 }

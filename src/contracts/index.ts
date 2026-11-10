@@ -555,6 +555,10 @@ export interface DocArtifact {
   }>;
   generatedAt: string;
   boundToReceipt?: string;
+  // 'page' means usabl drafted the whole artifact from the page, because no content requirement
+  // covered the surface. Set on the artifact as well as on each entry, so an artifact with no
+  // entries still says where it came from. Absent means it came from content requirements.
+  origin?: 'page';
 }
 
 // ---- injected dependencies (all I/O enters here; run() has none of its own) ----

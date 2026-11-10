@@ -242,6 +242,13 @@ describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
     expect(artifacts.filter((artifact) => artifact.kind === 'alt-text-manifest')).toHaveLength(0);
   });
 
+  it('marks a manifest drafted from a page that showed no images as drafted from the page', () => {
+    const result = resultFixture({ screens: [{ ...screenFixture('clusters', []), images: [] }] });
+    const manifest = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest');
+    expect(manifest?.entries).toEqual([]);
+    expect(manifest?.origin).toBe('page');
+  });
+
   it('says how many images were not listed', () => {
     const result = resultFixture({
       screens: [{ ...screenFixture('clusters', []), images: [], imagesNotListed: 7 }],
