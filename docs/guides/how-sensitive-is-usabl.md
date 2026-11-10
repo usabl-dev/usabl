@@ -25,6 +25,17 @@ This is Level 2. It reads the surfaces in `usabl.config.json`, so your app must 
 URLs listed there. It loads each screen twice for every defect, so it is slow on many screens. Use
 `--screen` to name a few.
 
+Level 2 acts on your app the way `usabl check` does, only many more times:
+
+- Each load uses your saved session, if you have one.
+- On each load, the dialog and menu probes click every dialog trigger and menu toggle on the screen.
+- For the flow and voice defects, your screen's flow and voice steps run on each of their loads. A
+  step that saves or deletes data runs that many times. No other defect runs your steps.
+
+Before it starts, the command prints the real counts for the screens you chose: the page loads, and
+for each screen with flow or voice steps, how many times they run. Point it at a dev backend whose
+data you can lose.
+
 Add `--json` to print the whole attestation instead of the summary.
 
 ## What it writes

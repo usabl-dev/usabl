@@ -17,7 +17,7 @@ import {
 } from './attestation.js';
 import { SENSITIVITY_CATALOG } from './catalog.js';
 import { LEVEL1_SCREEN_IDS } from './level1.js';
-import { level2LoadCount, level2Screens } from './level2.js';
+import { formatLevel2Warning, level2Cost, level2Screens, type Level2Requirements } from './level2.js';
 import type { EntryMeasurement, SensitivityScreen } from './runner.js';
 
 export interface VerifySensitivityOptions {
@@ -31,6 +31,8 @@ export interface VerifySensitivityPorts {
   versions(): Promise<{ runnerVersion: string; scannerVersions: { axeCore: string; playwright: string; chromium: string } }>;
   level1(now: string): Promise<EntryMeasurement[]>;
   loadConfig(): Promise<UsablConfig>;
+  // The team's design requirements, read only to count what Level 2 will run before it starts.
+  loadRequirements(config: UsablConfig): Promise<Level2Requirements>;
   level2(config: UsablConfig, screens: readonly SensitivityScreen[], now: string): Promise<EntryMeasurement[]>;
   writeAttestation(path: string, text: string): Promise<void>;
   stdout(text: string): void;
@@ -71,11 +73,12 @@ export async function runVerifySensitivity(options: VerifySensitivityOptions, po
     const fixture = await ports.level1(date);
     let app: EntryMeasurement[] | null = null;
     if (config !== null) {
-      // Said before it starts, because it can take a while and loads the app many times.
-      ports.stderr(
-        `usabl verify sensitivity --app: loads each of ${appScreens.length} app screen(s) twice for every catalog entry, ` +
-          `up to ${level2LoadCount(SENSITIVITY_CATALOG.length, appScreens.length)} page loads. The app must be running.\n`,
-      );
+      // Said before it starts, with the real counts, because it loads the app many times and runs the
+      // team's own flow and voice steps, which can save or delete data.
+      const requirements = await ports.loadRequirements(config);
+      const warning = formatLevel2Warning(level2Cost(SENSITIVITY_CATALOG, appScreens, requirements.ok ? requirements.bundle : null));
+      // Each line is scrubbed on its own, so the line breaks stay.
+      ports.stderr(warning.split('\n').map(scrubString).join('\n'));
       app = await ports.level2(config, appScreens, date);
     }
     attestation = buildAttestation({

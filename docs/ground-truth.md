@@ -4182,9 +4182,13 @@ in `level1.ts`, with no app and no config. The flow and voice pages bring their 
 The RHDS page defines small stand-in elements with the tag names and shadow structure the RHDS rules
 read; it does not load `@rhds/elements`. Level 2, only with `--app`, runs every entry on every
 surface in `usabl.config.json` (or the ones `--screen` names), through `buildDeps`, so the provider
-stack, the requirements, and the session are the team's own. It needs the app running and the
-`live` capability, and it says before it starts that it loads each screen twice per entry. Both
-levels go into one file, kept apart.
+stack, the requirements, and the session are the team's own. Only the flow and voice entries scan
+with the team's requirements; every other entry scans with none, so the team's flow and voice steps
+run only for those two entries. It needs the app running and the `live` capability. Before it
+starts it prints the real counts for the screens chosen: each load uses the team's saved session;
+the dialog and menu probes click every dialog trigger and menu toggle on each load; for the flow
+and voice entries the screen's flow and voice steps run on each of their loads, so a step that
+saves or deletes data runs that many times. Both levels go into one file, kept apart.
 
 **The attestation.** `.usabl/sensitivity.json` holds the schema version, the engine version and
 scanner versions a receipt binds, the catalog version and hash, the date (an input), each entry's

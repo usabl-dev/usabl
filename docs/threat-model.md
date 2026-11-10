@@ -897,7 +897,12 @@ mutation hook, run() never reads the file and returns the same Result with it th
 
 **What stays open:** the edits run in the page's own world, so page script on the measured page can
 see them and could undo one. That changes a measurement, never a verdict. Level 2 loads the team's
-app in the scan browser with the team's session, as `usabl check` does.
+app in the scan browser with the team's session, as `usabl check` does, but many more times: two
+loads per catalog entry per screen. On each load the dialog and menu probes click every dialog
+trigger and menu toggle. For the flow and voice entries, the screen's flow and voice steps run on
+each of their loads, so a step that saves or deletes data runs that many times against the team's
+backend. Every other entry scans without the requirements, so their steps do not run. The command
+prints the real counts for the screens chosen before it starts.
 
 ---
 

@@ -47,6 +47,7 @@ function ports(overrides: Partial<VerifySensitivityPorts> = {}, config: UsablCon
       versions: async () => VERSIONS,
       level1: async () => level1(),
       loadConfig: async () => config,
+      loadRequirements: async () => ({ ok: true, bundle: { version: 1, requirements: [] } }),
       level2: async (_config, screens) => {
         captured.level2Calls += 1;
         return screens.map((screen) => ({ entry: 'button-name-removed', screen: screen.id, outcome: 'caught', rules: ['button-name'], reason: null }));
@@ -152,7 +153,11 @@ describe('runVerifySensitivity', () => {
     const { ports: io, captured } = ports({}, config);
     expect(await runVerifySensitivity({ ...OPTIONS, app: true, screens: ['settings'] }, io)).toBe(0);
     expect(captured.level2Calls).toBe(1);
-    expect(captured.err.join('')).toContain(`loads each of 1 app screen(s) twice for every catalog entry, up to ${SENSITIVITY_CATALOG.length * 2} page loads`);
+    const plain = SENSITIVITY_CATALOG.filter((entry) => entry.needs === undefined).length;
+    const err = captured.err.join('');
+    expect(err).toContain('this loads your app many times, with your saved session if there is one.');
+    expect(err).toContain(`Up to ${plain * 2} page loads on 1 screen. Each catalog entry loads a screen twice, once clean and once changed.`);
+    expect(err).toContain('No chosen screen has flow or voice steps that the flow and voice entries would run, so none run.');
     const attestation = JSON.parse(captured.files['.usabl/sensitivity.json'] ?? '{}');
     expect(attestation.levels.app.screens).toEqual(['settings']);
     expect(attestation.levels.app.entries).toHaveLength(1);
