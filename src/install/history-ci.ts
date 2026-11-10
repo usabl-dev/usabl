@@ -49,6 +49,7 @@ import {
   UNPACK_ENGINE_IN_TEMP,
   USABL_GATE_WORKFLOW,
   type CiPlan,
+  type GateWorkflowState,
 } from './ci.js';
 
 export const USABL_HISTORY_WORKFLOW_PATH = '.github/workflows/usabl-history.yml';
@@ -290,6 +291,17 @@ export function historyBranchOf(raw: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The history workflow's state for `usabl doctor`, with the same rules as the gate: wired only when
+ * the file is usabl's draft line for line, for the branch its trigger names, pinned to a full
+ * commit SHA. The placeholder reads as unpinned, and any other change as drifted.
+ */
+export function classifyHistoryWorkflow(raw: string | null): GateWorkflowState {
+  if (raw === null) return 'missing';
+  const branch = historyBranchOf(raw);
+  return branch === null ? 'drifted' : classifyWorkflow(raw, historyWorkflow(branch));
 }
 
 // The one-based lines that hold the branch name, for the steps that say where to change it.

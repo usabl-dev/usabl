@@ -21,12 +21,18 @@ const WORKFLOWS: Array<[string, string]> = DRAFTS.flatMap(([name, draft]): Array
   [`${name} pinned`, pinEngineRef(draft, SHA)],
 ]);
 
-// Each `uses:` line that is not `owner/repo@<40 hex> # v<version>`.
+// Each `uses:` line that is not `owner/repo@<40 hex> # v<version>`. A quoted "uses" or 'uses' key
+// is the same key to YAML, so it is always flagged: the generators never write one.
 function unpinnedUses(workflow: string): string[] {
   return workflow
     .split('\n')
-    .filter((line) => /^\s*(?:-\s+)?uses:/.test(line))
+    .filter((line) => /^\s*(?:-\s+)?(?:uses|"uses"|'uses')\s*:/.test(line))
     .filter((line) => !/^\s*(?:-\s+)?uses: [\w.-]+\/[\w./-]+@[0-9a-f]{40} # v\d+(?:\.\d+)*$/.test(line));
+}
+
+// A secret read by index, such as secrets['NAME'], which the name sweep below cannot see.
+function indexedSecrets(workflow: string): string[] {
+  return workflow.match(/secrets\s*\[/g) ?? [];
 }
 
 function secretNames(workflow: string): string[] {
@@ -50,6 +56,18 @@ describe('every action a generated workflow runs is pinned to a full commit SHA'
     ).toHaveLength(5);
   });
 
+  it('flags a quoted uses key, which YAML reads the same as a bare one', () => {
+    expect(
+      unpinnedUses(
+        [
+          '      - "uses": actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0',
+          "        'uses': actions/checkout@v5",
+          '        "uses" : actions/checkout@main',
+        ].join('\n'),
+      ),
+    ).toHaveLength(3);
+  });
+
   it.each(WORKFLOWS)('%s', (_name, workflow) => {
     expect(workflow.split('\n').filter((line) => /uses:/.test(line)).length).toBeGreaterThan(0);
     expect(unpinnedUses(workflow)).toEqual([]);
@@ -64,7 +82,12 @@ describe('no generated workflow needs a secret beyond the run token', () => {
     ]);
   });
 
+  it('flags a secret read by index, which secretNames cannot name', () => {
+    expect(indexedSecrets("a: ${{ secrets['ENGINE_TOKEN'] }}\nb: ${{ secrets [ 'X' ] }}\nc: ${{ secrets.GITHUB_TOKEN }}")).toHaveLength(2);
+  });
+
   it.each(WORKFLOWS)('%s', (_name, workflow) => {
+    expect(indexedSecrets(workflow)).toEqual([]);
     for (const name of secretNames(workflow)) {
       expect(name).toBe('secrets.GITHUB_TOKEN');
     }

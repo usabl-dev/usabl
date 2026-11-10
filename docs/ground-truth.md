@@ -2844,7 +2844,9 @@ that cannot be fetched from `usabl-dev/usabl`, makes the engine checkout fail, s
 workflow file is written when absent, left alone when identical, filled in when it is the
 unedited sentinel draft and the build has a commit, left alone with its commit named when it is
 the draft pinned to another commit, and refused when anything else differs. `usabl doctor`
-still reads a workflow that holds the sentinel as not wired. The report lists the outcome for
+still reads a workflow that holds the sentinel as not wired: the gate on its `ci` line, and the
+history workflow on its own `history-ci` line, recognised for whichever branch its trigger names
+(no history workflow reads as missing, since it is optional). The report lists the outcome for
 each file, then the facts once, then the steps still needed: pin the engine (only with the
 sentinel), run `usabl init` or fix `appBaseUrl` (only when `usabl.config.json` has no loopback
 http `appBaseUrl` with a port), add a `dev` script (`install --ci` only, when `package.json` has
