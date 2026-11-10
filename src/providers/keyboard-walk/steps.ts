@@ -130,6 +130,7 @@ export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRun
     const elementPath = await page.activePath();
     const node = await page.activeNode();
     const focusUnreadable = await page.activeFocusUnreadable();
+    const onBody = await page.activeElementIs('body');
     const { drain, sourced } = settle ? await drainRecord(page) : { drain: { texts: await page.drainAnnouncements(), undecidable: null }, sourced: null };
     const liveText = drain.texts;
     const announcement: AnnouncementToken[] = [];
@@ -151,6 +152,9 @@ export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRun
     const stop: TranscriptStop = { index, elementPath, announcement };
     if (focusUnreadable !== null) {
       stop.focusUnreadable = focusUnreadable;
+    }
+    if (onBody) {
+      stop.onBody = true;
     }
     if (settled !== null && !settled.settled) {
       stop.unsettled = { waitedMs: settled.waitedMs };

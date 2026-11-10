@@ -11,17 +11,21 @@
  *                          {"status":"...","loop_count":N} on stdin; loop_count > 0
  *                          maps to stopHookActive to prevent recursive loops.
  */
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { statSync } from 'node:fs';
+import { readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
+import { makeGitReader } from '../deps/git.js';
 import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
-import { loadConfig } from '../cli.js';
+import { parseConfigText } from '../intake/load-config.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
+import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -29,7 +33,7 @@ import {
   type HookContext,
   type StoredReceiptPinState,
 } from './stop-hook.js';
-import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import { BYPASS_ONCE_PATH, loadReceipt, makeReceiptFs, receiptToSave, saveReceipt, type ReceiptFs } from './receipt-store.js';
 import {
   currentUid,
   deletePinFileFix,
@@ -47,14 +51,35 @@ export interface StopHookRunnerFs extends ReceiptFs {
   unlink(path: string): Promise<void>;
 }
 
+/** What a read of one file found: its text, nothing at the path, or an error that stopped the read. */
+export type FileBytes = { status: 'found'; text: string } | { status: 'missing' } | { status: 'unreadable'; reason: string };
+
+/**
+ * What the hook found at the last commit. `no-work-tree` means the hook found no git work tree from
+ * the folder it started in, so it could not look at a last commit at all.
+ */
+export type HeadBytes = FileBytes | { status: 'no-work-tree' };
+
+/** usabl.config.json as the working tree holds it and as the last commit holds it, as raw bytes. */
+export interface ConfigBytes {
+  working: FileBytes;
+  head: HeadBytes;
+}
+
 export interface StopHookRunnerPorts {
+  // Paths are relative to the repository root, so the receipt and the bypass file are the
+  // repository's own wherever the assistant changed directory to.
   fs: StopHookRunnerFs;
   // Where session pins are kept. The real one is private to the user; see session-pin-store.ts.
   pins: SessionPinStore;
+  // The repository root the hook works in. It keys the session pins.
   cwd: () => string;
   stdoutWrite: (text: string) => Promise<void> | void;
   stderrWrite: (text: string) => Promise<void> | void;
-  loadConfig: () => Promise<UsablConfig>;
+  // usabl.config.json at the repository root and at HEAD, read before anything parses it.
+  readConfigBytes: () => Promise<ConfigBytes>;
+  // Parses the config bytes readConfigBytes returned. It never reads the file again.
+  loadConfig: (text: string) => Promise<UsablConfig>;
   buildDeps: (config: UsablConfig) => Promise<Deps>;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
   evaluateDecision: (result: Result, ctx: HookContext, config?: UsablConfig) => { block: boolean; message: string };
@@ -89,8 +114,8 @@ function isSessionPins(value: unknown): value is SessionPins {
  * that stops in a demo app and then in a second app would otherwise compare the second
  * app's guarded digests against pins written from the first, and report guarded policy
  * drift that never happened. The repository key is the first 16 hex characters of the
- * SHA-256 of the resolved working directory. Config is loaded from that directory, so it
- * is the repository root by construction.
+ * SHA-256 of the resolved repository root. The hook finds that root from the folder it starts in
+ * and loads the config there, so a stop in a subfolder keys the same pins as one at the root.
  *
  * The user is bound by the directory, which only that user can use: see resolveSessionPinDir
  * in session-pin-store.ts.
@@ -146,12 +171,6 @@ function framedMessage(lines: string[], pieces: string[]): string {
 
 async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<void> {
   await ports.stderrWrite(text.endsWith('\n') ? text : `${text}\n`);
-}
-
-async function writePinNotice(ports: StopHookRunnerPorts, notice: PinNotice | null): Promise<void> {
-  if (notice !== null) {
-    await writeStderr(ports, notice.message);
-  }
 }
 
 // Cursor stdin carries loop_count so we can detect re-entry. Claude stdin carries
@@ -270,9 +289,154 @@ function driftMessage(drift: string[], continuation: boolean): string {
     `NOT verified - guarded policy drift during this session: ${drift.length} guarded file(s) changed ` +
     'since the session pins were recorded, named under "drifted files" in the untrusted text below.';
   const next = continuation
-    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this.'
+    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to make a later stop pass.'
     : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
   return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
+}
+
+// The config file the hook compares with the last commit before it parses anything.
+const CONFIG_FILE = 'usabl.config.json';
+
+/** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
+type ConfigProblem = 'differs' | 'missing' | 'unreadable' | 'unparseable';
+
+const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
+  differs:
+    'usabl.config.json in the working tree differs from the last commit, so usabl did not parse it and checked nothing on this stop.',
+  missing:
+    'usabl.config.json is in the last commit but missing from the working tree, so usabl checked nothing on this stop.',
+  unreadable:
+    'usabl.config.json in the working tree cannot be read (the error is under "error" in the untrusted text below), so usabl checked nothing on this stop.',
+  unparseable:
+    'usabl.config.json does not parse (the error is under "error" in the untrusted text below), so usabl cannot read its policy and checked nothing on this stop.',
+};
+
+// A config that does not parse is not cleared by a revert when the last commit holds the same
+// bytes, so it has its own next step and its own way out. usabl init refuses to overwrite an
+// existing config, so the way out names --force and what it overwrites.
+const UNPARSEABLE_NEXT = 'Next: tell the user that usabl.config.json does not parse and needs a fix.';
+const UNPARSEABLE_CLEARS =
+  'This clears when usabl.config.json parses and matches the last commit. A committed config is fixed on a pull request that a code owner reviews. ' +
+  'usabl init --force drafts a valid one, and it overwrites usabl.config.json and usabl.routes.json.';
+const CHANGED_NEXT = 'Next: tell the user that usabl.config.json changed and needs approval on the pull request.';
+// A block and a continuation that went through need different words: only a block can be cleared.
+const DO_NOT_EDIT_BLOCK = 'Do not edit the file to clear this block.';
+const DO_NOT_EDIT_CONTINUATION = 'Do not edit the file to make a later stop pass.';
+
+/**
+ * The message for a config that blocks before the run. It says what happened, that nothing was
+ * checked, what clears it, and the one lever a person has. Error text comes from the file system
+ * or the parser and can carry config content, so it goes inside the frame.
+ */
+function configBlockMessage(problem: ConfigProblem, continuation: boolean, error: string | null): string {
+  const lines = [`NOT verified - approval required: ${CONFIG_PROBLEM_LINES[problem]}`];
+  if (continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  const doNotEdit = continuation ? DO_NOT_EDIT_CONTINUATION : DO_NOT_EDIT_BLOCK;
+  if (problem === 'unparseable') {
+    lines.push(`${UNPARSEABLE_NEXT} ${doNotEdit}`, UNPARSEABLE_CLEARS);
+  } else {
+    lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
+  }
+  lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
+  return framedMessage(lines, error === null ? [] : [`error: ${error}`]);
+}
+
+// The note for a repository that has no usabl config in the working tree or in the last commit.
+const NOT_CONFIGURED_MESSAGE =
+  'NOT verified - usabl is not configured here: this repository has no usabl.config.json in the working tree or in the last commit, so usabl checked nothing on this stop. ' +
+  'Next: run usabl init to set usabl up in this repository, or ignore this note if the repository does not use usabl.';
+
+/**
+ * The note for a stop that started in a folder outside any git work tree. The hook could not find
+ * the repository, so it could not tell whether usabl is set up there. The folder comes from the
+ * environment, so it is printed only inside the frame.
+ */
+function outsideWorkTreeMessage(folder: string): string {
+  return framedMessage(
+    [
+      'NOT verified - the stop hook ran in a folder outside any git work tree, or git could not run there ' +
+        '(the folder is under "folder" in the untrusted text below), so it could not find the repository and ' +
+        'checked nothing on this stop. usabl is not blocking this stop.',
+      'Next: run usabl check from the project root before you call this change accessible.',
+    ],
+    [`folder: ${folder}`],
+  );
+}
+
+type ConfigStep =
+  | { kind: 'parse'; text: string }
+  | { kind: 'outside-work-tree' }
+  | { kind: 'not-configured' }
+  | { kind: 'block'; problem: ConfigProblem; error: string | null }
+  | { kind: 'error'; reason: string };
+
+/**
+ * What the hook does with the config bytes, before anything parses them.
+ *
+ * The last commit is the trusted copy. When it holds the config, the working copy must match it
+ * byte for byte, or the stop blocks as approval required: a corrupt or edited config used to throw
+ * at parse time and end in an allow with "stop hook error". When neither place holds a config,
+ * usabl is not set up here, unless this session already recorded pins for this root: then the
+ * config was removed and committed during the session, and runStopHook treats it as drift.
+ *
+ * A config only in the working tree goes on to the run. When HEAD exists, this is a new,
+ * uncommitted setup: the guard reports the config as a changed guarded file, and the run ends
+ * approval required, which blocks. A repository with no commits, or an orphan branch with none
+ * yet, has no HEAD: the guard cannot read it and throws with git's "make a first commit" step, so
+ * the stop fails open with that disclosure and does not block. Git failing to read the last commit
+ * is not one of the block cases either, so it stays an internal error and fails open with
+ * disclosure. A folder outside any work tree has no repository to look at, and says so.
+ */
+function configStep(bytes: ConfigBytes): ConfigStep {
+  const { working, head } = bytes;
+  if (head.status === 'no-work-tree') {
+    return { kind: 'outside-work-tree' };
+  }
+  if (head.status === 'unreadable') {
+    return { kind: 'error', reason: `git could not read ${CONFIG_FILE} at the last commit: ${head.reason}` };
+  }
+  if (head.status === 'missing') {
+    if (working.status === 'missing') {
+      return { kind: 'not-configured' };
+    }
+    if (working.status === 'unreadable') {
+      return { kind: 'error', reason: `${CONFIG_FILE} could not be read: ${working.reason}` };
+    }
+    return { kind: 'parse', text: working.text };
+  }
+  if (working.status === 'missing') {
+    return { kind: 'block', problem: 'missing', error: null };
+  }
+  if (working.status === 'unreadable') {
+    return { kind: 'block', problem: 'unreadable', error: working.reason };
+  }
+  if (working.text !== head.text) {
+    return { kind: 'block', problem: 'differs', error: null };
+  }
+  return { kind: 'parse', text: working.text };
+}
+
+/**
+ * Whether an earlier stop in this session recorded pins for this repository root. Only the hook
+ * writes a pin file, and only after it read a committed config, so a pin file here, whether or not
+ * it parses, means the root had a config earlier in the session. No usable session id means there
+ * is no pin file to look for.
+ */
+async function earlierSessionPins(
+  ports: StopHookRunnerPorts,
+  input: StopHookInput,
+): Promise<{ status: 'found' } | { status: 'missing' } | { status: 'refused'; reason: string; fix: string }> {
+  const parsedSession = parseSessionId(input.sessionId);
+  if ('notice' in parsedSession) {
+    return { status: 'missing' };
+  }
+  const stored = await ports.pins.read(sessionPinFileName(parsedSession.sessionId, ports.cwd()));
+  if (stored.status === 'refused') {
+    return { status: 'refused', reason: stored.reason, fix: stored.fix };
+  }
+  return { status: stored.status };
 }
 
 async function verifyStoredReceipt(
@@ -298,27 +462,69 @@ async function verifyStoredReceipt(
   };
 }
 
-function defaultFs(): StopHookRunnerFs {
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The repository root for the folder the hook starts in. The assistant can change directory
+ * during a session, so the hook's own folder can be any subfolder, or a folder outside every
+ * work tree, such as `.git`. A folder in no work tree is its own root, and the hook does not look
+ * for a last commit there.
+ */
+export function findRepositoryRoot(startDir: string): { root: string; inRepository: boolean } {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: startDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const root = out.replace(/\r?\n$/, '');
+    if (root.length > 0) {
+      return { root: resolve(root), inRepository: true };
+    }
+  } catch {
+    // Not a repository, or git is missing. Both mean there is no last commit to compare with.
+  }
+  return { root: resolve(startDir), inRepository: false };
+}
+
+async function readWorkingConfig(root: string): Promise<FileBytes> {
+  try {
+    return { status: 'found', text: await readFile(resolve(root, CONFIG_FILE), 'utf8') };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'missing' };
+    }
+    return { status: 'unreadable', reason: errorMessage(err) };
+  }
+}
+
+async function readHeadConfig(root: string, inRepository: boolean): Promise<HeadBytes> {
+  if (!inRepository) {
+    return { status: 'no-work-tree' };
+  }
+  try {
+    // A repository with no commits has no HEAD, so it has no committed config either.
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore' });
+  } catch {
+    return { status: 'missing' };
+  }
+  try {
+    const text = await makeGitReader({ cwd: root }).show('HEAD', CONFIG_FILE);
+    return text === null ? { status: 'missing' } : { status: 'found', text };
+  } catch (err) {
+    return { status: 'unreadable', reason: errorMessage(err) };
+  }
+}
+
+function defaultFs(root: string): StopHookRunnerFs {
+  // Receipt writes never follow a symbolic link. See makeReceiptFs.
   return {
-    readFile: async (path: string) => {
-      try {
-        return await readFile(path, 'utf8');
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-          return null;
-        }
-        throw err;
-      }
-    },
-    writeFile: async (path: string, contents: string) => {
-      await writeFile(path, contents, 'utf8');
-    },
-    mkdir: async (path: string) => {
-      await mkdir(path, { recursive: true });
-    },
+    ...makeReceiptFs(root),
     unlink: async (path: string) => {
       try {
-        await unlink(path);
+        await unlink(resolve(root, path));
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
           throw err;
@@ -335,23 +541,51 @@ export interface StopHookRunnerPortOptions {
   // Where XDG_RUNTIME_DIR is read from. Absent means the process environment. Tests inject one
   // so a host setting never moves the pins they inspect.
   env?: Record<string, string | undefined>;
+  // The folder the hook starts in. Absent means the process working directory. The hook works in
+  // the repository root above it. CLAUDE_PROJECT_DIR, when it names a folder, comes first.
+  startDir?: string;
+}
+
+/**
+ * The folder CLAUDE_PROJECT_DIR names, or null. Claude Code sets it to the project root, so the
+ * hook starts there and does not follow the assistant into a folder outside the work tree. A value
+ * that is empty, or that names no folder, is ignored.
+ */
+function claudeProjectDir(env: Record<string, string | undefined>): string | null {
+  const value = env['CLAUDE_PROJECT_DIR'];
+  if (value === undefined || value.length === 0) {
+    return null;
+  }
+  try {
+    const path = resolve(value);
+    return statSync(path).isDirectory() ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {}): StopHookRunnerPorts {
   const uid = options.uid === undefined ? currentUid() : options.uid;
-  const dir = resolveSessionPinDir({ env: options.env ?? process.env, tmpDir: tmpdir(), uid });
+  const env = options.env ?? process.env;
+  const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
+  const startDir = claudeProjectDir(env) ?? options.startDir ?? process.cwd();
+  const { root, inRepository } = findRepositoryRoot(startDir);
   return {
-    fs: defaultFs(),
+    fs: defaultFs(root),
     pins: makeFsSessionPinStore({ dir, uid }),
-    cwd: () => process.cwd(),
+    cwd: () => root,
     stdoutWrite: async (text: string) => {
       process.stdout.write(text);
     },
     stderrWrite: async (text: string) => {
       process.stderr.write(text);
     },
-    loadConfig: async () => loadConfig(),
-    buildDeps: async (config: UsablConfig) => buildDeps(config),
+    readConfigBytes: async () => {
+      const [working, head] = await Promise.all([readWorkingConfig(root), readHeadConfig(root, inRepository)]);
+      return { working, head };
+    },
+    loadConfig: async (text: string) => parseConfigText(text),
+    buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
     runEngine: async (deps: Deps, config: UsablConfig) => run(deps, config),
     evaluateDecision: evaluateStopDecision,
   };
@@ -372,13 +606,82 @@ async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, opt
   }
 }
 
-// Protocol-aware allow emitter. Claude emits nothing to stdout (stderr only).
-// Cursor must emit {} so the hook protocol response is valid JSON.
-async function emitProtocolAllow(ports: StopHookRunnerPorts, message: string, options: StopHookOptions): Promise<void> {
-  await writeStderr(ports, message);
+/** What an allow says, in the order it is written. */
+interface AllowText {
+  // The decision line and what follows it in one message.
+  message: string;
+  // Notices written after the decision line: a receipt that was not saved, pins that were not used.
+  notices?: string[];
+  // True only for a VERIFIED line or an idle line (no UI file changed, so nothing to check). With
+  // no notice, these are the allows a person does not need to see: neither is a failure to look.
+  quiet?: boolean;
+}
+
+/**
+ * Whether a decision allow is a quiet one: the gate verified the change, or the run was idle.
+ * The idle line is usabl's own words and ends "You may stop.". An idle run with diverged guarded
+ * policy that was let through on a continuation opens with the same verdict word, but it says
+ * NOT verified and ends in the untrusted frame, so it is never quiet.
+ */
+function isQuietDecision(result: Result, message: string): boolean {
+  if (result.verdict === 'verified') {
+    return message.startsWith('VERIFIED');
+  }
+  return (
+    result.verdict === null &&
+    result.coverage.nothingToCheck === true &&
+    message.startsWith('NO VERDICT: IDLE') &&
+    message.endsWith('You may stop.') &&
+    !message.includes('NOT verified')
+  );
+}
+
+/**
+ * Protocol-aware allow emitter. Every line goes to stderr, as before. Cursor must also get {} on
+ * stdout so the hook response is valid JSON. Claude Code does not show the stderr of a Stop hook
+ * that exits 0, and sends its plain stdout to the debug log, so an allow that carries a notice
+ * also writes one JSON object with a systemMessage field, which Claude Code shows to the person.
+ * The text is the same text stderr gets, so its carried values are already scrubbed and framed.
+ */
+async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, options: StopHookOptions): Promise<void> {
+  const lines = [text.message, ...(text.notices ?? [])];
+  for (const line of lines) {
+    await writeStderr(ports, line);
+  }
   if (options.cursorMode) {
     await emitCursorAllow(ports);
+    return;
   }
+  if (text.quiet === true && lines.length === 1) {
+    return;
+  }
+  await emitSystemMessage(ports, lines.join('\n'));
+}
+
+async function emitSystemMessage(ports: StopHookRunnerPorts, text: string): Promise<void> {
+  await ports.stdoutWrite(JSON.stringify({ systemMessage: text }) + '\n');
+}
+
+function pinNotices(notice: PinNotice | null): string[] {
+  return notice === null ? [] : [notice.message];
+}
+
+/**
+ * A config block lets one continuation through while stop_hook_active is set, as every other
+ * block does, so a person who edits the config on purpose is never looped.
+ */
+async function emitConfigBlock(
+  ports: StopHookRunnerPorts,
+  input: StopHookInput,
+  options: StopHookOptions,
+  problem: ConfigProblem,
+  error: string | null,
+): Promise<void> {
+  if (input.stopHookActive) {
+    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error) }, options);
+    return;
+  }
+  await emitProtocolBlock(ports, configBlockMessage(problem, false, error), options);
 }
 
 export async function runStopHook(
@@ -391,11 +694,50 @@ export async function runStopHook(
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
-      await emitProtocolAllow(ports, 'NOT verified - BYPASS consumed for this stop only.', options);
+      await emitProtocolAllow(ports, { message: 'NOT verified - BYPASS consumed for this stop only.' }, options);
       return 0;
     }
 
-    const config = await ports.loadConfig();
+    // The config is compared with the last commit before anything parses it. See configStep.
+    const step = configStep(await ports.readConfigBytes());
+    if (step.kind === 'error') {
+      throw new Error(step.reason);
+    }
+    if (step.kind === 'outside-work-tree') {
+      await emitProtocolAllow(ports, { message: outsideWorkTreeMessage(ports.cwd()) }, options);
+      return 0;
+    }
+    if (step.kind === 'not-configured') {
+      // Pins for this session and root mean an earlier stop here read a committed config, so a
+      // config now missing from the working tree and from HEAD was removed and committed during
+      // the session. That is drift, and it goes through the drift block.
+      const earlier = await earlierSessionPins(ports, input);
+      if (earlier.status === 'found') {
+        if (input.stopHookActive) {
+          await emitProtocolAllow(ports, { message: driftMessage([CONFIG_FILE], true) }, options);
+          return 0;
+        }
+        await emitProtocolBlock(ports, driftMessage([CONFIG_FILE], false), options);
+        return 0;
+      }
+      await emitProtocolAllow(
+        ports,
+        { message: NOT_CONFIGURED_MESSAGE, notices: earlier.status === 'refused' ? [pinsRefused(earlier).message] : [] },
+        options,
+      );
+      return 0;
+    }
+    if (step.kind === 'block') {
+      await emitConfigBlock(ports, input, options, step.problem, step.error);
+      return 0;
+    }
+    let config: UsablConfig;
+    try {
+      config = await ports.loadConfig(step.text);
+    } catch (err) {
+      await emitConfigBlock(ports, input, options, 'unparseable', errorMessage(err));
+      return 0;
+    }
     deps = await ports.buildDeps(config);
     const dirtyGuardedPaths = await checkGuard(deps, config);
 
@@ -440,7 +782,7 @@ export async function runStopHook(
             if (input.stopHookActive) {
               // Allow one continuation while active to avoid recursive stop-hook loops.
               // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-              await emitProtocolAllow(ports, driftMessage(drift, true), options);
+              await emitProtocolAllow(ports, { message: driftMessage(drift, true) }, options);
               return 0;
             }
             // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
@@ -463,46 +805,67 @@ export async function runStopHook(
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
       });
       if (receiptCheck.verified) {
-        await emitProtocolAllow(ports, receiptCheck.details, options);
-        await writePinNotice(ports, pinNotice);
+        await emitProtocolAllow(
+          ports,
+          { message: receiptCheck.details, notices: pinNotices(pinNotice), quiet: true },
+          options,
+        );
         return 0;
       }
     }
 
     const result = await ports.runEngine(deps, config);
-    if (result.verdict === 'verified' && result.receipt !== null) {
-      await saveReceipt(ports.fs, result.receipt);
+    let receiptNotice: string | null = null;
+    const receipt = receiptToSave(result, { ci: false });
+    if (receipt !== null) {
+      const saved = await saveReceipt(ports.fs, receipt);
+      // A refused save changes no verdict. It is said after the decision, so the decision line
+      // still comes first.
+      receiptNotice = saved.status === 'refused' ? saved.message : null;
     }
 
-    const ctx: HookContext =
-      pinNotice === null
-        ? { stopHookActive: input.stopHookActive }
-        : { stopHookActive: input.stopHookActive, sessionDriftChecked: pinNotice.driftChecked };
+    // The hook's own guard result travels with the decision, so diverged policy blocks even on a
+    // run that crashed and carried no paths of its own.
+    const ctx: HookContext = {
+      stopHookActive: input.stopHookActive,
+      guardDivergedPaths: dirtyGuardedPaths,
+      ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
+    };
     const decision = ports.evaluateDecision(result, ctx, config);
+    const notices = [...(receiptNotice === null ? [] : [receiptNotice]), ...pinNotices(pinNotice)];
     if (decision.block) {
+      // A block is sent as before. The notices follow it on stderr.
       await emitProtocolBlock(ports, decision.message, options);
-    } else {
-      await emitProtocolAllow(ports, decision.message, options);
+      for (const notice of notices) {
+        await writeStderr(ports, notice);
+      }
+      return 0;
     }
-    await writePinNotice(ports, pinNotice);
+    await emitProtocolAllow(
+      ports,
+      { message: decision.message, notices, quiet: isQuietDecision(result, decision.message) },
+      options,
+    );
     return 0;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     // Hook errors fail open with disclosure because a wedged stop hook is worse than an honest unverified allow.
     // The error text can carry a path or a value from the repository, so it goes inside the frame.
     await emitProtocolAllow(
       ports,
-      framedMessage(
-        [
-          'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
-            'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-          'Next: run usabl check, or check the change by hand, before you call this change accessible.',
-        ],
-        [`error: ${message}`],
-      ),
+      {
+        message: framedMessage(
+          [
+            'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
+              'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
+            'Next: run usabl check, or check the change by hand, before you call this change accessible.',
+          ],
+          [`error: ${message}`],
+        ),
+        notices: pinNotices(pinNotice),
+      },
       options,
     );
-    await writePinNotice(ports, pinNotice);
     return 0;
   } finally {
     if (deps !== null) {
@@ -510,6 +873,13 @@ export async function runStopHook(
     }
   }
 }
+
+// The note for hook input that is not JSON. The hook cannot tell what sent it, so it names both
+// hook files and the commands that check the wiring and the change.
+const INVALID_INPUT_MESSAGE =
+  'NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop. ' +
+  'Next: check the hook command in .claude/settings.json or .cursor/hooks.json, run usabl doctor, ' +
+  'and run usabl check before you call this change accessible.';
 
 export async function runStopHookFromStdin(
   stdinText: string,
@@ -522,12 +892,7 @@ export async function runStopHookFromStdin(
     const input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
     return runStopHook(input, ports, options);
   } catch {
-    if (options.cursorMode) {
-      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
-      await emitCursorAllow(ports);
-    } else {
-      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
-    }
+    await emitProtocolAllow(ports, { message: INVALID_INPUT_MESSAGE }, options);
     return 0;
   }
 }

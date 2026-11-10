@@ -25,6 +25,9 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
     <span slot="">empty slot name</span>
     <span slot="icon">named slot</span>
   </x-plain>
+  <x-plain id="hidden-x"><span aria-hidden="true">x</span></x-plain>
+  <x-plain id="hidden-mixed"><span aria-hidden="true">x</span> Close <span hidden>one</span><span style="display: none">two</span><span inert>three</span><span style="visibility: hidden">four</span></x-plain>
+  <x-plain id="screen-reader-text"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0)">Close</span></x-plain>
   <x-undefined id="not-upgraded"></x-undefined>
   <x-open id="open-host"></x-open>
   <x-closed id="closed-host"></x-closed>
@@ -79,6 +82,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('component markup and sha
         });
         expect((await page.hostMarkup('#not-upgraded'))?.defined).toBe(false);
         expect(await page.hostMarkup('#nothing-here')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
+  // The default-slot text stands in for a name only when a screen reader can reach it. An "x" under
+  // aria-hidden is a name for no one, so it must not let a rule skip its accessibility tree check.
+  for (const path of ['/', '/patched']) {
+    it(`leaves text hidden from assistive technology out of the default-slot text (${path})`, async () => {
+      const page = await open(path);
+      try {
+        expect((await page.hostMarkup('#hidden-x'))?.defaultSlotText).toBe('');
+        expect((await page.hostMarkup('#hidden-mixed'))?.defaultSlotText).toBe('Close');
+        expect((await page.hostMarkup('#screen-reader-text'))?.defaultSlotText).toBe('Close');
       } finally {
         await page.close();
       }

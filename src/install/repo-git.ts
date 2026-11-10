@@ -37,11 +37,30 @@ export function gitRunner(cwd: string): InstallGit {
 export const ROUTES_PATH = 'usabl.routes.json';
 
 // A branch name goes into a workflow file, so only a plain name is taken: letters, digits, and
-// . _ - /. Anything else is treated as not found, never escaped and written.
+// . _ - /. Anything else is treated as not found, never escaped and written. Every workflow usabl
+// writes takes its branch through this one rule.
 const SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
 
 export function isSafeBranchName(name: string): boolean {
   return SAFE_BRANCH.test(name);
+}
+
+// The one trigger form usabl writes: the event line, then its branch filter naming one quoted name.
+const TRIGGER_BRANCH_LINE = /^ {4}branches: \["([^"]*)"\]$/;
+
+/**
+ * The branch a usabl workflow names in its trigger for `event`: the line `  <event>:` followed
+ * straight away by `    branches: ["<name>"]`. Null when the file has no such pair, or when the name
+ * is not a plain name. A file whose trigger is in any other form names no branch usabl can read.
+ */
+export function workflowTriggerBranch(raw: string | null, event: 'pull_request' | 'push'): string | null {
+  if (raw === null) return null;
+  const lines = raw.split('\n');
+  const at = lines.indexOf(`  ${event}:`);
+  if (at === -1) return null;
+  const match = TRIGGER_BRANCH_LINE.exec(lines[at + 1] ?? '');
+  const name = match?.[1] ?? '';
+  return isSafeBranchName(name) ? name : null;
 }
 
 export type DefaultBranch = { kind: 'found'; name: string } | { kind: 'unknown'; reason: string };
@@ -73,21 +92,40 @@ export async function findDefaultBranch(git: InstallGit): Promise<DefaultBranch>
 }
 
 /**
- * Whether origin's default branch already holds usabl.config.json, and usabl.routes.json when the
- * working tree has one, with the same bytes as the working tree. False whenever git cannot show
- * it: no default branch, no such file there, different bytes, or no config in the working tree.
+ * The files the judge reads at the base commit that this app has: every required file, and each
+ * optional one only when the working tree holds it.
  */
-export async function configOnDefaultBranch(fs: InstallFs, git: InstallGit): Promise<boolean> {
+export async function presentFiles(fs: InstallFs, required: readonly string[], optional: readonly string[]): Promise<string[]> {
+  const present: string[] = [...required];
+  for (const path of optional) {
+    if ((await fs.readFile(path)) !== null) present.push(path);
+  }
+  return present;
+}
+
+/**
+ * Whether origin's default branch already holds each of `files` with the same bytes as the working
+ * tree. False whenever git cannot show it: no default branch, a file missing there or in the working
+ * tree, or different bytes.
+ */
+export async function filesOnDefaultBranch(fs: InstallFs, git: InstallGit, files: readonly string[]): Promise<boolean> {
   const branch = await findDefaultBranch(git);
   if (branch.kind !== 'found') return false;
-  const config = await fs.readFile(CONFIG_PATH);
-  if (config === null) return false;
-  const routes = await fs.readFile(ROUTES_PATH);
-  const files: Array<[string, string]> = [[CONFIG_PATH, config], ...(routes === null ? [] : [[ROUTES_PATH, routes] as [string, string]])];
-  for (const [path, contents] of files) {
+  for (const path of files) {
+    const contents = await fs.readFile(path);
+    if (contents === null) return false;
     // The ./ makes the path relative to the folder git runs in, which is the app folder.
     const onBranch = await git.run(['show', `${ORIGIN_PREFIX}${branch.name}:./${path}`]);
     if (onBranch !== contents) return false;
   }
   return true;
+}
+
+/**
+ * Whether origin's default branch already holds usabl.config.json, and usabl.routes.json when the
+ * working tree has one, with the same bytes as the working tree. False whenever git cannot show
+ * it: no default branch, no such file there, different bytes, or no config in the working tree.
+ */
+export async function configOnDefaultBranch(fs: InstallFs, git: InstallGit): Promise<boolean> {
+  return filesOnDefaultBranch(fs, git, await presentFiles(fs, [CONFIG_PATH], [ROUTES_PATH]));
 }

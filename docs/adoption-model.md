@@ -15,6 +15,7 @@ usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
 usabl floor prune     re-arm the floor by hand (removes and lowers counts; --unconfirmed); an escape hatch
 usabl debt            list the remaining debt by screen and rule, with first-seen date, age, and trend
+usabl debt ledger     days each accessibility barrier was open, fixed, or left the floor, and which way each count can be wrong
 usabl drift routes    check the route manifest against the app router
 ```
 
@@ -156,13 +157,20 @@ that, and what to do.
     or webpack, it refuses to edit it and prints the exact lines to add. When it finds both
     bundlers or neither, it refuses and names what it saw.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
-    `npx usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
-    blocking verdict is blocked unless a one-use bypass was issued. Its companion `usabl install --claude-skill`
+    `npm exec --no -- usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
+    blocking verdict is blocked unless a one-use bypass was issued. The hook command is a POSIX
+    shell line; on Windows it needs Git Bash, which is the shell Claude Code uses there by default.
+    Its companion `usabl install --claude-skill`
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`.
-    Its first step runs `npx usabl brief --json --files <paths>` with the files the task
+    Its first step runs `npm exec --no -- usabl brief --json --files <paths>` with the files the task
     will edit, so the assistant knows the screens the task reaches and what done means
     before it starts. Then the assistant can run the advisory self-check during work. The
     engine ships the skill body, so the installed command cannot drift from the CLI it calls.
+    Every generated command runs `npm exec --no -- usabl`, which runs the usabl installed in the
+    project or globally, or a copy already in npm's own cache, and never downloads a package.
+    With usabl not installed, each run still makes one request to the registry. Earlier releases wrote `npx usabl`, which downloads
+    whatever holds the npm name usabl when usabl is not installed. A reinstall rewrites those
+    files, and `usabl doctor` reports them as a security drift until then.
 13. (automatic, `usabl install --ci`) Writes the six-job
     `.github/workflows/usabl-gate.yml` draft: `usabl-engine` builds the pinned engine,
     `build-app` builds the head with no secrets, `usabl-scan` judges the build without running
@@ -313,9 +321,9 @@ pin the engine and turn on branch protection.
 |---|---|---|---|
 | **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a six-job draft (an untrusted `build-app`, the trusted judge `usabl-scan`, `gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate, fed by `usabl-engine`), and `.github/workflows/usabl-history.yml`, which records each scan of main on the `usabl/history` branch. The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment, a fail-closed gate, and automatic debt tracking |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite or webpack plugin. Detects the bundler first. Writes a Vite draft when a Vite app has no config, no-ops when already wired, refuses to edit an existing config and prints the lines instead, and refuses when it finds both bundlers or neither. | Advisory findings badge while coding |
-| **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
-| **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`. It first runs `npx usabl brief --json --files <paths>` with the files the task will edit, then the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant knows the screens a task reaches and what done means before it starts, and can self-check mid-task without leaving the editor |
-| **Cursor hook** | `usabl install --cursor` | Writes `.cursor/hooks.json` with an adapter script, the `/usabl-check` command, and a UI-scoped rule that opens with the same brief step, each as a whole-file draft that refuses to clobber a differing file. | Blocks the agent's stop through Cursor's `followup_message` protocol, up to a loop limit |
+| **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npm exec --no -- usabl stop-hook` into `.claude/settings.json`. When usabl is not installed, the hook prints one line that says so and exits 1, which Claude Code treats as a hook error that does not block. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
+| **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`. It first runs `npm exec --no -- usabl brief --json --files <paths>` with the files the task will edit, then the advisory `npm exec --no -- usabl check --self-check`. Writes a draft when absent, no-ops when it matches, rewrites the file the previous release wrote (which ran `npx usabl`), and refuses to clobber any other differing file. | The assistant knows the screens a task reaches and what done means before it starts, and can self-check mid-task without leaving the editor |
+| **Cursor hook** | `usabl install --cursor` | Writes `.cursor/hooks.json` with an adapter script, the `/usabl-check` command, and a UI-scoped rule that opens with the same brief step, each as a whole-file draft that rewrites the file the previous release wrote (which ran `npx usabl`) and refuses to clobber any other differing file. The adapter script runs `npm exec --no -- usabl stop-hook --cursor` under `set -euo pipefail`; when usabl is not installed it prints one line that says so and exits 1, which Cursor treats as a failed hook that lets the agent finish. | Blocks the agent's stop through Cursor's `followup_message` protocol, up to a loop limit |
 | **Docs gate** | `usabl install --docs-ci` | Writes the docs gate workflow draft, which builds and serves the rendered documentation instead of the app dev server. | The same gate on the published docs pages |
 | **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-required` status check. Writes nothing. | Confirms the gate is actually enforced |
 | **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` reads a gated Result, checks its verdict against the list you allow, and returns that answer as a `passed` flag with the verdict, the exit code, a summary line, and a scrubbed copy of the Result. Your test asserts on what it returns; the helper itself throws nothing and mints no verdict. | Reuse a check verdict in tests you already run |

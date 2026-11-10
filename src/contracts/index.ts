@@ -114,6 +114,9 @@ export interface TranscriptStop {
   // host or the frame, and the announcement holds no name, role, or state of the control, so a
   // check must not read their absence as a barrier.
   focusUnreadable?: FocusUnreadable;
+  // Set only when the document body had focus at this stop, as read from the page. The path cannot
+  // say so: a body with an id has that id as its path. The blank-page detector reads this field.
+  onBody?: true;
   // Set only by a runner that waits for the page to settle after each step, when the page was still
   // changing at the end of that wait. Focus and announcements were then read on a page that had not
   // finished reacting, so a check must not decide anything from this stop. waitedMs is for people
@@ -897,6 +900,11 @@ export interface Page {
   // boundary, the path of each tree is joined by ' >> ' for a shadow root and by
   // ' >> internal:control=enter-frame >> ' for a frame, so each control has its own path.
   activePath(): Promise<string>;
+  // A key for the element that has focus. It stays the same while that element stays in the
+  // document, even when elements around it are added or removed and its path changes. Null when no
+  // element has focus or it cannot be read. The key holds no page text and means something only on
+  // this page while it is open, so nothing stores it or compares it across pages or runs.
+  activeElementKey(): Promise<string | null>;
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
   // The paths of the open modal dialogs that hold the element that has focus, nearest first, in the

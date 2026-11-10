@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import type { EnginePin } from '../../src/install/build-info.js';
-import { pinEngineRef } from '../../src/install/ci.js';
+import { pinEngineRef, USABL_GATE_WORKFLOW, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
 import {
   historyWorkflow,
   installCi,
@@ -45,8 +45,9 @@ interface Parsed { on: { push: { branches: string[] } }; jobs: Record<string, { 
 const parse = (text: string): Parsed => load(text) as Parsed;
 
 const lineOf = (text: string, pattern: RegExp): number => text.split('\n').findIndex((line) => pattern.test(line)) + 1;
+// The gate takes its branch the same way, so one step names the lines in both files.
 const checkBranchStep = (reason: string): string =>
-  `Check the branch name. usabl could not find your default branch, because ${reason}. So ${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to main. If your default branch has another name, put it in place of main on lines ${lineOf(USABL_HISTORY_WORKFLOW, /^ {4}branches:/)} and ${lineOf(USABL_HISTORY_WORKFLOW, /^ {4}if: github\.ref/)}.`;
+  `Check the branch name. usabl could not find your default branch, because ${reason}. So ${USABL_GATE_WORKFLOW_PATH} runs on pull requests into main, and ${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to main. If your default branch has another name, put it in place of main on line ${lineOf(USABL_GATE_WORKFLOW, /^ {4}branches:/)} of ${USABL_GATE_WORKFLOW_PATH} and lines ${lineOf(USABL_HISTORY_WORKFLOW, /^ {4}branches:/)} and ${lineOf(USABL_HISTORY_WORKFLOW, /^ {4}if: github\.ref/)} of ${USABL_HISTORY_WORKFLOW_PATH}.`;
 
 describe('historyWorkflow', () => {
   it('names the branch in the trigger and in the scan job, and nowhere else changes', () => {
