@@ -1025,8 +1025,50 @@ export function docsGateWorkflowFor(branch: string): string {
 /** The docs gate for a repository whose default branch is main. */
 export const USABL_DOCS_GATE_WORKFLOW = docsGateWorkflowFor('main');
 
+const VERDICT_HINT = 'see the usabl comment for the accessibility barriers"';
+
+// What an earlier 0.3.0 build wrote in place of these parts of the draft: a trigger that names
+// main unquoted, comments that said main for the default branch, a shorter verdict line, and the engine
+// step with no guard for a repository named usabl. Those files are usabl's own text, so install
+// recognises them, unedited, and rewrites them to this draft. Nothing else is recognised this way.
+const EARLIER_PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
+          # An app that does not use that path never reads the folder, so for that app this step does
+          # not change what npm ci installs or what the build makes.
+          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
+          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
+
+/** The earlier text for each part of a draft that changed, as [this draft, earlier build]. */
+export type EarlierText = ReadonlyArray<readonly [string, string]>;
+
+export const EARLIER_ENGINE_TEXT: EarlierText = [[PLACE_ENGINE_BESIDE_APP, EARLIER_PLACE_ENGINE_BESIDE_APP]];
+
+const EARLIER_GATE_TEXT: EarlierText = [
+  ['  pull_request:\n    branches: ["main"]\n', '  pull_request:\n    branches: [main]\n'],
+  [
+    '    # Retargeting onto the default branch must re-run trusted-ref policy checks.\n',
+    '    # Retargeting onto main must re-run trusted-ref policy checks.\n',
+  ],
+  // The earlier build wrote this line without the word "accessibility". This text is only compared
+  // with a file on disk; it is never written or printed.
+  [VERDICT_HINT, VERDICT_HINT.replace('accessibility ', '')],
+  ...EARLIER_ENGINE_TEXT,
+];
+
+/** A draft with each changed part put back to the text an earlier build wrote. */
+export function earlierForm(draft: string, text: EarlierText): string {
+  return text.reduce((form, [now, before]) => form.split(now).join(before), draft);
+}
+
+/** The gate an earlier 0.3.0 build wrote. It could only name main. */
+export const EARLIER_GATE_WORKFLOW = earlierForm(USABL_GATE_WORKFLOW, EARLIER_GATE_TEXT);
+
+/** The docs gate an earlier 0.3.0 build wrote. It could only name main. */
+export const EARLIER_DOCS_GATE_WORKFLOW = earlierForm(USABL_DOCS_GATE_WORKFLOW, EARLIER_GATE_TEXT);
+
 export type CiPlan =
-  | { action: 'write'; path: string; contents: string }
+  // replacesEarlier is set when the file on disk is the unedited draft an earlier 0.3.0 build wrote,
+  // with keptPin the engine commit it held, if any.
+  | { action: 'write'; path: string; contents: string; replacesEarlier?: { keptPin: string | null } }
   // pinnedTo is set when the file on disk is the usabl draft pinned to a commit other than the one
   // this run would write. usabl leaves that pin alone, because someone chose it.
   | { action: 'already-wired'; path: string; pinnedTo?: string }
@@ -1054,6 +1096,7 @@ export async function planWorkflow(
   path: string,
   placeholderDraft: string,
   engineRef: string | null,
+  earlierDraft: string | null = null,
 ): Promise<CiPlan> {
   const draft = engineRef === null ? placeholderDraft : pinEngineRef(placeholderDraft, engineRef);
   const raw = await fs.readFile(path);
@@ -1067,6 +1110,21 @@ export async function planWorkflow(
   // only the line the operator was told to edit, so nothing anyone wrote is lost.
   if (engineRef !== null && raw === placeholderDraft) {
     return { action: 'write', path, contents: draft };
+  }
+  // The unedited draft an earlier 0.3.0 build wrote, pinned or not. It is usabl's own text, so it is
+  // rewritten to this draft, and a pin it held stays.
+  if (earlierDraft !== null) {
+    const earlier = matchWorkflow(raw, earlierDraft);
+    if (earlier.state === 'wired' || earlier.state === 'unpinned') {
+      const keptPin = earlier.state === 'wired' ? earlier.ref : null;
+      const ref = keptPin ?? engineRef;
+      return {
+        action: 'write',
+        path,
+        contents: ref === null ? placeholderDraft : pinEngineRef(placeholderDraft, ref),
+        replacesEarlier: { keptPin },
+      };
+    }
   }
   // The draft pinned to some other commit. Someone chose that pin, so it stays.
   const onDisk = matchWorkflow(raw, placeholderDraft);
@@ -1150,8 +1208,13 @@ export async function applyWorkflowPlan(
 ): Promise<AppliedWorkflow> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
+    const earlier = plan.replacesEarlier;
+    const message =
+      earlier === undefined
+        ? `Wrote ${plan.path}.`
+        : `Rewrote ${plan.path}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise.${earlier.keptPin === null ? '' : ` The engine pin ${earlier.keptPin} is kept.`} Review the change before you commit it.`;
     return {
-      result: { exitCode: 0, action: 'written', path: plan.path, message: `Wrote ${plan.path}.` },
+      result: { exitCode: 0, action: 'written', path: plan.path, message },
       draft,
       holdsPlaceholder: plan.contents.split('\n').includes(ENGINE_REF_LINE),
     };

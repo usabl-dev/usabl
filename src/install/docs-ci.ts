@@ -23,11 +23,12 @@ import { USABL_WORKFLOWS } from './history-ci.js';
 
 export async function installDocsCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD, git: InstallGit = NO_GIT): Promise<InstallResult> {
   const defaultBranch = await findDefaultBranch(git);
-  const branch = branchFor(await fs.readFile(DOCS_GATE_BRANCHED.path), DOCS_GATE_BRANCHED, defaultBranch);
+  const raw = await fs.readFile(DOCS_GATE_BRANCHED.path);
+  const branch = branchFor(raw, DOCS_GATE_BRANCHED, defaultBranch);
   const draft = DOCS_GATE_BRANCHED.draftFor(branch);
   const docsGate = await applyWorkflowPlan(
     fs,
-    await planWorkflow(fs, DOCS_GATE_BRANCHED.path, draft, engineRefFor(pin)),
+    await planWorkflow(fs, DOCS_GATE_BRANCHED.path, draft, engineRefFor(pin), DOCS_GATE_BRANCHED.earlierFor(raw)),
     pin,
     draft,
     'docs gate workflow',

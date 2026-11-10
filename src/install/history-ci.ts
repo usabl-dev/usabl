@@ -41,9 +41,12 @@ import {
   applyWorkflowPlan,
   classifyBranchedWorkflow,
   composeCiReport,
+  EARLIER_ENGINE_TEXT,
+  earlierForm,
   ENGINE_JOB,
   engineRefFor,
   PLACE_ENGINE_BESIDE_APP,
+  type EarlierText,
   planWorkflow,
   TRUSTED_ENGINE_STEP,
   trustedEngineSteps,
@@ -283,12 +286,42 @@ ${ENGINE_CHECK}
 /** The history workflow for an app whose default branch is main. */
 export const USABL_HISTORY_WORKFLOW = historyWorkflow('main');
 
+// What an earlier 0.3.0 build wrote in place of these parts: comments and step names that said main
+// for the default branch, and the engine step with no guard for a repository named usabl.
+const EARLIER_HISTORY_TEXT: EarlierText = [
+  [
+    '    # A second scan of an unchanged default branch confirms a fix without waiting for the next merge.\n',
+    '    # A second scan of an unchanged main confirms a fix without waiting for the next merge.\n',
+  ],
+  [
+    '    # Starts the application from the default branch and scans every screen. It runs application\n    # code, so it never gets write access.',
+    '    # Starts the application from main and scans every screen. It runs application code, so it\n    # never gets write access.',
+  ],
+  ['      - name: Checkout the default branch\n', '      - name: Checkout main\n'],
+  [
+    '          # The scan reads appBaseUrl from this checkout of the default branch, so the app starts on\n          # that origin, never on a port this file assumes. Only an http origin on loopback with an\n          # explicit port is taken,',
+    '          # The scan reads appBaseUrl from this checkout of main, so the app starts on that origin,\n          # never on a port this file assumes. Only an http origin on loopback with an explicit port\n          # is taken,',
+  ],
+  ['      - name: Scan the default branch and write the history record\n', '      - name: Scan main and write the history record\n'],
+  ['      - name: Checkout the default branch without running it\n', '      - name: Checkout main without running it\n'],
+  ...EARLIER_ENGINE_TEXT,
+];
+
+/** The history workflow an earlier 0.3.0 build wrote for `branch`. */
+export function earlierHistoryWorkflow(branch: string): string {
+  return earlierForm(historyWorkflow(branch), EARLIER_HISTORY_TEXT);
+}
+
 export const HISTORY_BRANCHED: BranchedWorkflow = {
   path: USABL_HISTORY_WORKFLOW_PATH,
   event: 'push',
   runsOn: 'runs on pushes to',
   ifWrong: 'the history scan never runs',
   draftFor: historyWorkflow,
+  earlierFor: (raw) => {
+    const branch = branchNamedBy(raw, HISTORY_BRANCHED);
+    return branch === null ? null : earlierHistoryWorkflow(branch);
+  },
 };
 
 /** Every workflow usabl writes, in the order the agreement step names them. */
@@ -309,7 +342,7 @@ export function classifyHistoryWorkflow(raw: string | null): GateWorkflowState {
 }
 
 export async function planHistoryCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, historyWorkflow(branch), engineRef);
+  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, historyWorkflow(branch), engineRef, earlierHistoryWorkflow(branch));
 }
 
 const HISTORY_NOTES = [
@@ -328,9 +361,11 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
   const engineRef = engineRefFor(pin);
   const app = await readAppOrigin(fs);
   const defaultBranch = await findDefaultBranch(git);
-  const gateBranch = branchFor(await fs.readFile(GATE_BRANCHED.path), GATE_BRANCHED, defaultBranch);
+  const gateRaw = await fs.readFile(GATE_BRANCHED.path);
+  const gateBranch = branchFor(gateRaw, GATE_BRANCHED, defaultBranch);
   const gateDraft = GATE_BRANCHED.draftFor(gateBranch);
-  const gate = await applyWorkflowPlan(fs, await planWorkflow(fs, GATE_BRANCHED.path, gateDraft, engineRef), pin, gateDraft, 'gate workflow');
+  const gatePlan = await planWorkflow(fs, GATE_BRANCHED.path, gateDraft, engineRef, GATE_BRANCHED.earlierFor(gateRaw));
+  const gate = await applyWorkflowPlan(fs, gatePlan, pin, gateDraft, 'gate workflow');
   const branch = branchFor(await fs.readFile(USABL_HISTORY_WORKFLOW_PATH), HISTORY_BRANCHED, defaultBranch);
   const historyDraft = historyWorkflow(branch);
   const history = await applyWorkflowPlan(fs, await planHistoryCi(fs, engineRef, branch), pin, historyDraft, 'history workflow');

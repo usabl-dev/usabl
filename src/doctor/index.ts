@@ -20,6 +20,8 @@ import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install
 import { gateBranchTarget, verifyBranchRule, REQUIRED_CHECK, type BranchTarget, type GhReader } from '../install/branch-rule.js';
 import { workflowTriggerBranch } from '../install/repo-git.js';
 import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
+import { DOCS_GATE_BRANCHED, GATE_BRANCHED, isEarlierDraft, type BranchedWorkflow } from '../install/workflow-branch.js';
+import { HISTORY_BRANCHED } from '../install/history-ci.js';
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
@@ -635,6 +637,14 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+// The next step for a workflow file that is the unedited draft an earlier 0.3.0 build wrote, or
+// null when it is not. Install rewrites such a file and keeps its pin, so the step says to run it.
+function earlierDraftStep(raw: string | null, workflow: BranchedWorkflow, what: string, command: string): string | null {
+  return isEarlierDraft(raw, workflow)
+    ? `The ${what} is the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. Run "${command}": it rewrites the file and keeps its engine pin.`
+    : null;
+}
+
 async function collectCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {
   // doctor asks a finer question than planCi: is the gate workflow present, structurally
   // correct, AND pinned to a trusted engine commit? classifyGateWorkflow answers that from the
@@ -674,14 +684,17 @@ async function collectCi(deps: DoctorDeps, label: string): Promise<SurfaceReport
     id: 'ci',
     label,
     state: 'drifted',
-    nextStep: 'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+    nextStep:
+      earlierDraftStep(raw, GATE_BRANCHED, 'gate workflow', 'usabl install --ci') ??
+      'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
   };
 }
 
 async function collectHistoryCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {
   // The same recognizer rules as the gate, from the draft install writes, for whichever branch the
   // file names. The history workflow is optional, so missing is information, not a fault.
-  const state = classifyHistoryWorkflow(await deps.fs.readFile(USABL_HISTORY_WORKFLOW_PATH));
+  const raw = await deps.fs.readFile(USABL_HISTORY_WORKFLOW_PATH);
+  const state = classifyHistoryWorkflow(raw);
   if (state === 'wired') {
     return { id: 'history-ci', label, state: 'wired', nextStep: '' };
   }
@@ -707,7 +720,9 @@ async function collectHistoryCi(deps: DoctorDeps, label: string): Promise<Surfac
     id: 'history-ci',
     label,
     state: 'drifted',
-    nextStep: 'A history workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+    nextStep:
+      earlierDraftStep(raw, HISTORY_BRANCHED, 'history workflow', 'usabl install --ci') ??
+      'A history workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
   };
 }
 
@@ -715,7 +730,8 @@ async function collectDocsCi(deps: DoctorDeps, label: string): Promise<SurfaceRe
   // The same recognizer rules as the app gate, from the draft install writes, for whichever branch
   // the file names. The docs gate is optional, as the history workflow is, so missing is
   // information, not a fault.
-  const state = classifyDocsGateWorkflow(await deps.fs.readFile(USABL_DOCS_GATE_WORKFLOW_PATH));
+  const raw = await deps.fs.readFile(USABL_DOCS_GATE_WORKFLOW_PATH);
+  const state = classifyDocsGateWorkflow(raw);
   if (state === 'wired') {
     return { id: 'docs-ci', label, state: 'wired', nextStep: '' };
   }
@@ -741,7 +757,9 @@ async function collectDocsCi(deps: DoctorDeps, label: string): Promise<SurfaceRe
     id: 'docs-ci',
     label,
     state: 'drifted',
-    nextStep: 'A docs gate workflow is present but differs from the usabl draft. Run "usabl install --docs-ci" to see where, and reconcile by hand.',
+    nextStep:
+      earlierDraftStep(raw, DOCS_GATE_BRANCHED, 'docs gate workflow', 'usabl install --docs-ci') ??
+      'A docs gate workflow is present but differs from the usabl draft. Run "usabl install --docs-ci" to see where, and reconcile by hand.',
   };
 }
 

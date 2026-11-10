@@ -9,7 +9,10 @@
 import type { InstallFs } from './index.js';
 import {
   classifyBranchedWorkflow,
+  classifyWorkflow,
   docsGateWorkflowFor,
+  EARLIER_DOCS_GATE_WORKFLOW,
+  EARLIER_GATE_WORKFLOW,
   gateWorkflowFor,
   USABL_DOCS_GATE_WORKFLOW_PATH,
   USABL_GATE_WORKFLOW_PATH,
@@ -26,6 +29,9 @@ export interface BranchedWorkflow {
   // What goes wrong when the branch is not the default branch, for the step that says so.
   ifWrong: string;
   draftFor(branch: string): string;
+  // The placeholder draft an earlier 0.3.0 build wrote that this file would be checked against, or
+  // null when there is none.
+  earlierFor(raw: string | null): string | null;
 }
 
 export const GATE_BRANCHED: BranchedWorkflow = {
@@ -34,6 +40,7 @@ export const GATE_BRANCHED: BranchedWorkflow = {
   runsOn: 'runs on pull requests into',
   ifWrong: 'the gate never runs and "usabl-required" never reports',
   draftFor: gateWorkflowFor,
+  earlierFor: () => EARLIER_GATE_WORKFLOW,
 };
 
 export const DOCS_GATE_BRANCHED: BranchedWorkflow = {
@@ -42,6 +49,7 @@ export const DOCS_GATE_BRANCHED: BranchedWorkflow = {
   runsOn: 'runs on pull requests into',
   ifWrong: 'the docs gate never runs and "usabl-required" never reports',
   draftFor: docsGateWorkflowFor,
+  earlierFor: () => EARLIER_DOCS_GATE_WORKFLOW,
 };
 
 /** The branch a workflow file names in its trigger, or null when it names none usabl can read. */
@@ -49,14 +57,23 @@ export function branchNamedBy(raw: string | null, workflow: BranchedWorkflow): s
   return workflowTriggerBranch(raw, workflow.event);
 }
 
+/** Whether the file on disk is the unedited draft an earlier 0.3.0 build wrote, pinned or not. */
+export function isEarlierDraft(raw: string | null, workflow: BranchedWorkflow): boolean {
+  const earlier = workflow.earlierFor(raw);
+  return raw !== null && earlier !== null && classifyWorkflow(raw, earlier) !== 'drifted';
+}
+
 /**
  * The branch the plan for one workflow uses. A file on disk that is usabl's own draft for some
  * branch, pinned or not, keeps that branch, so a re-run recognises its own file even when git now
- * names another branch or none, and a name the person put in by hand is never moved. Otherwise it
- * is the default branch git names, or main when git names none.
+ * names another branch or none, and a name the person put in by hand is never moved. An earlier
+ * 0.3.0 draft keeps the branch it names in the quoted form; an earlier gate, which could only name
+ * main, takes the default branch. Otherwise it is the default branch git names, or main when git
+ * names none.
  */
 export function branchFor(raw: string | null, workflow: BranchedWorkflow, defaultBranch: DefaultBranch): string {
   const fallback = defaultBranch.kind === 'found' ? defaultBranch.name : 'main';
+  if (isEarlierDraft(raw, workflow)) return branchNamedBy(raw, workflow) ?? fallback;
   if (classifyBranchedWorkflow(raw, workflow.event, workflow.draftFor) === 'drifted') return fallback;
   return branchNamedBy(raw, workflow) ?? fallback;
 }
