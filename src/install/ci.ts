@@ -361,7 +361,7 @@ export const PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ..
           # When this repository is itself named usabl, ../usabl is this checkout, so the step
           # unpacks nothing and leaves the checkout as it is.
           if [ "$(realpath -m "\${GITHUB_WORKSPACE}/../usabl")" = "$(realpath -m "\${GITHUB_WORKSPACE}")" ]; then
-            echo "usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is."
+            echo "usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is. If your app installs usabl from file:../usabl, it cannot build here, because ../usabl holds this checkout and not the engine. Rename the repository to fix that. An app that does not install usabl from that path needs no change."
           else
             mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
             tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"

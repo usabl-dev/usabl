@@ -60,7 +60,9 @@ describe('the step that places the engine at ../usabl', () => {
     const outcome = runStep(workspace);
     expect(outcome.status, outcome.stderr).toBe(0);
     expect(outcome.stdout.trim().split('\n')).toEqual([
-      'usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is.',
+      'usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is. ' +
+        'If your app installs usabl from file:../usabl, it cannot build here, because ../usabl holds this checkout and not the engine. ' +
+        'Rename the repository to fix that. An app that does not install usabl from that path needs no change.',
     ]);
     expect(readFileSync(join(workspace, 'package.json'), 'utf8')).toBe('{"name":"my-app"}\n');
   });
