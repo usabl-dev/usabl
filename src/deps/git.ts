@@ -38,6 +38,11 @@ function isMissingShow(stderr: string): boolean {
   return MISSING_SHOW_PATTERNS.some((pattern) => pattern.test(stderr));
 }
 
+/** The error for a repository with no last commit, such as a new one or an orphan branch. */
+export const NO_HEAD_MESSAGE =
+  'git cannot read HEAD. If this repository has no commits yet, make a first commit, then run ' +
+  'usabl again. usabl compares policy files with the last commit.';
+
 // The ref itself does not exist. Still an error, never a missing file: reading no policy at all
 // as "no policy" would let a run pass against nothing. The message names the fix, because a new
 // repository with no commits and a CI checkout without the trusted ref both land here.
@@ -46,10 +51,7 @@ function missingRefError(ref: string, stderr: string): Error | null {
     return null;
   }
   if (ref === 'HEAD') {
-    return new Error(
-      'git cannot read HEAD. If this repository has no commits yet, make a first commit, then run ' +
-        'usabl again. usabl compares policy files with the last commit.',
-    );
+    return new Error(NO_HEAD_MESSAGE);
   }
   return new Error(
     `git cannot read ${ref}. usabl reads trusted policy from that ref. Check its name, or fetch it ` +
