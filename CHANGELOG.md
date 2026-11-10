@@ -244,22 +244,49 @@
   Before, a receipt minted while a waiver was live kept verifying after the waiver ended, and
   the stop hook said VERIFIED for an accessibility barrier the gate would block. The fast path
   still skips the scan until that moment. A stored receipt from before this change verifies only
-  if it counted no waived finding; one that did runs one full check. Gate effect: the stop hook
-  runs a full check after a waiver ends, where it allowed on the stored receipt.
+  if it counted no waived finding; one that did runs one full check. The receipt finds the
+  waivers it binds with the gate's own match rule. Gate effect: the stop hook runs a full check
+  after a waiver ends, where it allowed on the stored receipt.
+
+- When a stored receipt for an unchanged tree does not verify, the Stop hook's notice after the
+  decision line now says why, one plain reason per failed binding, such as "a waiver this receipt
+  relied on ended at ...". Before, the reason was dropped. A receipt that failed only because the
+  files changed adds no notice, so a verified stop after an edit stays quiet. Gate effect: none;
+  the hook runs the full check as before, and the person sees why.
 
 - A run now reads the tree before it plans and again after it scans, and the receipt binds the
   first read. Before, the receipt bound the tree read after the scan, so a file written during a
-  check was bound into a receipt that never saw it. Gate effect: a run whose files changed during
-  the check is not covered, with a gap on `working tree`, and mints no receipt.
+  check was bound into a receipt that never saw it. Two reads cannot see an edit undone before
+  the second read, or a dev server that still serves an older build than the tree; both stay
+  verified. Gate effect: a run whose files changed during the check is not covered, with a gap
+  on `working tree`, and mints no receipt.
 
-- A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. The
-  Chromium version now comes from the browser's own `--version` output, then from the folder
-  Playwright installed it in, so a system Chromium placed where Playwright looks and a custom
-  `PLAYWRIGHT_BROWSERS_PATH` read a real version. A stored receipt that holds a Chromium revision
-  may not verify once after the upgrade, and the stop hook runs one full check. `usabl doctor`
-  reports an unreadable version with the fix. Gate effect: a run with a version usabl still
-  cannot read is not covered, with a gap on `scanner versions` that names the fix, and mints no
-  receipt.
+- A repository with no commits now gets a plain message. Every run reads the working tree
+  first, and without HEAD that read failed with git's raw error text. The summary now says git
+  cannot read HEAD and to make a first commit. Gate effect: none; the run still ends with no
+  verdict and exit 4.
+
+- The Chromium version a receipt binds is now the version of the binary that scans:
+  Playwright's headless shell (`chrome-headless-shell`), which a headless run launches, not the
+  full browser `chromium.executablePath()` names. usabl finds the headless shell beside the full
+  browser and binds what it prints for `--version`, or the revision in its folder name as
+  `revision-<number>` when it prints none. Before, the version was the revision in the full
+  browser's folder name, so a replaced headless shell, or a different browser placed at the full
+  browser's path, read the same value as before. A stored receipt that holds a Chromium revision
+  does not verify once after the upgrade, and the stop hook runs one full check. Gate effect: a
+  stored receipt stops verifying when the headless shell changes, so the stop hook runs a full
+  check where it allowed.
+
+- A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. When the
+  headless shell cannot be found, the Chromium version is unreadable; the full browser's version
+  is never bound in its place. `usabl doctor` reports an unreadable version with the fix. Gate
+  effect: a run with a version usabl cannot read is not covered, with a gap on `scanner versions`
+  that names the fix, and mints no receipt.
+
+- A Result document read by `usabl enforce`, `usabl comment`, or a library caller keeps the
+  receipt's `waiverExpiresAt`, read as null or a strict ISO-8601 UTC time. Before, the field was
+  dropped, so a Result sent through JSON lost a receipt that verifies. Gate effect: a document
+  whose receipt carries any other `waiverExpiresAt` value is refused, naming the field.
 
 - The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
   the repository root first, so a stop in a subfolder reads the root config, the root receipt,
