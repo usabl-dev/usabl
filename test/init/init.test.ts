@@ -538,6 +538,20 @@ describe('what init writes is what usabl accepts', () => {
     expect(fs.store['usabl.routes.json']).toBeUndefined();
   });
 
+  // init reads the router and refuses on the collision before it looks at any file, so "run usabl
+  // init again" refused again. The steps that work write the files by hand and check the sidecar.
+  it('gives steps for colliding route ids that do not loop back into init', async () => {
+    const both = routerWithExtraRoute('/cluster/list').replace(
+      '<Route path="/clusters" element={<Clusters />} />',
+      '<Route path="/clusters" element={<Clusters />} />\n      <Route path="/cluster-list" element={<Clusters />} />',
+    );
+    const message = await refusalOf(memoryFs(fixtureFiles({ 'src/App.tsx': both })));
+    expect(message).toContain('write usabl.config.json and usabl.routes.json by hand');
+    expect(message).toContain('a screen id of its own for each route');
+    expect(message).toContain('run usabl drift routes');
+    expect(message).not.toContain('init again');
+  });
+
   it('refuses the whole draft when a route path holds a raw space, and names the file and line', async () => {
     // A raw space in a route path rides straight through screenIdFromUrl into the id. The route
     // cannot be written, and it cannot be left out either, so nothing is written at all. The

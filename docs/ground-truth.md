@@ -4768,7 +4768,10 @@ id fails the grammar, so a wide-blast change records each as a `skipped` gap, an
 route still runs. `usabl drift routes` still counts every route set aside as a route the router
 declares: a sidecar that names it reports no removal, and a sidecar that omits it reports it as
 added, so drift never says "No drift detected" for a route check never scans. `usabl init` refuses the whole draft in that case, names the file and line of
-each route that shares an id, and says to change a path or write the sidecar by hand.
+each route that shares an id, and says to write `usabl.config.json` and `usabl.routes.json` by
+hand, with a screen id of its own for each route, then run `usabl drift routes` to check the
+sidecar against the router file. Running `init` again would refuse again, because it reads the
+router before any file on disk.
 
 **A surface and a discovered route may share an id, but the config has to say so.** Set
 `"overridesDiscoveredRoute": true` on the surface. That is how a surface controls the scan URL for

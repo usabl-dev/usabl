@@ -583,8 +583,9 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
             'same screen id, so usabl could not tell those screens apart, and a sidecar that left one out would never ' +
             'scan it. Nothing was written. The routes that share an id:',
           ...colliding.map((wheres) => `  ${wheres.map((where) => operatorText(where)).join(' and ')}`),
-          'Fix: change one of the route paths, or write usabl.routes.json by hand with a screen id of its own for each ' +
-            'route. Then run usabl init again.',
+          // init reads the router before any file on disk, so running it again refuses again.
+          'Fix: write usabl.config.json and usabl.routes.json by hand, with a screen id of its own for each route in ' +
+            'usabl.routes.json. Then run usabl drift routes to check the sidecar against the router file.',
         ].join('\n'),
       );
     }
