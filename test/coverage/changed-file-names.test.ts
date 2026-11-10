@@ -147,3 +147,19 @@ describe('a changed path that still looks quoted', () => {
     expect(coverage.gaps[0]?.reason).toMatch(/quoted/);
   });
 });
+
+describe('a changed file with a newline in its name', () => {
+  it('is scanned under a src/** glob, never nothing to check', async () => {
+    const page = 'src/pages/new\nline.tsx';
+    const files = {
+      'usabl.routes.json': JSON.stringify({ routes: [{ screenId: 'newline', url: '/newline', entryFile: page }] }),
+      'src/App.tsx': '',
+      [page]: 'export default function Page() { return null }\n',
+    };
+    const fs = makeFakeDeps({ files }).fs;
+    const coverage = await computeCoverage(fs, config, [page]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['newline']);
+    expect(coverage.gaps).toEqual([]);
+  });
+});
