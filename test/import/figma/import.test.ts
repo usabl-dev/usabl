@@ -151,6 +151,21 @@ describe('importFigmaFile with design text that is not safe to copy', () => {
     expect(result.bundle.requirements.map((r) => r.assertion)).toEqual([{ type: 'heading', name: 'Team members', level: 2 }]);
   });
 
+  it('keeps a no-break space in design text where the page keeps it, inside and at either end', () => {
+    // The matcher collapses ASCII white space only, so the importer must do the same, or a page
+    // built from this design keeps a no-break space the requirement lost.
+    const heading = (value: string) =>
+      importFigmaFile(
+        screen([text('t', value, rect(0, 0, 200, 40)), kit('h', 'heading', rect(0, 0, 20, 20), { Level: 'h2' })]),
+        screenOptions,
+      ).bundle.requirements.map((r) => r.assertion);
+    expect(heading('Save draft')).toEqual([{ type: 'heading', name: 'Save draft', level: 2 }]);
+    expect(heading('Save ')).toEqual([{ type: 'heading', name: 'Save ', level: 2 }]);
+    expect(heading(' Save \n draft ')).toEqual([{ type: 'heading', name: 'Save draft', level: 2 }]);
+    // Text that is only white space of any kind is no name at all.
+    expect(heading('  　')).toEqual([]);
+  });
+
   it('keeps markup and an instruction-like name as data, and the YAML still loads with approved: false', () => {
     const result = importFigmaFile(
       screen([text('t', hostile, rect(0, 0, 200, 40)), kit('h', 'heading', rect(0, 0, 20, 20), { Level: 'h1' })]),

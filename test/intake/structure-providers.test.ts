@@ -103,6 +103,33 @@ describe('name requirement', () => {
     expect(drafts[0]?.confidence).toBe('fail');
   });
 
+  it('is unconfirmed, and names the hidden character, when the page name differs only by a no-break space', async () => {
+    const drafts = await run(r, pageWith({ '#r': button('Refresh ') }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.whatUserExperiences).not.toContain('There is no button');
+    expect(drafts[0]?.why).toBe(
+      'A button on this screen is named "Refresh" followed by a no-break space, and the design names it "Refresh". The two names differ only in white space that cannot be seen, so usabl cannot tell whether this is the button the design means, and it does not guess.',
+    );
+    expect(drafts[0]?.elementPath).toBe('#r');
+  });
+
+  it('names a no-break space in the design name, and where it is', async () => {
+    const save = req({ type: 'name', target: { role: 'button', name: 'Save draft' } });
+    const drafts = await run(save, pageWith({ '#s': button('Save draft') }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('is named "Save draft", and the design names it "Save", a no-break space, then "draft".');
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Whether the screen has the button the design names "Save", a no-break space, then "draft" is unknown.',
+    );
+  });
+
+  it('counts every element whose name differs only in white space, and still does not guess', async () => {
+    const drafts = await run(r, pageWith({ '#a': button('Refresh '), '#b': button('　Refresh') }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('2 buttons on this screen have names that differ from "Refresh" only in white space that cannot be seen');
+    expect(drafts[0]?.elementPath).toBe('body');
+  });
+
   it('is unconfirmed, never a pass, when two elements have the name', async () => {
     const drafts = await run(r, pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }));
     expect(drafts).toHaveLength(1);
@@ -379,12 +406,14 @@ describe('focus order requirement', () => {
   it('reads each name with the one white space rule the name check uses: ASCII white space only', async () => {
     const one = req({ type: 'focus-order', sequence: ['Refresh'] });
     expect(await run(one, tabbingPage([' Refresh\n']))).toEqual([]);
-    // A no-break space is not ASCII white space, so it is part of the name, for both checks.
+    // A no-break space is not ASCII white space, so it is part of the name, for both checks. The
+    // name check then asks for review and names the character, because a person cannot see it.
     const focus = await run(one, tabbingPage(['Refresh ']));
     expect(focus[0]?.confidence).toBe('fail');
     expect(focus[0]?.evidence.extra).toMatchObject({ heard: ['Refresh '] });
     const name = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({ '#r': button('Refresh ') }));
-    expect(name[0]?.confidence).toBe('fail');
+    expect(name[0]?.confidence).toBe('unverified');
+    expect(name[0]?.why).toContain('"Refresh" followed by a no-break space');
   });
 
   it('fails and says which name focus never reached', async () => {

@@ -22,6 +22,7 @@ import type {
 import { describeFileKeyProblem, describeNodeIdProblem, describeVersionProblem } from '../../intake/design-source.js';
 import { describeRequirementIdProblem } from '../../intake/requirement-ids.js';
 import { boundText } from '../../output/bounded-text.js';
+import { collapseWhiteSpace } from '../../primitives/accessible-name.js';
 import { neutralize } from '../../primitives/neutralize.js';
 import { scrubString } from '../../surfaces/scrub.js';
 import { kitNote, propertyIsSlot, propertyValue, type StampKind } from './kit.js';
@@ -75,8 +76,9 @@ const NAME_LIMIT = 200;
 const QUOTE_LIMIT = 80;
 const NOTE_TEXT_LIMIT = 300;
 
-// Design text as one line: the characters that make a display lie are removed, and every run of
-// white space is one space, the way a browser computes an accessible name.
+// Design text as one line, for a note or a stamp value: the characters that make a display lie are
+// removed, and every run of white space is one space. Names use readName, which keeps a no-break
+// space as the page does.
 function oneLine(raw: string): string {
   return neutralize(raw).replace(/\s+/gu, ' ').trim();
 }
@@ -91,9 +93,13 @@ type NameRead = { ok: true; name: string } | { ok: false; reason: string };
 // Why a stamp linked to a Button Details card whose name usabl cannot read gives no name.
 const UNREAD_CARD = 'its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place';
 
+// Design text read as an accessible name. The characters that make a display lie are removed, and
+// white space is collapsed with the same rule the page match uses: ASCII white space only. So a
+// no-break space in the design stays where the page keeps it, and the two names can still match.
 function readName(raw: string | undefined): NameRead {
-  const name = oneLine(raw ?? '');
-  if (name === '') {
+  const name = collapseWhiteSpace(neutralize(raw ?? ''));
+  // Text that is only white space, of any kind, is no name.
+  if (name.trim() === '') {
     return { ok: false, reason: 'empty' };
   }
   if (name.length > NAME_LIMIT) {

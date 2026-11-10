@@ -36,6 +36,7 @@ import {
   resolveTarget,
   sameName,
   type DesignTreeSource,
+  type TargetMatch,
   type TargetResolution,
 } from './resolve-target.js';
 
@@ -212,6 +213,80 @@ function refusedDraft(
   });
 }
 
+// A name with every run of white space, of any kind, read as one space and none at either end.
+// Used only to find a name that differs from the design in white space a person cannot see.
+function looseName(name: string): string {
+  return name.replace(/\s+/gu, ' ').trim();
+}
+
+// How a sentence names each white space character that is not a plain space.
+const SPACE_WORDS: Readonly<Record<string, string>> = {
+  ' ': 'a space',
+  '\t': 'a tab',
+  '\n': 'a line break',
+  ' ': 'a no-break space',
+  ' ': 'an Ogham space mark',
+  ' ': 'a figure space',
+  ' ': 'a line separator',
+  ' ': 'a paragraph separator',
+  ' ': 'a narrow no-break space',
+  ' ': 'a medium mathematical space',
+  '　': 'an ideographic space',
+  '﻿': 'a zero width no-break space',
+};
+
+function spaceWord(character: string): string {
+  if (Object.hasOwn(SPACE_WORDS, character)) {
+    return SPACE_WORDS[character] ?? '';
+  }
+  const code = (character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0');
+  return `the white space character U+${code}`;
+}
+
+// A name written out so a person can see where white space they cannot see sits, for example
+// '"Refresh" followed by a no-break space'. A plain space between words stays inside the quotes.
+function spelledName(name: string): string {
+  const parts: string[] = [];
+  let text = '';
+  for (const piece of name.split(/(\s+)/u)) {
+    if (piece === '') {
+      continue;
+    }
+    if (/^\s+$/u.test(piece) && !/^ +$/u.test(piece)) {
+      if (text !== '') {
+        parts.push(`"${text}"`);
+        text = '';
+      }
+      parts.push(...Array.from(piece, spaceWord));
+    } else {
+      text += piece;
+    }
+  }
+  if (text !== '' || parts.length === 0) {
+    parts.push(`"${text}"`);
+  }
+  if (parts.length === 1) {
+    return parts[0] ?? '';
+  }
+  if (parts.length === 2) {
+    return `${parts[0] ?? ''} followed by ${parts[1] ?? ''}`;
+  }
+  return `${parts.slice(0, -1).join(', ')}, then ${parts[parts.length - 1] ?? ''}`;
+}
+
+// When no element has the design's name, the elements whose name is the same once white space of
+// any kind is collapsed and trimmed. Such an element is most likely the one the design means, so
+// the check asks for review and names the character, instead of saying there is no such element.
+async function sameButForWhiteSpace(page: Page, target: RoleTarget): Promise<TargetMatch[]> {
+  const wanted = looseName(target.name);
+  const search = await findByRole(page, target.role);
+  return search.matches.filter((match) => match.node.name !== null && looseName(match.node.name) === wanted);
+}
+
+function article(word: string): string {
+  return /^[aeiou]/u.test(word) ? `An ${word}` : `A ${word}`;
+}
+
 async function checkName(requirement: Requirement, assertion: NameAssertion, page: Page, tree: DesignTreeSource): Promise<Draft[]> {
   const target = assertion.target;
   const found = await resolveTarget(page, target, tree);
@@ -219,6 +294,28 @@ async function checkName(requirement: Requirement, assertion: NameAssertion, pag
     return [];
   }
   if (found.kind === 'none') {
+    const near = await sameButForWhiteSpace(page, target);
+    const [only] = near;
+    if (only !== undefined) {
+      const word = ROLE_WORD[target.role];
+      const design = spelledName(target.name);
+      // The text between the white space is the design's own, because the names match once white
+      // space is collapsed. Only the white space comes from the page, and it is named, not copied.
+      const why =
+        near.length === 1
+          ? `${article(word)} on this screen is named ${spelledName(only.node.name ?? '')}, and the design names it ${design}. The two names differ only in white space that cannot be seen, so usabl cannot tell whether this is the ${word} the design means, and it does not guess.`
+          : `${near.length} ${ROLE_PLURAL[target.role]} on this screen have names that differ from ${design} only in white space that cannot be seen, so usabl cannot tell which one the design means, and it does not guess.`;
+      return [
+        draft(requirement, 'name', 'unverified', {
+          elementPath: near.length === 1 ? only.selector : SCREEN_PATH,
+          node: near.length === 1 ? only.node : null,
+          whatUserExperiences: `Whether the screen has the ${word} the design names ${design} is unknown.`,
+          why,
+          fix: `Use the same white space in the accessible name on the page and in the design, for example a plain space in both, or update the requirement if the design changed.`,
+          extra: { sameButForWhiteSpace: near.length },
+        }),
+      ];
+    }
     return [
       draft(requirement, 'name', 'fail', {
         elementPath: SCREEN_PATH,
