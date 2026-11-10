@@ -85,7 +85,7 @@ const DOCS_CI_LABEL = `ci docs gate workflow (${USABL_DOCS_GATE_WORKFLOW_PATH})`
 // check name from branch-rule rather than spelling it out, so doctor can never tell someone to
 // require a stale job name.
 function branchRuleLabel(target: BranchTarget): string {
-  return target.source === 'gate'
+  return target.source !== 'assumed'
     ? `branch protection (${target.name} requires ${REQUIRED_CHECK})`
     : `branch protection (${target.name}, assumed, requires ${REQUIRED_CHECK})`;
 }
@@ -782,12 +782,12 @@ async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
     }
   };
   const named = (label: string, runsOn: string, branch: string | null): string => (branch === null ? label : `${label} for ${runsOn} ${branch}`);
-  const gate = await read(USABL_GATE_WORKFLOW_PATH);
   return {
-    ci: named(CI_LABEL, 'pull requests into', workflowTriggerBranch(gate, 'pull_request')),
+    ci: named(CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_GATE_WORKFLOW_PATH), 'pull_request')),
     docsCi: named(DOCS_CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_DOCS_GATE_WORKFLOW_PATH), 'pull_request')),
     historyCi: named(HISTORY_CI_LABEL, 'pushes to', workflowTriggerBranch(await read(USABL_HISTORY_WORKFLOW_PATH), 'push')),
-    target: await gateBranchTarget(async () => gate),
+    // The app gate's branch, or the docs gate's when there is no app gate.
+    target: await gateBranchTarget(read),
   };
 }
 
