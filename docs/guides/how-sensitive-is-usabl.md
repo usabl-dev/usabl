@@ -48,8 +48,9 @@ could not run, and 2 when a flag is wrong.
 
 - **caught**: a rule expected to report the defect reported something new, on the changed element,
   and the gate would block it.
-- **caught by another rule**: something new would block, but from another rule, or somewhere else on
-  the page. It is counted apart from caught.
+- **caught by another rule**: something new would block on the changed element, but from another
+  rule. It is counted apart from caught. Something new away from the change is unreadable instead:
+  the page differed between its two loads, so it proves nothing about the defect.
 - **missed**: nothing new would block. The summary names the defect and what was expected.
 - **preview only**: the only new finding is preview evidence, which never blocks. Voice findings are
   preview until a person promotes the class.

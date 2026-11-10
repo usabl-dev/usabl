@@ -183,12 +183,13 @@ describe('measureEntry', () => {
     });
   });
 
-  it('is caught by another rule when the new finding is not on the mutated element', async () => {
+  it('is unreadable when the only new finding is away from the mutated element, because the two loads differ', async () => {
     const { deps } = setup([namesProvider('button-name', '#other')]);
     expect(await measureEntry(deps, entry(), SCREEN)).toMatchObject({
-      outcome: 'caught by another rule',
+      outcome: 'unreadable',
       rules: ['button-name'],
-      reason: 'a new finding gated, but not on the element the mutation changed: button-name; expected button-name',
+      reason:
+        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
     });
   });
 
@@ -201,7 +202,7 @@ describe('measureEntry', () => {
     const { deps } = setup([namesProvider('button-name', 'main')]);
     expect((await measureEntry(deps, entry({ reportedOn: 'around-target' }), SCREEN)).outcome).toBe('caught');
     const inside = setup([namesProvider('button-name', 'main')]);
-    expect((await measureEntry(inside.deps, entry({ reportedOn: 'inside-target' }), SCREEN)).outcome).toBe('caught by another rule');
+    expect((await measureEntry(inside.deps, entry({ reportedOn: 'inside-target' }), SCREEN)).outcome).toBe('unreadable');
   });
 
   it('is missed when nothing new gates, and names what was expected', async () => {

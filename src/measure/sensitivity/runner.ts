@@ -252,13 +252,16 @@ export async function measureEntry(
         const rules = sortedUnique(onTarget.map((finding) => finding.rule));
         return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
       }
+      // The clean and mutated scans are two loads of the page. A finding that is new away from the
+      // change can come from the page itself differing between loads, so it says nothing about the
+      // defect either way.
       const rules = sortedUnique(definite.map((finding) => finding.rule));
       return result(
         entry,
         screen,
-        'caught by another rule',
+        'unreadable',
         rules,
-        `a new finding gated, but not on the element the mutation changed: ${rules.join(', ')}; ${expectedText(entry)}`,
+        `a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: ${rules.join(', ')}`,
       );
     }
 

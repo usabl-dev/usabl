@@ -4171,8 +4171,9 @@ elements the edit changed. The outcome, in this order:
 - `unreadable`: either scan had a coverage gap, including a screen marked unseen, or the edit was
   not made. A gapped scan proves nothing in either direction.
 - `caught`: a new gating finding from an expected rule, where the entry says it reports.
-- `caught by another rule`: a new gating finding from another rule, or from any rule somewhere
-  else on the screen. Counted apart from caught.
+- `caught by another rule`: a new gating finding from another rule, on the changed element.
+  Counted apart from caught. A new finding away from the change makes the entry `unreadable`: the
+  two loads differ, so it proves nothing about the defect.
 - `preview only`: nothing new gates, and a preview finding is new.
 - `missed`: nothing new gates.
 
