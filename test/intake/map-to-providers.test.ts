@@ -481,6 +481,44 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
+  it('fails a flow whose only match is in the drain taken before its first step', async () => {
+    // The capture runs for the life of the page, so the first drain holds what earlier checks
+    // caused. The flow's own steps announce nothing.
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [['Saved']];
+    const context = await makeContext({
+      page: makeFakePage({
+        activeNode: vi.fn(async () => axNode('Save')),
+        activePath: vi.fn(async () => '#save'),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      }),
+    });
+
+    const drafts = draftsOf(await provider!.run(context));
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', confidence: 'fail', elementPath: '#save' });
+    expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
+  });
+
+  it('is not a gap when only the drain taken before its first step is undecidable', async () => {
+    // That drain is not read for the verdict, so its reason cannot decide it either way.
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [
+      { texts: ['Saved'], undecidable: 'closed-shadow-modal' as const },
+      { texts: ['Saved'], undecidable: null },
+    ];
+    const context = await makeContext({
+      page: makeFakePage({
+        drainAnnouncementRecord: vi.fn(async () => drains.shift() ?? { texts: [], undecidable: null }),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
   describe('when the drain cannot say what a screen reader heard', () => {
     const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
 

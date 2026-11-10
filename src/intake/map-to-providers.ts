@@ -197,8 +197,8 @@ async function runFlowStep(page: Page, step: Step): Promise<boolean> {
   return false;
 }
 
-// The drains of every step, read as the one drain the flow used to take after its last step: the
-// texts in step order, and the first reason any of them could not be trusted.
+// The drains taken after the flow's steps, read as one drain: the texts in step order, and the
+// first reason any of them could not be trusted.
 function unionOfDrains(drains: readonly AnnouncementSourcesDrain[]): AnnouncementDrain {
   return {
     texts: drains.flatMap((drain) => drain.texts),
@@ -328,20 +328,20 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 
 async function runFlow(page: Page, requirement: Requirement, assertion: FlowAssertion, watch: SilentChangeWatch): Promise<Draft[]> {
   await page.armAnnouncementCapture();
-  // Each step's drain is kept. The flow's verdict reads them all in step order, with the drain
-  // taken before the first step leading, so it reads what the one drain after the last step read.
-  // A drain that fails is kept as an error: the verdict needs every one, and fails with the first
-  // failure, the way the one drain did. A flow with no expected announcement never needed one.
+  // Each step's drain is kept. The flow's verdict reads them all in step order. A drain that fails
+  // is kept as an error: the verdict needs every one, and fails with the first failure. A flow with
+  // no expected announcement never needed one.
   const drains: AnnouncementSourcesDrain[] = [];
-  // The step each kept drain was taken after, in the same order, or null for the drain before the
-  // first step.
-  const drainSteps: (number | null)[] = [];
+  // The step each kept drain was taken after, in the same order.
+  const drainSteps: number[] = [];
   const drainFailures: unknown[] = [];
   const takeDrain = async (stepIndex: number | null): Promise<AnnouncementSourcesDrain | null> => {
     try {
       const drain = await page.drainAnnouncementSources();
-      drains.push(drain);
-      drainSteps.push(stepIndex);
+      if (stepIndex !== null) {
+        drains.push(drain);
+        drainSteps.push(stepIndex);
+      }
       return drain;
     } catch (error) {
       drainFailures.push(error);
@@ -349,6 +349,11 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
     }
   };
 
+  // The capture runs for the life of the page, so the drain before the first step holds every
+  // announcement since the last drain, such as one an earlier check caused. The verdict never
+  // reads it: the flow is judged only on what was announced after its first step ran. The silent
+  // change rule takes it as background speech. A failure of this drain still fails the flow,
+  // because the speech it should have cleared could then land in the first step's drain.
   watch.start(await takeDrain(null));
   for (const [index, step] of assertion.steps.entries()) {
     const action = isActionStep(step) && flowRuns(step);
@@ -400,8 +405,8 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   if (own.some((draft) => draft.confidence === 'fail')) {
     watch.quiet(assertion.steps.length - 1);
   } else if (own.length > 0 && drain.undecidable !== null) {
-    const undecidableStep = drainSteps[drains.findIndex((entry) => entry.undecidable !== null)] ?? null;
-    if (undecidableStep !== null) {
+    const undecidableStep = drainSteps[drains.findIndex((entry) => entry.undecidable !== null)];
+    if (undecidableStep !== undefined) {
       watch.dropGap(undecidableStep, 'announcements undecidable');
     }
   }
