@@ -4012,7 +4012,10 @@ screen the planners can reach is scanned, whatever git status says. Nothing else
 coverage changes: a file no screen owns is still a coverage gap, and that gap still stops
 the run from minting a receipt. It is still a generator. It exits 0, mints no verdict of
 its own, and takes every honesty state from receipt binding, exactly as the per-change
-mode does.
+mode does. In practice that means `--all` mints no receipt in most apps: one UI file that no
+route or surface reaches, such as a shared layout imported through an alias usabl cannot
+follow, is a coverage gap, so every card reads as not verified. Map those files, as the gap
+reasons say, to get bound cards.
 
 When no content requirement covers a scanned screen, the alt-text manifest for that
 screen is drafted from the page instead. The docs run reads each image on the screen
@@ -4020,11 +4023,17 @@ screen is drafted from the page instead. The docs run reads each image on the sc
 and role from the accessibility tree. Gating runs never read them. Each entry is the
 image's element path and the text it has now. An image with no name reads `Marked
 decorative on the page.` when its own `alt` is empty or its role is `none` or
-`presentation`, and `No text alternative on the page.` otherwise.
+`presentation`, and `No text alternative on the page.` otherwise. An `input type="image"`
+with no `aria-labelledby`, `aria-label`, `alt`, `value`, or `title` gets a name from the
+browser, "Submit" in English. That name is not text the page wrote, so it is drafted as
+`No text alternative on the page.`, read from the attributes and never from the name, so the
+browser's language does not change it.
 That text is untrusted page text. It passes the surface scrubber, each string is cut to a
-fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
-screen, with one more entry that counts the rest. Every drafted entry has `origin:
-'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a
+fixed number of characters, never inside a character, and marked `(shortened)` when cut, and
+at most 200 images are listed per screen, with one more entry that counts the rest. Every
+drafted entry has `origin: 'page'` and `status: 'draft'`, and never an `evidenceRef`. The
+manifest itself carries `origin: 'page'` too, so a screen that showed no images still reads
+as drafted from the page, and its card says the page showed no images. It never becomes a check, a
 requirement, or an approval. The HTML page labels such a card "Drafted from the page" and
 says a person must review every entry. A screen that has content requirements keeps the
 manifest built from them, and a screen whose images could not be read, or that usabl did
