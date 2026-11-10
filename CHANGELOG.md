@@ -12,9 +12,9 @@
   themselves. A step it cannot judge, such as one that navigates, never settles, or names no one
   control, is an `unverified` preview gap that names the reason. It drives no step of its own,
   makes no network call, never shows a value or a removed node's name, and never changes a
-  verdict. With no flow or voice requirement it does not run. The flow driver now reports a step
-  kind it does not run instead of skipping it, and a flow waits for the page to settle after each
-  click or activate step; its verdict still reads every announcement the step drains.
+  verdict. With no flow or voice requirement it does not run. Under a failing flow it adds
+  nothing for the step the flow judged. The flow driver now reports a step kind it does not run
+  instead of skipping it. `usabl brief` names the rule with flow and voice requirements.
 
 - `usabl brief` prints what an agent reads before it starts a task: the screens the task's
   files reach and how each is reached, the checks that apply to each screen, the ones that do
@@ -764,6 +764,16 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- Flow requirements now read each step at its own time. A flow waits for the page to settle
+  after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and
+  drains after every step. Each step's text is judged against the page as it was after that step,
+  where before the flow drained once after its last step. This can change a flow verdict, in both
+  directions. Text written inside a dialog that a later step closes is now heard, where it was
+  dropped. Text written outside an open modal that a later step closes is now dropped, where it
+  was heard. An announcement that lands shortly after the click is now heard, where it was
+  missed. A step that loads a new document, or whose target is gone after the settle wait, makes
+  the flow a `not-covered` gap.
 
 - `usabl install --overlay` now detects whether the app uses Vite or webpack, from config
   files and `package.json` scripts. In a webpack app it prints the two lines to add to the
