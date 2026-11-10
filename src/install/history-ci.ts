@@ -1,12 +1,13 @@
 /**
  * The default-branch workflow `usabl install --ci` writes beside the pull request gate. It scans
- * main and records what it saw on the usabl/history branch, which is what lets a fixed barrier close
- * its slot in the accepted debt without anyone running `usabl floor prune`.
+ * the default branch and records what it saw on the usabl/history branch, which is what lets a
+ * fixed accessibility barrier close its slot in the accepted debt without anyone running
+ * `usabl floor prune`.
  *
  * Three jobs, so the job that runs the application never holds write access:
  * - usabl-engine builds the pinned engine, with the same job the pull request gate uses.
- * - history-scan checks out main, starts the application on the origin of appBaseUrl in main's
- *   usabl.config.json, runs `usabl history record`, and uploads the record. It runs application
+ * - history-scan checks out the default branch, starts the application on the origin of appBaseUrl
+ *   in that branch's usabl.config.json, runs `usabl history record`, and uploads the record. It runs application
  *   code, so it reads only.
  * - history-append downloads the record, adds it to the history branch with `usabl history append`,
  *   and pushes without force. It runs only the engine archive it checked against the engine job's
@@ -26,41 +27,49 @@ import { ARTIFACT_MAX_BYTES, ENGINE_CHECK, fetchArtifactStep } from './artifact-
 import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
 import { CONFIG_PATH, hasDevScript, readAppOrigin } from './app-origin.js';
 import {
-  configOnDefaultBranch,
+  filesOnDefaultBranch,
   findDefaultBranch,
   isSafeBranchName,
   NO_GIT,
+  presentFiles,
   ROUTES_PATH,
-  type DefaultBranch,
   type InstallGit,
 } from './repo-git.js';
 import {
   appGateNotes,
   appGateSetupSteps,
   applyWorkflowPlan,
-  classifyWorkflow,
+  classifyBranchedWorkflow,
   composeCiReport,
+  EARLIER_ENGINE_TEXT,
+  earlierForm,
   ENGINE_JOB,
   engineRefFor,
-  planCi,
+  PLACE_ENGINE_BESIDE_APP,
+  type EarlierText,
   planWorkflow,
   TRUSTED_ENGINE_STEP,
   trustedEngineSteps,
   UNPACK_ENGINE_IN_TEMP,
-  USABL_GATE_WORKFLOW,
   type CiPlan,
   type GateWorkflowState,
 } from './ci.js';
+import {
+  branchAgreementStep,
+  branchFor,
+  branchNamedBy,
+  branchReport,
+  DOCS_GATE_BRANCHED,
+  filesFirstStep,
+  GATE_BRANCHED,
+  type BranchedWorkflow,
+} from './workflow-branch.js';
 
 export const USABL_HISTORY_WORKFLOW_PATH = '.github/workflows/usabl-history.yml';
 
 // The scan job also places the engine at ../usabl, for an app whose lockfile installs it from there.
 const HISTORY_SCAN_ENGINE_UNPACK = `${UNPACK_ENGINE_IN_TEMP}
-          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
-          # An app that does not use that path never reads the folder, so for that app this step does
-          # not change what npm ci installs or what the build makes.
-          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
-          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
+${PLACE_ENGINE_BESIDE_APP}`;
 
 /**
  * The history workflow for an app whose default branch is `branch`. The name goes into the trigger
@@ -77,7 +86,7 @@ on:
   push:
     branches: ["${branch}"]
   schedule:
-    # A second scan of an unchanged main confirms a fix without waiting for the next merge.
+    # A second scan of an unchanged default branch confirms a fix without waiting for the next merge.
     - cron: "17 6 * * *"
   workflow_dispatch:
 
@@ -99,8 +108,8 @@ jobs:
 ${ENGINE_JOB}
 
   history-scan:
-    # Starts the application from main and scans every screen. It runs application code, so it
-    # never gets write access. It writes the record to a file and nothing to git.
+    # Starts the application from the default branch and scans every screen. It runs application
+    # code, so it never gets write access. It writes the record to a file and nothing to git.
     if: github.ref == 'refs/heads/${branch}'
     needs: usabl-engine
     runs-on: ubuntu-latest
@@ -111,7 +120,7 @@ ${ENGINE_JOB}
     env:
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
-      - name: Checkout main
+      - name: Checkout the default branch
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
@@ -146,9 +155,9 @@ ${ENGINE_CHECK}
 
       - name: Read the app origin from usabl.config.json
         run: |
-          # The scan reads appBaseUrl from this checkout of main, so the app starts on that origin,
-          # never on a port this file assumes. Only an http origin on loopback with an explicit port
-          # is taken, the same shape the judge needs. Anything else stops here.
+          # The scan reads appBaseUrl from this checkout of the default branch, so the app starts on
+          # that origin, never on a port this file assumes. Only an http origin on loopback with an
+          # explicit port is taken, the same shape the judge needs. Anything else stops here.
           node <<'NODE'
           const fs = require('node:fs');
           const fail = (why) => {
@@ -196,7 +205,7 @@ ${ENGINE_CHECK}
           cat "\${RUNNER_TEMP}/usabl-vite.log"
           exit 1
 
-      - name: Scan main and write the history record
+      - name: Scan the default branch and write the history record
         run: |
 ${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history record --out usabl-history-record.json
@@ -231,7 +240,7 @@ ${ENGINE_CHECK}
     env:
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
-      - name: Checkout main without running it
+      - name: Checkout the default branch without running it
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
@@ -277,20 +286,50 @@ ${ENGINE_CHECK}
 /** The history workflow for an app whose default branch is main. */
 export const USABL_HISTORY_WORKFLOW = historyWorkflow('main');
 
-// The trigger line, as historyWorkflow writes it. A file that names its branch any other way is not
-// usabl's own file.
-const TRIGGER_LINE = /^ {4}branches: \["([^"]*)"\]$/;
+// What an earlier 0.3.0 build wrote in place of these parts: comments and step names that said main
+// for the default branch, and the engine step with no guard for a repository named usabl.
+const EARLIER_HISTORY_TEXT: EarlierText = [
+  [
+    '    # A second scan of an unchanged default branch confirms a fix without waiting for the next merge.\n',
+    '    # A second scan of an unchanged main confirms a fix without waiting for the next merge.\n',
+  ],
+  [
+    '    # Starts the application from the default branch and scans every screen. It runs application\n    # code, so it never gets write access.',
+    '    # Starts the application from main and scans every screen. It runs application code, so it\n    # never gets write access.',
+  ],
+  ['      - name: Checkout the default branch\n', '      - name: Checkout main\n'],
+  [
+    '          # The scan reads appBaseUrl from this checkout of the default branch, so the app starts on\n          # that origin, never on a port this file assumes. Only an http origin on loopback with an\n          # explicit port is taken,',
+    '          # The scan reads appBaseUrl from this checkout of main, so the app starts on that origin,\n          # never on a port this file assumes. Only an http origin on loopback with an explicit port\n          # is taken,',
+  ],
+  ['      - name: Scan the default branch and write the history record\n', '      - name: Scan main and write the history record\n'],
+  ['      - name: Checkout the default branch without running it\n', '      - name: Checkout main without running it\n'],
+  ...EARLIER_ENGINE_TEXT,
+];
+
+/** The history workflow an earlier 0.3.0 build wrote for `branch`. */
+export function earlierHistoryWorkflow(branch: string): string {
+  return earlierForm(historyWorkflow(branch), EARLIER_HISTORY_TEXT);
+}
+
+export const HISTORY_BRANCHED: BranchedWorkflow = {
+  path: USABL_HISTORY_WORKFLOW_PATH,
+  event: 'push',
+  runsOn: 'runs on pushes to',
+  ifWrong: 'the history scan never runs',
+  draftFor: historyWorkflow,
+  earlierFor: (raw) => {
+    const branch = branchNamedBy(raw, HISTORY_BRANCHED);
+    return branch === null ? null : earlierHistoryWorkflow(branch);
+  },
+};
+
+/** Every workflow usabl writes, in the order the agreement step names them. */
+export const USABL_WORKFLOWS: readonly BranchedWorkflow[] = [GATE_BRANCHED, DOCS_GATE_BRANCHED, HISTORY_BRANCHED];
 
 /** The branch a history workflow names in its trigger, or null when it is not a plain name. */
 export function historyBranchOf(raw: string): string | null {
-  for (const line of raw.split('\n')) {
-    const match = TRIGGER_LINE.exec(line);
-    if (match !== null) {
-      const name = match[1] ?? '';
-      return isSafeBranchName(name) ? name : null;
-    }
-  }
-  return null;
+  return branchNamedBy(raw, HISTORY_BRANCHED);
 }
 
 /**
@@ -299,77 +338,17 @@ export function historyBranchOf(raw: string): string | null {
  * commit SHA. The placeholder reads as unpinned, and any other change as drifted.
  */
 export function classifyHistoryWorkflow(raw: string | null): GateWorkflowState {
-  if (raw === null) return 'missing';
-  const branch = historyBranchOf(raw);
-  return branch === null ? 'drifted' : classifyWorkflow(raw, historyWorkflow(branch));
-}
-
-// The one-based lines that hold the branch name, for the steps that say where to change it.
-function branchLines(draft: string): [number, number] {
-  const lines = draft.split('\n');
-  return [
-    lines.findIndex((line) => TRIGGER_LINE.test(line)) + 1,
-    lines.findIndex((line) => line.startsWith("    if: github.ref == 'refs/heads/")) + 1,
-  ];
-}
-
-/**
- * The branch the history plan uses. A file on disk that is usabl's own draft for some branch, pinned
- * or not, keeps that branch, so a re-run recognises its own file even when git now names another
- * branch or none, and a name the person put in by hand is never moved. Otherwise it is the default
- * branch git names, or main when git names none.
- */
-export function historyBranchFor(raw: string | null, defaultBranch: DefaultBranch): string {
-  const fallback = defaultBranch.kind === 'found' ? defaultBranch.name : 'main';
-  if (raw === null) return fallback;
-  const named = historyBranchOf(raw);
-  if (named === null) return fallback;
-  return classifyWorkflow(raw, historyWorkflow(named)) === 'drifted' ? fallback : named;
+  return classifyBranchedWorkflow(raw, 'push', historyWorkflow);
 }
 
 export async function planHistoryCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, historyWorkflow(branch), engineRef);
-}
-
-// What the report says about the branch the history workflow runs on: a note for the branch it
-// wrote, or a step when that branch may be wrong.
-function branchReport(
-  action: 'written' | 'already-wired' | 'refused',
-  branch: string,
-  defaultBranch: DefaultBranch,
-): { note?: string; step?: string } {
-  if (action === 'refused') return {};
-  const [trigger, scan] = branchLines(historyWorkflow(branch));
-  if (defaultBranch.kind === 'found') {
-    if (branch === defaultBranch.name) {
-      return action === 'written' ? { note: `${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to ${branch}, the default branch git records for origin.` } : {};
-    }
-    return {
-      step: `${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to ${branch}, but the default branch git records for origin is ${defaultBranch.name}. Put ${defaultBranch.name} in place of ${branch} on lines ${trigger} and ${scan}, or the history scan never runs.`,
-    };
-  }
-  if (action === 'written' && branch === 'main') {
-    return {
-      step: `Check the branch name. usabl could not find your default branch, because ${defaultBranch.reason}. So ${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to main. If your default branch has another name, put it in place of main on lines ${trigger} and ${scan}.`,
-    };
-  }
-  return {};
+  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, historyWorkflow(branch), engineRef, earlierHistoryWorkflow(branch));
 }
 
 const HISTORY_NOTES = [
   `${USABL_HISTORY_WORKFLOW_PATH} scans the default branch after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed accessibility barrier closes its slot in the accepted debt on its own.`,
   "Its history-append job needs contents: write, the one permission tracking needs. It runs no application code. To keep that write on the history branch only, add a ruleset for usabl/history that blocks force pushes and deletion. If you cannot grant the permission, leave this file out: every run then says tracking is off and keeps today's behavior.",
 ];
-
-// The judge reads usabl.config.json, and usabl.routes.json when the app uses it, at the base commit
-// of each pull request. So they must be on the default branch before the pull request that adds the
-// workflows, or that pull request cannot pass.
-function configFirstStep(branch: DefaultBranch, withRoutes: boolean): string {
-  const target = branch.kind === 'found' ? branch.name : 'your default branch';
-  return withRoutes
-    ? `Merge ${CONFIG_PATH} and ${ROUTES_PATH} to ${target} first, in their own pull request. The judge reads them at the base commit of each pull request, so a pull request that adds them together with the workflows cannot pass.`
-    : `Merge ${CONFIG_PATH} to ${target} first, in its own pull request. The judge reads it at the base commit of each pull request, so a pull request that adds it together with the workflows cannot pass.`;
-}
 
 /**
  * `usabl install --ci`: the pull request gate and the default-branch history workflow. Each file is
@@ -382,28 +361,43 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
   const engineRef = engineRefFor(pin);
   const app = await readAppOrigin(fs);
   const defaultBranch = await findDefaultBranch(git);
-  const gate = await applyWorkflowPlan(fs, await planCi(fs, engineRef), pin, USABL_GATE_WORKFLOW, 'gate workflow');
-  const branch = historyBranchFor(await fs.readFile(USABL_HISTORY_WORKFLOW_PATH), defaultBranch);
+  const gateRaw = await fs.readFile(GATE_BRANCHED.path);
+  const gateBranch = branchFor(gateRaw, GATE_BRANCHED, defaultBranch);
+  const gateDraft = GATE_BRANCHED.draftFor(gateBranch);
+  const gatePlan = await planWorkflow(fs, GATE_BRANCHED.path, gateDraft, engineRef, GATE_BRANCHED.earlierFor(gateRaw));
+  const gate = await applyWorkflowPlan(fs, gatePlan, pin, gateDraft, 'gate workflow');
+  const branch = branchFor(await fs.readFile(USABL_HISTORY_WORKFLOW_PATH), HISTORY_BRANCHED, defaultBranch);
   const historyDraft = historyWorkflow(branch);
   const history = await applyWorkflowPlan(fs, await planHistoryCi(fs, engineRef, branch), pin, historyDraft, 'history workflow');
-  const branchFacts = branchReport(history.result.action, branch, defaultBranch);
+  const branchFacts = branchReport(
+    [
+      { workflow: GATE_BRANCHED, branch: gateBranch, action: gate.result.action },
+      { workflow: HISTORY_BRANCHED, branch, action: history.result.action },
+    ],
+    defaultBranch,
+  );
 
   const setupSteps = appGateSetupSteps(app);
-  if (branchFacts.step !== undefined) setupSteps.push(branchFacts.step);
+  setupSteps.push(...branchFacts.steps);
+  const agreement = await branchAgreementStep(fs, USABL_WORKFLOWS);
+  if (agreement !== null) setupSteps.push(agreement);
   // The history scan starts the app with npm run dev. Without that script it has nothing to start.
   if (history.result.action !== 'refused' && !(await hasDevScript(fs))) {
     setupSteps.push(
       `Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. The script must start the server directly and accept --host and --port, because a script that calls another npm script does not pass them on. For example: "dev": "webpack serve --config webpack.dev.js". Or leave ${USABL_HISTORY_WORKFLOW_PATH} out: every run then says tracking is off.`,
     );
   }
-  // Printed unless git shows the default branch already holds the same config bytes.
-  if (!(await configOnDefaultBranch(fs, git))) {
-    setupSteps.push(configFirstStep(defaultBranch, (await fs.readFile(ROUTES_PATH)) !== null));
+  // The judge reads usabl.config.json, and usabl.routes.json when the app uses it, at the base commit
+  // of each pull request. So they must be on the default branch before the pull request that adds
+  // the workflows. The step is printed unless git shows the default branch already holds the same bytes.
+  const judgeFiles = await presentFiles(fs, [CONFIG_PATH], [ROUTES_PATH]);
+  if (!(await filesOnDefaultBranch(fs, git, judgeFiles))) {
+    setupSteps.push(filesFirstStep(defaultBranch, judgeFiles, 'the workflows'));
   }
   const notes = [
     ...(gate.result.action === 'written' ? appGateNotes(app) : []),
     ...(history.result.action === 'written' ? HISTORY_NOTES : []),
-    ...(branchFacts.note === undefined ? [] : [branchFacts.note]),
+    ...branchFacts.notes,
   ];
   return composeCiReport({ applied: [gate, history], pin, notes, setupSteps });
 }

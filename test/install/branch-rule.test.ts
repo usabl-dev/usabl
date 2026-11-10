@@ -16,6 +16,11 @@ import {
   verifyBranchRule,
 } from '../../src/install/branch-rule.js';
 
+// A gate workflow on disk that names main. A test that reads the protection itself, with a fake
+// repository read that does not say which branch is the default, passes this target: with no target
+// usabl only assumed main, and an assumed main is never verified unless GitHub confirms it.
+const GATE_MAIN = { name: PROTECTED_BRANCH, source: 'gate' } as const;
+
 function recordingGh(reply: (endpoint: string) => GhResult | null): {
   reader: GhReader;
   calls: string[];
@@ -148,23 +153,23 @@ describe('verifyBranchRule', () => {
       }
       return { code: 0, stdout: protectionJson([REQUIRED_CHECK], false), stderr: '' };
     });
-    const result = await verifyBranchRule(gh.reader);
+    const result = await verifyBranchRule(gh.reader, GATE_MAIN);
     expect(result.action).toBe('verified');
     expect(result.message).toContain('classic branch protection and ruleset "Reviews"');
   });
 
-  it('reports verified when the aggregate is a required check, using one read-only GET', async () => {
+  it('reports verified when the aggregate is a required check, using two read-only GETs', async () => {
     const gh = recordingGh(() => ({ code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
-    const result = await verifyBranchRule(gh.reader);
+    const result = await verifyBranchRule(gh.reader, GATE_MAIN);
 
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('verified');
     expect(result.message.toLowerCase()).toContain('verified');
 
-    // Read-only proof: exactly one getJson to the protection endpoint. The port exposes no
-    // method or body, so it cannot mutate; the endpoint it was asked for is exact.
-    expect(gh.calls).toHaveLength(1);
-    expect(gh.calls[0]).toBe(`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`);
+    // Read-only proof: exactly one getJson to the protection endpoint and one to the repository,
+    // which says whether the gate's branch is the default branch. The port exposes no method or
+    // body, so it cannot mutate; the endpoints it was asked for are exact.
+    expect(gh.calls).toEqual([`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`, 'repos/{owner}/{repo}']);
   });
 
   it('reports not applied when the check is absent, and prints the exact setting', async () => {
@@ -231,7 +236,7 @@ describe('verifyBranchRule', () => {
       conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
       rules: [codeOwnerRule, requiredCheckRule],
     });
-    const result = await verifyBranchRule(gh.reader);
+    const result = await verifyBranchRule(gh.reader, GATE_MAIN);
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('verified');
     expect(result.message).toContain('ruleset');
@@ -313,7 +318,7 @@ describe('verifyBranchRule', () => {
       }
       return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
     });
-    const result = await verifyBranchRule(gh.reader);
+    const result = await verifyBranchRule(gh.reader, GATE_MAIN);
     expect(result.action).toBe('verified');
     expect(gh.calls.some((c) => c.endsWith('&page=2'))).toBe(true);
   });
@@ -522,7 +527,7 @@ describe('verifyBranchRule', () => {
 
   it('does not count a ruleset on ~DEFAULT_BRANCH when another branch is the default', async () => {
     const gh = ghWithDefaultBranchRuleset('trunk', { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader);
+    const result = await verifyBranchRule(gh.reader, GATE_MAIN);
     expect(result.action).toBe('not-applied');
   });
 

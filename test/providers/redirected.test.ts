@@ -25,6 +25,7 @@ import {
   readRefusedRequests,
   redirectedAwayGap,
   refusalsFromAppHost,
+  sameScreenPath,
   sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
   type LandingObservation,
@@ -956,5 +957,33 @@ describe('the check runner refuses to measure a screen it did not reach signed i
 
     expect(scan.gaps).toEqual([]);
     expect(scan.drafts).toHaveLength(1);
+  });
+});
+
+describe('sameScreenPath', () => {
+  it('sets the origin aside and compares the path and the fragment', () => {
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://localhost:4000/clusters')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'https://preview.test/clusters/')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://127.0.0.1:5173/clusters?page=2')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://localhost:4000/#/clusters')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://127.0.0.1:5173/login?next=%2Fclusters')).toBe(false);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/login')).toBe(false);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'about:blank')).toBe(false);
+  });
+
+  it('reads a hash route the way it reads a path: its query is left out and one trailing slash is removed', () => {
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://localhost:4000/#/clusters?page=2')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://localhost:4000/#/clusters/')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters/', 'http://localhost:4000/#/clusters/?page=2')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/login?next=%2Fclusters')).toBe(false);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/clusters/nodes')).toBe(false);
+    // A fragment that is not a route, such as an in-page anchor, is still compared whole.
+    expect(sameScreenPath('http://127.0.0.1:5173/docs#intro?x', 'http://127.0.0.1:5173/docs#intro')).toBe(false);
+    // The root route keeps its slash.
+    expect(sameScreenPath('http://127.0.0.1:5173/#/', 'http://127.0.0.1:5173/#/?tab=1')).toBe(true);
+  });
+
+  it('makes no claim when an address does not parse', () => {
+    expect(sameScreenPath('not a url', 'http://127.0.0.1:5173/clusters')).toBeNull();
   });
 });

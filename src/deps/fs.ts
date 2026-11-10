@@ -21,6 +21,24 @@ function isMissingFile(err: unknown): boolean {
   return code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR';
 }
 
+/**
+ * A reader for one workflow file, where a folder at the path is not the same as nothing there. It
+ * returns null only when the path does not exist (ENOENT, or ENOTDIR for a path below a file). Any
+ * other failure, such as EISDIR for a folder or EACCES for no permission, is thrown, so the caller
+ * can say the file could not be read instead of calling it missing.
+ */
+export function makeWorkflowReader(cwd: string = process.cwd()): (path: string) => Promise<string | null> {
+  return async (path) => {
+    try {
+      return await readFile(resolve(cwd, path), 'utf8');
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+      throw err;
+    }
+  };
+}
+
 export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
   const cwd = options.cwd ?? process.cwd();
 
