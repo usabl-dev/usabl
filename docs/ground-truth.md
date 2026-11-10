@@ -3042,6 +3042,23 @@ headline. Its hint calls the findings gating only when every one of them gates. 
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
+**Size bound.** GitHub refuses a comment body over 65,536 characters, and the required check
+then fails with no comment. The comment body, counted with the newline the CLI writes after
+it, is at most 60,000 UTF-16 code units (`COMMENT_BODY_LIMIT` in `src/surfaces/pr-comment.ts`).
+Every carried value is cut to a fixed length, marked `[shortened, N characters omitted]`.
+Coverage gaps are named up to 20 per state, and one line counts the rest of each state, as the
+transcript names up to 20 stops per screen. When the body is still over the bound, whole items
+are cut, lowest priority first: announcements, disclosed notes, advisory findings, recorded
+debt, notices for floored barriers not seen, gaps after the first of each state, the framed
+detail under a gating finding, the first gap of each state, and last a gating finding's first
+line. The marker, the verdict line, the approval line, the judge line, the receipt, the
+conformance counts, and the debt lines are never cut. Each section that lost items says how
+many, and one note under the verdict says how many in all and that the full Result is
+`usabl-result.json` in the `usabl-result` artifact. A gating finding's first line is cut only
+when those first lines alone pass the bound, which needs an operator to raise the noise budget
+until hundreds of gating findings are listed one by one; the comment then keeps as many as fit,
+in the gate's order. The bound changes what the comment shows, never the verdict.
+
 **Two shapes.** `usabl install --ci` and `usabl install --docs-ci` *generate* a six-job
 workflow in the consuming repo. `usabl-engine` checks out the public `usabl-dev/usabl` at the
 engine pin (see "The engine pin and the install report" below), with no token, builds it, and hands it on as an archive with an `engine_digest` output.

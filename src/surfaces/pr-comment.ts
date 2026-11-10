@@ -15,9 +15,10 @@ import type {
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { isJudgeDisclosure, judgeLine } from '../judge/disclosure.js';
+import { boundField, type TextCap } from '../output/bounded-text.js';
 import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
-import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
+import { fixOrAbsence, isBlockingBarrier, UNRECOGNIZED_GAP_STATE } from '../output/disclosure.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
 import { screenNotes } from '../output/notes.js';
 import { debtSentence, trackingOffSentence } from '../output/debt.js';
@@ -38,6 +39,30 @@ import {
 
 const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
+
+/**
+ * The longest body this surface prints, in UTF-16 code units, counted on the final text with the
+ * newline the CLI adds after it.
+ *
+ * GitHub refuses a comment body over 65,536 characters. A refused body fails the comment job,
+ * and the required check then fails with no comment to say why. GitHub counts characters, and a
+ * character is never more than two UTF-16 code units, so a body under this bound in code units
+ * is under GitHub's limit in characters. The margin under 65,536 is room for the workflow to
+ * change how it posts the body without the bound having to move.
+ */
+export const COMMENT_BODY_LIMIT = 60_000;
+
+/**
+ * How many coverage gaps of one state the comment names. The rest of that state are counted on
+ * one line. A pull request that touches hundreds of files no screen owns would otherwise print
+ * one gap per file. The same cap the transcript uses per screen.
+ */
+export const GAPS_PER_STATE_CAP = 20;
+
+// Where the full list is when this comment leaves something out. The judge uploads the Result as
+// this artifact, and `usabl check --json` prints the same Result on a local machine.
+const FULL_RESULT_POINTER =
+  'The full Result is usabl-result.json in the usabl-result artifact of this workflow run. On your own machine, `usabl check --json` prints it.';
 
 // Every value this document carries from the Result is written inside a code span, whoever
 // authored it, and only text usabl itself wrote is left as prose.
@@ -157,10 +182,13 @@ function inlineCode(value: string): string {
   return `${fence}${padding}${value}${padding}${fence}`;
 }
 
-// One line inside a frame: an engine-authored label and a page-derived value.
+// One line inside a frame: an engine-authored label and a page-derived value, and the length cap
+// for that value. Every value is cut to its cap, so one oversized field can never push the
+// comment past its size bound on its own.
 interface FramedPiece {
   label: string;
   value: string;
+  cap: TextCap;
 }
 
 // The framed block as Markdown lines: the opening marker, one line per piece, the closing marker.
@@ -174,11 +202,12 @@ interface FramedPiece {
 // label can never open a fenced code block, which a line starting with three backticks would,
 // and no join of consecutive lines can produce the marker text.
 function framedMarkdownLines(pieces: FramedPiece[]): string[] {
-  return [
-    UNTRUSTED_FRAME_START,
-    ...pieces.map((piece) => `${piece.label}: ${inlineCode(scrubString(piece.value))}`),
-    UNTRUSTED_FRAME_END,
-  ];
+  return [UNTRUSTED_FRAME_START, ...pieces.map(framedLine), UNTRUSTED_FRAME_END];
+}
+
+// One line inside a frame: the label, then the value scrubbed, cut to its cap, and spanned.
+function framedLine(piece: FramedPiece): string {
+  return `${piece.label}: ${inlineCode(boundField(scrubString(piece.value), piece.cap))}`;
 }
 
 const HEADLINE: Record<Verdict, string> = {
@@ -224,7 +253,7 @@ function renderNoVerdict(result: Result): string[] {
     '',
     meaning,
     '',
-    ...framedMarkdownLines([{ label: 'engine summary', value: result.summary }]),
+    ...framedMarkdownLines([{ label: 'engine summary', value: result.summary, cap: 'summary' }]),
     ...renderJudge(result),
   ];
 }
@@ -256,10 +285,10 @@ function renderReceipt(result: Result): string[] {
   }
   return [
     '### Receipt',
-    `- sourceTree: ${inlineCode(result.receipt.sourceTree)}`,
-    `- policyHash: ${inlineCode(result.receipt.policyHash)}`,
-    `- runnerVersion: ${inlineCode(result.receipt.runnerVersion)}`,
-    `- mintedAt: ${inlineCode(result.receipt.mintedAt)}`,
+    `- sourceTree: ${inlineCode(carriedWord(result.receipt.sourceTree, 'receipt'))}`,
+    `- policyHash: ${inlineCode(carriedWord(result.receipt.policyHash, 'receipt'))}`,
+    `- runnerVersion: ${inlineCode(carriedWord(result.receipt.runnerVersion, 'receipt'))}`,
+    `- mintedAt: ${inlineCode(carriedWord(result.receipt.mintedAt, 'receipt'))}`,
   ];
 }
 
@@ -274,7 +303,7 @@ function renderConformance(result: Result): string[] {
   // and the next count added here should not have to know the difference.
   const lines = [
     '### Conformance summary',
-    `- schemaVersion: ${inlineCode(result.schemaVersion)}`,
+    `- schemaVersion: ${inlineCode(carriedWord(result.schemaVersion, 'receipt'))}`,
     // The headline is the count of what is listed below. The split follows in parentheses, and
     // only when there is something new, because "(0 failing, 0 unconfirmed)" on a clean run is
     // noise that teaches the reader to skip the clause on the runs where it carries something.
@@ -307,21 +336,21 @@ function sourcePieces(
   appSource: AppSourceMapping | undefined,
 ): FramedPiece[] {
   if (source !== undefined && source.file !== null) {
-    const pieces = [{ label: 'source', value: formatDocsSourceLocation(source) }];
+    const pieces: FramedPiece[] = [{ label: 'source', value: formatDocsSourceLocation(source), cap: 'source' }];
     if (source.candidates.length > 1) {
-      pieces.push({ label: 'candidates', value: source.candidates.join(', ') });
+      pieces.push({ label: 'candidates', value: source.candidates.join(', '), cap: 'candidates' });
     }
     return pieces;
   }
   if (appSource !== undefined && appSource.file !== null) {
-    const pieces = [{ label: 'source', value: formatAppSourceLocation(appSource) }];
+    const pieces: FramedPiece[] = [{ label: 'source', value: formatAppSourceLocation(appSource), cap: 'source' }];
     if (appSource.candidates.length > 1) {
-      pieces.push({ label: 'candidates', value: appSource.candidates.join(', ') });
+      pieces.push({ label: 'candidates', value: appSource.candidates.join(', '), cap: 'candidates' });
     }
     return pieces;
   }
   if (appSource !== undefined && appSource.candidates.length > 0) {
-    return [{ label: 'candidates', value: appSource.candidates.join(', ') }];
+    return [{ label: 'candidates', value: appSource.candidates.join(', '), cap: 'candidates' }];
   }
   return [];
 }
@@ -342,10 +371,10 @@ function sourcePieces(
 // That matches how the stop hook frames its block.
 function findingPieces(finding: Finding): FramedPiece[] {
   return [
-    { label: 'experience', value: finding.whatUserExperiences },
-    { label: 'why', value: finding.why },
+    { label: 'experience', value: finding.whatUserExperiences, cap: 'experience' },
+    { label: 'why', value: finding.why, cap: 'why' },
     ...sourcePieces(finding.docsSource, finding.appSource),
-    { label: 'fix', value: fixOrAbsence(finding) },
+    { label: 'fix', value: fixOrAbsence(finding), cap: 'fix' },
   ];
 }
 
@@ -363,15 +392,241 @@ function listItem(marker: string, first: string, continuation: string[]): string
   return [`${marker} ${first}`, ...continuation.map((line) => `${indent}${line}`)];
 }
 
+// A value the Result carried, printed in a code span on one of this comment's own lines, cut to
+// its cap. A value that is not a string is named, never printed: this surface reads a document,
+// so a field typed as a string can be anything.
+function carriedWord(value: unknown, cap: TextCap): string {
+  return typeof value === 'string' ? boundField(neutralize(value), cap) : 'unknown';
+}
+
+// ---- the size bound ----
+//
+// The comment is assembled as fixed lines and sections. Fixed lines are never cut: the marker,
+// the verdict line, the approval line, the judge line, the receipt, the conformance counts, and
+// the debt lines. Every value on them is a checked number, a fixed word, or a field cut to its
+// cap, so together they come to a few thousand characters whatever the Result holds. A section
+// holds items, and an item is one finding, gap, notice, note, or screen of announcements.
+//
+// When the whole body is over COMMENT_BODY_LIMIT, items are cut in CUT_ORDER, lowest priority
+// first, and from the end of the comment within each tier. A cut item is removed whole, so no
+// frame is ever opened without being closed. Each section that lost items says how many, and one
+// note under the verdict says how many in all and where the full Result is.
+//
+// The order, lowest priority first:
+//   1. announcements: current state from the transcript, not part of any verdict;
+//   2. disclosed notes: what a check did not read, which never changes the verdict;
+//   3. advisory findings: preview and model judgment never gate;
+//   4. recorded debt: carried and waived findings the gate already accepted;
+//   5. notices for floored barriers this run did not see;
+//   6. coverage gaps after the first one of each state;
+//   7. the framed detail under a gating finding, which keeps its first line;
+//   8. the first coverage gap of each state, so every state stays named while anything else
+//      can go;
+//   9. a gating finding's first line.
+//
+// Tier 9 is reached only when the first lines of the gating findings alone pass the bound. Each
+// first line is cut to a few hundred characters, so at the default noise budget it never is: the
+// noise budget collapses a long list into a handful of rule groups. It can be reached when an
+// operator raises the noise budget far enough that hundreds of gating findings are listed one by
+// one. The comment then keeps as many first lines as fit, in the order the gate ranked them, and
+// says how many it left out. That is the one place a gating finding's first line is cut, because
+// a body over GitHub's limit posts no comment at all.
+const CUT_ORDER = [
+  'announcement',
+  'note',
+  'advisory',
+  'recorded',
+  'floor-notice',
+  'gap',
+  'gating-detail',
+  'gap-first',
+  'gating',
+] as const;
+type CutTier = (typeof CUT_ORDER)[number];
+
+// One entry in a section. `head` is the first line or lines and `detail` the rest. The whole item
+// is cut at `tier`. When `detailTier` is set, the detail alone is cut earlier, at that tier, and
+// the head stays.
+interface CommentItem {
+  head: string[];
+  detail: string[];
+  tier: CutTier;
+  detailTier?: CutTier;
+  cut: boolean;
+  detailCut: boolean;
+}
+
+// A section: the lines before its items, the items, and the lines after them. `noun` names what
+// one item is, for the line that says how many were cut.
+// `close` is printed right after the items and before the cut count, so a section whose items sit
+// inside one frame can close the frame there and the count stays outside it.
+interface CommentSection {
+  kind: 'section';
+  before: string[];
+  items: CommentItem[];
+  close: string[];
+  after: string[];
+  noun: string;
+}
+
+type CommentPart = { kind: 'fixed'; lines: string[] } | { kind: 'cut-note' } | CommentSection;
+
+function item(head: string[], detail: string[], tier: CutTier, detailTier?: CutTier): CommentItem {
+  return { head, detail, tier, ...(detailTier === undefined ? {} : { detailTier }), cut: false, detailCut: false };
+}
+
+function itemFrom(lines: string[], tier: CutTier, detailTier?: CutTier): CommentItem {
+  const [first, ...rest] = lines;
+  return item(first === undefined ? [] : [first], rest, tier, detailTier);
+}
+
+function section(
+  before: string[],
+  items: CommentItem[],
+  after: string[],
+  noun: string,
+  close: string[] = [],
+): CommentSection {
+  return { kind: 'section', before, items, close, after, noun };
+}
+
+function fixed(lines: string[]): CommentPart {
+  return { kind: 'fixed', lines };
+}
+
+function cutLine(count: number, noun: string): string {
+  return `- ${wholeNumber(count)} more ${noun} not shown here, to keep this comment under the size GitHub accepts.`;
+}
+
+function cutNote(cutItems: number, cutDetails: number): string {
+  const items = `${wholeNumber(cutItems)} ${cutItems === 1 ? 'item is' : 'items are'} not shown`;
+  const details =
+    cutDetails === 0
+      ? ''
+      : `, and ${wholeNumber(cutDetails)} gating ${cutDetails === 1 ? 'finding shows' : 'findings show'} only ${cutDetails === 1 ? 'its' : 'their'} first line`;
+  return `_This comment is longer than GitHub accepts, so ${items}${details}. Each section says what it left out. ${FULL_RESULT_POINTER}_`;
+}
+
+function renderParts(parts: CommentPart[]): string {
+  const sections = parts.filter((part): part is CommentSection => part.kind === 'section');
+  const cutItems = sections.reduce((total, part) => total + part.items.filter((entry) => entry.cut).length, 0);
+  const cutDetails = sections.reduce(
+    (total, part) => total + part.items.filter((entry) => !entry.cut && entry.detailCut).length,
+    0,
+  );
+  const lines: string[] = [];
+  for (const part of parts) {
+    if (part.kind === 'fixed') {
+      lines.push(...part.lines);
+      continue;
+    }
+    if (part.kind === 'cut-note') {
+      if (cutItems > 0 || cutDetails > 0) {
+        lines.push('', cutNote(cutItems, cutDetails));
+      }
+      continue;
+    }
+    lines.push(...part.before);
+    for (const entry of part.items) {
+      if (!entry.cut) {
+        lines.push(...entry.head, ...(entry.detailCut ? [] : entry.detail));
+      }
+    }
+    lines.push(...part.close);
+    const cut = part.items.filter((entry) => entry.cut).length;
+    if (cut > 0) {
+      lines.push(cutLine(cut, part.noun));
+    }
+    lines.push(...part.after);
+  }
+  return lines.join('\n');
+}
+
+// The cut steps in order: for each tier in CUT_ORDER, from the end of the comment back, an item
+// loses its detail or goes whole. Each call makes the next step and returns the characters it
+// removed, or null when nothing is left to cut. The order is worked out once, so cutting a long
+// comment is linear in its items.
+function cutter(parts: CommentPart[]): () => number | null {
+  const items = parts.flatMap((part) => (part.kind === 'section' ? part.items : []));
+  const steps: Array<{ entry: CommentItem; detailOnly: boolean }> = [];
+  for (const tier of CUT_ORDER) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const entry = items[index]!;
+      if (entry.detailTier === tier && entry.detail.length > 0) {
+        steps.push({ entry, detailOnly: true });
+      }
+      if (entry.tier === tier) {
+        steps.push({ entry, detailOnly: false });
+      }
+    }
+  }
+  const size = (lines: string[]): number => lines.reduce((total, line) => total + line.length + 1, 0);
+  let next = 0;
+  return () => {
+    while (next < steps.length) {
+      const { entry, detailOnly } = steps[next]!;
+      next += 1;
+      if (entry.cut) {
+        continue;
+      }
+      if (detailOnly) {
+        entry.detailCut = true;
+        return size(entry.detail);
+      }
+      entry.cut = true;
+      return size(entry.head) + (entry.detailCut ? 0 : size(entry.detail));
+    }
+    return null;
+  };
+}
+
+// The lines the cut adds back: one note under the verdict and one count line per section. Each is
+// fixed wording around whole numbers, so this is an upper bound on what they can cost.
+const CUT_LINES_RESERVE = 600;
+const CUT_LINE_RESERVE = 140;
+
+/**
+ * Renders the parts within COMMENT_BODY_LIMIT, counted with the newline the CLI writes after the
+ * body. A body that fits is returned exactly as it was assembled.
+ *
+ * A first pass works on line lengths, so a comment with thousands of items is not rendered once
+ * per cut, and reserves room for the lines the cut adds. A second pass renders and checks the
+ * real body, and cuts further while it is over.
+ */
+function renderWithinLimit(parts: CommentPart[]): string {
+  const fits = (text: string): boolean => text.length + 1 <= COMMENT_BODY_LIMIT;
+  const whole = renderParts(parts);
+  if (fits(whole)) {
+    return whole;
+  }
+  const cutOne = cutter(parts);
+  const sections = parts.filter((part) => part.kind === 'section').length;
+  let estimate = whole.length + 1 + CUT_LINES_RESERVE + sections * CUT_LINE_RESERVE;
+  while (estimate > COMMENT_BODY_LIMIT) {
+    const removed = cutOne();
+    if (removed === null) {
+      break;
+    }
+    estimate -= removed;
+  }
+  let body = renderParts(parts);
+  while (!fits(body) && cutOne() !== null) {
+    body = renderParts(parts);
+  }
+  return body;
+}
+
+// ---- sections ----
+
 // The known section holds two statuses, carried and waived, so each of its items names its own
 // status beside the severity, in the one span the collapsed headline uses. The other sections hold
 // one status each, which the heading already names.
 function formatFinding(finding: Finding, withStatus: boolean): string[] {
-  const rule = neutralize(finding.rule);
-  const layer = neutralize(finding.layer);
-  const screenId = neutralize(finding.screenId);
-  const severity = neutralize(finding.severity);
-  const label = withStatus ? `${neutralize(finding.status)} ${severity}` : severity;
+  const rule = boundField(neutralize(finding.rule), 'rule');
+  const layer = boundField(neutralize(finding.layer), 'word');
+  const screenId = boundField(neutralize(finding.screenId), 'screenId');
+  const severity = boundField(neutralize(finding.severity), 'word');
+  const label = withStatus ? `${boundField(neutralize(finding.status), 'word')} ${severity}` : severity;
   return listItem(
     '-',
     `${OPEN_BRACKET}${inlineCode(label)}${CLOSE_BRACKET} ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
@@ -379,11 +634,28 @@ function formatFinding(finding: Finding, withStatus: boolean): string[] {
   );
 }
 
-function renderFindingGroup(title: string, findings: Finding[], withStatus = false): string[] {
+// A finding as an item. A gating finding keeps its first line until the very last tier; its frame
+// goes earlier. Any other finding goes whole at its lane's tier.
+function findingItem(finding: Finding, withStatus: boolean, tier: CutTier): CommentItem {
+  const lines = formatFinding(finding, withStatus);
+  return isBlockingBarrier(finding) ? itemFrom(lines, 'gating', 'gating-detail') : itemFrom(lines, tier);
+}
+
+function renderFindingGroup(
+  title: string,
+  findings: Finding[],
+  tier: CutTier,
+  withStatus = false,
+): CommentSection {
   if (findings.length === 0) {
-    return [`### ${title}`, '- none'];
+    return section([`### ${title}`], [], ['- none'], 'findings');
   }
-  return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding, withStatus))];
+  return section(
+    [`### ${title}`],
+    findings.map((finding) => findingItem(finding, withStatus, tier)),
+    [],
+    'findings',
+  );
 }
 
 // The headline is built from the group's fields rather than from one formatted string, so every
@@ -394,11 +666,11 @@ function renderFindingGroup(title: string, findings: Finding[], withStatus = fal
 // line keeps the shape it had when it was one escaped string.
 function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const finding = group.representative;
-  const rule = neutralize(finding.rule);
-  const layer = neutralize(finding.layer);
-  const screenId = neutralize(finding.screenId);
-  const severity = neutralize(finding.severity);
-  const status = neutralize(group.status);
+  const rule = boundField(neutralize(finding.rule), 'rule');
+  const layer = boundField(neutralize(finding.layer), 'word');
+  const screenId = boundField(neutralize(finding.screenId), 'screenId');
+  const severity = boundField(neutralize(finding.severity), 'word');
+  const status = boundField(neutralize(group.status), 'word');
   const count = formatCollapsedGroupCount(group);
   const headline = `${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
   // The headline names the screen id, layer, rule, and severity, so the frame follows it directly.
@@ -407,7 +679,7 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   return listItem('-', headline, framedMarkdownLines(findingPieces(finding)));
 }
 
-function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
+function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): CommentSection | null {
   // The collapsed list holds new findings and recorded debt. Only the findings the gate blocks on
   // are called gating, so the hint says "gating" only when every finding in it gates, and
   // otherwise names the deterministic total and then how many of them gate.
@@ -419,36 +691,50 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): str
   // that is from grouping repeated rules or from the budget hiding groups. Checking only collapsed
   // dropped the grouped-but-not-truncated case back to a raw, hint-less list.
   if (!view.grouped && !view.collapsed) {
-    return [];
+    return null;
   }
-  return [
-    '### Findings (collapsed by rule)',
-    ...view.groups.flatMap((group) => formatCollapsedFinding(group)),
-    '',
-    `_${view.showAllHint ?? ''}_`,
-    ...(recordedCount === 0
-      ? []
-      : [
-          '',
-          `_Of these, ${wholeNumber(gatingCount)} gate this run and ${wholeNumber(recordedCount)} are recorded debt that does not block it._`,
-        ]),
-  ];
+  return section(
+    ['### Findings (collapsed by rule)'],
+    view.groups.map((group) => {
+      const lines = formatCollapsedFinding(group);
+      return isBlockingBarrier(group.representative)
+        ? itemFrom(lines, 'gating', 'gating-detail')
+        : itemFrom(lines, 'recorded');
+    }),
+    [
+      '',
+      `_${view.showAllHint ?? ''}_`,
+      ...(recordedCount === 0
+        ? []
+        : [
+            '',
+            `_Of these, ${wholeNumber(gatingCount)} gate this run and ${wholeNumber(recordedCount)} are recorded debt that does not block it._`,
+          ]),
+    ],
+    'rule groups',
+  );
 }
 
 // The floored barriers this run did not see on a screen it cannot show rendered, one notice per
 // screen. Printed only when there is one, because the notice is about debt and a "none" under a
 // heading nobody needs would teach readers to skip it. The sentence names a screen id, which can
 // come from a route literal in the application, so it is framed with the other untrusted text.
-function renderFloorUnconfirmed(result: Result): string[] {
+// All notices share one frame. Each notice is one line in it, so the size bound can cut notices
+// one at a time, and the frame closes before the line that counts what was cut.
+function renderFloorUnconfirmed(result: Result): CommentSection | null {
   const screens = Array.isArray(result.floorUnconfirmed) ? result.floorUnconfirmed : [];
   if (screens.length === 0) {
-    return [];
+    return null;
   }
-  return [
-    '### Recorded barriers not seen',
-    ...framedMarkdownLines(screens.map((entry) => ({ label: 'notice', value: unconfirmedNotice(entry) }))),
-    '',
-  ];
+  return section(
+    ['### Recorded barriers not seen', UNTRUSTED_FRAME_START],
+    screens.map((entry) =>
+      item([framedLine({ label: 'notice', value: unconfirmedNotice(entry), cap: 'notice' })], [], 'floor-notice'),
+    ),
+    [''],
+    'notices',
+    [UNTRUSTED_FRAME_END],
+  );
 }
 
 // What this change did to the accepted debt, and whether automatic tracking is on. Printed only
@@ -466,7 +752,10 @@ function renderDebt(result: Result): string[] {
   if (line === null && off === null) {
     return [];
   }
-  const detail = off !== null && typeof status.off?.detail === 'string' ? [`- detail: ${inlineCode(status.off.detail)}`] : [];
+  const detail =
+    off !== null && typeof status.off?.detail === 'string'
+      ? [`- detail: ${inlineCode(boundField(status.off.detail, 'gapReason'))}`]
+      : [];
   return [
     '### Accessibility debt',
     ...(line === null ? [] : [escapeMarkdown(line)]),
@@ -475,56 +764,91 @@ function renderDebt(result: Result): string[] {
   ];
 }
 
-function renderCoverageGaps(result: Result): string[] {
+// The key a gap is counted under for the per-state cap. A state usabl does not recognize is
+// counted under one fixed label and never under the text that arrived, the way the shared gap
+// disclosure counts it.
+const GAP_STATES: ReadonlySet<string> = new Set(['capability-denied', 'skipped', 'not-covered', 'unresolved']);
+function gapStateKey(state: unknown): string {
+  return typeof state === 'string' && GAP_STATES.has(state) ? state : UNRECOGNIZED_GAP_STATE;
+}
+
+function renderCoverageGaps(result: Result): CommentSection {
   if (!Array.isArray(result.coverage.gaps)) {
-    return ['### Coverage gaps', NOT_A_LIST];
+    return section(['### Coverage gaps', NOT_A_LIST], [], [], 'gaps');
   }
   if (result.coverage.gaps.length === 0) {
-    return ['### Coverage gaps', '- none'];
+    return section(['### Coverage gaps', '- none'], [], [], 'gaps');
   }
-  return [
-    '### Coverage gaps',
-    ...result.coverage.gaps.flatMap((gap) => {
-      // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
-      // page- or tool-derived, so they are sealed as untrusted for the model reading this comment
-      // and spanned so a URL in the ref cannot become a link the page chose. The state is an
-      // engine enum and stays as the plain label.
-      const framed = framedMarkdownLines([
-        { label: 'ref', value: gap.ref },
-        { label: 'reason', value: gap.reason },
-      ]);
-      // A state is an engine enum and no page can choose one, but `Result` is exported and a
-      // caller can compose one outside the engine, so the label is any string at runtime. It
-      // costs one code span to keep that out of the renderer's and the filters' reach.
-      return listItem('-', `(${inlineCode(neutralize(gap.state))})`, framed);
-    }),
-  ];
+  // At most GAPS_PER_STATE_CAP gaps of each state are named, in the order they arrived. The rest
+  // of each state are counted on one line, so a change that touches hundreds of files no screen
+  // owns names twenty of them and counts the others.
+  const shownPerState = new Map<string, number>();
+  const items: CommentItem[] = [];
+  for (const gap of result.coverage.gaps) {
+    const key = gapStateKey(gap.state);
+    const shown = shownPerState.get(key) ?? 0;
+    shownPerState.set(key, shown + 1);
+    if (shown >= GAPS_PER_STATE_CAP) {
+      continue;
+    }
+    // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
+    // page- or tool-derived, so they are sealed as untrusted for the model reading this comment
+    // and spanned so a URL in the ref cannot become a link the page chose. The state is an
+    // engine enum and stays as the plain label.
+    const framed = framedMarkdownLines([
+      { label: 'ref', value: gap.ref, cap: 'gapRef' },
+      { label: 'reason', value: gap.reason, cap: 'gapReason' },
+    ]);
+    // A state is an engine enum and no page can choose one, but `Result` is exported and a
+    // caller can compose one outside the engine, so the label is any string at runtime. It
+    // costs one code span to keep that out of the renderer's and the filters' reach.
+    const lines = listItem('-', `(${inlineCode(carriedWord(gap.state, 'word'))})`, framed);
+    // The first gap of each state stays until late, so every state present stays named.
+    items.push(item(lines, [], shown === 0 ? 'gap-first' : 'gap'));
+  }
+  const over = [...shownPerState.entries()]
+    .filter(([, count]) => count > GAPS_PER_STATE_CAP)
+    .map(([key, count]) => `- ${wholeNumber(count - GAPS_PER_STATE_CAP)} more ${inlineCode(key)} gaps are not shown.`);
+  return section(
+    ['### Coverage gaps'],
+    items,
+    over.length === 0 ? [] : [...over, `_${FULL_RESULT_POINTER}_`],
+    'gaps',
+  );
 }
 
 // The notes providers disclosed about screens, after the coverage gaps and under their own heading,
 // so no reader takes one for a gap. A note never changes the verdict. The section is left out when
 // no screen has a note. The ref and reason are framed like a gap's: engine words, but a caller can
 // compose a Result outside the engine.
-function renderNotes(result: Result): string[] {
+function renderNotes(result: Result): CommentSection | null {
   const notes = screenNotes(result);
   if (notes.length === 0) {
-    return [];
+    return null;
   }
-  return [
-    '',
-    '### Disclosed, does not block',
-    '_What a check did not read on a screen. These are not coverage gaps and do not change the verdict._',
-    ...notes.flatMap((note) =>
-      listItem(
-        '-',
-        `(${inlineCode(neutralize(note.screenId))})`,
-        framedMarkdownLines([
-          { label: 'ref', value: note.ref },
-          { label: 'reason', value: note.reason },
-        ]),
+  return section(
+    [
+      '',
+      '### Disclosed, does not block',
+      '_What a check did not read on a screen. These are not coverage gaps and do not change the verdict._',
+    ],
+    notes.map((note) =>
+      item(
+        listItem(
+          '-',
+          `(${inlineCode(carriedWord(note.screenId, 'screenId'))})`,
+          framedMarkdownLines([
+            { label: 'ref', value: note.ref, cap: 'gapRef' },
+            { label: 'reason', value: note.reason, cap: 'gapReason' },
+          ]),
+        ),
+        [],
+        'note',
       ),
     ),
-  ];
+    [],
+    'notes',
+  );
 }
 
 // The announcement text for one stop, page-derived: tokens come from the accessibility tree and
@@ -541,11 +865,13 @@ function stopAnnouncementText(stop: TranscriptStop): string {
   return pieces.length > 0 ? pieces.join(', ') : stop.elementPath;
 }
 
-function renderAnnouncements(result: Result): string[] {
-  const lines = [
+// One item per screen: its heading and its stops. The size bound cuts a screen whole.
+function renderAnnouncements(result: Result): CommentSection {
+  const before = [
     '### Announcements (current run)',
     '_Screen reader announcements captured on this run. This is current state, not a before/after comparison against a base run._',
   ];
+  const items: CommentItem[] = [];
 
   // Both lists are taken as lists only when they really are lists. The document supplies them,
   // and this section is where a length becomes a printed number and an index would become a list
@@ -553,15 +879,16 @@ function renderAnnouncements(result: Result): string[] {
   // an already assembled document.
   const screens = Array.isArray(result.screens) ? result.screens : [];
   for (const screen of screens) {
+    const heading = `#### ${inlineCode(carriedWord(screen.screenId, 'screenId'))}`;
     if (!Array.isArray(screen.stops)) {
-      lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`, NOT_A_LIST);
+      items.push(item([heading, NOT_A_LIST], [], 'announcement'));
       continue;
     }
     const stops = screen.stops;
     if (stops.length === 0) {
       continue;
     }
-    lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
+    const lines = [heading];
     const capped = stops.slice(0, STOP_CAP);
     capped.forEach((stop, position) => {
       // The marker counts the stops this list prints and is never built from the stop's own
@@ -574,7 +901,7 @@ function renderAnnouncements(result: Result): string[] {
       // The frame opens on the marker's line. A bare "1." renders as an empty item, and the
       // frame under it, indented two columns where "1. " needs three, would leave the list.
       const [first, ...rest] = framedMarkdownLines([
-        { label: 'announced', value: stopAnnouncementText(stop) },
+        { label: 'announced', value: stopAnnouncementText(stop), cap: 'announcement' },
       ]);
       lines.push(...listItem(`${position + 1}.`, first!, rest));
     });
@@ -583,13 +910,10 @@ function renderAnnouncements(result: Result): string[] {
       // of a list this function proved was a list.
       lines.push(`- showing first ${wholeNumber(STOP_CAP)} of ${wholeNumber(stops.length)} stops`);
     }
+    items.push(item(lines, [], 'announcement'));
   }
 
-  if (lines.length === 2) {
-    lines.push('- none');
-  }
-
-  return lines;
+  return section(before, items, items.length === 0 ? ['- none'] : [], 'screens');
 }
 
 /** The failing and unconfirmed breakdown behind the new count, omitted when nothing is new. */
@@ -605,6 +929,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
   // and the fragment of a configured screen url.
   const safe = scrubPublishedResult(result);
   if (safe.verdict === null) {
+    // Every value here is cut to its cap, so this body is a few hundred characters long.
     return renderNoVerdict(safe).join('\n');
   }
   const deterministicNew = safe.findings.filter(
@@ -629,36 +954,31 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
   // names its status, so recorded debt in it still reads as recorded.
   const deterministic = [...deterministicNew, ...deterministicRecorded];
   const collapsedGating = renderCollapsedFindings(deterministic, config);
-  const findingSections =
-    collapsedGating.length > 0
-      ? [...collapsedGating, '', ...renderFindingGroup('Advisory (non-gating)', advisory)]
+  const blank = fixed(['']);
+  const findingSections: CommentPart[] =
+    collapsedGating !== null
+      ? [collapsedGating, blank, renderFindingGroup('Advisory (non-gating)', advisory, 'advisory')]
       : [
-          ...renderFindingGroup('New barriers', deterministicNew),
-          '',
-          ...renderFindingGroup('Known (recorded debt)', deterministicRecorded, true),
-          '',
-          ...renderFindingGroup('Advisory (non-gating)', advisory),
+          renderFindingGroup('New barriers', deterministicNew, 'recorded'),
+          blank,
+          renderFindingGroup('Known (recorded debt)', deterministicRecorded, 'recorded', true),
+          blank,
+          renderFindingGroup('Advisory (non-gating)', advisory, 'advisory'),
         ];
+  const optional = (part: CommentSection | null): CommentPart[] => (part === null ? [] : [part]);
 
   // Every section is printed for a real verdict, "none" included: under a real verdict an empty
   // section is a fact about the run, where under no verdict it would read as a clean one.
-  return [
-    COMMENT_MARKER,
-    projectHeadline(safe.verdict),
-    ...renderAccessibilitySplit(safe),
-    ...renderJudge(safe),
-    '',
-    ...renderReceipt(safe),
-    '',
-    ...renderConformance(safe),
-    '',
-    ...renderDebt(safe),
+  return renderWithinLimit([
+    fixed([COMMENT_MARKER, projectHeadline(safe.verdict), ...renderAccessibilitySplit(safe), ...renderJudge(safe)]),
+    { kind: 'cut-note' },
+    fixed(['', ...renderReceipt(safe), '', ...renderConformance(safe), '', ...renderDebt(safe)]),
     ...findingSections,
-    '',
-    ...renderFloorUnconfirmed(safe),
-    ...renderCoverageGaps(safe),
-    ...renderNotes(safe),
-    '',
-    ...renderAnnouncements(safe),
-  ].join('\n');
+    blank,
+    ...optional(renderFloorUnconfirmed(safe)),
+    renderCoverageGaps(safe),
+    ...optional(renderNotes(safe)),
+    blank,
+    renderAnnouncements(safe),
+  ]);
 }
