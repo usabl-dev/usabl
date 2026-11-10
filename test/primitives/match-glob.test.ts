@@ -67,6 +67,14 @@ describe('matchGlob', () => {
       expect(matchGlob('src/**/*.ts', 'src/a.ts')).toBe(true);
       expect(matchGlob('src/**/*.ts', 'src/deep/nested/a.ts')).toBe(true);
     });
+
+    // git allows a newline in a file name. A changed file with one must still match a glob
+    // that covers its folder, or it reads as a file outside the UI globs.
+    it('double star matches a name that holds a newline', () => {
+      expect(matchGlob('src/**', 'src/pages/new\nline.tsx')).toBe(true);
+      expect(matchGlob('src/**/*.tsx', 'src/pages/new\nline.tsx')).toBe(true);
+      expect(matchGlob('src/**', 'src/new\ndir/Page.tsx')).toBe(true);
+    });
   });
 
   describe('property style: {a,b} under src', () => {

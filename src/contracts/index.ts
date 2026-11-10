@@ -308,6 +308,15 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[]; // in-scope surfaces or checks that could not be exercised, each with a reason
   nothingToCheck: boolean; // no UI-touching files; not a verdict
+  // Changed files that match uiFileGlobs but that the planner left out on purpose, each with why.
+  // Today these are files under a test folder that no screen imports. Disclosure only: an excluded
+  // file is not a gap, the gate never reads this list, and it never moves a verdict. Optional so a
+  // Result written before it existed still reads; absent and empty both mean nothing was excluded.
+  excludedFiles?: ExcludedFile[];
+}
+export interface ExcludedFile {
+  ref: string; // the repository path of the changed file
+  reason: string; // why the planner did not count it as a UI file, and what would make it count
 }
 // The gate treats unresolved files and coverage gaps as not-covered evidence.
 
@@ -977,9 +986,10 @@ export interface SurfaceConfig {
   // Declares that this surface is the same screen as the discovered route with the same id, and
   // exists to control that screen's scan URL. Surface ids and route screen ids are one namespace,
   // so without this the planner cannot tell an intended URL override from two different screens
-  // that happen to share a key, and sharing a key silently drops one of them from the scan. It is
-  // only needed when the surface URL differs from the route's own URL: an identical URL is the
-  // same screen on its face and needs no declaration. Absent means false.
+  // that happen to share a key. The planner refuses a surface whose id is also a discovered
+  // route's screen id unless this is set. It never compares the two URLs, so the declaration is
+  // needed even when they are the same, because a URL does not determine which screen renders.
+  // Absent means false.
   overridesDiscoveredRoute?: boolean;
 }
 export interface UsablConfig {

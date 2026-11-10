@@ -441,6 +441,15 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
+  excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+}
+
+// A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
+// a file in a test folder that no screen imports. Not a gap: the gate never reads it. Absent and
+// empty both mean nothing was excluded.
+export interface ExcludedFile {
+  ref: string;    // repository path
+  reason: string; // why it was left out, and what would make it count
 }
 
 export interface Receipt {
@@ -1379,6 +1388,32 @@ rules that ran, because Deque records applicability for its own rules. Those cou
 
 ### How it works
 
+**Which files changed.** A local run takes the paths
+`git status --porcelain -z --untracked-files=all` reports. A run with `--trusted-ref` joins them
+with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every git listing usabl reads
+(status, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z` and is split on NUL.
+Without `-z`, git quotes a name that holds a byte above 0x7f, a newline, a tab, or a double quote,
+so `src/pages/Über.tsx` arrived as `"src/pages/\303\234ber.tsx"`, matched no UI glob, and a CI
+run read as nothing to check. Names are never trimmed, so a name that starts or ends with a space
+is kept. A `**` in a glob matches any character, a newline included, so a name with a newline
+matches `src/**`. A changed path that starts and ends with a double quote, the shape git prints
+for a quoted name, is an `unresolved` gap that says why, never a file outside the UI globs. A real
+file name of that shape is a gap too, and the reason says to rename it. A name such as `"draft".md`
+does not have that shape and is read as the file it names. The same listing reads the trusted
+requirement files and the guarded files at a ref, so a file there with such a name is read too.
+
+New untracked files are listed one by one. Without `--untracked-files=all`, git status lists a new
+folder as the folder alone, which matches no file glob, and a user's
+`status.showUntrackedFiles=no` hides new files completely. A listing longer than usabl reads (10
+MB of output) stops the run with an error that says so, never a short list read as complete.
+
+A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
+a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
+the files that import it, and the router file or `usabl.routes.json` when a route names it. An
+import left pointing at the old path is an import usabl cannot resolve, so a file moved into a
+test folder under the same name is a gap (see "Test files" below). A move that changes nothing
+else, such as moving a route's entry file while the route still names the old path, is not seen.
+
 Given a set of changed files, discover which surfaces they affect:
 
 1. Build a route manifest from the router source (or use a configured override).
@@ -1422,6 +1457,33 @@ not on the climb, such as another workspace package, does not count. A dependenc
 configured surface with provenance `wide-blast`, and each such screen carries a `reason` that
 names each dependency file and why it counts. With no route and no surface, each dependency file
 is an `unresolved` gap that says there was no screen to check, never nothing to check.
+Surfaces are queued by screen id, never by url, on every path: a dependency change, a changed
+file that matches `wideBlastGlobs` and that a surface lists in its `files`, a route-graph match,
+and a manual surface match. A surface that shares its url with a discovered route or with another
+surface is queued under its own id, with its own readiness signal and requirements, because a url
+does not determine which screen renders. A surface that overrides a discovered route
+(`overridesDiscoveredRoute`) has the route's id, so the two are one entry.
+
+**Test files.** A file named like a test, `*.test.*` or `*.spec.*`, is never a UI file, wherever
+it is. A file in a folder named `test`, `tests`, or `__tests__` is a UI file only when a screen
+reaches it: a route entry file's import graph includes it, or a surface lists it in its `files`.
+So a screen component kept in `src/tests/` is checked when it changes. A file in such a folder
+that matches `uiFileGlobs` and that no screen reaches, such as `src/test/setup.ts`, a helper in
+`src/__tests__/`, or a mock request handler in `src/test/`, is left out and disclosed in
+`coverage.excludedFiles`, with a reason that says usabl found no import of it and how to make it
+count. It is not a gap, so a pull request that edits only test helpers still has nothing to check.
+`usabl check` prints these files under "excluded files, not checked", marked as not blocking, on
+any run, an idle one included. It prints the first 20 and then the count of the rest; the JSON
+output holds the full list.
+
+"No screen reaches it" is read from the import graph, so it is a guess when the graph holds an
+import usabl could not resolve. When an unresolved import's last path segment, with or without its
+extension, equals the file's name without its extension (or its folder name, for an `index` file),
+the file is an `unresolved` gap that names the import and the file that holds it. For example,
+`src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
+`src/tests/Dashboard.tsx` is a gap. An unresolved import that names another file changes nothing.
+A dynamic import built from a template literal, such as `` import(`../tests/${name}`) ``, names no
+file, so a file it loads stays excluded. That is a known limit.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
@@ -1450,8 +1512,9 @@ with that extension is not seen and the file usabl did find is attributed.
 
 Coverage answers two different questions.
 
-**Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
-`uiFileGlobs`, no changed file is a dependency change of the app, and no changed file maps to a
+**Nothing to check** (`coverage.nothingToCheck === true`): no changed file is a UI file (it
+matches `uiFileGlobs` and is not a test file, see "Test files" above), no changed path looks
+quoted, no test-folder file is a gap, no changed file is a dependency change of the app, and no changed file maps to a
 documentation page under a `usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
 exit 0, and an explicit "nothing to check" message. A backend-only PR, a prose change
 with no manifested doc page, and a clean tree with no diff are this path. This is not

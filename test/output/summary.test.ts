@@ -694,3 +694,52 @@ describe('formatSummary', () => {
     expect(out).not.toContain('floor');
   });
 });
+
+// A guarded file name comes from the repository, so it can hold an escape byte that would drive
+// the terminal. It prints neutralized and bounded like every other path.
+describe('formatSummary guarded paths line', () => {
+  it('neutralizes and bounds each guarded path name', () => {
+    const escaped = 'policy/\u001b[31mred\u001b[0m.yaml';
+    const long = `policy/${'a'.repeat(500)}.yaml`;
+    const text = formatSummary(baseResult({ dirtyGuardedPaths: [escaped, long] }));
+    const line = text.split('\n').find((entry) => entry.startsWith('  guarded paths changed:')) ?? '';
+    expect(line).not.toContain('\u001b');
+    expect(line).toContain(neutralizePrintedText(escaped));
+    expect(line).not.toContain('a'.repeat(300));
+  });
+});
+
+// A pull request can change thousands of helper files. The terminal names the first 20 of each list
+// and says how many more there are and where the full list is.
+describe('formatSummary long file lists', () => {
+  const refs = (prefix: string, count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `${prefix}/f${String(index).padStart(3, '0')}.ts`);
+
+  it('shows at most 20 excluded files, then the count of the rest', () => {
+    const excludedFiles = refs('src/test', 25).map((ref) => ({ ref, reason: 'test helper' }));
+    const text = formatSummary(
+      baseResult({ coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true, excludedFiles } }),
+    );
+    expect(text).toContain('excluded files, not checked: 25');
+    expect(text).toContain('src/test/f019.ts');
+    expect(text).not.toContain('src/test/f020.ts');
+    expect(text).toContain('5 more excluded files not shown');
+    expect(text).toContain('--json');
+  });
+
+  it('shows at most 20 other unplaced files, then the count of the rest', () => {
+    const gaps = refs('src/widgets', 30).map((ref) => ({ ref, state: 'unresolved' as const, reason: 'not placed' }));
+    const text = formatSummary(
+      baseResult({
+        verdict: 'not_covered',
+        exitCode: 3,
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: gaps.map((gap) => gap.ref), gaps, nothingToCheck: false },
+      }),
+    );
+    expect(text).toContain('other files not placed on any screen: 29');
+    const listed = text.split('\n').filter((line) => line.startsWith('      src/widgets/'));
+    expect(listed).toHaveLength(20);
+    expect(text).toContain('9 more files not placed on any screen not shown');
+    expect(text).toContain('--json');
+  });
+});
