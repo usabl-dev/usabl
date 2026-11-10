@@ -48,7 +48,7 @@ const scan: ScreenScan = {
   reachedSelectorPresent: null,
 };
 
-function depsAt(now: string, waivers: unknown[]): Deps {
+function depsAt(now: string, waivers: unknown[], tree = 'tree-a'): Deps {
   const files = {
     'usabl.config.json': JSON.stringify(config),
     'usabl.routes.json': JSON.stringify({ routes: [] }),
@@ -60,7 +60,7 @@ function depsAt(now: string, waivers: unknown[]): Deps {
     files,
     headContents: { ...files },
     headBlobs: { 'usabl.config.json': 'blob-config', '.usabl-waivers.json': 'blob-waivers' },
-    writeTree: 'tree-a',
+    writeTree: tree,
     changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
     scans: { clusters: scan },
   });
@@ -97,8 +97,8 @@ interface Stop {
   stdout: string;
 }
 
-async function stopAt(fs: MemoryFs, now: string): Promise<Stop> {
-  const deps = depsAt(now, [liveWaiver]);
+async function stopAt(fs: MemoryFs, now: string, tree = 'tree-a'): Promise<Stop> {
+  const deps = depsAt(now, [liveWaiver], tree);
   const stderr: string[] = [];
   const stdout: string[] = [];
   let engineRuns = 0;
@@ -169,5 +169,48 @@ describe('stop hook fast path and waiver expiry', () => {
     const next = await stopAt(fs, '2026-04-01T00:00:00.000Z');
     expect(next.engineRuns).toBe(1);
     expect(next.stderr).not.toContain(FAST_PATH);
+  });
+});
+
+describe('the stop hook says why a stored receipt did not verify', () => {
+  const NOT_VERIFIED_NOTICE = 'The stored receipt for this tree did not verify, so this stop ran a full check';
+
+  it('names the waiver that ended when the receipt for the same tree stops standing', async () => {
+    const fs = new MemoryFs();
+    await stopAt(fs, MINTED);
+    const after = await stopAt(fs, EXPIRES);
+    expect(blockOf(after).decision).toBe('block');
+    expect(after.stderr).toContain(NOT_VERIFIED_NOTICE);
+    expect(after.stderr).toContain(
+      `a waiver this receipt relied on ended at ${EXPIRES}, so the accessibility barrier it waived counts again`,
+    );
+  });
+
+  it('shows the reason to the person when the full check then verifies', async () => {
+    const fs = new MemoryFs();
+    await stopAt(fs, MINTED);
+    // The same tree, minted by another engine build: the full run verifies, and the allow says why
+    // the stored receipt was not used.
+    const stored = JSON.parse((await fs.readFile('.usabl/receipt.json')) ?? 'null') as Record<string, unknown>;
+    stored['runnerVersion'] = 'another-engine';
+    await fs.writeFile('.usabl/receipt.json', JSON.stringify(stored));
+
+    const next = await stopAt(fs, '2026-04-01T00:00:00.000Z');
+    expect(next.engineRuns).toBe(1);
+    const message = (JSON.parse(next.stdout.trim()) as { systemMessage?: string }).systemMessage ?? '';
+    expect(message.startsWith('VERIFIED')).toBe(true);
+    expect(message).toContain(NOT_VERIFIED_NOTICE);
+    expect(message).toContain('a different usabl engine minted the receipt');
+  });
+
+  it('stays quiet when the receipt did not verify only because the files changed', async () => {
+    const fs = new MemoryFs();
+    await stopAt(fs, MINTED, 'tree-a');
+    // An edit since the last receipt is the normal reason for a full check, so a verified stop
+    // after it says nothing more than before.
+    const next = await stopAt(fs, '2026-04-01T00:00:00.000Z', 'tree-b');
+    expect(next.engineRuns).toBe(1);
+    expect(next.stdout).toBe('');
+    expect(next.stderr).not.toContain(NOT_VERIFIED_NOTICE);
   });
 });

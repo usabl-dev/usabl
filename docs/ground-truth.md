@@ -3083,6 +3083,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
+- A stored receipt that does not verify: the hook runs the full check, as before. When the
+  receipt's tree still matches, so something other than an edit stopped it, a notice follows
+  the decision line: "Note: The stored receipt for this tree did not verify, so this stop ran a
+  full check instead of using it. Why: ..." with one plain reason per failed binding, for
+  example that a waiver the receipt relied on ended at a given time. The reasons are usabl's
+  own sentences, each bounded. A receipt that did not verify because the files changed adds no
+  notice, so a verified stop after an edit stays quiet.
 - Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
   hook reads and writes it under the repository root; `usabl check` writes it in the folder it
   runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
