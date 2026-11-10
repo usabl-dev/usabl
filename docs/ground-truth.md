@@ -4419,12 +4419,8 @@ loopback http. They do not follow redirects. Both are loaded by a dynamic import
 command, and a test pins that no check, gate, or hook entry point can reach their code
 (threat model, Threat 18).
 
-The mock file is typed with Figma's published types (the `@figma/rest-api-spec` development
-dependency, types only, imported by tests and never by `src`), so it holds every field they
-require. A type test also holds that every published `GetFileResponse` fits the local types the
-reader returns, so the reader never refuses a file by type that Figma can send. That test found
-one: a slot component property holds an id object, not text. The reader now accepts it, and a slot
-property never reads as text.
+A component property can be a slot, whose value is an id object, not text. The reader accepts a
+file that uses one, and a slot property never reads as text.
 
 This was tested end to end with a mock file built from Figma's published file format; not yet run
 on a real design file.

@@ -84,7 +84,6 @@
     "prepare": "node -e \"if (require('node:fs').existsSync('scripts/install-git-hooks.sh')) process.exitCode = require('node:child_process').spawnSync('bash', ['scripts/install-git-hooks.sh'], { stdio: 'inherit' }).status ?? 1\""
   },
   "devDependencies": {
-    "@figma/rest-api-spec": "0.46.0",
     "@rhds/elements": "5.0.0",
     "@types/js-yaml": "4.0.9",
     "@types/node": "^22.0.0",

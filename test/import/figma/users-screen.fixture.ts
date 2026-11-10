@@ -3,38 +3,91 @@
  * notes follow the kit in src/import/figma/kit.ts: stamps are component instances placed over the design
  * element they annotate, and coordinates are absolute, as in the API.
  *
- * Every node and the file itself are typed with Figma's published types from @figma/rest-api-spec,
- * so this file does not compile unless it carries every field those types require, filled with
- * plain defaults. It is a file Figma could send, not only the subset usabl reads. The package holds
- * types only, and only tests import it.
+ * The file carries every field Figma's published GetFileResponse type requires for each node type,
+ * filled with plain defaults, so it is a file Figma could send and not only the subset usabl reads.
+ * The types below spell those fields out. A compile-time check against Figma's own package is not
+ * part of this repository yet.
  */
 import type {
-  CanvasNode,
-  Component,
-  ComponentProperty,
-  ComponentSet,
-  DocumentNode,
-  FrameNode,
-  GetFileResponse,
-  InstanceNode,
-  Rectangle,
-  SubcanvasNode,
-  TextNode,
-} from '@figma/rest-api-spec';
-import type { FigmaAnnotation } from '../../../src/import/figma/types.js';
+  FigmaAnnotation,
+  FigmaComponentProperty,
+  FigmaFile,
+  FigmaNode,
+  FigmaRect,
+  FigmaSlotContentId,
+} from '../../../src/import/figma/types.js';
 
-function box(x: number, y: number, width: number, height: number): Rectangle {
+// The fields Figma's types require on every node, and on frames, instances, and text.
+interface SpecNode extends FigmaNode {
+  visible: boolean;
+  scrollBehavior: 'SCROLLS';
+}
+interface SpecLayer extends SpecNode {
+  blendMode: 'PASS_THROUGH';
+  absoluteRenderBounds: FigmaRect;
+  fills: never[];
+  strokes: never[];
+  effects: never[];
+}
+interface SpecText extends SpecLayer {
+  characters: string;
+  style: Record<string, never>;
+  characterStyleOverrides: never[];
+  styleOverrideTable: Record<string, never>;
+  lineTypes: Array<'NONE'>;
+  lineIndentations: number[];
+}
+interface SpecFrame extends SpecLayer {
+  children: FigmaNode[];
+  clipsContent: boolean;
+}
+interface SpecInstance extends SpecFrame {
+  componentId: string;
+  componentProperties: Record<string, FigmaComponentProperty>;
+  overrides: never[];
+}
+// A slot property, as Figma's types allow on an instance: its value is an id for the slot's
+// content, never text.
+interface SpecSlotProperty extends FigmaComponentProperty {
+  type: 'SLOT';
+  value: FigmaSlotContentId;
+}
+interface SpecComponent {
+  key: string;
+  name: string;
+  description: string;
+  componentSetId: string;
+  documentationLinks: never[];
+  remote: boolean;
+}
+interface SpecComponentSet {
+  key: string;
+  name: string;
+  description: string;
+  documentationLinks: never[];
+  remote: boolean;
+}
+interface SpecFile extends FigmaFile {
+  role: 'viewer';
+  editorType: 'figma';
+  schemaVersion: number;
+  styles: Record<string, never>;
+  components: Record<string, SpecComponent>;
+  componentSets: Record<string, SpecComponentSet>;
+}
+
+function box(x: number, y: number, width: number, height: number): FigmaRect {
   return { x, y, width, height };
 }
 
-// The fields every layer here shares, with plain defaults.
-function layer(id: string, name: string, rect: Rectangle) {
+function layer(id: string, name: string, type: string, rect: FigmaRect): SpecLayer {
   return {
     id,
     name,
+    type,
     visible: true,
-    scrollBehavior: 'SCROLLS' as const,
-    blendMode: 'PASS_THROUGH' as const,
+    scrollBehavior: 'SCROLLS',
+    blendMode: 'PASS_THROUGH',
     absoluteBoundingBox: rect,
     absoluteRenderBounds: rect,
     fills: [],
@@ -43,10 +96,9 @@ function layer(id: string, name: string, rect: Rectangle) {
   };
 }
 
-function text(id: string, characters: string, rect: Rectangle): TextNode {
+function text(id: string, characters: string, rect: FigmaRect): SpecText {
   return {
-    ...layer(id, characters, rect),
-    type: 'TEXT',
+    ...layer(id, characters, 'TEXT', rect),
     characters,
     style: {},
     characterStyleOverrides: [],
@@ -56,47 +108,49 @@ function text(id: string, characters: string, rect: Rectangle): TextNode {
   };
 }
 
-function frame(id: string, name: string, rect: Rectangle, children: SubcanvasNode[]): FrameNode {
-  return { ...layer(id, name, rect), type: 'FRAME', children, clipsContent: false };
+function frame(id: string, name: string, rect: FigmaRect, children: FigmaNode[]): SpecFrame {
+  return { ...layer(id, name, 'FRAME', rect), children, clipsContent: false };
 }
 
 function stamp(
   id: string,
   name: string,
   componentId: string,
-  rect: Rectangle,
-  componentProperties: Record<string, ComponentProperty>,
-): InstanceNode {
-  return {
-    ...layer(id, name, rect),
-    type: 'INSTANCE',
-    children: [],
-    clipsContent: false,
-    componentId,
-    componentProperties,
-    overrides: [],
-  };
+  rect: FigmaRect,
+  componentProperties: Record<string, FigmaComponentProperty>,
+): SpecInstance {
+  return { ...frame(id, name, rect, []), type: 'INSTANCE', componentId, componentProperties, overrides: [] };
 }
 
-function component(key: string, name: string, componentSetId: string): Component {
+function component(key: string, name: string, componentSetId: string): SpecComponent {
   return { key, name, description: '', componentSetId, documentationLinks: [], remote: true };
 }
 
-function componentSet(key: string, name: string): ComponentSet {
+function componentSet(key: string, name: string): SpecComponentSet {
   return { key, name, description: '', documentationLinks: [], remote: true };
 }
 
 // Text and boolean properties carry Figma's "#id" suffix. Variant properties do not.
-function variant(value: string): ComponentProperty {
+function variant(value: string): FigmaComponentProperty {
   return { type: 'VARIANT', value };
 }
-function textProperty(value: string): ComponentProperty {
+function textProperty(value: string): FigmaComponentProperty {
   return { type: 'TEXT', value };
 }
+function slotProperty(sessionID: number, localID: number): SpecSlotProperty {
+  return { type: 'SLOT', value: { guid: { sessionID, localID } } };
+}
 
-// The refresh control is icon only, so its accessible name comes from the Button Details card. The
-// note on it is a Dev Mode annotation, which Figma's published node types do not spell out.
-const refreshIcon: FrameNode & { annotations: FigmaAnnotation[] } = {
+/**
+ * An instance whose component has a slot property named "Content", for tests that add it to a copy
+ * of the mock file. The mock file itself holds none, so the import of it is unchanged.
+ */
+export function slotInstance(id: string): SpecInstance {
+  return stamp(id, 'Card', '13:1', box(0, 0, 100, 100), { 'Content#9:9': slotProperty(1, 2) });
+}
+
+// The refresh control is icon only, so its accessible name comes from the Button Details card.
+const refreshIcon: SpecFrame & { annotations: FigmaAnnotation[] } = {
   ...frame('1:5', 'refresh-icon', box(160, 140, 32, 32), []),
   annotations: [{ label: "Spins while loading. Announce 'Refreshing'." }],
 };
@@ -123,7 +177,15 @@ const usersFrame = frame('1:1', 'Users', box(0, 0, 1480, 800), [
   }),
 ]);
 
-const page: CanvasNode = {
+interface SpecCanvas extends SpecNode {
+  children: FigmaNode[];
+  backgroundColor: { r: number; g: number; b: number; a: number };
+  prototypeStartNodeID: null;
+  flowStartingPoints: never[];
+  prototypeDevice: { type: 'NONE'; rotation: 'NONE' };
+}
+
+const page: SpecCanvas = {
   id: '0:1',
   name: 'Page 1',
   type: 'CANVAS',
@@ -136,7 +198,7 @@ const page: CanvasNode = {
   children: [usersFrame],
 };
 
-const documentNode: DocumentNode = {
+const documentNode: SpecNode & { children: FigmaNode[] } = {
   id: '0:0',
   name: 'Document',
   type: 'DOCUMENT',
@@ -145,7 +207,7 @@ const documentNode: DocumentNode = {
   children: [page],
 };
 
-export const usersScreen: GetFileResponse = {
+export const usersScreen: SpecFile = {
   name: 'Users screen',
   role: 'viewer',
   lastModified: '2026-10-08T00:00:00Z',

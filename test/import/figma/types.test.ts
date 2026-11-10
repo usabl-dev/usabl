@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { propertyValue } from '../../../src/import/figma/kit.js';
 import { readFigmaFile } from '../../../src/import/figma/types.js';
-import { usersScreen } from './users-screen.fixture.js';
+import { slotInstance, usersScreen } from './users-screen.fixture.js';
 
 describe('readFigmaFile', () => {
   it('reads the mock file after a JSON round trip, as it arrives from the network', () => {
@@ -19,20 +19,11 @@ describe('readFigmaFile', () => {
   });
 
   it('reads a file whose instance has a slot property, and never reads the slot as text', () => {
-    // Figma's published types allow a slot property, whose value is an id object, not text.
+    // Figma's file format allows a slot property, whose value is an id object, not text.
     const slotted = structuredClone(usersScreen);
-    const users = slotted.document.children[0]?.children[0];
-    if (users === undefined || users.type !== 'FRAME') throw new Error('fixture has no Users frame');
-    users.children.push({
-      ...users,
-      id: '6:1',
-      name: 'Card',
-      type: 'INSTANCE',
-      children: [],
-      componentId: '13:1',
-      overrides: [],
-      componentProperties: { 'Content#9:9': { type: 'SLOT', value: { guid: { sessionID: 1, localID: 2 } } } },
-    });
+    const users = slotted.document.children?.[0]?.children?.[0];
+    if (users?.children === undefined) throw new Error('fixture has no Users frame');
+    users.children.push(slotInstance('6:1'));
     const read = readFigmaFile(JSON.parse(JSON.stringify(slotted)));
     expect(read).not.toBeNull();
     const card = read?.document.children?.[0]?.children?.[0]?.children?.find((node) => node.id === '6:1');

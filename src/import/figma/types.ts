@@ -3,8 +3,7 @@
  * that shape before anything reads it.
  *
  * The types are kept local so usabl's published types never depend on Figma's package. They are a
- * subset of Figma's GetFileResponse: every field here is one Figma's published types also have, and
- * a type test holds that every GetFileResponse fits them.
+ * subset of Figma's GetFileResponse: every field here is one Figma's published types also have.
  * Dev Mode annotations are typed as a bare object in Figma's REST types, so their shape follows the
  * Plugin API (label, labelMarkdown) and is to be confirmed on a real design file.
  *

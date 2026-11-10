@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runImportCommand, type ImportOutcome } from '../../../src/import/figma/cli.js';
-import type { FrameNode } from '@figma/rest-api-spec';
+import type { FigmaNode } from '../../../src/import/figma/types.js';
 import { normalize } from '../../../src/intake/normalize.js';
 import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from '../../../src/surfaces/scrub.js';
 import { MOCK_TOKEN, startMockFigma, type MockFigma } from './mock-server.js';
@@ -160,11 +160,11 @@ describe('usabl import figma', () => {
 describe('usabl import figma frames', () => {
   // The mock Users file plus a Settings frame that holds no kit notes.
   const withSettings = structuredClone(usersScreen);
-  const canvas = withSettings.document.children[0];
-  const users = canvas?.children[0];
-  if (canvas === undefined || users === undefined || users.type !== 'FRAME') throw new Error('fixture has no Users frame');
-  const settings: FrameNode = { ...users, id: '5:0', name: 'Settings', children: [] };
-  canvas.children.push(settings);
+  const canvas = withSettings.document.children?.[0];
+  const users = canvas?.children?.[0];
+  if (canvas === undefined || users === undefined) throw new Error('fixture has no Users frame');
+  const settings: FigmaNode = { ...users, id: '5:0', name: 'Settings', children: [] };
+  canvas.children?.push(settings);
 
   let two: MockFigma;
   beforeAll(async () => {
