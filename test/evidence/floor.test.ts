@@ -126,7 +126,7 @@ describe('parseEvidenceFloor total', () => {
       }
       expect(refused).toBeInstanceOf(InputRefusedError);
       expect((refused as InputRefusedError).field).toBe(field);
-      expect(String(refused)).toMatch(/more barriers in total than usabl can count exactly/);
+      expect(String(refused)).toMatch(/more accessibility barriers in total than usabl can count exactly/);
       expect(String(refused)).not.toContain(String(Number.MAX_SAFE_INTEGER));
     }
     expect(() => parseEvidenceFloor({ version: 2, entries: [entry('button-name', Number.MAX_SAFE_INTEGER)] })).not.toThrow();

@@ -114,6 +114,9 @@ export interface TranscriptStop {
   // host or the frame, and the announcement holds no name, role, or state of the control, so a
   // check must not read their absence as a barrier.
   focusUnreadable?: FocusUnreadable;
+  // Set only when the document body had focus at this stop, as read from the page. The path cannot
+  // say so: a body with an id has that id as its path. The blank-page detector reads this field.
+  onBody?: true;
   // Set only by a runner that waits for the page to settle after each step, when the page was still
   // changing at the end of that wait. Focus and announcements were then read on a page that had not
   // finished reacting, so a check must not decide anything from this stop. waitedMs is for people
@@ -559,6 +562,18 @@ export interface DocArtifact {
   // covered the surface. Set on the artifact as well as on each entry, so an artifact with no
   // entries still says where it came from. Absent means it came from content requirements.
   origin?: 'page';
+  // The git tree the report was made from: the receipt's tree when the run minted one, otherwise
+  // the tree read when the docs run started. Absent when usabl could not read a tree.
+  sourceTree?: string;
+  // The tree read when the docs run started, recorded only when it differs from the receipt's
+  // tree in sourceTree. Then a file changed while the run scanned, the scan saw no one whole tree,
+  // and the report is stale against every tree.
+  startTree?: string;
+  // Set when the report is listed or read against a tree other than sourceTree, it records no
+  // tree, or a file changed while it was made. The report needs to be made again, and nothing in
+  // it is proof for the code as it is now. staleReason says which trees differ and what to run.
+  stale?: true;
+  staleReason?: string;
 }
 
 // ---- injected dependencies (all I/O enters here; run() has none of its own) ----
@@ -815,6 +830,11 @@ export interface Page {
   // boundary, the path of each tree is joined by ' >> ' for a shadow root and by
   // ' >> internal:control=enter-frame >> ' for a frame, so each control has its own path.
   activePath(): Promise<string>;
+  // A key for the element that has focus. It stays the same while that element stays in the
+  // document, even when elements around it are added or removed and its path changes. Null when no
+  // element has focus or it cannot be read. The key holds no page text and means something only on
+  // this page while it is open, so nothing stores it or compares it across pages or runs.
+  activeElementKey(): Promise<string | null>;
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
   // The paths of the open modal dialogs that hold the element that has focus, nearest first, in the

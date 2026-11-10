@@ -50,6 +50,24 @@ describe('rhds-dialog-name', () => {
   it('passes a dialog with a heading in its header or default slot, even closed', async () => {
     const { drafts } = await run({
       query: { [DIALOG_SEL.host]: [host], [headingsIn(host)]: [`${host} > h2`] },
+      markup: { [`${host} > h2`]: { defaultSlotText: 'Settings' } },
+    });
+    expect(drafts).toEqual([]);
+  });
+
+  // An empty heading names nothing, so it must not let the rule skip the accessibility tree check.
+  it('fails an open dialog whose only heading is empty and whose tree name is empty', async () => {
+    const { drafts } = await run({
+      query: { [DIALOG_SEL.host]: [host], [headingsIn(host)]: [`${host} > h2`] },
+      shadow: { [host]: { [DIALOG_SEL.inner]: ax('', 'dialog') } },
+    });
+    expect(byRule(drafts, RULE)).toEqual([expect.objectContaining({ rule: RULE, confidence: 'fail', elementPath: host })]);
+  });
+
+  it('passes an open dialog with an empty heading when the tree gives it a name', async () => {
+    const { drafts } = await run({
+      query: { [DIALOG_SEL.host]: [host], [headingsIn(host)]: [`${host} > h2`] },
+      shadow: { [host]: { [DIALOG_SEL.inner]: ax('Settings', 'dialog') } },
     });
     expect(drafts).toEqual([]);
   });

@@ -6,7 +6,7 @@
  * Nothing here converts advisory display state into a process exit or a verdict.
  */
 import { resolve, relative } from 'node:path';
-import { loadConfig } from '../cli.js';
+import { loadConfig } from '../intake/load-config.js';
 import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';
@@ -349,11 +349,15 @@ export function projectOverlay(
     exitCode: safe.exitCode,
     verdict: safe.verdict,
     schemaVersion: safe.schemaVersion,
-    summary: safe.summary,
+    // The summary and a gap's reason are framed by carrier, as the pull request comment frames
+    // them: a reason can quote an error the page threw during the scan, and the summary can carry
+    // a reason. Nothing matches on either, and the client unwraps the frame before it shows them.
+    // A gap's ref stays as written, because the client matches it with the screen url exactly.
+    summary: frameUntrusted(safe.summary),
     coverage: {
       affected: safe.coverage.affected,
       unresolvedFiles: safe.coverage.unresolvedFiles,
-      gaps: safe.coverage.gaps,
+      gaps: safe.coverage.gaps.map((gap) => ({ ref: gap.ref, state: gap.state, reason: frameUntrusted(gap.reason) })),
       nothingToCheck: safe.coverage.nothingToCheck,
     },
     findings: safe.findings.map((finding) => {
@@ -371,8 +375,12 @@ export function projectOverlay(
         elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
         identityBasis: finding.identityBasis,
         whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
-        why: finding.why,
-        fix: finding.fix,
+        // Framed by carrier, not by author, as the pull request comment frames them. why and fix are
+        // provider prose for a curated rule, but for every other axe rule they fall back to axe's
+        // failure summary, which quotes attribute values from the page. The client unwraps the frame
+        // before it shows either one.
+        why: frameUntrusted(finding.why),
+        fix: frameUntrusted(finding.fix),
         appSource: finding.appSource ?? null,
       };
     }),

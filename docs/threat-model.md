@@ -555,6 +555,33 @@ its own, so a rule is whatever that runner wrote, and a pull request author choo
 any file they add under a guarded directory, so a guarded path is text that author wrote.
 Deciding by author does not survive either case, so these surfaces now decide by carrier too.
 
+The dev-server overlay's result endpoint frames each finding's text by carrier as well: the
+element path, name, role, and key, what a user experiences, why it matters, and the fix. Why and
+the fix used to be passed through unframed because a provider writes them, but for every axe rule
+without a curated note they are axe's failure summary, which quotes the page. The overlay client
+unwraps the frame before it shows a value and writes every value with `textContent`, so a person
+reads the plain text. Each coverage gap's reason and the gate's summary are framed the same way:
+a reason can quote an error the page threw during the scan, such as `scan failed: ...`, and the
+summary can carry a reason. The client shows both through the same unwrap.
+
+Every other field on the endpoint is unframed, and each is listed here with its reason:
+
+- Fields the client matches on, because a frame would break the match: a finding's rule, layer,
+  screen id, severity, and status; each coverage gap's ref, which the overlay compares with the
+  screen url exactly; and each affected screen's id and url, which the overlay compares with the
+  page address.
+- Values from a closed set, numbers, and values usabl makes, which no page chooses: a finding's
+  evidence class, confidence, and identity basis; a gap's state; the verdicts and exit codes;
+  `nothingToCheck`; the counts; and the receipt's tree, hashes, versions, screen ids, and time.
+- Text that is shown and not matched, and is not framed yet. A model that fetches the endpoint
+  directly reads these with no frame. Each is scrubbed, and the client writes it with
+  `textContent`. `floorUnconfirmed[].notice` is usabl's own sentence, but it names a screen id,
+  which can come from a route literal in the application, and rule names. `floorHeadroom` and
+  `floorUnconfirmed` carry the same screen ids and rule names. `dirtyGuardedPaths` holds file
+  names that a pull request author chooses. `unresolvedFiles`, each affected screen's
+  `importChain`, and a finding's `appSource` hold file paths from the repository, and
+  `workspaceRoot` is the folder the dev server runs in.
+
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
@@ -623,6 +650,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
   inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
   draft stays, so the screen is not covered rather than passed.
+- Focus on the body ends the walk as complete only when one more Tab lands on a stop the walk
+  already reached: the same element by the browser's node id, or the same path. When the browser
+  gives a node id for both, a path match alone counts only for the first stop walked. A page
+  script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
+  body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
+  control not yet walked, so the walk ends with the truncation draft instead. A walk that reaches
+  no stop is complete only when the extra Tab leaves focus on the body, and that page is left to
+  the blank-page detector, which runs in the CLI only. `checkPage` has no blank-page detector, so
+  there a blank page is caught only by a `reachedWhen` readiness signal.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
@@ -649,6 +685,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   leaves out of the accessibility tree for a `showModal()` dialog and Safari with VoiceOver hides
   for an `aria-modal` dialog. See ground-truth for the platform facts.
 
+- The live-region capture records only text in the accessibility tree. A page that writes the
+  expected text into a live region under an `aria-hidden`, `inert`, `hidden`, `display: none`, or
+  `visibility: hidden` child, where no screen reader speaks it, no longer satisfies a flow
+  requirement: a change whose added text is all hidden is not recorded, and the text recorded for
+  the region leaves the hidden parts out. These reads run in the live world, so page script cannot
+  patch the functions they call, such as `getComputedStyle` or `getAttribute`. Page script still
+  owns the DOM and can change the styles and attributes themselves. Text hidden only on screen, such as
+  PatternFly's screen-reader class, is still recorded, because screen readers speak it.
+
 - A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
@@ -669,7 +714,10 @@ browser does not expose. Where the browser exposes nothing, axe is told nothing 
 Page script still shares the DOM and the main thread with axe's world, so it can change the DOM
 between axe's steps and can tell from the timing that axe runs.
 
-**Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
+**Tests:** `test/providers/keyboard-walk.real.integration.test.ts` (the end of the walk in Chromium,
+a focus handler that blurs, a keydown handler that swallows Tab), `test/deps/real.integration.test.ts`
+(text added to a live region under each kind of hidden content, and the flow level), and
+`test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
 getter, a sandboxed frame, a frame in another process, a chain of processes, a frame that stops
 answering, frames axe never finds, roles from layout), `test/deps/axe-world-frames.test.ts` (removed,
 navigating, and changed frames, frames no session reaches, results that are not results), and
@@ -693,13 +741,18 @@ carry exactly one Host header that names a local host or the configured bind hos
 own port, and any Origin must be a browser's exact serialization matching that origin. Anything
 else gets 403. The Result is scrubbed before it is projected, and a failed run's reason stays in
 the dev server log. The webpack event stream carries only the event name, never a result, path,
-or page text. The webpack plugin does nothing outside development mode, so a production bundle
-has no overlay loader, no endpoints, and no source attributes.
+or page text. Neither plugin puts anything in a production build. The webpack plugin does nothing
+outside development mode. The Vite plugin adds the overlay loader and source attributes only when
+Vite resolves its config with the `serve` command: `vite build`, an SSR build, and
+`vite build --watch` run with `build`, and a tool that never resolves the config gets nothing. So
+a production bundle has no overlay loader, no endpoints, and no source attributes.
 
 **Tests:** `test/surfaces/vite-plugin.test.ts` (Host, Origin, duplicate Host, IPv6, live port),
-`test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and other port refused on
-the result, client, and event paths; production and no-mode builds carry nothing), and
-`test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
+`test/surfaces/vite-plugin-build.test.ts` (a real `vite build` carries no overlay loader, the dev
+server still serves it, and nothing is added before Vite resolves its config; this test does not
+check source attributes), `test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and
+other port refused on the result, client, and event paths; production and no-mode builds carry
+nothing), and `test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
 
 **Status:** [x] Shipped for Vite and webpack-dev-server 5.
 
@@ -1015,6 +1068,20 @@ jobs. The rule they hold: no job that decides a verdict, or holds a write token,
 request head code in Node or a shell. Head code runs only in `build-app`, and as page script
 inside the judge's Chromium.
 
+Two values the installer reads reach these files: the engine pin, only as a full commit SHA, and
+the default branch, read from the clone's `refs/remotes/origin/HEAD`. The branch is written only
+when it is letters, digits, and `. _ - /`, and always quoted, into each workflow's trigger and
+nowhere else: the `pull_request` trigger of the gate and the docs gate, and the `push` trigger of
+the history workflow, which also names it in its scan job's `if:`. Any other name is not written:
+the file names `main` and the report prints a step to check it.
+
+The branch filter applies to the `pull_request` event only. GitHub takes no branch filter on
+`pull_request_review`, so a review on a pull request into any branch starts the gate. `build-app`
+does not run on a review. The judge looks for the `pull_request` run that built this exact pull
+request, head, and base. A pull request into another branch normally has none, because the branch
+filter kept the gate from running on it, so the judge fails closed and `usabl-required` reports
+red. That red check blocks nothing on a branch that does not require it, and it is never a pass.
+
 What runs where, and what each job holds:
 
 | Job | Runs head code? | Token | Secrets | Checks out |
@@ -1148,8 +1215,11 @@ Residual risks that remain:
   dismissal are required (classic `require_code_owner_reviews`, `required_approving_review_count`,
   `dismiss_stale_reviews`; ruleset `require_code_owner_review`, `required_approving_review_count`,
   `dismiss_stale_reviews_on_push`). A count of 0 or a dismissal that is off is not applied; a
-  value usabl cannot read is "cannot verify". A ruleset on `~DEFAULT_BRANCH` counts for `main`
-  only when the repository says `main` is its default branch. `usabl doctor` also checks that
+  value usabl cannot read is "cannot verify". Both check the branch the gate workflow on disk
+  names in its trigger, and `main`, said to be assumed, when no gate names one. A ruleset on
+  `~DEFAULT_BRANCH` counts for that branch only when the repository says it is the default
+  branch. A branch name that would form an empty, `.`, or `..` path segment is never read, and
+  the name goes into the api path as one encoded segment. `usabl doctor` also checks that
   `CODEOWNERS` gives every workflow an owner: the last rule that matches each `.yml` or `.yaml`
   file in `.github/workflows/`, and the last rule for any such file a pull request could add, must
   name valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes
@@ -1199,8 +1269,8 @@ policy job builds the base commit and decides policy from it. The tests hold it 
 `usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
 the same `usabl-engine` job, and both later jobs fetch the archive with usabl's own fetcher,
 check it against `engine_digest`, and check the unpacked tree before each engine run. Its scan
-job runs main's own application, which was merged through the gate, so it does not get the judge
-split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
+job runs the default branch's own application, which was merged through the gate, so it does not
+get the judge split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
 directory, and its content is believed, which is safe for the reason Threat 13 gives: the history
 can only make a run stricter, never greener.
 

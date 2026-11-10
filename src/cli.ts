@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { run } from './run.js';
 import type { GitReader, Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
-import { makeFsGlob } from './deps/fs.js';
+import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
@@ -30,7 +30,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { configUrlWarningsByUrl, parseUsablConfig } from './intake/config.js';
+import { loadConfig, parseConfigText } from './intake/load-config.js';
 import {
   ciRefusal,
   installRefusal,
@@ -48,11 +48,11 @@ import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
-import { engineRefFor, planDocsCi, writeDocsCi } from './install/ci.js';
 import { installCi } from './install/history-ci.js';
+import { installDocsCi } from './install/docs-ci.js';
 import { readEnginePin } from './install/build-info.js';
 import { gitRunner } from './install/repo-git.js';
-import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
+import { gateBranchTarget, verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
@@ -74,94 +74,9 @@ import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
 import { makeBrief, normalizeTaskFiles } from './brief/index.js';
 import { formatBrief } from './output/brief.js';
 
-// The configured url warnings this process has already printed. It holds config urls, which may
-// carry a query, so it is never printed and never leaves the process.
-const warnedConfigUrls = new Set<string>();
-
-const DEFAULT_CONFIG_PATH = 'usabl.config.json';
-
-export async function loadConfig(
-  path = DEFAULT_CONFIG_PATH,
-  warn: (line: string) => void = (line) => {
-    process.stderr.write(`${line}\n`);
-  },
-  // The docs manifest the run reads, from the folder usabl runs in. Its presence is what lets a
-  // config with no UI globs load. Tests pass a path of their own.
-  docsManifestPath = 'usabl.docs.json',
-): Promise<UsablConfig> {
-  // Targets come from config so the same engine can run in local, CI, and preview environments.
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') {
-      // The first error a new user meets. Name the command that writes the file. A path other than
-      // the default came from --config, so telling that reader to pass --config would repeat what
-      // they did.
-      throw new Error(
-        path === DEFAULT_CONFIG_PATH
-          ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
-          : `${scrubString(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`,
-      );
-    }
-    throw error;
-  }
-  const config = parseConfigText(raw, warn);
-  if (config.uiFileGlobs.length === 0 && !(await fileExists(docsManifestPath))) {
-    throw new Error(emptyUiFileGlobsRefusal(path));
-  }
-  return config;
-}
-
-/**
- * Why a config with no UI globs is refused. With none, no changed file is a UI file, so every run
- * reads as nothing to check and exits 0, which reads like a pass on a run that looked at nothing.
- * A documentation-only repository has no UI files, and its usabl.docs.json says what to check, so
- * that shape still loads.
- */
-export function emptyUiFileGlobsRefusal(path: string): string {
-  return (
-    `${scrubString(path)} has an empty uiFileGlobs list, so usabl would read no change as a UI change, ` +
-    'and every run would say nothing to check without looking at anything. usabl did not run. ' +
-    'Set uiFileGlobs to the files that render your UI, such as src/**/*.tsx. ' +
-    'If this repository holds documentation only, add usabl.docs.json, which "usabl init --docs" drafts.'
-  );
-}
-
-// A manifest usabl cannot even look at is not proof of a documentation-only repository.
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Parse config text that was already read, with the same checks and warnings as loadConfig. The
- * Stop hook reads the bytes itself, compares them with the last commit, and parses only the bytes
- * it compared, so the file is never read twice.
- */
-export function parseConfigText(
-  raw: string,
-  warn: (line: string) => void = (line) => {
-    process.stderr.write(`${line}\n`);
-  },
-): UsablConfig {
-  const config = parseUsablConfig(raw);
-  // A configured URL with a query or a fragment loads, and the operator is told where it is
-  // printed. Once per process for each field and url: the dev-server plugin loads the config on
-  // every save, and the same warning on every save buries the output it sits in.
-  for (const { url, warning } of configUrlWarningsByUrl(config)) {
-    const key = `${warning}\u0000${url}`;
-    if (!warnedConfigUrls.has(key)) {
-      warnedConfigUrls.add(key);
-      warn(warning);
-    }
-  }
-  return config;
-}
+// The config loader lives in intake so the stop hook and the overlay host can read config without
+// loading every command. Re-exported here for callers that import it from the CLI.
+export { loadConfig, parseConfigText };
 
 async function readStdin(): Promise<string> {
   const chunks: string[] = [];
@@ -307,7 +222,9 @@ async function runInstall(opts: CliOptions): Promise<number> {
   // branch-rule is read-only. It writes nothing and only verifies through a read-only gh
   // GET, so it takes the gh reader rather than a filesystem port.
   if (opts.installTarget === 'branch-rule') {
-    const outcome = await verifyBranchRule(makeGhReader());
+    // The branch to check is the one the gate workflow on disk runs on, read without writing. The
+    // reader tells a folder or an unreadable file apart from no file, so neither reads as missing.
+    const outcome = await verifyBranchRule(makeGhReader(), await gateBranchTarget(makeWorkflowReader()));
     const stream = outcome.exitCode === 0 ? process.stdout : process.stderr;
     stream.write(formatInstallReport(outcome));
     return outcome.exitCode;
@@ -337,9 +254,9 @@ async function runInstall(opts: CliOptions): Promise<number> {
     const uiFileGlobs = await readCursorUiFileGlobs(installFs, opts.configPath);
     result = await writeCursor(installFs, await planCursor(installFs, uiFileGlobs));
   } else if (opts.installTarget === 'docs-ci') {
-    // The engine pin comes from this usabl's build record, or stays the placeholder without one.
-    const pin = await readEnginePin();
-    result = await writeDocsCi(installFs, await planDocsCi(installFs, engineRefFor(pin)), pin);
+    // The engine pin comes from this usabl's build record, or stays the placeholder without one. git
+    // reads the default branch the docs gate runs on, only locally.
+    result = await installDocsCi(installFs, await readEnginePin(), gitRunner(process.cwd()));
   } else {
     // The pull request gate and the default-branch history workflow that turns on debt tracking.
     result = await installCi(installFs, await readEnginePin(), gitRunner(process.cwd()));
@@ -710,8 +627,34 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
+  if (opts.command === 'debt' && opts.debtSubcommand === 'ledger') {
+    // Measurement only: how long accessibility barriers stay open, read from committed objects.
+    // It scans nothing, decides no verdict, and writes a file only when --out names one.
+    const ref = opts.trustedRef ?? 'HEAD';
+    // Loaded here and nowhere else in the CLI, by a dynamic import, so the process that runs check
+    // or enforce in CI never loads the ledger.
+    const [{ makeLedgerGit }, { runLedger }] = await Promise.all([import('./history/ledger-git.js'), import('./history/ledger-report.js')]);
+    // No clock: open rows are counted to the commit the ref names, so the same repository state
+    // always prints the same bytes.
+    const outcome = await runLedger(makeLedgerGit(), makeHistoryGit(), ref);
+    if (outcome.exitCode !== 0) {
+      process.stderr.write(`${opts.json ? outcome.json : outcome.text}\n`);
+      return outcome.exitCode;
+    }
+    if (opts.outPath !== null) {
+      await writeFile(opts.outPath, `${outcome.json}\n`, 'utf8');
+      process.stderr.write(`Wrote the full ledger to ${scrubString(opts.outPath)}.\n`);
+    }
+    process.stdout.write(`${opts.json ? outcome.json : outcome.text}\n`);
+    return 0;
+  }
+
   if (opts.command === 'debt') {
     // A projection of the floor and the history. It scans nothing and never decides a verdict.
+    if (opts.outPath !== null) {
+      process.stderr.write('usabl: --out is for usabl debt ledger. usabl debt writes no file; use --json to print its data.\n');
+      return 2;
+    }
     const git = makeGitReader();
     const readFloor = async (): Promise<string | null> => {
       if (opts.trustedRef !== null) {

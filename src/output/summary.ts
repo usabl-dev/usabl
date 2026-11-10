@@ -184,7 +184,7 @@ function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
  * were: a finding the run proved gone is not something a developer can act on. Advisory evidence is
  * left out too, again as before, because this surface has never listed it.
  */
-const BLOCKING_HEADING = 'barriers that block this run';
+const BLOCKING_HEADING = 'accessibility barriers that block this run';
 const RECORDED_HEADING = 'recorded, not blocking';
 const RECORDED_NOTE = 'usabl already recorded these. They do not block this run.';
 const HEADROOM_HEADING = 'floor ahead of this run';
@@ -194,7 +194,7 @@ const HEADROOM_HEADING = 'floor ahead of this run';
 // mean twelve barriers went away or may mean the page has less content today. Both readings are
 // given, and the operator is the only one who knows which applies.
 const HEADROOM_NOTE = [
-  'This run observed fewer deterministic barriers at these identities than the floor records.',
+  'This run observed fewer deterministic accessibility barriers at these identities than the floor records.',
   'If they were fixed, run usabl floor prune to re-arm the floor.',
   'If the page shows less content today, nothing needs to change.',
 ];

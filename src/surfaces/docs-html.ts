@@ -61,7 +61,9 @@ const PAGE_DRAFTED_NOTE =
 // The three honesty states an artifact can be in. The gate is the only verdict
 // authority, so these describe how much proof an artifact carries, never a verdict
 // the page invents.
-type Proof = 'verified' | 'bound-no-evidence' | 'observation';
+// A fourth state, stale, outranks the other three: a report made from another tree describes code
+// that is gone, so a receipt on it proves nothing about the code as it is now.
+type Proof = 'verified' | 'bound-no-evidence' | 'observation' | 'stale';
 
 /** Whether usabl drafted this artifact from the page, read from the artifact or its entries. */
 function isPageDrafted(artifact: DocArtifact): boolean {
@@ -82,6 +84,7 @@ function isBound(artifact: DocArtifact): boolean {
  * no binding at all is an observation.
  */
 function classify(artifact: DocArtifact, hasEvidence: boolean): Proof {
+  if (artifact.stale === true) return 'stale';
   if (!isBound(artifact)) return 'observation';
   return hasEvidence ? 'verified' : 'bound-no-evidence';
 }
@@ -101,6 +104,18 @@ function renderStatus(artifact: DocArtifact, hasEvidence: boolean): string {
     ? `, generated <time datetime="${generated}">${generated}</time>`
     : '';
 
+  if (state === 'stale') {
+    // The reason names both trees and what to run. It is escaped like every other value on the
+    // page, because a saved report can be edited before it is read again.
+    const reason = escapeHtml(artifact.staleReason ?? 'This report was made from another tree. Run usabl docs again to make it from the current code.');
+    return (
+      `<p class="status status--stale">` +
+      `<span class="status__mark" aria-hidden="true">↻</span> ` +
+      `<span class="status__label">Out of date.</span> ` +
+      `${reason} Nothing on this card is proof for the code as it is now.` +
+      `</p>`
+    );
+  }
   if (state === 'verified') {
     return (
       `<p class="status status--bound">` +
@@ -251,6 +266,7 @@ const STYLE = `
     .status--intake { border-left-color: var(--slate); }
     .status--drafted { border-left-color: var(--slate); }
     .status--observation { border-left-style: dashed; border-left-color: var(--amber); border-left-width: 6px; }
+    .status--stale { border-left-style: double; border-left-color: var(--amber); border-left-width: 6px; }
     table { border-collapse: collapse; width: 100%; background: var(--white); border: 1px solid var(--line); }
     caption { text-align: left; font-weight: 700; padding: .5rem .2rem; }
     th, td { text-align: left; vertical-align: top; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
@@ -284,7 +300,7 @@ function documentShell(title: string, bodyMain: string): string {
     // activation moves focus into the content instead of resuming from the link.
     `  <main id="main-content" tabindex="-1">\n${bodyMain}\n  </main>\n` +
     '  <footer class="page-footer">\n' +
-    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations, or text drafted from the page, and not per-element proof. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all.</p>\n' +
+    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations, or text drafted from the page, and not per-element proof. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all. A card marked <strong>Out of date</strong> may not match the current code, so it is not proof for the code as it is now. The card says why. Run usabl docs again to make it again.</p>\n' +
     '  </footer>\n' +
     '</body>\n' +
     '</html>\n'
@@ -318,11 +334,13 @@ export function renderDocsHtml(artifacts: DocArtifact[]): string {
   let verifiedCount = 0;
   let intakeCount = 0;
   let observationCount = 0;
+  let staleCount = 0;
   for (const artifact of artifacts) {
     const hasEvidence = artifact.entries.some((entry) => Boolean(entry.evidenceRef));
     const state = classify(artifact, hasEvidence);
     if (state === 'verified') verifiedCount += 1;
     else if (state === 'bound-no-evidence') intakeCount += 1;
+    else if (state === 'stale') staleCount += 1;
     else observationCount += 1;
   }
 
@@ -335,7 +353,11 @@ export function renderDocsHtml(artifacts: DocArtifact[]): string {
     (intakeCount > 0
       ? `${intakeCount} bound to a receipt without per-entry evidence, shown as not proof; `
       : '') +
-    `${observationCount} shown as observations only, with no receipt claim.</p>\n` +
+    `${observationCount} shown as observations only, with no receipt claim.` +
+    (staleCount > 0
+      ? ` ${staleCount} out of date: may not match the current code, so not proof for the code as it is now. Run usabl docs again to make them again.`
+      : '') +
+    '</p>\n' +
     '    </section>';
 
   // Each surface section is named by its own heading via aria-labelledby, so the

@@ -405,7 +405,7 @@ describe('usabl comment and usabl enforce refuse a malformed Result', () => {
 
   it('comment keeps the notice for floored barriers the run could not confirm', async () => {
     const out = await runWith(['comment'], JSON.stringify(validResult()));
-    expect(out.stdout).toContain('2 recorded barriers on screen clusters (button-name, image-alt)');
+    expect(out.stdout).toContain('2 recorded accessibility barriers on screen clusters (button-name, image-alt)');
   });
 
   it('comment exits 4 with a plain reason that names the field', async () => {

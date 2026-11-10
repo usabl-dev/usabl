@@ -2315,11 +2315,13 @@ usabl.routes.json      <span class="c">// the route manifest</span></code></pre>
 
 test(<span class="s">'deployments page is accessible'</span>, <span class="k">async</span> ({ page }) =&gt; {
   <span class="k">await</span> page.goto(<span class="s">'/deployments'</span>);
-  <span class="k">const</span> r = <span class="k">await</span> checkPage(page, { screenId: <span class="s">'deployments'</span> });
+  <span class="k">const</span> r = <span class="k">await</span> checkPage(page, { screenId: <span class="s">'deployments'</span>, signedIn: <span class="k">true</span> });
   expect(r.verdict).toBe(<span class="s">'verified'</span>);
 });</code></pre>
 
   <p>It adopts an existing Playwright page, attaches a CDP session, runs the same four detectors, and summarises. One difference matters and it is deliberate: <strong>there is no floor and there are no waivers here</strong>. Every finding with confidence <code>fail</code> blocks. A page carrying accepted floor debt reads as <code>regression</code> from <code>checkPage</code> but <code>verified</code> from <code>usabl check</code>. The verdict precedence is identical, because both call the same <code>decideAccessibilityVerdict</code> function, but the input set is not.</p>
+
+  <p>A test that signs in passes <code>signedIn: true</code>. A Playwright test usually signs in through its context's storage state, which usabl cannot see. With <code>signedIn</code>, or with <code>USABL_STORAGE_STATE</code> set, a refused data request or a password field on the screen means the session did not work, and the page is not covered. Without either, a sign-in page served at the screen's own path is not caught.</p>
 
   <h3>The pull request comment</h3>
 
