@@ -4,7 +4,7 @@
  * Accessibility and policy checks split GitHub required status only.
  * GitHub review lookup is injected. `run()` stays GitHub-free.
  */
-import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
 import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
@@ -203,7 +203,7 @@ interface CodeownersRule {
   // Whether the rule names an @org/team or an email. usabl cannot resolve team membership or
   // match an email to a login, so it cannot tell who may approve a path this rule owns.
   namesTeamOrEmail: boolean;
-  match: (path: string) => boolean;
+  state: (path: string) => CodeownersMatch;
 }
 
 const OWNER_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -247,7 +247,7 @@ function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | {
         };
       }
     }
-    rules.push({ pattern, users, namesTeamOrEmail, match: compiled.match });
+    rules.push({ pattern, users, namesTeamOrEmail, state: compiled.state });
   }
   return { ok: true, rules };
 }
@@ -264,8 +264,9 @@ export type CodeownersLimits =
 
 /**
  * What `usabl enforce policy` can and cannot accept for each path, from the last CODEOWNERS rule
- * that matches it. A path no rule matches, a path whose last rule names no owner, and a path whose
- * last rule names a team or an email can never be approved, so each is a limit. doctor reports the
+ * that matches it. A path no rule matches, a path whose last rule names no owner, a path whose last
+ * rule names a team or an email, and a path whose last match is unknown can never be approved, so
+ * each is a limit. doctor reports the
  * same limits with the same words, so a repository doctor reads as wired is one this check can pass.
  */
 export function readCodeownersLimits(raw: string, paths: readonly string[]): CodeownersLimits {
@@ -276,11 +277,17 @@ export function readCodeownersLimits(raw: string, paths: readonly string[]): Cod
   const unmatched: string[] = [];
   const ownerless: string[] = [];
   const teamOrEmail: string[] = [];
+  const unknown: string[] = [];
+  const unknownPatterns = new Set<string>();
   const userOwners = new Map<string, Set<string>>();
   for (const path of [...new Set(paths)].sort()) {
-    // GitHub last-match-wins: a later rule for the same path replaces earlier owners.
-    const rule = parsed.rules.filter((candidate) => candidate.match(path)).pop();
-    if (rule === undefined) {
+    // GitHub last-match-wins: a later rule for the same path replaces earlier owners. A later rule
+    // that may or may not match makes the last match unknown.
+    const rule = parsed.rules.filter((candidate) => candidate.state(path) !== 'none').pop();
+    if (rule !== undefined && rule.state(path) === 'unknown') {
+      unknown.push(path);
+      unknownPatterns.add(rule.pattern);
+    } else if (rule === undefined) {
       unmatched.push(path);
     } else if (rule.namesTeamOrEmail) {
       teamOrEmail.push(path);
@@ -300,6 +307,11 @@ export function readCodeownersLimits(raw: string, paths: readonly string[]): Cod
   if (teamOrEmail.length > 0) {
     reasons.push(
       `the last CODEOWNERS rule that matches ${teamOrEmail.join(', ')} names a team or an email, and usabl enforce policy accepts approval only from a user login`,
+    );
+  }
+  if (unknown.length > 0) {
+    reasons.push(
+      `usabl cannot tell which CODEOWNERS rule matches ${unknown.join(', ')} last, because GitHub's documentation does not say whether ${[...unknownPatterns].join(', ')} matches it`,
     );
   }
   return { ok: true, reasons, userOwners };

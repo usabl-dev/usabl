@@ -415,6 +415,56 @@ describe('enforcePolicy', () => {
       });
     });
 
+    // A gate change, with the guarded folder owned by a team and a later wildcard rule for its
+    // parent folder. GitHub documents that docs/* does not match nested files, so the last match
+    // for src/gate/index.ts is the team rule, and alice's approval cannot clear it.
+    const gateChange = (codeowners: string): Parameters<typeof policyGit>[0] => ({
+      codeowners,
+      trusted: { 'usabl.config.json': '{"guardedPaths":["src/gate/"]}', 'src/gate/index.ts': 'gate\n' },
+      head: {
+        'usabl.config.json': '{"guardedPaths":["src/gate/"]}',
+        '.usabl-evidence.json': '{"version":1,"entries":[]}',
+        'src/gate/index.ts': 'changed gate\n',
+      },
+    });
+
+    it('refuses when a later wildcard rule for a parent folder does not reach the team-owned file', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: gateChange('/src/gate/ @org/gate-team\nsrc/* @alice\n'), listReviews: aliceApproved }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/gate/index.ts');
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('refuses when the last rule that could match uses a form GitHub does not document for that path', async () => {
+      // A slash-free name with no trailing slash, such as `gate`, may or may not own the files
+      // in a folder of that name. GitHub's examples do not settle it, so the last match is unknown.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: gateChange('/src/gate/ @alice\ngate @bob\n'),
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc' },
+          ],
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/gate/index.ts');
+      expect(out.message).toContain('gate');
+      expect(out.message).toContain('cannot tell');
+    });
+
+    it('passes when the form GitHub does not document comes before the last match', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: gateChange('gate @bob\n/src/gate/ @alice\n'), listReviews: aliceApproved }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
     it('still refuses the whole file on a pattern it cannot parse, even after a matching user line', async () => {
       const out = await enforcePolicy(
         policyResult,

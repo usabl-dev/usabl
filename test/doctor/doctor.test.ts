@@ -318,6 +318,13 @@ describe('workflow owners (.github/workflows has a code owner)', () => {
   it('is unknown for a pattern usabl cannot evaluate', async () => {
     expect((await report('/.github/** @o\n')).state).toBe('unknown');
   });
+
+  it('is unknown when the last rule that could match a workflow file is a form GitHub does not document for it', async () => {
+    // `workflows` with no slash may or may not own the files in a folder of that name.
+    const found = await report('/.github/workflows/ @o\nworkflows @p\n', { '.github/workflows/deploy.yml': 'name: deploy\n' });
+    expect(found.state).toBe('unknown');
+    expect(found.nextStep).toContain('workflows');
+  });
 });
 
 describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
@@ -443,6 +450,13 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
       const report = await scope(`${LEDGERS}/src/gate/ @o\n/src/gate/index.ts\n`);
       expect(report.state).toBe('drifted');
       expect(report.nextStep).toContain('the last CODEOWNERS rule that matches src/gate/index.ts names no owner');
+    });
+
+    it('reports a guarded path whose last match is unknown, in the policy check words', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/ @o\ngate @p\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('usabl cannot tell which CODEOWNERS rule matches');
+      expect(report.nextStep).toContain('src/gate/index.ts');
     });
 
     it('reports that the policy check refuses the whole file on an owner it cannot read', async () => {

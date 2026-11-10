@@ -35,7 +35,7 @@ describe("this repository's verdict rule files", () => {
       const owned = codeowners.split('\n').some((line) => {
         const [pattern = '', owner] = line.replace(/#.*$/, '').trim().split(/\s+/);
         const compiled = compileCodeownersPattern(pattern);
-        return pattern !== '*' && owner !== undefined && compiled.ok && compiled.match(path);
+        return pattern !== '*' && owner !== undefined && compiled.ok && compiled.state(path) === 'match';
       });
       expect(owned).toBe(true);
     });

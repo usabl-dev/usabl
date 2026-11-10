@@ -23,7 +23,7 @@ import { workflowTriggerBranch } from '../install/repo-git.js';
 import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { DOCS_GATE_BRANCHED, GATE_BRANCHED, earlierDraftPin, type BranchedWorkflow } from '../install/workflow-branch.js';
 import { HISTORY_BRANCHED } from '../install/history-ci.js';
-import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -925,7 +925,7 @@ function isValidOwner(token: string): boolean {
 interface CodeownersRule {
   pattern: string;
   owners: string[];
-  match: (path: string) => boolean;
+  state: (path: string) => CodeownersMatch;
   // The extensions for which it matches every workflow file a pull request could add.
   everyNewWorkflow: ReadonlySet<WorkflowExtension>;
   // The extensions for which it could match some workflow file a pull request could add.
@@ -969,7 +969,7 @@ function matchesSomeNewWorkflow(pattern: string, ext: WorkflowExtension): boolea
     return false;
   }
   const directory = compileCodeownersPattern(`/${segments.slice(0, -1).join('/')}/`);
-  return directory.ok && directory.match(`${WORKFLOWS_DIR}/x`) && nameCouldBeWorkflow(name, ext);
+  return directory.ok && directory.state(`${WORKFLOWS_DIR}/x`) === 'match' && nameCouldBeWorkflow(name, ext);
 }
 
 // Why a rule does not give what it matches an owner, or null when it does.
@@ -1021,17 +1021,34 @@ async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<
         nextStep: `${CODEOWNERS_PATH} uses the pattern ${pattern}, which usabl cannot evaluate (${compiled.reason}), so it cannot confirm .github/workflows/ has an owner. Check it by hand.`,
       };
     }
-    const every = WORKFLOW_EXTENSIONS.filter((ext) => matchesEveryNewWorkflow(compiled.match, ext));
-    const some = WORKFLOW_EXTENSIONS.filter((ext) => every.includes(ext) || matchesSomeNewWorkflow(pattern, ext));
-    rules.push({ pattern, owners, match: compiled.match, everyNewWorkflow: new Set(every), someNewWorkflow: new Set(some) });
+    const every = WORKFLOW_EXTENSIONS.filter((ext) =>
+      matchesEveryNewWorkflow((path) => compiled.state(path) === 'match', ext),
+    );
+    // A rule that may match a new workflow file under one reading of its pattern could take
+    // ownership away from it, so it counts as able to match one.
+    const some = WORKFLOW_EXTENSIONS.filter(
+      (ext) =>
+        every.includes(ext) ||
+        matchesSomeNewWorkflow(pattern, ext) ||
+        !matchesEveryNewWorkflow((path) => compiled.state(path) === 'none', ext),
+    );
+    rules.push({ pattern, owners, state: compiled.state, everyNewWorkflow: new Set(every), someNewWorkflow: new Set(some) });
   }
 
   // Every workflow file present, by its last matching rule.
   const present = await deps.fs.glob(WORKFLOW_EXTENSIONS.map((ext) => `${WORKFLOWS_DIR}/*.${ext}`));
   for (const file of [...present].sort()) {
-    const rule = rules.filter((candidate) => candidate.match(file)).pop();
+    const rule = rules.filter((candidate) => candidate.state(file) !== 'none').pop();
     if (rule === undefined) {
       return missing(`${CODEOWNERS_PATH} gives ${file} no owner`);
+    }
+    if (rule.state(file) === 'unknown') {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${CODEOWNERS_PATH} has the rule "${rule.pattern}", and GitHub's documentation does not say whether it matches ${file}, so usabl cannot confirm which rule owns that workflow. Check it by hand, or write the rule with a leading slash.`,
+      };
     }
     const problem = ownerProblem(rule);
     if (problem !== null) {
