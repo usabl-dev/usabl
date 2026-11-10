@@ -37,27 +37,30 @@ function manifestPath(dir: string): string {
   return dir === '' ? 'package.json' : `${dir}/package.json`;
 }
 
-// The part of a glob before its first segment with glob syntax, such as packages/admin/src for
-// packages/admin/src/**/*.tsx. Every match sits in that folder.
-function staticPrefix(glob: string): string {
+// The folder every match of a uiFileGlobs pattern sits in. For a glob, that is the part before its
+// first segment with glob syntax, such as packages/admin/src for packages/admin/src/**/*.tsx. A
+// pattern with no glob syntax names one file, such as src/App.tsx, so it is the file's folder. A
+// file is never read as a folder: <file>/package.json cannot exist, and the disk refuses the read.
+// A pattern that ends with / names a folder, so it stays as written.
+function patternFolder(glob: string): string {
   const segments: string[] = [];
   for (const segment of glob.split('/')) {
-    if (/[*?[\]{}!]/u.test(segment)) break;
+    if (/[*?[\]{}!]/u.test(segment)) return segments.join('/');
     segments.push(segment);
   }
-  return segments.join('/');
+  return glob.endsWith('/') ? glob : path.dirname(glob);
 }
 
 // The folders that hold one of the app's package.json files: for each place the config points into
-// (the router file, the uiFileGlobs folders, and the surface files), every folder from it up to the
-// repository root that has a package.json in the tree or at the trusted ref. Not only the nearest
-// one: a pull request can add a package.json below the real manifest, and the nearest one would
-// then move the app folder off it, so a bump of the real manifest would not count. A repository
-// with one package at its root has the root as its app folder.
+// (the folder of the router file, of each uiFileGlobs pattern, and of each surface file), every
+// folder from it up to the repository root that has a package.json in the tree or at the trusted
+// ref. Not only the nearest one: a pull request can add a package.json below the real manifest,
+// and the nearest one would then move the app folder off it, so a bump of the real manifest would
+// not count. A repository with one package at its root has the root as its app folder.
 async function appDirs(fs: FsGlob, config: UsablConfig, trusted: TrustedRead | undefined): Promise<Set<string>> {
   const anchors = [
     path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
-    ...config.uiFileGlobs.map((glob) => staticPrefix(glob.replace(/^\/+/u, ''))),
+    ...config.uiFileGlobs.map((glob) => patternFolder(glob.replace(/^\/+/u, ''))),
     ...config.surfaces.flatMap((surface) => surface.files.map((file) => path.dirname(file.replace(/^\/+/u, '')))),
   ];
   const found = new Set<string>();

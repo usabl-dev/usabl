@@ -1,7 +1,14 @@
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
+import { makeFsGlob } from '../../src/deps/fs.js';
+import { makeGitReader } from '../../src/deps/git.js';
 import { run } from '../../src/run.js';
 
 const fsOf = (files: Record<string, string>): FsGlob => makeFakeDeps({ files }).fs;
@@ -475,4 +482,72 @@ describe('surfaces that share a url on a wide-blast file change', () => {
     const coverage = await shellChange(config);
     expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters', 'deployments', 'settings', 'settings-dialog']);
   });
+});
+
+// A config can name files, not only globs: a uiFileGlobs entry with no glob character, the router
+// file, and the files of a surface. The climb read each such file as a folder and asked the real
+// disk for <file>/package.json, which throws ENOTDIR, so the run stopped with no verdict.
+describe('an app whose config names files, on a real disk and a real git repository', () => {
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]): Promise<void> => {
+    await execFileAsync('git', args, { cwd });
+  };
+  const DEPS = (version: string): string => JSON.stringify({ name: 'app', dependencies: { '@patternfly/react-core': version } });
+
+  async function repoWith(dir: string): Promise<string> {
+    const repo = await mkdtemp(nodePath.join(tmpdir(), 'usabl-dep-files-'));
+    const prefix = dir === '' ? '' : `${dir}/`;
+    const files: Record<string, string> = {
+      'package.json': JSON.stringify({ private: true }),
+      [`${prefix}package.json`]: DEPS('6.1.0'),
+      [`${prefix}src/App.tsx`]: 'export default function App() { return null; }\n',
+    };
+    for (const [file, text] of Object.entries(files)) {
+      await mkdir(nodePath.dirname(nodePath.join(repo, file)), { recursive: true });
+      await writeFile(nodePath.join(repo, file), text);
+    }
+    await git(repo, ['init', '--quiet', '--initial-branch=main']);
+    await git(repo, ['add', '.']);
+    await git(repo, ['-c', 'user.name=Test User', '-c', 'user.email=test@example.com', 'commit', '--quiet', '--no-verify', '-m', 'seed']);
+    await writeFile(nodePath.join(repo, `${prefix}package.json`), DEPS('6.2.0'));
+    return repo;
+  }
+
+  for (const dir of ['', 'packages/admin']) {
+    it(`counts a bump of the app package.json and never reads below a file (app in ${dir === '' ? 'the root' : dir})`, async () => {
+      const repo = await repoWith(dir);
+      try {
+        const prefix = dir === '' ? '' : `${dir}/`;
+        const app = `${prefix}src/App.tsx`;
+        const config: UsablConfig = {
+          appBaseUrl: 'http://localhost:5173',
+          uiFileGlobs: [app, `${prefix}src/pages/*.tsx`],
+          discovery: { routerFile: app, wideBlastGlobs: [] },
+          surfaces: [{ id: 'home', url: 'http://localhost:5173/', files: [app] }],
+          guardedPaths: ['usabl.config.json'],
+        };
+        const disk = makeFsGlob({ cwd: repo });
+        const reader = makeGitReader({ cwd: repo });
+        const reads: string[] = [];
+        const recording: FsGlob = {
+          readFile: async (file) => {
+            reads.push(file);
+            return disk.readFile(file);
+          },
+          glob: (patterns) => disk.glob(patterns),
+        };
+        const trusted = async (file: string): Promise<string | null> => {
+          reads.push(file);
+          return reader.show('HEAD', file);
+        };
+        const coverage = await computeCoverage(recording, config, [`${prefix}package.json`], undefined, trusted);
+        expect(coverage.affected).toEqual([
+          expect.objectContaining({ screenId: 'home', provenance: 'wide-blast', reason: expect.stringContaining(`${prefix}package.json changed`) }),
+        ]);
+        expect(reads.filter((file) => file.startsWith(`${app}/`))).toEqual([]);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    });
+  }
 });
