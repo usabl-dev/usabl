@@ -96,15 +96,18 @@ export const PROVIDER_PROVES: Readonly<Record<string, string>> = {
   evinced: 'Runs the Evinced issue checks on the rendered page. Its findings are preview.',
 };
 
+// The silent change rule runs inside the step loops of flow and voice requirements, so the brief
+// names it with both.
+const SILENT_CHANGE_PROVES =
+  'It also runs the silent change rule on each click and activate step: a step that changes the page, is not announced, and does not move focus to a named control is a preview finding.';
+
 // Intake providers are one per design requirement, so their ids are the requirement ids. Their
 // sentence comes from the kind of requirement, which is the provider layer.
 const INTAKE_PROVES: Readonly<Record<string, string>> = {
   'intake-content':
     'content requirement: the element the requirement names has the accessible text or name the requirement states.',
-  'intake-flow':
-    'flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region.',
-  voicing:
-    'voice requirement: after each step the requirement lists, the focused control has a name and role, and the words each obligation requires are heard. Its findings are preview unless the trusted config promotes the obligation class.',
+  'intake-flow': `flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region. ${SILENT_CHANGE_PROVES}`,
+  voicing: `voice requirement: after each step the requirement lists, the focused control has a name and role, and the words each obligation requires are heard. Its findings are preview unless the trusted config promotes the obligation class. ${SILENT_CHANGE_PROVES}`,
 };
 
 /** The sentence for one provider, or null when this table does not know it. */

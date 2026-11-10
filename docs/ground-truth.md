@@ -266,7 +266,7 @@ an MCP wrapper stays an optional transport.
 src/
   contracts/        index.ts
   primitives/       canonical.ts identity.ts iso8601.ts match-glob.ts neutralize.ts slug.ts sortKey.ts
-  deps/             build.ts real.ts fakes.ts fs.ts git.ts
+  deps/             build.ts real.ts ax-tree.ts fakes.ts fs.ts git.ts
   providers/
     axe/            index.ts notes.ts
     rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
@@ -291,7 +291,7 @@ src/
   session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
-  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (runs voice requirements; section 7.5)
+  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
@@ -1028,6 +1028,168 @@ Static-only runs. A static-only run grants no live capability, so each voice pro
 `capability-denied` gap with ref `provider:intake:<id>` and reason
 `provider intake:<id> denied capability: live`. The screen is then not cleanly scanned: no
 voicing finding, and no clean pass for that screen.
+
+#### 7.5.1 Silent change rule (no contract needed)
+
+The silent change rule is an additional check in the voicing lane. It flags an action step that
+changes the page, is not announced, and does not move focus to a named control. Nobody has to
+write down what the step should have said. It lives in `src/voicing/silent-change.ts` and
+`src/voicing/tree-change.ts`, and its rule id is `voicing/silent-change`.
+
+Where it runs. Inside the two loops that already drive steps: the flow provider's own step loop
+and the contract step runner of each voice requirement. It reads around each step those loops
+drive and never drives a step itself, so it cannot delete a second row. It adds no step, needs
+only the `live` capability, and makes no network call. It runs whenever a flow requirement or a
+voice requirement runs on its screen. With neither, there are no driven steps, nothing runs, and
+no provider is added. Its drafts come back with the drafts of the provider whose loop it watched,
+under its own rule id, never the requirement's.
+
+What an action step is. A step of kind `activate` (Enter on the focused control) or `click`. A
+Tab step is not one: Tab moves focus, and the focused control's name and role are the speech for
+it. A `press` step and a key such as Escape or an arrow key are not judged, and `type` steps
+are out, because a character counter would be a finding on every keystroke.
+
+What it reads, per action step:
+
+1. Did the page change in a way assistive technology can perceive. Two reads of the whole
+   accessibility tree of the main frame, one before the step and one after its settle window
+   (the wait in section 7.5), through `Page.fullAxTree()` over `Accessibility.getFullAXTree`.
+   The browser computes that tree, and no page script world takes part. A change is a node
+   added or removed, or a name or a checked, expanded, pressed, selected, invalid, or sort
+   state that changed, outside the control's own change. Nodes are matched by DOM backend node
+   id. The browser does not expose `aria-sort` as a tree property, so the sort state of each
+   column and row header is read from its attribute through the browser's DOM read, inside the
+   same budget. The control's own change is its own states, the states of its ancestors, and
+   every node its `aria-controls` names, with everything under those nodes, when its own state
+   changed in the same step. A tab that becomes selected also deselects the tab it replaces, a
+   node with the same parent and role that is still in the tree after the step, so that tab's
+   state change, and the nodes its `aria-controls` names, are the control's own change too. A tab
+   that was removed was not deselected, and the panel it controlled is not exempt. So a disclosure that shows its
+   panel, a tab that shows its panel, and a sort header that re-orders its rows are the control
+   speaking for itself, and the voicing tier already checks that speech. Values never count and
+   are never read: a field's value, and the text inside an editable field, are left out of the
+   read.
+2. Was anything heard. The step's own drain, with the same hidden and modal rules as every
+   announcement check (section 11.6), so a region in a dialog the step closed, or outside an
+   open modal, is not heard. Each record carries the live region that wrote it and whether the
+   change was only a removal. A record that holds only a removal, which is how a toast that
+   dismisses itself shows up, is never credited as heard. A live region that also wrote before
+   the first step makes speech from that region inside a step's window a gap, because a ticker
+   or a polling counter speaks whether or not the action did anything.
+3. Did focus move to a named control. Identity is the DOM backend node id
+   (`Page.focusedNodeId()`). Moved means the focused node after the window is a different node
+   than before, has a non-empty accessible name, and has a role other than generic or none. Focus
+   that lands on the control that received the action is never a move: a mouse click focuses the
+   clicked button before the click fires. For a `click` step, the control is the element its
+   selector names, resolved by `Page.controlNodeId()` in an isolated world with a query that looks
+   in the document and in every open shadow root, as the click does. A name change on the acted
+   control while it keeps focus ("Save" becomes "Saved") counts as the control speaking for
+   itself, because readers usually speak a name change on the focused element.
+
+A step that changed the page, was not heard, and moved focus nowhere named is a finding: rule
+`voicing/silent-change`, evidence class `preview`, severity `serious`, confidence `fail`. Its
+element path is the control that received the action: the step's selector for a click, the
+focused element's path for an activate. It names no element, because the control may be the
+row that was deleted. Its evidence is the step as its kind and selector, the counts of nodes
+added, removed, and changed by role, and the names of added nodes only, each once, sorted,
+capped at three. It never holds a value or a removed node's name, so a deleted row's data does
+not reach a pull request comment. Every string goes through the scrubber in the provider. The fix
+text reads: announce the outcome in a live region that is shown and inside the open modal, or
+move focus to a control whose name states it.
+
+The rule stays quiet only where it would repeat the flow requirement's own draft for the same
+step. When the flow fails because its expected announcement was not heard, the rule emits nothing
+for the last step, which is the step the flow judged: the flow's draft already says the step was
+silent, and the gate keys identity by rule, so a second draft would be a second finding for one
+accessibility barrier. When the flow is a gap because a drain could not say what was heard, the
+rule drops its own `announcements undecidable` gap on the step whose drain the flow's gap names,
+the first undecidable one, and on no other step. When a step's drain is undecidable, the rule
+names that reason before any other focus reason, so the flow's gap covers the step. A finding or a
+gap on any other step is always emitted.
+
+What is a gap, never a finding and never a pass. Each is an `unverified` preview draft on the
+step, with the reason in `evidence.extra.reason`:
+
+- `navigated`: the main frame loaded a new document, or the URL path changed, during the step;
+- `not settled`: the page was still changing at the end of the settle window;
+- `still busy`: a node is still `aria-busy` at the end of the window;
+- `tree over budget`: a tree read took more than 500 ms or returned more than 5000 nodes;
+- `unreadable control`: the page changed and the click selector names no one element in the
+  document or one open shadow root, because it matches nothing, is not CSS the browser parses,
+  or matches in both the document and a shadow root, where the click's own order cannot be read.
+  A selector with a combinator (a space, `>`, `+`, or `~`) on a page with any open shadow root is
+  this gap too: the click engine can match it across a shadow boundary, and the browser's own
+  query cannot, so the element found may not be the one the click takes;
+- `focus unreadable`: the focused element cannot be read (section 7.3), or focus after the step
+  is on a node that is not the acted control and is not in the tree read after the step, such as
+  a control inside a same-origin child frame, which the tree read does not cover;
+- `replaced focus`: focus ended on a new node with the same name as the acted control or the
+  node that had focus before, so the read cannot tell a re-render from a move;
+- `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;
+- `background announcements`: the only speech in the window came from a region that also wrote
+  before the first step;
+- `step not run`: the flow driver does not run the step, such as an unknown kind, a click with no
+  selector, or a press with no key. The driver used to skip such a step without a word;
+- `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
+  still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
+  drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
+  error, through the scrubber, because the browser's call log can quote the element's markup;
+- `read failed`: a read the rule needs failed.
+
+Only a step that was read in full, settled, and not busy is dropped when it changed nothing. A
+step that changed nothing but met `read failed`, `navigated`, `not settled`, `tree over budget`,
+or `still busy` is still that gap, because those are checked before the trees are compared.
+
+Flow verdicts now read each step at its own time. The flow loop waits for the page to settle
+after each `click` or `activate` step, and drains after every step. Its verdict reads the union
+of every drain in step order, led by the drain taken before the first step. The hidden and modal
+rules (section 11.6) run when each drain is taken, so each step's text is judged against the page
+as it was after that step. Before, the flow drained once, right after its last step, with no
+wait, and judged every step's text against the page as it was then. This can change a flow
+verdict, in both directions. A team can see these differences:
+
+- text written inside a dialog that a later step closes is now heard, where it was dropped;
+- text written outside an open modal that a later step closes is now dropped, where it was heard;
+- an announcement that lands shortly after the click, inside the settle wait, is now heard, where
+  it was missed;
+- focus that rests on a control named with the expected text, and that a re-render takes away
+  during the wait, is now read after the wait, so the flow can fail where it passed;
+- a step that loads a new document, or whose target is gone after the settle wait (an Undo
+  toast, or a menu that closes on a timer), makes the flow a `not-covered` gap.
+
+The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 second cap, in every
+flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
+the late announcement at the flow verdict.
+
+Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
+over either is the gap above. The time bound is a timer: each browser call in the read races it,
+so a call that is slow or never returns ends the read at 500 ms. Measured on `usabl-app` (commit 6118ea7, served by its own Vite dev
+server): `usabl-app` has no delete or save flow, so five click actions across its four screens
+were measured instead. Every read stayed inside the budget, at 26 to 250 ms, and the browser
+returned 179 to 300 nodes per read (132 to 207 kept after inline text boxes and field content
+are left out).
+
+Known limits. The capture covers the main frame and the light tree. The full tree read covers
+the main frame and, because the browser builds it from the flat tree, open shadow roots too; a
+real-Chromium fixture confirms this. Child frames are read by neither. A node that holds an
+editable field, such as a row or a button with a text box inside, can take its name from its
+contents, and those contents include the field's value. When the browser says such a node's name
+comes from its contents, or does not say where it comes from, the read leaves that name out: it is
+never shown in evidence, a change of it never counts as a page change, and focus that moves to
+that node does not count as a move to a named control. An author-given name, such as
+`aria-label`, is kept. A name built through `aria-labelledby` from a field can still hold that
+field's value, and the rule does not take a name apart. Background announcements are found only from
+the drain taken before the first step: a ticker that first writes inside a step's window, or
+between two steps, reads as speech that step caused. A live region that is drawn again, as a new
+element, counts as a new region, so a ticker that draws its region again is not known as
+background. The settle element count still runs in the page's own world, so
+a page that patches `getElementsByTagName` can end the window early. Moving that count to an
+isolated world is planned, with this rule's patched-page test.
+
+What it never does. It never minds the words: "Saved" after Delete passes this rule and fails a
+contract that requires "deleted". It never blocks: the class is preview, so the gate ignores it
+and `checkPage` lists it as advisory, until calibration (section 26) measures it in both
+directions. It never reads page text as instructions.
 
 ### 7.6 Documentation profile (docs-content)
 
@@ -3466,7 +3628,8 @@ add content and flow assertions that the engine enforces alongside the default s
 - `content` requirements become content-matcher providers (compare element text or
   aria-label against the approved string).
 - `flow` requirements become declarative interaction probes (same step runner as the
-  keyboard walk probes).
+  keyboard walk probes). The silent change rule watches their click and activate steps
+  (section 7.5.1). A step the flow driver does not run is reported as a gap of that rule.
 - `doc` requirements are not runtime checks; they feed the output module.
 - `voice` requirements become interaction contracts, one virtual screen reader provider each
   (section 7.5).
@@ -3522,7 +3685,8 @@ repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule i
 `intake:<id>` for content and flow requirements; there is no code path that marks an intake
 draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of the two
 tiers, with the requirement in place of `voicing/`, and are `preview` unless their obligation
-class is promoted (section 7.5).
+class is promoted (section 7.5). A flow or voice provider can also return `voicing/silent-change`
+drafts, which are always `preview` (section 7.5.1).
 
 ### Requirement ids are waiver identities
 
