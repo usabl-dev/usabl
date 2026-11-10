@@ -220,6 +220,15 @@ export async function measureEntry(
     if (record.kind !== 'applied') {
       return result(entry, screen, 'unreadable', [], `the mutation was not made: ${record.reason}`);
     }
+    // A defect the clean page already had on the target cannot be made new, so the gate would carry
+    // it, and the entry would read as missed when nothing was missed.
+    const targets = new Set(record.targets);
+    const alreadyThere = clean.drafts.some(
+      (draft) => targets.has(draft.elementPath) && entry.expectedRules.some((pattern) => ruleMatches(pattern, draft.rule)),
+    );
+    if (alreadyThere) {
+      return result(entry, screen, 'not applicable', [], 'the defect was already on this element before the edit');
+    }
 
     const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
     const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);

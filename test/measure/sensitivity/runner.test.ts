@@ -177,6 +177,28 @@ describe('measureEntry', () => {
     expect(await measureEntry(both.deps, entry(), SCREEN)).toMatchObject({ outcome: 'caught', rules: ['button-name'] });
   });
 
+  it('is not applicable when an expected rule already reports the target on the clean page', async () => {
+    const already: Provider = {
+      id: 'already',
+      layer: 'axe',
+      capabilities: ['live'],
+      run: async (ctx) => [draft(ctx, 'button-name', '#save')],
+    };
+    const { deps, harness } = setup([already]);
+    expect(await measureEntry(deps, entry(), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'not applicable',
+      rules: [],
+      reason: 'the defect was already on this element before the edit',
+    });
+    expect(harness.closed).toBe(harness.opened);
+
+    // Another rule on the target before the edit is not the defect.
+    const other = setup([{ ...already, run: async (ctx) => [draft(ctx, 'color-contrast', '#save')] }, namesProvider()]);
+    expect((await measureEntry(other.deps, entry(), SCREEN)).outcome).toBe('caught');
+  });
+
   it('is unreadable, not caught, when the only new gating finding is unverified', async () => {
     const { deps } = setup([namesProvider('button-name', '#save', { confidence: 'unverified' })]);
     expect(await measureEntry(deps, entry(), SCREEN)).toEqual({
