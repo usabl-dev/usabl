@@ -244,9 +244,13 @@ export interface StoredReceiptPinState {
  * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
  * in the work tree, so its source tree is a carried value and goes inside the frame.
  *
- * The line names what was compared and nothing more. A receipt binds the tree, the committed
- * policy, the engine, and the scanners as they were when it was minted; it says nothing about the
- * policy at the start of the session. Only a stop that compared the session pins says they match.
+ * The line says first that the result comes from a stored receipt and was not re-scanned, next to
+ * the verdict word, so a reader never takes it for a fresh check. A receipt is a local file with
+ * no signature: a user with a shell on the same machine can write one that verifies (threat model,
+ * Threats 1 and 4). The line names what was compared and nothing more. A receipt binds the tree,
+ * the committed policy, the engine, and the scanners as they were when it was minted; it says
+ * nothing about the policy at the start of the session. Only a stop that compared the session
+ * pins says they match.
  */
 export function formatStoredReceiptAllow(
   sourceTree: unknown,
@@ -255,8 +259,9 @@ export function formatStoredReceiptAllow(
   const note = pins.sessionDriftChecked ? '' : `, ${DRIFT_NOT_CHECKED}`;
   const pinClause = pins.pinsCompared ? ' Guarded policy files match the session pins.' : '';
   const line =
-    `VERIFIED (exit 0${note}): a stored receipt matches this tree, the committed policy, the engine, and the scanners.` +
-    `${pinClause} No new scan ran. You may stop.`;
+    `VERIFIED (exit 0, stored receipt, not re-scanned${note}): this result comes from a stored receipt. ` +
+    'usabl did not scan this change again on this stop. The receipt matches this tree, the committed policy, the engine, and the scanners.' +
+    `${pinClause} You may stop.`;
   return assembleBoundedMessage({
     scaffold: [line],
     keep: 1,

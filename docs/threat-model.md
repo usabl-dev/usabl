@@ -72,8 +72,14 @@ re-baseline to green.
   copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
   every screen and surface id against the shared id grammar. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
+- Limit, stated plainly: a user with a shell on the same machine can write a local receipt
+  that verifies. Every binding the receipt carries (tree, policy hash, engine and scanner
+  versions, history head) can be computed again by that user, and `mintReceipt()` is exported.
+  Receipt signing is not built. So the Stop hook's fast path says on its first line that the
+  result comes from a stored receipt and was not re-scanned. CI never reads a local receipt;
+  the CI gate scans the pull request itself.
 
-**Status:** [x] Documented in ground-truth.
+**Status:** [x] Documented in ground-truth. [ ] Receipt signing is not built.
 
 ---
 
@@ -142,9 +148,15 @@ passing bundle from another run.
   drifted file paths, the session id from the hook input, the pin store's reasons and fixes
   (which name directories from the environment), and error text. A guarded file name with a
   line break and an instruction in it is printed as data, never as usabl's own words.
-- Future: signed attestation on the receipt (engineering §7).
+- A receipt is not signed. A user with a shell on the same machine can write a receipt that
+  verifies: each binding can be computed again by the same user, and `mintReceipt()` is
+  exported. The bindings stop a receipt lifted from another run, not one written on purpose on
+  this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
+  re-scanned)" and says usabl did not scan the change again on that stop.
+- Future: signed attestation on the receipt (engineering §7). Signing is not built.
 
-**Status:** Receipt bindings ship and re-verify; cross-run signing is still open.
+**Status:** Receipt bindings ship and re-verify. Receipt signing is not built, so a same-machine
+shell user can write a receipt that verifies.
 
 ---
 

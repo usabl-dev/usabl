@@ -2673,11 +2673,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   committed policy as it was when the receipt was minted. A policy weakened and committed
   during the session, then checked under the weaker policy, mints a receipt that matches, and
   only the pins see that drift. The fast path records or replaces pins exactly as a full run
-  does. The line reads "VERIFIED (exit 0): a stored receipt matches this tree, the committed
-  policy, the engine, and the scanners. No new scan ran. You may stop." When this stop
+  does. The line reads "VERIFIED (exit 0, stored receipt, not re-scanned): this result comes
+  from a stored receipt. usabl did not scan this change again on this stop. The receipt matches
+  this tree, the committed policy, the engine, and the scanners. You may stop." When this stop
   compared the pins and found no drift, "Guarded policy files match the session pins." comes
-  before "No new scan ran." When the pins were not used, the line carries the
+  before "You may stop." When the pins were not used, the parentheses also carry the
   `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  A receipt is a local file with no signature. A user with a shell on the same machine can
+  write one that verifies, so the line says where the result came from (threat model, Threats
+  1 and 4).
   Detected drift prevents the fast allow: the stop blocks whether or not a receipt matches,
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
