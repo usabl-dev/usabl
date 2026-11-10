@@ -367,6 +367,54 @@ describe('Stop hook reads the config at the repository root, through the real po
     }
   });
 
+  // A config removed and committed during the session is the strongest form of policy drift. The
+  // session pins hold the committed config from an earlier stop, so the stop goes through the
+  // drift block, not the "not configured" allow.
+  it('blocks once as drift when the config is removed and committed during the session', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    const pins = memoryPinStore();
+    const session = (active: boolean) => JSON.stringify({ stop_hook_active: active, session_id: 'session-one' });
+
+    const first = realPorts(repo);
+    first.ports.pins = pins;
+    await runStopHookFromStdin(session(false), first.ports);
+    expect(first.stderr()).toContain('VERIFIED');
+    expect(pins.files.size).toBe(1);
+
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'remove usabl');
+
+    const second = realPorts(join(repo, 'packages', 'web'));
+    second.ports.pins = pins;
+    expect(await second.base.readConfigBytes()).toEqual({ working: missing, head: missing });
+    await runStopHookFromStdin(session(false), second.ports);
+    const reason = blockReason(second.stdout());
+    expect(reason).toContain('guarded policy drift during this session');
+    expect(reason).toContain('drifted files: usabl.config.json');
+    expect(second.stderr()).not.toContain('usabl is not configured here');
+    expect(second.configs).toEqual([]);
+
+    const third = realPorts(repo);
+    third.ports.pins = pins;
+    await runStopHookFromStdin(session(true), third.ports);
+    expect(third.stdout()).not.toContain('"decision":"block"');
+    expect(third.stderr()).toContain('guarded policy drift during this session');
+    expect(third.stderr()).toContain('continuation already active');
+    // The pins are kept, so the next stop that is not a continuation blocks again.
+    expect(pins.files.size).toBe(1);
+  });
+
+  it('still allows with the not-configured note in a repository that never had a config, with a session id', async () => {
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    const h = realPorts(repo);
+    await runStopHookFromStdin(JSON.stringify({ stop_hook_active: false, session_id: 'session-one' }), h.ports);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    expect(h.stderr()).toContain('usabl is not configured here');
+  });
+
   it('blocks a corrupt root config read from a subfolder, through the real ports', async () => {
     await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
     git('add', '-A');

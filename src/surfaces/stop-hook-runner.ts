@@ -355,7 +355,8 @@ type ConfigStep =
  * The last commit is the trusted copy. When it holds the config, the working copy must match it
  * byte for byte, or the stop blocks as approval required: a corrupt or edited config used to throw
  * at parse time and end in an allow with "stop hook error". When neither place holds a config,
- * usabl is not set up here. A config only in the working tree is a new, uncommitted setup: the
+ * usabl is not set up here, unless this session already recorded pins for this root: then the
+ * config was removed and committed during the session, and runStopHook treats it as drift. A config only in the working tree is a new, uncommitted setup: the
  * guard reports it as a changed guarded file, so the run goes on and the guard holds it for
  * approval. Git failing to read the last commit is not one of these cases, so it stays an internal
  * error and fails open with disclosure.
@@ -384,6 +385,27 @@ function configStep(bytes: ConfigBytes): ConfigStep {
     return { kind: 'block', problem: 'differs', error: null };
   }
   return { kind: 'parse', text: working.text };
+}
+
+/**
+ * Whether an earlier stop in this session recorded pins for this repository root. Only the hook
+ * writes a pin file, and only after it read a committed config, so a pin file here, whether or not
+ * it parses, means the root had a config earlier in the session. No usable session id means there
+ * is no pin file to look for.
+ */
+async function earlierSessionPins(
+  ports: StopHookRunnerPorts,
+  input: StopHookInput,
+): Promise<{ status: 'found' } | { status: 'missing' } | { status: 'refused'; reason: string; fix: string }> {
+  const parsedSession = parseSessionId(input.sessionId);
+  if ('notice' in parsedSession) {
+    return { status: 'missing' };
+  }
+  const stored = await ports.pins.read(sessionPinFileName(parsedSession.sessionId, ports.cwd()));
+  if (stored.status === 'refused') {
+    return { status: 'refused', reason: stored.reason, fix: stored.fix };
+  }
+  return { status: stored.status };
 }
 
 async function verifyStoredReceipt(
@@ -579,7 +601,22 @@ export async function runStopHook(
       throw new Error(step.reason);
     }
     if (step.kind === 'not-configured') {
+      // Pins for this session and root mean an earlier stop here read a committed config, so a
+      // config now missing from the working tree and from HEAD was removed and committed during
+      // the session. That is drift, and it goes through the drift block.
+      const earlier = await earlierSessionPins(ports, input);
+      if (earlier.status === 'found') {
+        if (input.stopHookActive) {
+          await emitProtocolAllow(ports, driftMessage([CONFIG_FILE], true), options);
+          return 0;
+        }
+        await emitProtocolBlock(ports, driftMessage([CONFIG_FILE], false), options);
+        return 0;
+      }
       await emitProtocolAllow(ports, NOT_CONFIGURED_MESSAGE, options);
+      if (earlier.status === 'refused') {
+        await writePinNotice(ports, pinsRefused(earlier));
+      }
       return 0;
     }
     if (step.kind === 'block') {
