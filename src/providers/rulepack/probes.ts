@@ -164,18 +164,56 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
   return drafts;
 }
 
+/**
+ * Whether a menu is open on the page for an expanded toggle: the element its aria-controls names is
+ * exposed to assistive technology, or any menu on the page is. A menu that stays in the page while
+ * it is closed is hidden from assistive technology, so it does not count.
+ */
+async function menuOpenFor(ctx: ProviderContext, toggle: ElementRef): Promise<boolean> {
+  const controls = (await ctx.page.getAttribute(toggle.selector, 'aria-controls')) ?? '';
+  for (const id of controls.split(/\s+/).filter((token) => token.length > 0)) {
+    // An attribute selector with the id quoted, so an id with any character still names one element.
+    const selector = `[id="${id.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+    if ((await ctx.page.axAt(selector)) !== null) {
+      return true;
+    }
+  }
+  for (const menu of await ctx.page.queryAll(SEL.menu)) {
+    if ((await ctx.page.axAt(menu.selector)) !== null) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
   const toggles = await ctx.page.queryAll(SEL.menuToggle);
   const drafts: Draft[] = [];
 
   for (const toggle of toggles) {
     try {
+      const toggleNode = await ctx.page.axAt(toggle.selector);
       // A toggle whose menu is already open closes it on the click, so the click would show no new
-      // menu and read as a promise broken. Its menu is left as it is.
+      // menu and read as a promise broken. Its menu is left as it is. A toggle that says it is
+      // expanded while no menu is open reports a state that is not true, which is itself an
+      // accessibility barrier the probe cannot judge, so it says so instead of skipping in silence.
       if ((await ctx.page.getAttribute(toggle.selector, 'aria-expanded')) === 'true') {
+        if (!(await menuOpenFor(ctx, toggle))) {
+          drafts.push(
+            draft(
+              ctx,
+              toggleNode,
+              'pf-kebab-expanded-state',
+              toggle.selector,
+              'unverified',
+              'Could not verify menu focus behavior.',
+              'The toggle reports aria-expanded="true", but no menu is open on the page, so the probe could not check where focus goes.',
+              'Set aria-expanded to "true" only while the menu is open, and to "false" when it closes.',
+            ),
+          );
+        }
         continue;
       }
-      const toggleNode = await ctx.page.axAt(toggle.selector);
       // aria-haspopup="menu", and "true", its legacy synonym, promise a menu. A PatternFly
       // MenuToggle found by its OUIA type promises nothing by markup alone.
       const haspopup = await ctx.page.getAttribute(toggle.selector, 'aria-haspopup');

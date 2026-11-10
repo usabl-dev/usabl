@@ -99,13 +99,18 @@ async function makeMenuContext(options: {
   // When true, the menu stays in the page while it is closed, hidden from assistive technology,
   // and the click exposes it, as a menu toggled with the hidden attribute is.
   menuStaysInPage?: boolean;
+  // When true, the toggle's menu is open and exposed before the probe runs.
+  menuOpenBefore?: boolean;
+  // The toggle's aria-controls value, and whether the element it names is exposed.
+  controls?: string;
+  controlsExposed?: boolean;
 }): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
   const toggle = element('#menu-toggle');
   const staleMenu = element('#stale-menu');
   const menu = element('#menu');
-  let isOpen = false;
+  let isOpen = options.menuOpenBefore ?? false;
   let readsAfterClick = 0;
 
   const scriptedPage: Page = Object.assign(page, {
@@ -142,6 +147,9 @@ async function makeMenuContext(options: {
       if (selector === menu.selector && isOpen) {
         return axNode('Row actions', 'menu');
       }
+      if (options.controls !== undefined && selector === `[id="${options.controls}"]` && (options.controlsExposed ?? false)) {
+        return axNode('Row actions', 'menu');
+      }
       return null;
     },
     click: async (selector: string) => {
@@ -160,6 +168,9 @@ async function makeMenuContext(options: {
       }
       if (name === 'aria-haspopup') {
         return options.haspopup ?? null;
+      }
+      if (name === 'aria-controls') {
+        return options.controls ?? null;
       }
       return name === 'aria-expanded' ? (options.expanded ?? null) : null;
     },
@@ -385,9 +396,40 @@ describe('rulepack interaction probes', () => {
     expect(drafts.map((d) => [d.elementPath, d.confidence])).toEqual([['#menu-toggle', 'fail']]);
   });
 
+  it('reports a toggle that says it is expanded while no menu is open as unverified, without a click', async () => {
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({ menuAppearsOnClick: true, focusMovesIntoMenu: true, haspopup: 'menu', expanded: 'true', menuStaysInPage: true });
+    let clicked = false;
+    const click = ctx.page.click.bind(ctx.page);
+    ctx.page.click = async (selector) => {
+      clicked = true;
+      await click(selector);
+    };
+
+    const drafts = draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state');
+
+    expect(drafts.map((d) => [d.elementPath, d.confidence])).toEqual([['#menu-toggle', 'unverified']]);
+    expect(drafts[0]?.why).toContain('reports aria-expanded="true"');
+    expect(clicked).toBe(false);
+  });
+
+  it('leaves an expanded toggle alone when the element its aria-controls names is exposed', async () => {
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({
+      menuAppearsOnClick: false,
+      focusMovesIntoMenu: false,
+      haspopup: 'menu',
+      expanded: 'true',
+      controls: 'row-menu',
+      controlsExposed: true,
+    });
+
+    expect(draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state')).toEqual([]);
+  });
+
   it('leaves a toggle that is already expanded alone, because the click would close its menu', async () => {
     const provider = makeRulepackProvider();
-    const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false, haspopup: 'menu', expanded: 'true' });
+    const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false, haspopup: 'menu', expanded: 'true', menuOpenBefore: true });
     let clicked = false;
     const click = ctx.page.click.bind(ctx.page);
     ctx.page.click = async (selector) => {
