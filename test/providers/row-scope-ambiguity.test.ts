@@ -82,7 +82,7 @@ describe('row scope when a row cannot be told apart', () => {
     expect(out.drafts[0]!.evidence.extra?.['rowScope']).toBeDefined();
     expect(out.drafts[1]!.evidence).toEqual({});
     expect(out.gaps).toHaveLength(1);
-    expect(out.gaps[0]!.reason).toContain('1 barrier');
+    expect(out.gaps[0]!.reason).toContain('1 accessibility barrier sits');
     expect(out.gaps[0]!.reason).toContain('has no key');
   });
 

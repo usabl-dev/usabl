@@ -3119,11 +3119,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   counts and exit codes checked to be whole numbers, and a finding's status and severity
   checked to be one of the contract's words ("unknown" otherwise). A barrier's rule, layer,
   and screen id, the guarded file paths, and the receipt's `sourceTree` are inside the frame.
-  A barrier headline outside the frame reads `- barrier 1: [new serious] (×3)`, and its
-  pieces inside the frame carry the same number: `barrier 1: axe/color-contrast`,
-  `screen (1): ...`, `experience (1): ...`, `fix (1): ...`. One barrier reads
-  `Barrier: [new serious] (×3)` with `barrier: <layer>/<rule>` and `screen: <id>` inside, then
-  its experience and fix. When guarded files changed,
+  An accessibility barrier's headline outside the frame reads
+  `- accessibility barrier 1: [new serious] (×3)` under the heading `Accessibility barriers:`,
+  and its pieces inside the frame carry the same number:
+  `accessibility barrier 1: axe/color-contrast`, `screen (1): ...`, `experience (1): ...`,
+  `fix (1): ...`. One reads `Accessibility barrier: [new serious] (×3)` with
+  `accessibility barrier: <layer>/<rule>` and `screen: <id>` inside, then its experience and
+  fix. When guarded files changed,
   the scaffold line gives their count, for example `Guarded files changed: 2, named under
   "guarded files" in the untrusted text below`, and the piece `guarded files: <paths>`
   follows the gate's summary and is never dropped when the message is shortened. A field
@@ -3135,7 +3137,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   barrier's headline goes with its pieces in the frame, so no headline is left whose rule is
   nowhere in the message. Coverage gap lines go only after every barrier is gone. The note
   says how many lines and how many barriers were left out, in the form "[shortened to fit
-  the message budget, N line(s) omitted (K barrier(s) left out); run usabl check --json for
+  the message budget, N line(s) omitted (K accessibility barrier(s) left out); run usabl check --json for
   the full list]", and the show-all hint counts only the barriers still shown.
 - A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."

@@ -185,7 +185,7 @@ export interface BoundedGroup {
 }
 
 function noteFor(omitted: number, droppedGroups = 0): string {
-  const barriers = droppedGroups > 0 ? ` (${droppedGroups} barrier(s) left out)` : '';
+  const barriers = droppedGroups > 0 ? ` (${droppedGroups} accessibility barrier(s) left out)` : '';
   return `[shortened to fit the message budget, ${omitted} line(s) omitted${barriers}; run usabl check --json for the full list]`;
 }
 

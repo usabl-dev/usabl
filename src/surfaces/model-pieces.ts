@@ -155,7 +155,7 @@ export interface BarrierLines {
  * A group's headline, outside the frame, carries only its checked status, severity, and count.
  * Its pieces, inside the frame, name the layer and rule, the screen, any extra pieces the surface
  * adds (the self-check adds the source location), the experience, and the fix. One barrier reads
- * `Barrier: [new serious]` with unnumbered pieces. Several are numbered, so a headline and its
+ * `Accessibility barrier: [new serious]` with unnumbered pieces. Several are numbered, so a headline and its
  * pieces match by number and no label is built from a value the Result carried.
  *
  * Each group is handed to the message assembler whole, so a shortened message drops a barrier's
@@ -179,9 +179,9 @@ export function barrierLines(
     return {
       groups: [
         {
-          headline: `Barrier: ${formatCollapsedGroupStatus(group)}`,
+          headline: `Accessibility barrier: ${formatCollapsedGroupStatus(group)}`,
           pieces: [
-            `barrier: ${group.layer}/${group.rule}`,
+            `accessibility barrier: ${group.layer}/${group.rule}`,
             `screen: ${group.screenId}`,
             ...extraPieces(group.representative, ''),
             `experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -198,9 +198,9 @@ export function barrierLines(
     const group = boundGroup(raw);
     const n = index + 1;
     return {
-      headline: `- barrier ${n}: ${formatCollapsedGroupStatus(group)}`,
+      headline: `- accessibility barrier ${n}: ${formatCollapsedGroupStatus(group)}`,
       pieces: [
-        `barrier ${n}: ${group.layer}/${group.rule}`,
+        `accessibility barrier ${n}: ${group.layer}/${group.rule}`,
         `screen (${n}): ${group.screenId}`,
         ...extraPieces(group.representative, ` (${n})`),
         `experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -208,7 +208,7 @@ export function barrierLines(
       ],
     };
   });
-  return { groupHeading: 'Barriers:', groups, groupFooter };
+  return { groupHeading: 'Accessibility barriers:', groups, groupFooter };
 }
 
 /** The verdicts the contract names. Anything else a Result carries is unrecognized. */

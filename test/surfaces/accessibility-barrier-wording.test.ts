@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { DocArtifact, Finding, Result } from '../../src/contracts/index.js';
 import { formatSummary } from '../../src/output/summary.js';
@@ -139,7 +139,19 @@ const SOURCES = [
   'src/output/notes.ts',
   'src/surfaces/docs-html.ts',
   'src/surfaces/docs.ts',
-  'src/docs/evidence-binding.ts',
+  // Engine text that providers and the evidence floor write into the Result, which the comment,
+  // the CLI summary, and the overlay print, and the model-facing message pieces.
+  'src/providers/row-scope.ts',
+  'src/providers/redirected.ts',
+  'src/providers/core-stack.ts',
+  'src/evidence/floor.ts',
+  'src/output/bounded-text.ts',
+  'src/output/disclosure.ts',
+  'src/surfaces/model-pieces.ts',
+  ...readdirSync('src/docs')
+    .filter((name) => name.endsWith('.ts'))
+    .sort()
+    .map((name) => `src/docs/${name}`),
 ];
 
 const finding = (over: Partial<Finding>): Finding => ({
