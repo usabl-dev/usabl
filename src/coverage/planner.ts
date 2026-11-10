@@ -6,7 +6,7 @@
  */
 import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { aliasConfigDir, loadAliasConfig } from './alias-config.js';
-import { buildUnresolvedReason, UNPLACED_FILE_FIX } from './discovery-diagnostics.js';
+import { buildUnresolvedReason, UNPLACED_FILE_FIX, unresolvedImportsNaming } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
@@ -40,32 +40,6 @@ const TEST_FOLDER_REASON =
   'usabl reads it as test code and did not check it. This does not block. If a screen renders it, ' +
   'import it from the route entry file of that screen, or add it to the files of a surface in ' +
   'usabl.config.json.';
-
-// The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
-function importName(file: string): string {
-  const segments = file.split('/');
-  const base = segments[segments.length - 1] ?? '';
-  const stem = base.replace(/\.[^.]*$/u, '');
-  if (stem === 'index' && segments.length > 1) {
-    return segments[segments.length - 2] ?? stem;
-  }
-  return stem;
-}
-
-// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
-// `@/tests/Dashboard.js` both name a file called Dashboard.
-function importLastSegments(specifier: string): string[] {
-  const last = specifier.split('/').pop() ?? '';
-  return [last, last.replace(/\.[^.]*$/u, '')];
-}
-
-// The imports usabl could not resolve that may load this file. "No screen reaches it" is read from
-// the import graph, so an unresolved import that names the file makes that a guess.
-function unresolvedImportsNaming(file: string, unresolvable: UnresolvableImport[]): UnresolvableImport[] {
-  const name = importName(file);
-  return unresolvable.filter((entry) => importLastSegments(entry.specifier).includes(name));
-}
 
 function testFolderGapReason(entries: UnresolvableImport[]): string {
   const imports = entries

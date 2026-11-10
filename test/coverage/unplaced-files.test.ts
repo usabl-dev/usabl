@@ -91,4 +91,59 @@ describe('a shared file usabl cannot place on a screen', () => {
     // No page text: every unplaced line is a repository path and usabl's own words.
     expect(text).not.toContain('http://127.0.0.1:5173/settings');
   });
+
+  // baseline passes every UI file to the planner, so "changed UI file" was wrong there.
+  it('does not call a file changed in the reason, since baseline names files that did not change', async () => {
+    const coverage = await computeCoverage(fixtureDeps().fs, sharedLayoutConfig, [SHARED_LAYOUT_FILE]);
+    const gap = coverage.gaps.find((entry) => entry.ref === SHARED_LAYOUT_FILE);
+    expect(gap?.reason).not.toContain('changed UI file');
+    expect(gap?.reason).toMatch(/^This UI file is not in any route closure/);
+  });
+});
+
+// Every import usabl could not follow on the screens' paths was listed for every unplaced file,
+// in graph order, under a cap of three. An unrelated file read as if it held those imports, and
+// the import that names the file could be cut by the cap.
+describe('the discovery detail of a file usabl cannot place', () => {
+  const routes = JSON.stringify({ routes: [{ screenId: 'page', url: '/page', entryFile: 'src/Page.tsx' }] });
+  const config = { ...sharedLayoutConfig, uiFileGlobs: ['src/**/*.tsx'] };
+
+  it('puts the import that names the file first, and labels each group', async () => {
+    const fs = makeFakeDeps({
+      files: {
+        'usabl.routes.json': routes,
+        'src/Page.tsx': [
+          "import { A } from '@/a/A';",
+          "import { B } from '@/b/B';",
+          "import { C } from '@/c/C';",
+          "import { D } from '@/d/D';",
+          "import { Orphan } from '@/widgets/Orphan';",
+        ].join('\n'),
+        'src/widgets/Orphan.tsx': `import { Gone } from './Gone';`,
+      },
+    }).fs;
+    const coverage = await computeCoverage(fs, config, ['src/widgets/Orphan.tsx']);
+    const reason = coverage.gaps.find((entry) => entry.ref === 'src/widgets/Orphan.tsx')?.reason ?? '';
+    const detail = reason.slice(reason.indexOf('Discovery detail:'));
+    expect(detail).toContain("imports that may load this file: could not resolve '@/widgets/Orphan' in src/Page.tsx");
+    expect(detail).toContain("imports in this file: could not resolve './Gone' in src/widgets/Orphan.tsx");
+    expect(detail.indexOf('@/widgets/Orphan')).toBeLessThan(detail.indexOf("'./Gone'"));
+    expect(detail).toContain('other imports usabl could not follow from the screens, any of which may load this file');
+  });
+
+  it('labels unrelated imports as imports of other files, never as this file', async () => {
+    const fs = makeFakeDeps({
+      files: {
+        'usabl.routes.json': routes,
+        'src/Page.tsx': "import { A } from '@/a/A';",
+        'src/Lonely.tsx': 'export const Lonely = 1;',
+      },
+    }).fs;
+    const coverage = await computeCoverage(fs, config, ['src/Lonely.tsx']);
+    const reason = coverage.gaps.find((entry) => entry.ref === 'src/Lonely.tsx')?.reason ?? '';
+    expect(reason).toContain(
+      "Discovery detail: other imports usabl could not follow from the screens, any of which may load this file: could not resolve '@/a/A' in src/Page.tsx",
+    );
+    expect(reason).not.toContain('imports in this file');
+  });
 });

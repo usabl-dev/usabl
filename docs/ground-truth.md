@@ -1528,7 +1528,11 @@ file, so a file it loads stays excluded. That is a known limit.
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
 `files` of a surface in `usabl.config.json`, or add the route that renders it to
 `usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
-way comes last, as discovery detail. A docs source gets the docs form of the fix: add it to a
+way comes last, as discovery detail, in three labelled groups: the imports on the screens' paths
+whose last segment names the file, then the file's own imports, then every other import on the
+screens' paths, labelled as imports of other files that may still load this one. The first three
+entries are printed, in that order, and then the count of the rest. The reason never calls the
+file changed, because `usabl baseline` passes every UI file through the same planner. A docs source gets the docs form of the fix: add it to a
 page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case is a shared file,
 such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
 the first such file in its gap list and then lists every other one with its reason, sorted.
