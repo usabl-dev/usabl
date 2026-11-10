@@ -2631,7 +2631,8 @@ lines.
 - Sensitivity evidence: `usabl verify sensitivity [--app] [--screen <id> ...] [--json]` puts each
   declared defect in its catalog on a page in the scan browser and records whether the real checks
   and the real gate catch it, in `.usabl/sensitivity.json` (see section 25). It is measurement: it
-  mints no verdict and no receipt, and it exits 0 whenever it ran and wrote the file.
+  mints no verdict and no receipt. It exits 0 whenever it ran and wrote the file, 2 when a flag or
+  the config is wrong, and 4 when it could not run.
 - CI: the workflow invokes `usabl check --ci --trusted-ref <base>`. On `check`, `--ci` is
   the CI-mode boolean and forces `--trusted-ref` (without it, `check --ci` refuses with
   exit 2). The same `--ci` token is the CI *install target* under `usabl install`; the two
@@ -4141,22 +4142,26 @@ aggregates this measurement across repos; verdict authority stays with the gate.
 ### Sensitivity evidence (`usabl verify sensitivity`)
 
 **What it measures.** Whether the shipped checks and the gate catch a declared set of defects, on
-pages where usabl put each defect itself. It answers "does usabl see this kind of barrier when it
-is there", one defect at a time. It says nothing about any other defect, and nothing about whether
+pages where usabl put each defect itself. It answers "does usabl see this kind of accessibility
+barrier when it is there", one defect at a time. It says nothing about any other defect, and nothing about whether
 a screen is accessible.
 
 **The catalog.** `src/measure/sensitivity/catalog.ts` is a typed, versioned list. Each entry has a
 stable id, one plain sentence, the WCAG 2.2 success criterion it breaks, the rule ids expected to
 report it, the evidence class expected (deterministic or preview), where the rule is expected to
-report it (on the changed element, inside it, around it, or anywhere on the screen), and a
-mutation. A mutation is data: a target finder and one edit. The target finder reads the page only
+report it (on the changed element, inside it, on it or its shadow host, or anywhere on the
+screen), and a mutation. A mutation is data: a target finder and one edit. The target finder reads the page only
 through `Page.queryAll`, `Page.axAt`, and `Page.hostMarkup`, the reads the checks use. The edit is
 one of eight fixed kinds: remove attribute, set attribute, remove text name, set style, remove
 element, replace role, swallow a key, and make `focus()` calls do nothing. The two page functions
 that carry them out are written once in `edits.ts`, and an entry's values reach the page only as
 JSON arguments. They run in the page's own world, because two kinds change how the page's script
-behaves. An edit that changes markup reads its change back, so one the page did not keep is
-reported as unreadable, not measured. An entry that no shipped rule claims carries the place where a claim to catch it is made.
+behaves. An edit that changes markup reads its change back at once, and again after the last
+provider has run. The two script kinds count what they did: a swallowed key counts the keys aimed at
+the element that reached the page first, and a stubbed `focus()` counts focus that reached the
+element some other way, such as on an element the page added later or by autofocus. Focus by Tab or
+by a pointer press is not counted, because the edit leaves both working on purpose. An entry that no
+shipped rule claims carries the place where a claim to catch it is made.
 
 **The run.** For each entry and screen: load the page and scan it with the real provider stack,
 then gate the scan with the real `gate()` against an empty floor. Load the page again, make the
@@ -4165,17 +4170,36 @@ against a floor of what the clean scan found. Each finding the gate calls `new` 
 is located on the mutated page, through every draft the gate collapsed into it, against the
 elements the edit changed. The outcome, in this order:
 
-- `not applicable`: the screen cannot carry the defect. No element matches the target finder, the
-  defect needs more elements than the page has (one toolbar needs no label), or the entry needs a
-  flow requirement, a voice requirement, or a documentation page the screen does not have.
-- `unreadable`: either scan had a coverage gap, including a screen marked unseen, or the edit was
-  not made. A gapped scan proves nothing in either direction.
-- `caught`: a new gating finding from an expected rule, where the entry says it reports.
-- `caught by another rule`: a new gating finding from another rule, on the changed element.
-  Counted apart from caught. A new finding away from the change makes the entry `unreadable`: the
-  two loads differ, so it proves nothing about the defect.
+A new finding is dropped when every draft behind it has a rule and element path the clean scan
+already reported: that is a finding the page already had, moved to a new identity because the edit
+changed the name it was keyed on. Only a finding with confidence `fail` counts as a catch. An
+`unverified` finding is the checks saying they could not tell.
+
+The outcome, in this order:
+
+- `unreadable` before anything loads: the entry needs a flow or voice requirement and the design
+  requirements could not be loaded. The reason is the load error.
+- `not applicable`: the screen cannot carry the defect. The entry needs a flow requirement, a voice
+  requirement, or a documentation page the screen does not have; no element matches the target
+  finder; the defect needs more elements than the page has (one toolbar needs no label); or a
+  finding from an expected rule was already on a target element in the clean scan, so the defect
+  was there before the edit.
+- `unreadable`: the scans cannot say. Either scan had a coverage gap, including a screen marked
+  unseen. The edit was not made. The change did not hold through the scan: a markup change was gone
+  at the second read, a key aimed at the element got past the swallow, or focus reached the element
+  in a way the edit does not stop. The gate did not verify the mutated scan, and no new finding
+  explains it. Every new gating finding is `unverified`. Or the only definite new findings are away
+  from the change, for an entry not reported on the screen: the two loads differ, so they prove
+  nothing about the defect.
+- `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
+  it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
+  `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
+  anywhere on the screen.
+- `caught by another rule`: a new gating finding with confidence `fail` from another rule, on the
+  changed element. Counted apart from caught.
 - `preview only`: nothing new gates, and a preview finding is new.
-- `missed`: nothing new gates.
+- `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
+  the reason says so.
 
 **Two levels.** Level 1 runs each entry on its own fixture page, served on loopback from strings
 in `level1.ts`, with no app and no config. The flow and voice pages bring their own requirements.
@@ -4206,20 +4230,28 @@ the stop hook, the overlay, the CI judge, the pull request comment, checkPage, o
 imports reaches it, and nothing on those paths reads the attestation.
 `test/measure/sensitivity/isolation.test.ts` pins both.
 
-**Level 1, measured.** On the fixture pages the catalog caught 25 of 28 defects. Two were missed:
-`control-out-of-tab-order` (a visible button with `tabindex="-1"`; no shipped rule reports a
-control Tab never reaches) and `menu-does-not-open-on-enter` (the menu probe opens a menu with a
-click, never with Enter). `voice-live-region-broken` was preview only, as voice findings are until
-a class is promoted. `test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
+**Level 1, measured.** On the fixture pages the catalog caught 24 of the 27 defects it could
+make and read. Two were missed: `control-out-of-tab-order` (a visible button with `tabindex="-1"`;
+no shipped rule reports a control Tab never reaches) and `menu-does-not-open-on-enter` (the menu
+probe opens a menu with a click, so no check presses Enter on the toggle). `voice-live-region-broken`
+was preview only, as voice findings are until a class is promoted. `menu-toggle-state-removed` was
+unreadable: the menu probe clicks the toggle, the fixture's script sets `aria-expanded` again, and
+the second read finds the change gone. `test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
 
 **Limits.** A catch on the fixture pages is a catch on that markup. On a team's app, a mutation
-can land on an element where it creates no barrier for users, for example a live region the flow
-does not use, and that reads as missed; read a Level 2 miss with the screen in hand. The edits run
-in the page's own world, so page script can see them and could undo one; the read-back catches a
-change the page did not keep at once, not one it changed back later, and the two script kinds have
-no read-back. Edits reach the top document only. A
-defect the catalog does not declare is not measured, and every shipped rule no entry expects is
-listed in the file.
+can land on an element where it creates no accessibility barrier for users, for example a live
+region the flow does not use, and that reads as missed; read a Level 2 miss with the screen in
+hand. The edits run in the page's own world, so page script can see them and could undo one. The
+second read catches a markup change that is gone by the end of the scan, not one the page undid and
+then made again in between. A page key listener on the window that ran before the edit was made is
+not seen by the key count. Edits reach the top document only. A page with no focusable element
+cannot be measured: the keyboard walk never leaves the body, so the screen reads as unseen and
+every entry on it is unreadable. Pages listed in `usabl.docs.json` are not measured on Level 2:
+it reads only the surfaces in `usabl.config.json`, and a surface carries no documentation profile,
+so the documentation entry is not applicable on any Level 2 screen. A finding is located after every provider has acted, so a path such as
+`nth-child(5)` can name another element by then, for example after a toast was added. A defect the
+catalog does not declare is not measured, and every shipped rule no entry expects is listed in the
+file.
 
 ---
 
@@ -4346,7 +4378,7 @@ Categories:
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
+| 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements and reports a focus trap. No shipped rule reports a visible control that is not on the Tab path (section 25 measures this). PF rules cover dialog focus, kebabs, and row actions. |
 | 2.1.2 | No Keyboard Trap | A | Built (keyboard walk) | Cycle detection in the walk. A Tab cycle that never reaches the body is `keyboard-walk-trap`, plus a truncation gap. A cycle inside one open modal dialog is a truncation gap only. See 7.3. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
 | 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. usabl does not run over time. |

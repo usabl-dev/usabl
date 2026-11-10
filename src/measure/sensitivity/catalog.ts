@@ -189,7 +189,7 @@ export const SENSITIVITY_CATALOG: readonly CatalogEntry[] = [
     criterion: { id: '2.1.1', name: 'Keyboard' },
     expectedRules: [],
     noShippedRule:
-      'No shipped rule reports a visible control that Tab never reaches. The WCAG coverage map in docs/ground-truth.md section 28 says the keyboard walk reports it.',
+      'No shipped rule reports a visible control that Tab never reaches. The WCAG coverage map in docs/ground-truth.md section 28 claimed under 2.1.1 that the keyboard walk reports it, until this entry measured the claim.',
     expectedClass: 'deterministic',
     reportedOn: 'target',
     level1Screen: 'sensitivity-basic',

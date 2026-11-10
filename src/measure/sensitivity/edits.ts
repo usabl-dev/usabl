@@ -68,7 +68,9 @@ export interface EditResultInPage {
  * The result also holds a second read for after the scan. A markup edit reads its change back
  * again. The two script edits count what they did: a key edit counts the keys aimed at the element
  * that got past it, and a focus edit counts focus that reached the element in a way the edit does
- * not stop. The reasons are engine words only, never page text.
+ * not stop. The reasons are engine words. An error the page throws while the edit runs can still
+ * carry page words into the reason the real editor builds, so every reason is scrubbed before any
+ * output.
  */
 export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditResultInPage {
   const NAME_ATTRIBUTES = ['aria-label', 'aria-labelledby', 'title', 'placeholder'];

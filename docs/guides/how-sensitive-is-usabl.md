@@ -43,8 +43,8 @@ Add `--json` to print the whole attestation instead of the summary.
 The command writes `.usabl/sensitivity.json` and prints a short summary, for example:
 
 ```text
-On the fixture pages: caught 25 of 28 catalog defects.
-  caught 25, caught by another rule 0, missed 2, preview only 1, not applicable 0, unreadable 0
+On the fixture pages: caught 24 of 27 catalog defects.
+  caught 24, caught by another rule 0, missed 2, preview only 1, not applicable 0, unreadable 1
   Missed:
     control-out-of-tab-order on sensitivity-basic. Expected: no shipped rule. ...
 ```
@@ -53,24 +53,38 @@ The file holds the engine and scanner versions, the catalog hash, the date, and 
 and screen: the outcome, the rules that reported it, and the reason for any outcome other than
 caught. It also lists every shipped rule the catalog does not exercise, with the reason. The command
 exits 0 whenever it ran and wrote the file, even when defects were missed. It exits 4 only when it
-could not run, and 2 when a flag is wrong.
+could not run, and 2 when a flag or the config is wrong.
 
 ## What each outcome means
 
-- **caught**: a rule expected to report the defect reported something new, on the changed element,
-  and the gate would block it.
-- **caught by another rule**: something new would block on the changed element, but from another
-  rule. It is counted apart from caught. Something new away from the change is unreadable instead:
-  the page differed between its two loads, so it proves nothing about the defect.
-- **missed**: nothing new would block. The summary names the defect and what was expected.
+- **caught**: a rule expected to report the defect reported a new, definite failure, and the gate
+  would block it. For most defects it must be on the changed element. For the defects a rule reports
+  on the page or on the control that opens something (the level one heading, the page title, a
+  dialog that does not take focus, and the flow and voice defects), it can be anywhere on the
+  screen.
+- **caught by another rule**: a new, definite failure on the changed element, but from another
+  rule. It is counted apart from caught.
+- **missed**: nothing new would block. The summary names the defect and what was expected. When the
+  defect is a key that does nothing, and the checks never pressed that key on the element, the
+  reason says so.
 - **preview only**: the only new finding is preview evidence, which never blocks. Voice findings are
   preview until a person promotes the class.
 - **not applicable**: the screen cannot carry the defect, for example a screen with no table for a
-  table defect.
-- **unreadable**: one of the two scans had a coverage gap, or the change could not be made. Such a
-  scan proves nothing either way.
+  table defect, or the defect was already on the element before the change.
+- **unreadable**: the scans cannot say either way. One of these happened:
+  - one of the two scans had a coverage gap, or the screen was not seen;
+  - the change could not be made;
+  - the change did not hold through the scan: the page put it back, a key got to the page before
+    the change could cancel it, or focus reached the element in a way the change does not stop;
+  - the gate did not verify the changed scan, and no new finding explains why;
+  - every new finding that would block is one the checks could not confirm;
+  - the only new findings are away from the change, so the page differed between its two loads;
+  - on your app, the design requirements could not be loaded, for the flow and voice defects.
 
-"Caught 25 of 28" counts only the defects that were made and read. Not applicable and unreadable
+Two more rules keep old findings out. A finding the page already had is not new, even when the
+change moved it to a new name. And only a definite failure counts as a catch.
+
+"Caught 24 of 27" counts only the defects that were made and read. Not applicable and unreadable
 rows are listed, never counted as caught. A level where nothing could be made and read is reported
 as measuring nothing, not as a pass.
 
@@ -81,16 +95,28 @@ On the fixture pages, two defects are missed:
 - `control-out-of-tab-order`: a visible button with `tabindex="-1"`. Keyboard users cannot reach it,
   and no shipped rule reports a control that Tab never reaches.
 - `menu-does-not-open-on-enter`: a menu that opens on a click but not on Enter. The PatternFly menu
-  probe opens menus with a click, so it does not see this.
+  probe opens menus with a click, so no check ever presses Enter on the toggle.
 
 `voice-live-region-broken` is preview only, as expected for voice findings today.
+
+`menu-toggle-state-removed` is unreadable. The change removes `aria-expanded` from the menu toggle,
+and a rule reports it. Then the menu probe clicks the toggle, and the page's own script sets
+`aria-expanded` again. By the end of the scan the change is gone, so the measurement cannot say
+whether the checks saw the defect.
 
 ## Limits
 
 - A catch on the fixture pages is a catch on that markup. Your screens can differ.
-- On your app, a change can land on an element where it creates no barrier, for example a live
-  region your flow does not use. That reads as missed. Read a Level 2 miss with the screen open.
+- On your app, a change can land on an element where it creates no accessibility barrier, for
+  example a live region your flow does not use. That reads as missed. Read a Level 2 miss with the
+  screen open.
 - The changes run in the page's own script world, so your page's own script can see them.
+- A page with no focusable element cannot be measured. The keyboard walk never leaves the body, so
+  the screen reads as not seen, and every defect on it is unreadable.
+- Pages listed in `usabl.docs.json` are not measured on Level 2. Level 2 reads only the surfaces in
+  `usabl.config.json`.
+- A finding is located after every check has run. By then a position-based path can name another
+  element, for example after a toast was added to the page.
 - Only the defects in the catalog are measured. A defect that is not in the catalog is not
   measured at all.
 
