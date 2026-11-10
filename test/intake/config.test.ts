@@ -579,6 +579,21 @@ describe('parseUsablConfig glob syntax', () => {
     }
   });
 
+  it('refuses a guardedPaths entry with white space at the start or end, and shows it in quotes', () => {
+    // No file is named "src/gate/ ", so such an entry guards nothing, in CI and locally.
+    for (const entry of ['src/gate/ ', ' src/gate/', 'src/gate\t']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, JSON.stringify(entry)).toContain('guardedPaths');
+      expect(message, JSON.stringify(entry)).toContain('white space');
+      expect(message, JSON.stringify(entry)).toMatch(new RegExp(`"\\s*${entry.trim()}\\s*"`));
+    }
+  });
+
   it('refuses a backslash, which Node reads as an escape and usabl reads as text', () => {
     expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/\\x.json'] }))).toThrow(/guardedPaths/);
     expect(() => parseUsablConfig(configJson({ uiFileGlobs: ['src/\\*.tsx'] }))).toThrow(/uiFileGlobs/);

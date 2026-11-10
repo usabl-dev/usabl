@@ -73,6 +73,18 @@ function expectGlobArray(value: unknown, label: string): string[] {
   return patterns;
 }
 
+// A guarded entry with white space at the start or end names a path no file has, so it would
+// guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen.
+function expectGuardedPaths(value: unknown): string[] {
+  const entries = expectGlobArray(value, 'guardedPaths');
+  for (const entry of entries) {
+    if (entry.trim() !== entry) {
+      throw configError`guardedPaths entry "${entry}" starts or ends with white space, so it names no file and would guard nothing. Remove the white space.`;
+    }
+  }
+  return entries;
+}
+
 // A budget of zero, a negative, a fraction, or a string would either fail every screen or fail
 // deep inside a browser call. Refusing it here keeps the failure at config load, before a run
 // launches anything.
@@ -447,7 +459,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
       wideBlastGlobs: expectGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
     },
     surfaces,
-    guardedPaths: expectGlobArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
+    guardedPaths: expectGuardedPaths(Reflect.get(root, 'guardedPaths')),
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
