@@ -1015,6 +1015,20 @@ jobs. The rule they hold: no job that decides a verdict, or holds a write token,
 request head code in Node or a shell. Head code runs only in `build-app`, and as page script
 inside the judge's Chromium.
 
+Two values the installer reads reach these files: the engine pin, only as a full commit SHA, and
+the default branch, read from the clone's `refs/remotes/origin/HEAD`. The branch is written only
+when it is letters, digits, and `. _ - /`, and always quoted, into each workflow's trigger and
+nowhere else: the `pull_request` trigger of the gate and the docs gate, and the `push` trigger of
+the history workflow, which also names it in its scan job's `if:`. Any other name is not written:
+the file names `main` and the report prints a step to check it.
+
+The branch filter applies to the `pull_request` event only. GitHub takes no branch filter on
+`pull_request_review`, so a review on a pull request into any branch starts the gate. `build-app`
+does not run on a review. The judge looks for the `pull_request` run that built this exact pull
+request, head, and base. A pull request into another branch normally has none, because the branch
+filter kept the gate from running on it, so the judge fails closed and `usabl-required` reports
+red. That red check blocks nothing on a branch that does not require it, and it is never a pass.
+
 What runs where, and what each job holds:
 
 | Job | Runs head code? | Token | Secrets | Checks out |
@@ -1148,8 +1162,11 @@ Residual risks that remain:
   dismissal are required (classic `require_code_owner_reviews`, `required_approving_review_count`,
   `dismiss_stale_reviews`; ruleset `require_code_owner_review`, `required_approving_review_count`,
   `dismiss_stale_reviews_on_push`). A count of 0 or a dismissal that is off is not applied; a
-  value usabl cannot read is "cannot verify". A ruleset on `~DEFAULT_BRANCH` counts for `main`
-  only when the repository says `main` is its default branch. `usabl doctor` also checks that
+  value usabl cannot read is "cannot verify". Both check the branch the gate workflow on disk
+  names in its trigger, and `main`, said to be assumed, when no gate names one. A ruleset on
+  `~DEFAULT_BRANCH` counts for that branch only when the repository says it is the default
+  branch. A branch name that would form an empty, `.`, or `..` path segment is never read, and
+  the name goes into the api path as one encoded segment. `usabl doctor` also checks that
   `CODEOWNERS` gives every workflow an owner: the last rule that matches each `.yml` or `.yaml`
   file in `.github/workflows/`, and the last rule for any such file a pull request could add, must
   name valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes
@@ -1199,8 +1216,8 @@ policy job builds the base commit and decides policy from it. The tests hold it 
 `usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
 the same `usabl-engine` job, and both later jobs fetch the archive with usabl's own fetcher,
 check it against `engine_digest`, and check the unpacked tree before each engine run. Its scan
-job runs main's own application, which was merged through the gate, so it does not get the judge
-split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
+job runs the default branch's own application, which was merged through the gate, so it does not
+get the judge split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
 directory, and its content is believed, which is safe for the reason Threat 13 gives: the history
 can only make a run stricter, never greener.
 

@@ -3340,6 +3340,28 @@ Result, or writes it to the run summary on a pull request from a fork. `usabl-po
 `usabl enforce policy --trusted-ref <base SHA>` with the head read only as git objects.
 `usabl-required` (`if: always()`, needs all five) sets the required status. Serving, scanning,
 policy, and the comment all read the one base commit the event names, never a branch ref.
+Each gate triggers on pull requests into one branch, written quoted in its `pull_request`
+trigger. The installer takes it the way it takes the history workflow's branch (below): from
+`refs/remotes/origin/HEAD`, a plain name only, main and a printed step when git names none, and
+the branch already in usabl's own file kept on a re-run. That trigger line is the only line of a
+gate that changes with the branch, and the file then names the branch: doctor and the installer
+recognise usabl's own draft for whichever plain branch the trigger names, and any other trigger
+form is drifted. The branch filter applies to the `pull_request` event only. GitHub takes no
+branch filter on `pull_request_review`, so a review on a pull request into any branch starts the
+gate. The judge then looks for the `pull_request` run that built this exact pull request, head,
+and base (below). A pull request into another branch normally has none, so the judge fails closed
+and `usabl-required` reports red on it; that red check blocks nothing on a branch that does not
+require it. When the gate, the docs gate, and the history workflow on disk name different
+branches, the installer prints one step naming each file and its branch, and changes none of
+them. A gate, docs gate, or history workflow that is byte for byte the unedited draft an earlier
+0.3.0 build wrote (a gate triggering on an unquoted `[main]`, and older comment text) is rewritten
+to this draft with the engine pin it held, if it held one. The rewrite line says when the trigger
+moved, from which branch to which, and the line to change to put it back (`origin/HEAD` can be
+stale after a rename), and says to commit the file. Doctor reads such a file as drifted and says
+to run the installer; it says the pin is kept only when the file has one. The step that places
+the engine at `../usabl` skips the unpack when that path is the checkout itself (a repository
+named usabl). It prints one line that also says an app installing usabl from `file:../usabl`
+cannot build there, and that renaming the repository fixes it.
 
 **The engine pin and the install report.** `npm run build` ends with
 `scripts/write-build-info.mjs`, which writes `dist/build-info.json`: the package version, the
@@ -3353,16 +3375,20 @@ that cannot be fetched from `usabl-dev/usabl`, makes the engine checkout fail, s
 workflow file is written when absent, left alone when identical, filled in when it is the
 unedited sentinel draft and the build has a commit, left alone with its commit named when it is
 the draft pinned to another commit, and refused when anything else differs. `usabl doctor`
-still reads a workflow that holds the sentinel as not wired: the gate on its `ci` line, and the
-history workflow on its own `history-ci` line, recognised for whichever branch its trigger names
-(no history workflow reads as missing, since it is optional). The report lists the outcome for
+still reads a workflow that holds the sentinel as not wired: the gate on its `ci` line, the docs
+gate on its own `docs-ci` line, and the history workflow on its own `history-ci` line, each
+recognised for whichever branch its trigger names and labelled with that branch (no docs gate
+and no history workflow read as missing, since both are optional). The report lists the outcome for
 each file, then the facts once, then the steps still needed: pin the engine (only with the
 sentinel), run `usabl init` or fix `appBaseUrl` (only when `usabl.config.json` has no loopback
 http `appBaseUrl` with a port), add a `dev` script (`install --ci` only, when `package.json` has
 none), merge `usabl.config.json` (and `usabl.routes.json` when the working tree has one) to the
-default branch first in their own pull request (`install --ci` only, unless git shows that
-`refs/remotes/origin/<default branch>` already holds the same bytes; the judge reads them at the
-base commit, so a pull request that adds them with the workflows cannot pass), and, when a file
+default branch first in their own pull request (for `install --docs-ci` the files are
+`usabl.config.json` and `usabl.docs.json`, and `usabl.routes.json` when the working tree has one;
+left out when git shows that `refs/remotes/origin/<default branch>` already holds the same
+bytes; the judge reads them at the base commit, so a pull request that adds them with the
+workflows cannot pass), check the branch name (when git names no default branch) or make the
+files name the same branch (when they differ), and, when a file
 was written, commit, add the branch rule, and open a pull request. Before
 init, the report reads the port from a `--port` in the `dev` script, `server.port` in the Vite
 config, or `devServer.port` in the webpack dev config (a literal, a module-level binding to one,
@@ -3393,9 +3419,20 @@ evidence. The protection is a branch rule or ruleset that requires review from c
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
 `usabl install --branch-rule` verifies the required check, code-owner review, at least one
 required approving review (a count of 0 requires no review at all), and dismissal of stale
-approvals on push, each by classic protection or by an active ruleset; a ruleset on
-`~DEFAULT_BRANCH` counts only when the repository's default branch is `main`. Each part that is
-off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`: wired only when the last
+approvals on push, each by classic protection or by an active ruleset, on the branch the gate
+workflow on disk names in its trigger. With no gate workflow, it reads the branch the docs gate
+workflow names, since the docs gate requires the same check, and its advice names
+`install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
+or no permission), it checks `main` and says it assumed it in each line that names it. An
+assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
+default branch. When GitHub reports another default branch, or cannot say which one it is, the
+result is "cannot verify": it names both branches when it can, and the next step. A default
+branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. When a gate
+names one branch and GitHub's default branch is another, the output says in one line that the
+gate covers only pull requests into the branch it names, and names the line to change. Each part
+that is off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, with the branch lines in the next step; a verified branch that
+is not GitHub's default branch reads as drifted, not wired. It also reports `workflow-owners`: wired only when the last
 `CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
 rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
@@ -3406,8 +3443,8 @@ three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it h
 build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
 `usabl doctor` reads the engine's own gate as `drifted`. That is the expected reading for the
 one repository that is its own engine. The required status check named in branch protection is
-`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is
-`main`. Both `enforce` commands read Result JSON from stdin and never call the gate.
+`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is the
+one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape
@@ -3453,10 +3490,11 @@ from `refs/remotes/origin/HEAD` in the app's clone and writes it, quoted, into t
 and the `history-scan` job's `if:`; the report names it. A name with any character outside
 letters, digits, and `. _ - /`, or no such ref, means not found: the installer writes main and
 prints a step to change it on those two lines. A re-run keeps the branch its own file already
-names. The text below says main for that branch. It builds the engine with the same `usabl-engine` job
+names. Those two lines are the only ones that carry the name; comments and step names say
+"the default branch". It builds the engine with the same `usabl-engine` job
 as the gate, and each later job fetches the archive and the record with usabl's own fetcher,
 checks the archive against `engine_digest`, and checks the unpacked tree before each engine run. Its
-`history-scan` job checks out main, reads `appBaseUrl` from main's `usabl.config.json`, starts
+`history-scan` job checks out the default branch, reads `appBaseUrl` from its `usabl.config.json`, starts
 the application with `npm run dev -- --host <host> --port <port>` on that origin, runs
 `usabl history record`, and uploads the record. An `appBaseUrl` that is missing, unreadable, or
 not an http loopback origin with an explicit port fails the job before the application starts. It runs application code, so it reads only. Its `history-append` job needs

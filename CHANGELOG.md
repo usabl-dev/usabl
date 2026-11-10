@@ -27,6 +27,42 @@
   `usabl debt --out` is refused, because plain `usabl debt` writes no file. The stop hook and the
   overlay host now read the config through `src/intake/load-config.ts`, where `loadConfig` and
   `parseConfigText` live, instead of loading the whole CLI.
+- The gate works on any default branch. `usabl install --ci` and `usabl install --docs-ci` read
+  the default branch from the clone's `origin/HEAD` and write it, quoted, into the pull request
+  trigger of the gate and the docs gate, the same way the history workflow already took it. When
+  git cannot name a plain branch they write main and print one step that names the line to change
+  in each file. A re-run keeps the branch each file names, and doctor recognises usabl's own draft
+  for whichever branch its trigger names. When the gate, the docs gate, and the history workflow
+  name different branches, the report says so in one step and changes no file.
+  The branch filter applies to the `pull_request` event. A review starts the gate on a pull
+  request into any branch, and on a pull request into another branch the gate normally finds no
+  build of it and reports `usabl-required` red.
+  `usabl install --branch-rule` and the doctor branch rule check the protection on the branch the
+  gate names, for classic protection, ruleset includes and excludes, and `~DEFAULT_BRANCH`. With
+  no app gate they read the branch the docs gate names, and their advice names
+  `install --docs-ci`. With neither, or a gate file or trigger they cannot read, they check main
+  and say in each line that they assumed it. An assumed main is verified only when there is no
+  gate file and GitHub reports main as the default branch; when GitHub reports another default
+  branch, or cannot say, the check is not verified and names the next step. When the gate names
+  one branch and GitHub's default branch is another, they say so in one line with the line to
+  change, and doctor reads the branch protection as drifted. A default branch name from GitHub
+  that is not a plain name is neither trusted nor printed. `install --docs-ci` now says to merge
+  `usabl.config.json` and `usabl.docs.json` to the default branch first, unless git shows they are
+  there. Doctor reports the docs gate on its own line, and each workflow label names its branch.
+  Comments and step names in the workflows say "the default branch", and the gate says
+  "accessibility barriers". In a repository named usabl, the step that places the engine at
+  `../usabl` prints one line and skips the unpack, so it never unpacks over the checkout. The
+  line says that an app installing usabl from `file:../usabl` cannot build there, and that
+  renaming the repository fixes it.
+
+  If you ran `usabl install --ci` or `--docs-ci` from an earlier 0.3.0 build, run it again. Those
+  builds wrote the gates with `branches: [main]` and older comment text, so this version reads
+  them as drifted. When a file is that earlier draft with no edits, the command rewrites it to
+  this draft, keeps the engine pin it held if it held one, and gives an earlier gate the default
+  branch git names. When that branch is not main, the rewrite line says the trigger moved from
+  main and which line to change to put it back, since git does not update the default branch it
+  recorded at clone time when a team renames it. Review and commit the change. A file you edited
+  is refused as before: reconcile it by hand.
 
 - `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
   catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
