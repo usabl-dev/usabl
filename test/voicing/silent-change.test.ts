@@ -324,9 +324,17 @@ describe('the silent change rule in a flow requirement', () => {
     });
 
     it('step not run: the flow driver reports a step kind it does not run instead of ignoring it', async () => {
-      const drafts = await flowDrafts({}, [{ do: 'hover', selector: '#save' }, { do: 'click' }, { do: 'press' }]);
+      // The flow runs none of its steps and is not covered. The rule's gap for each step comes with it.
+      const { page, calls } = worldPage({});
+      const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'hover', selector: '#save' }, { do: 'click' }, { do: 'press' }])))[0];
+      if (provider === undefined) throw new Error('no provider');
+      const result = await runProviders([provider], { page, screen: SCREEN, config: testConfig() }, ['live']);
+      const drafts = result.drafts;
       expect(reasons(drafts)).toEqual(['step not run', 'step not run', 'step not run']);
       expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified', 'unverified', 'unverified']);
+      expect(result.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['provider:intake:save-flow', 'not-covered']]);
+      expect(calls).not.toContain('click');
+      expect(calls).not.toContain('press');
     });
 
     it('step threw: the step and those after it are unjudged, and the flow still fails with the same gap', async () => {

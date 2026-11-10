@@ -161,40 +161,39 @@ function flowUndecidableDraft(
   };
 }
 
-// Whether the flow driver runs a step. A kind it does not know, a click with no selector, and a
-// press with no key are not run.
-function flowRuns(step: Step): boolean {
-  return (
-    step.do === 'tab' ||
-    step.do === 'activate' ||
-    (step.do === 'click' && typeof step.selector === 'string') ||
-    (step.do === 'press' && typeof step.key === 'string')
-  );
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-// Runs one flow step. Returns false for a step the driver does not run, so the caller can report
-// it rather than read the page as if the step had happened.
-async function runFlowStep(page: Page, step: Step): Promise<boolean> {
+// What a step lacks for the flow driver to run it, or null when it can run. A click needs a
+// selector and a press needs a key; a missing, empty, or blank value is no value. An activate step
+// presses Enter on the focused control and needs nothing more. Any other kind is not run.
+function missingForFlow(step: Step): string | null {
+  if (step.do === 'tab' || step.do === 'activate') {
+    return null;
+  }
+  if (step.do === 'click') {
+    return hasText(step.selector) ? null : "a click step needs a selector, such as selector: '#delete'";
+  }
+  if (step.do === 'press') {
+    return hasText(step.key) ? null : 'a press step needs a key, such as key: Escape';
+  }
+  return 'the flow does not run this kind of step; write do as tab, activate, press with a key, or click with a selector';
+}
+
+// Runs one flow step the driver can run. The caller checked every step with missingForFlow first.
+async function runFlowStep(page: Page, step: Step): Promise<void> {
   if (step.do === 'tab') {
     await page.tab();
-    return true;
-  }
-
-  if (step.do === 'activate') {
+  } else if (step.do === 'activate') {
     await page.press('Enter');
-    return true;
-  }
-
-  if (step.do === 'click' && typeof step.selector === 'string') {
+  } else if (step.do === 'click' && typeof step.selector === 'string') {
     await page.click(step.selector);
-    return true;
-  }
-
-  if (step.do === 'press' && typeof step.key === 'string') {
+  } else if (step.do === 'press' && typeof step.key === 'string') {
     await page.press(step.key);
-    return true;
+  } else {
+    throw new Error(`the flow cannot run step kind ${step.do}`);
   }
-  return false;
 }
 
 // The drains taken after the flow's steps, read as one drain: the texts in step order, and the
@@ -327,6 +326,23 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 }
 
 async function runFlow(page: Page, requirement: Requirement, assertion: FlowAssertion, watch: SilentChangeWatch): Promise<Draft[]> {
+  // A step the driver cannot run would run as nothing, and the flow would judge a page its steps
+  // never touched. So every step is checked before any runs. One that cannot run makes the flow a
+  // not-covered gap that names it, and the silent change rule reports it as a step not run.
+  const missing: string[] = [];
+  for (const [index, step] of assertion.steps.entries()) {
+    const lack = missingForFlow(step);
+    if (lack !== null) {
+      missing.push(`step ${index} (${step.do}): ${lack}`);
+      watch.notRun(step, index);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `the flow ran none of its steps, because it cannot run ${missing.join('; ')}. Steps are counted from 0.`,
+    );
+  }
+
   await page.armAnnouncementCapture();
   // Each step's drain is kept. The flow's verdict reads them all in step order. A drain that fails
   // is kept as an error: the verdict needs every one, and fails with the first failure. A flow with
@@ -356,20 +372,15 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   // because the speech it should have cleared could then land in the first step's drain.
   watch.start(await takeDrain(null));
   for (const [index, step] of assertion.steps.entries()) {
-    const action = isActionStep(step) && flowRuns(step);
+    const action = isActionStep(step);
     if (action) {
       await watch.before(page, step, index);
     }
-    let ran: boolean;
     try {
-      ran = await runFlowStep(page, step);
+      await runFlowStep(page, step);
     } catch (error) {
       watch.threw(step, index, error);
       throw error;
-    }
-    if (!ran) {
-      watch.notRun(step, index);
-      continue;
     }
     // An action step waits for the page to react before its window is read. A wait that fails
     // leaves the step unjudged by the rule and changes nothing for the flow.

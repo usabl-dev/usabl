@@ -519,6 +519,68 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
+  describe('a flow step the driver cannot run', () => {
+    // Each step the driver cannot run as written, with what the gap must say about it.
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ['a click with no selector', { do: 'click' }, 'step 1 (click): a click step needs a selector'],
+      ['a click with an empty selector', { do: 'click', selector: '' }, 'step 1 (click): a click step needs a selector'],
+      ['a click with a blank selector', { do: 'click', selector: '   ' }, 'step 1 (click): a click step needs a selector'],
+      ['a click whose selector is not text', { do: 'click', selector: 7 }, 'step 1 (click): a click step needs a selector'],
+      ['a press with no key', { do: 'press' }, 'step 1 (press): a press step needs a key'],
+      ['a press with an empty key', { do: 'press', key: '' }, 'step 1 (press): a press step needs a key'],
+      ['a press with a blank key', { do: 'press', key: ' ' }, 'step 1 (press): a press step needs a key'],
+      ['a step of a kind the driver does not know', { do: 'hover', selector: '#save' }, 'step 1 (hover): the flow does not run this kind of step'],
+    ];
+
+    for (const [name, step, said] of cases) {
+      it(`makes the flow a gap for ${name}, and runs no step`, async () => {
+        const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }, step as { do: string }], expectedAnnouncement: 'Saved' });
+        const provider = mapRequirementsToProviders(bundle)[0];
+        const tab = vi.fn(async () => {});
+        const press = vi.fn(async () => {});
+        const click = vi.fn(async () => {});
+        const drainAnnouncements = vi.fn(async () => ['Saved']);
+        const context = await makeContext({
+          page: makeFakePage({ tab, press, click, drainAnnouncements, activeNode: vi.fn(async () => axNode('Saved')) }),
+        });
+
+        const run = provider!.run(context);
+
+        await expect(run).rejects.toThrow(said);
+        await expect(run).rejects.toThrow('counted from 0');
+        expect(tab).not.toHaveBeenCalled();
+        expect(press).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
+        expect(drainAnnouncements).not.toHaveBeenCalled();
+      });
+    }
+
+    it('names every step it cannot run, in step order', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press' }, { do: 'tab' }, { do: 'click' }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext();
+
+      await expect(provider!.run(context)).rejects.toThrow(/step 0 \(press\): a press step needs a key.*step 2 \(click\): a click step needs a selector/u);
+    });
+
+    it('is a gap even for a flow that expects no announcement', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click' }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+
+      await expect(provider!.run(await makeContext())).rejects.toThrow('step 0 (click)');
+    });
+
+    it('runs an activate step with no selector: it presses Enter on the focused control', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'activate' }, { do: 'press', key: 'Escape' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const press = vi.fn(async () => {});
+      const context = await makeContext({ page: makeFakePage({ press, drainAnnouncements: vi.fn(async () => ['Saved']) }) });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+      expect(press.mock.calls).toEqual([['Enter'], ['Escape']]);
+    });
+  });
+
   describe('when the drain cannot say what a screen reader heard', () => {
     const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
 

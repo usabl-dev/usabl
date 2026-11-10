@@ -2,8 +2,10 @@
  * Flow requirements at the run level, through the real check runner, step runner, providers, and
  * gate, with a scripted page.
  *
- * The capture runs for the life of the page, so the drain a flow took before its first step held
- * speech that an earlier check caused, and the flow counted it. The flow passed without looking.
+ * Two ways a flow used to pass without looking. The capture runs for the life of the page, so the
+ * drain a flow took before its first step held speech that an earlier check caused, and the flow
+ * counted it. And a step the driver could not run, such as a click with no selector, ran as
+ * nothing, so the flow judged a page its steps never touched.
  */
 import { describe, expect, it } from 'vitest';
 import { run } from '../src/run.js';
@@ -108,6 +110,52 @@ describe('a flow requirement and speech from before its first step', () => {
     const providers = [earlierCheck(live), ...flowProviders([{ do: 'click', selector: '#save' }])];
     const r = await run(depsFor(savePage(live, true), providers), config);
     expect(r.findings.filter((f) => f.rule === 'intake:save-announces')).toEqual([]);
+    expect(r.coverage.gaps).toEqual([]);
+    expect(r.verdict).toBe('verified');
+  });
+});
+
+describe('a flow requirement with a step the driver cannot run', () => {
+  // The walk lands on Save, then on the body. An earlier check clicked Save, which renamed it
+  // "Saved" and left focus on it. A flow step that runs as nothing leaves focus there, so the flow
+  // read the expected text as the focused control's name and passed.
+  function savedFocusPage(): { page: Page; earlier: Provider } {
+    let cursor = -1;
+    let saved = false;
+    const at = () => (saved ? { path: '#save', node: { name: 'Saved', role: 'button', states: {} } } : cursor === 0 ? { path: '#save', node: { name: 'Save', role: 'button', states: {} } } : { path: 'body', node: null });
+    const page = makeFakePage({
+      currentUrl: async () => SCREEN_URL,
+      tab: async () => {
+        cursor += 1;
+      },
+      activePath: async () => at().path,
+      activeNode: async () => at().node,
+    });
+    const earlier: Provider = {
+      id: 'earlier-check',
+      layer: 'axe',
+      capabilities: ['live'],
+      run: async () => {
+        saved = true;
+        return [];
+      },
+    };
+    return { page, earlier };
+  }
+
+  it('is not covered, and the gap names the step and what it is missing', async () => {
+    const { page, earlier } = savedFocusPage();
+    const r = await run(depsFor(page, [earlier, ...flowProviders([{ do: 'click' }])]), config);
+    expect(r.findings.filter((f) => f.rule === 'intake:save-announces')).toEqual([]);
+    const gap = r.coverage.gaps.find((g) => g.ref === 'provider:intake:save-announces');
+    expect(gap?.state).toBe('not-covered');
+    expect(gap?.reason).toContain('step 0 (click): a click step needs a selector');
+    expect(r.verdict).toBe('not_covered');
+  });
+
+  it('still passes the same flow with its selector written', async () => {
+    const live: string[] = [];
+    const r = await run(depsFor(savePage(live, true), flowProviders([{ do: 'click', selector: '#save' }])), config);
     expect(r.coverage.gaps).toEqual([]);
     expect(r.verdict).toBe('verified');
   });
