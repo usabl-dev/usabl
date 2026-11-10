@@ -1067,8 +1067,14 @@ export const EARLIER_DOCS_GATE_WORKFLOW = earlierForm(USABL_DOCS_GATE_WORKFLOW, 
 
 export type CiPlan =
   // replacesEarlier is set when the file on disk is the unedited draft an earlier 0.3.0 build wrote,
-  // with keptPin the engine commit it held, if any.
-  | { action: 'write'; path: string; contents: string; replacesEarlier?: { keptPin: string | null } }
+  // with keptPin the engine commit it held, if any, and moved set when the rewrite names another
+  // branch in its trigger than the earlier draft did.
+  | {
+      action: 'write';
+      path: string;
+      contents: string;
+      replacesEarlier?: { keptPin: string | null; moved: { from: string; to: string; line: number } | null };
+    }
   // pinnedTo is set when the file on disk is the usabl draft pinned to a commit other than the one
   // this run would write. usabl leaves that pin alone, because someone chose it.
   | { action: 'already-wired'; path: string; pinnedTo?: string }
@@ -1086,6 +1092,20 @@ function describeDifference(actual: string, expected: string): string {
     }
   }
   return `the existing file has ${actualLines.length} lines and the usabl draft has ${expectedLines.length} lines`;
+}
+
+// The branch a usabl workflow's trigger names and the one-based line it is on: the branch filter
+// straight after the pull_request or push line, quoted as this version writes it or unquoted as an
+// earlier 0.3.0 gate wrote it. Only read from usabl's own drafts, to say where a rewrite moved it.
+const DRAFT_TRIGGER_BRANCH = /^ {4}branches: \[("?)([A-Za-z0-9._/-]+)\1\]$/;
+function triggerBranchOf(raw: string): { name: string; line: number } | null {
+  const lines = raw.split('\n');
+  for (const event of ['pull_request', 'push']) {
+    const at = lines.indexOf(`  ${event}:`);
+    const match = at === -1 ? null : DRAFT_TRIGGER_BRANCH.exec(lines[at + 1] ?? '');
+    if (match?.[2] !== undefined) return { name: match[2], line: at + 2 };
+  }
+  return null;
 }
 
 // planCi, planDocsCi, and planHistoryCi answer the same question against different targets: given
@@ -1118,11 +1138,13 @@ export async function planWorkflow(
     if (earlier.state === 'wired' || earlier.state === 'unpinned') {
       const keptPin = earlier.state === 'wired' ? earlier.ref : null;
       const ref = keptPin ?? engineRef;
+      const from = triggerBranchOf(raw);
+      const to = triggerBranchOf(placeholderDraft);
       return {
         action: 'write',
         path,
         contents: ref === null ? placeholderDraft : pinEngineRef(placeholderDraft, ref),
-        replacesEarlier: { keptPin },
+        replacesEarlier: { keptPin, moved: from !== null && to !== null && from.name !== to.name ? { from: from.name, to: to.name, line: to.line } : null },
       };
     }
   }
@@ -1209,10 +1231,16 @@ export async function applyWorkflowPlan(
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
     const earlier = plan.replacesEarlier;
+    // The branch only moves when the earlier draft named main and git records another default
+    // branch. origin/HEAD can be stale after a rename, so the line says how to put main back.
+    const moved =
+      earlier?.moved == null
+        ? ''
+        : ` Its trigger moved from ${earlier.moved.from} to ${earlier.moved.to}, the default branch git records for origin. If ${earlier.moved.from} is still your default branch, put ${earlier.moved.from} back in place of ${earlier.moved.to} on line ${earlier.moved.line}.`;
     const message =
       earlier === undefined
         ? `Wrote ${plan.path}.`
-        : `Rewrote ${plan.path}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise.${earlier.keptPin === null ? '' : ` The engine pin ${earlier.keptPin} is kept.`} Review the change before you commit it.`;
+        : `Rewrote ${plan.path}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise.${moved}${earlier.keptPin === null ? '' : ` The engine pin ${earlier.keptPin} is kept.`} Review the file and commit it: the change is only on disk until you do.`;
     return {
       result: { exitCode: 0, action: 'written', path: plan.path, message },
       draft,

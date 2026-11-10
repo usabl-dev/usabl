@@ -77,7 +77,9 @@ describe('install rewrites an unedited earlier draft and keeps its pin', () => {
     expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(pinEngineRef(gateWorkflowFor('trunk'), OTHER_SHA));
     expect(fs.store[USABL_HISTORY_WORKFLOW_PATH]).toBe(pinEngineRef(historyWorkflow('trunk'), OTHER_SHA));
     expect(result.message).toContain(
-      `Rewrote ${USABL_GATE_WORKFLOW_PATH}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. The engine pin ${OTHER_SHA} is kept. Review the change before you commit it.`,
+      `Rewrote ${USABL_GATE_WORKFLOW_PATH}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. ` +
+        'Its trigger moved from main to trunk, the default branch git records for origin. If main is still your default branch, put main back in place of trunk on line 8. ' +
+        `The engine pin ${OTHER_SHA} is kept. Review the file and commit it: the change is only on disk until you do.`,
     );
     expect(result.message).toContain(`Rewrote ${USABL_HISTORY_WORKFLOW_PATH}.`);
     expect(result.message).toContain(`Review and commit ${USABL_GATE_WORKFLOW_PATH} and ${USABL_HISTORY_WORKFLOW_PATH}.`);
