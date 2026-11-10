@@ -2961,7 +2961,7 @@ export const overlayClientSource = `(() => {
       gapList.appendChild(make('li', 'path-token', 'None'));
     } else {
       for (const gap of payload.coverage.gaps) {
-        gapList.appendChild(make('li', 'gap-item', gap.ref + ': ' + gap.reason));
+        gapList.appendChild(make('li', 'gap-item', gap.ref + ': ' + displayText(gap.reason)));
       }
     }
     gaps.appendChild(gapList);
@@ -3217,7 +3217,7 @@ export const overlayClientSource = `(() => {
     if (state.error) {
       const section = make('section', 'section');
       section.appendChild(make('h3', '', 'No result to show'));
-      section.appendChild(make('p', 'notice', payload.summary));
+      section.appendChild(make('p', 'notice', displayText(payload.summary)));
       body.replaceChildren(...(tamper ? [tamper, section] : [section]));
       return;
     }

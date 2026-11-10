@@ -560,10 +560,27 @@ element path, name, role, and key, what a user experiences, why it matters, and 
 the fix used to be passed through unframed because a provider writes them, but for every axe rule
 without a curated note they are axe's failure summary, which quotes the page. The overlay client
 unwraps the frame before it shows a value and writes every value with `textContent`, so a person
-reads the plain text. Fields the client matches on are not framed, because a frame would break the
-match: the rule, layer, screen id, severity, and status, and each coverage gap's ref, which the
-overlay compares with the screen url exactly. A gap's reason and the gate's summary are not framed
-on this endpoint yet.
+reads the plain text. Each coverage gap's reason and the gate's summary are framed the same way:
+a reason can quote an error the page threw during the scan, such as `scan failed: ...`, and the
+summary can carry a reason. The client shows both through the same unwrap.
+
+Every other field on the endpoint is unframed, and each is listed here with its reason:
+
+- Fields the client matches on, because a frame would break the match: a finding's rule, layer,
+  screen id, severity, and status; each coverage gap's ref, which the overlay compares with the
+  screen url exactly; and each affected screen's id and url, which the overlay compares with the
+  page address.
+- Values from a closed set, numbers, and values usabl makes, which no page chooses: a finding's
+  evidence class, confidence, and identity basis; a gap's state; the verdicts and exit codes;
+  `nothingToCheck`; the counts; and the receipt's tree, hashes, versions, screen ids, and time.
+- Text that is shown and not matched, and is not framed yet. A model that fetches the endpoint
+  directly reads these with no frame. Each is scrubbed, and the client writes it with
+  `textContent`. `floorUnconfirmed[].notice` is usabl's own sentence, but it names a screen id,
+  which can come from a route literal in the application, and rule names. `floorHeadroom` and
+  `floorUnconfirmed` carry the same screen ids and rule names. `dirtyGuardedPaths` holds file
+  names that a pull request author chooses. `unresolvedFiles`, each affected screen's
+  `importChain`, and a finding's `appSource` hold file paths from the repository, and
+  `workspaceRoot` is the folder the dev server runs in.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
