@@ -18,7 +18,8 @@
   too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
   screen's flow and voice steps, and the command prints the real page loads and step counts before
   it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
-  hash, every outcome, and every shipped rule the catalog does not exercise, and prints "caught N of
+  hash, every outcome, and every rule of the checks that can block (axe, PatternFly, RHDS, keyboard
+  walk, docs) that the catalog does not exercise, and prints "caught N of
   M" with every miss by name. On the fixture pages it catches 25 of the 28 it can make and read: a
   visible control taken out of the Tab order and a menu that does not open on Enter are missed, and
   a broken live region under a voice requirement is preview only. A menu toggle that loses

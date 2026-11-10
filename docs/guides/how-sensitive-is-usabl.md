@@ -51,7 +51,7 @@ On the fixture pages: caught 25 of 28 catalog defects.
 
 The file holds the engine and scanner versions, the catalog hash, the date, and one row per defect
 and screen: the outcome, the rules that reported it, and the reason for any outcome other than
-caught. A caught row has a reason only when the change did not hold to the end of the scan. It also lists every shipped rule the catalog does not exercise, with the reason. The command
+caught. A caught row has a reason only when the change did not hold to the end of the scan. It also lists every rule of the checks that can block (axe, PatternFly, RHDS, the keyboard walk, and the docs rules) that the catalog does not exercise, with the reason. Rules that only give preview findings, such as the silent change rule, are not in that list. The command
 exits 0 whenever it ran and wrote the file, even when defects were missed. It exits 4 only when it
 could not run, and 2 when a flag or the config is wrong.
 

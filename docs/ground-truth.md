@@ -4483,8 +4483,10 @@ saves or deletes data runs that many times. Both levels go into one file, kept a
 
 **The attestation.** `.usabl/sensitivity.json` holds the schema version, the engine version and
 scanner versions a receipt binds, the catalog version and hash, the date (an input), each entry's
-outcome, rules, screen, and reason per level, the totals per outcome, and every shipped rule the
-catalog does not exercise with the reason. The same tree, versions, and pages give the same bytes
+outcome, rules, screen, and reason per level, the totals per outcome, and every rule of the
+deterministic checks (axe, PatternFly, RHDS, keyboard walk, docs) the catalog does not exercise,
+with the reason. A rule that only gives preview findings, such as `voicing/silent-change`, is not
+in that list. The same tree, versions, and pages give the same bytes
 apart from the date. It is scrubbed on the way out. The terminal summary says "caught N of M catalog
 defects" per level, where M counts the entries that were made and read, lists every outcome other
 than caught by name with what was expected, and reports a level where nothing could be made and read
@@ -4518,8 +4520,8 @@ every entry on it is unreadable. Pages listed in `usabl.docs.json` are not measu
 it reads only the surfaces in `usabl.config.json`, and a surface carries no documentation profile,
 so the documentation entry is not applicable on any Level 2 screen. A finding is located after every provider has acted, so a path such as
 `nth-child(5)` can name another element by then, for example after a toast was added. A defect the
-catalog does not declare is not measured, and every shipped rule no entry expects is listed in the
-file.
+catalog does not declare is not measured, and every rule of the deterministic checks that no entry expects is listed in
+the file. Preview rules are not listed.
 
 ---
 

@@ -1,8 +1,9 @@
 /**
  * The rule ids the shipped checks can report, for the sensitivity catalog.
  * The catalog names the rules it expects to report each declared defect, and the attestation lists
- * every shipped rule the catalog does not exercise. Both read the ids from here, so a rule cannot be
- * expected that does not exist, and a shipped rule cannot be left out of the attestation silently.
+ * every rule of the deterministic checks the catalog does not exercise. Both read the ids from here,
+ * so a rule cannot be expected that does not exist, and a deterministic rule cannot be left out of
+ * the attestation silently. A rule that only gives preview findings is not listed here.
  * Measurement only: nothing here runs a check or decides a verdict.
  */
 import axe from 'axe-core';

@@ -244,8 +244,8 @@ export async function measureEntry(
     }
     // Read the change back on the page the checks left, after the last provider. A change the page
     // undid, or got around, means the checks may never have seen the defect, so a miss proves
-    // nothing. A catch stands: a definite failure on the changed element, new in the mutated scan,
-    // was measured while the defect was there.
+    // nothing. A catch stands: a definite failure where the entry says it reports, new in the mutated
+    // scan, was measured while the defect was there.
     const check = await record.edit.check();
     const decided = await decide(deps, entry, screen, clean, mutated, record, check.held ? check.note : null);
     if (check.held) {
