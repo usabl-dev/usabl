@@ -2322,11 +2322,29 @@ absent. That run used to report the barriers paid down. So the gate marks an abs
 identity `fixed` only when one of these holds:
 
 - the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
-- the identity's own element was met this run: a keyboard stop or a draft on that screen at the
-  same element path, for a structural identity, or with the same accessible name, for a name
+- the identity's own element was met this run: a keyboard stop or a draft on that screen whose
+  neutralized path matches, for a structural identity, or whose slugged name matches, for a name
   identity. A counted identity names no element, so only the signal can confirm it. Neither
   does a row identity: its row and table are kept only as hashes, which no keyboard stop or
   element path carries, so an absent row is confirmed only by the signal.
+
+The match is on the same reduced forms the keys are written in (`elementSlots` and
+`identitySlot` in `src/primitives/identity.ts`), not on the identical element path. The
+neutralized path replaces generated ids with placeholders and drops every `:nth-of-type()` and
+`:nth-child()` position, so one button in a list confirms the floored path of another button in
+the same list. The slugged name is lowercased with every run of characters other than `a` to
+`z` and `0` to `9` folded to one hyphen, so names that differ only in case or punctuation match,
+and a name written only in other scripts slugs to nothing and matches any other such name.
+
+The limit to know: the readiness signal confirms every absent identity on its screen. When
+`reachedWhen` matches only the app shell, such as a header or navigation that mounts while the
+content fails to mount, the floored barriers in the missing content are marked `fixed`, and the
+run can be verified. The barrier is not lost. Once its floor entry is pruned, or the debt
+history confirms the fix and frees its slot, nothing carries it any more, so when the content
+renders again it comes back as a new finding and blocks a later change, which may be one that
+did not touch it. It never reads as a pass of that barrier for good. Point
+`reachedWhen` at an element of the content itself, not the shell, so a screen whose content did
+not mount never holds its signal.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -2376,7 +2394,7 @@ screen has, or runs `usabl floor prune --unconfirmed` and reviews the diff. Meas
 Chromium scan of an axe-sourced floor: axe names a structural element with a short unique selector,
 such as `tr>td>img` or `a[href$="#A-100"]`, which is not the path a keyboard stop records, so in
 practice a structural axe entry is confirmed by a held signal, not by the walk. Name identities are
-confirmed by a stop with the same accessible name.
+confirmed by a stop whose accessible name has the same slug.
 
 What this still cannot catch. A path or a name that something else on the screen also has: another
 element at the same path once the position numbers are removed, or a header button with the same
