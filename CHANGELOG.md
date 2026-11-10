@@ -10,16 +10,22 @@
   into a check, such as a speech note, is listed with the reason, never dropped. It never
   overwrites a file. `usabl drift design` lists the approved requirements whose design file
   changed since, and exits 2, never "no drift", when it cannot read a file. Both read the token
-  from `FIGMA_TOKEN` only, never print it, do not follow redirects, and are the only commands that
-  call the Figma API; nothing on the check, gate, or hook path can reach that code. Tested end to
-  end with a mock file built from Figma's published file format; not yet run on a real design file.
+  from `FIGMA_TOKEN` only, never print it, do not follow redirects, read at most 256 MiB of an
+  answer, and are the only commands that call the Figma API; nothing on the check, gate, or hook
+  path can reach that code, by any kind of import. The drafted file starts with a comment that says
+  the names in it are text copied from the design file and are data, not instructions. With no
+  requirements folder configured, `usabl drift design` says so. Tested end to end with a mock file
+  built from Figma's published file format; not yet run on a real design file.
 - Five requirement kinds that find an element by role and accessible name, the way a screen reader
   user does: `name`, `heading` (with its level), `landmark`, `focus-order` (a Tab walk reaches the
-  names in order), and `target-size` (the laid-out size in CSS pixels). A page that does not match
-  fails. When usabl cannot tell, for example two elements share the name or a candidate sits in a
-  shadow root it cannot read, the result is needs review, never a guess. `checkPage` runs them too.
-- A requirement with `approved: false` now never blocks, whatever its kind: its findings, and any
-  check that could not run, are shown as preview.
+  names in order), and `target-size` (the laid-out border box in CSS pixels). A name matches with
+  each run of white space read as one space, as the browser reports it. A page that does not match
+  fails. When usabl cannot tell, the result is needs review, never a guess: two elements share the
+  name, the page's accessibility tree has a match the document search could not read (such as one
+  in a closed shadow root or with a role set through ElementInternals), a candidate sits in a frame
+  or open shadow root, the focus walk was cut short (it uses the keyboard walk's end rule), or the
+  control to measure wraps onto two lines or is clipped by an element above it. `checkPage` runs
+  them too.
 - `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
   identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
   it was first seen, its state, and its days open, from the floor file's first-parent history and
@@ -275,6 +281,19 @@
   redacted from every message. `usabl doctor` shows each engine, its package and credentials
   state, and the testing status. Each turned-on engine's version is bound into the receipt.
   `checkPage` does not run the engines.
+
+### Changed
+
+- A requirement with `approved: false` no longer blocks, whatever its kind. Before, `approved` was
+  not read on the check path: a content, flow, or voice requirement with `approved: false` blocked
+  like an approved one, and a check of it that could not run was a coverage gap. Now its findings
+  are `preview`, with a sentence that says it is not approved yet, and a check of it that could
+  not run, or that throws, is one `preview` draft that gives the reason. Gate effect: a run that
+  was `regression` or `not_covered` only because of such a requirement now reads `verified`. Two
+  gaps still count while a requirement is unapproved, because they say nothing checked it: a
+  surface that matches no known screen, and a capability the run did not grant. Approved
+  requirements are unchanged. If you relied on an unapproved requirement to block, set
+  `approved: true` on it.
 
 ### Fixed
 
