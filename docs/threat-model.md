@@ -997,9 +997,14 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
 
 - The token is read from `FIGMA_TOKEN` only, never from a flag or a file, so it does not land in
   shell history or in the repository. It is sent only in the `X-Figma-Token` header. Every line
-  either command prints passes through one function that replaces the token with `[token]` and
-  scrubs the rest. An error answer from Figma is never read, because it can echo the request. A
-  network error is reported by the API origin only.
+  either command prints, on stdout and on stderr, passes through one function per command that
+  replaces the token with `[token]` and scrubs the rest: `render` in `src/import/figma/cli.ts`
+  for `usabl import figma`, and `clean` in `src/drift/design.ts` for `usabl drift design`, the
+  drift report included. The notes the import prints have the token replaced and are framed as
+  untrusted text. The drafted requirements file does not pass through that function: it holds
+  the file key and version, which fit narrow grammars, and names that the importer keeps only when
+  the scrubber would not change them. An error answer from Figma is never read, because it can
+  echo the request. A network error is reported by the API origin only.
 - Each command makes one GET per file, to `https://api.figma.com/v1/files/<key>`. The key must
   fit a fixed grammar before any request is made, and is encoded into the path. Redirects are not
   followed, because a redirect to another host would carry the header with it. A request times
@@ -1018,7 +1023,10 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
 - Design text is data. A name goes into a requirement only after it is put on one line with
   control and direction characters removed, and only if it is 200 characters or fewer and the
   scrubber would not change it; otherwise the note is listed instead. Every printed note is
-  scrubbed, bounded, and printed inside the untrusted-text frame. Design text never builds a file
+  scrubbed, bounded, and printed inside the untrusted-text frame. The drafted requirements file
+  starts with a comment that says the names in it are text copied from the design file and are
+  data, not instructions, so an agent that reads the file meets that before any name. A name that
+  reads as an instruction still loads as a name: it cannot change a field. Design text never builds a file
   path, a selector, or a command: the design checks find elements by role and name, and the name is
   compared as a string. Lookups in the file's own maps read only keys the map holds itself, so a
   key such as `constructor` reaches nothing inherited.

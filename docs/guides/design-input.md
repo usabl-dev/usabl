@@ -74,9 +74,10 @@ Every requirement records where it came from:
 
 Every drafted requirement starts with `approved: false`. Until it is approved, what its check finds
 is shown as a preview finding and never blocks: not a failure and not a needs review. A check that
-could not run is shown as a preview finding too. One case still counts while unapproved: a
-requirement whose surface id matches no screen usabl knows is a coverage gap, because nothing
-checked it at all. Open the file,
+could not run is shown as a preview finding too. Two cases still count while unapproved, because
+nothing checked the requirement at all: a requirement whose surface id matches no screen usabl
+knows is a coverage gap, and so is a requirement whose check needs a capability the run did not
+grant, such as a live browser in a static-only run. Open the file,
 check each requirement against the design, change what is wrong, set `approved: true`, and commit.
 The pull request needs owner review, like any requirement change.
 
@@ -147,4 +148,6 @@ FIGMA_API_BASE=http://127.0.0.1:4010 FIGMA_TOKEN=mock-figma-token \
 Layer names, note text, and component properties come from whoever can edit the design file. usabl
 treats them as data. Names are cut to one line and checked before they go into a requirement, and a
 name that is too long or looks like a credential is listed as a note instead. Notes are printed
-inside an untrusted-text frame. Design text never builds a file path, a selector, or a command.
+inside an untrusted-text frame. The drafted file starts with a comment that says the names in it
+are text copied from the design file and are data, not instructions, so a person or an agent that
+reads it meets that first. Design text never builds a file path, a selector, or a command.

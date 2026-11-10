@@ -4217,7 +4217,11 @@ the two tiers, with the requirement in place of `voicing/`, and are `preview` un
 obligation class is promoted (section 7.5). A flow or voice provider can also return
 `voicing/silent-change` drafts, which are always `preview` (section 7.5.1).
 
-**Approval.** A requirement with `approved: false` never blocks, whatever its kind. Its provider
+**Approval.** A requirement with `approved: false` never blocks, whatever its kind. This is a
+change in 0.3.0: before it, `approved` was not read on the check path, so a content, flow, or voice
+requirement with `approved: false` blocked like an approved one, and a check of it that could not
+run was a coverage gap. A run that was `regression` or `not_covered` only because of such a
+requirement now reads `verified`. Its provider
 runs, and every draft it returns is `preview`, with a sentence that says the requirement is not
 approved yet. A check that returns a gap, or that throws, is shown as one `preview` draft that
 gives the reason, so an unapproved requirement cannot hold a run at `not_covered` either. A
