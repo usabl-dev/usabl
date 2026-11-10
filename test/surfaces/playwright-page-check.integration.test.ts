@@ -796,6 +796,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     ['on localhost where the config says 127.0.0.1', () => `http://localhost:${port}/clusters`, 'clusters'],
     ['with a trailing slash the config does not have', () => `http://127.0.0.1:${port}/clusters/`, 'clusters'],
     ['in a hash-routed app', () => `http://localhost:${port}/#/clusters`, 'hash-clusters'],
+    ['in a hash-routed app whose route holds a query and a trailing slash', () => `http://localhost:${port}/#/clusters/?page=2`, 'hash-clusters'],
   ];
   for (const [name, urlOf, screenId] of ordinary) {
     it(`is verified ${name}`, async () => {

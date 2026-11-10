@@ -102,7 +102,9 @@
  * slash on the path. The query string is ignored, because a login redirect usually adds a return
  * address and a legitimately requested login screen often has one too, so a query difference
  * separates nothing. The fragment IS compared, because hash routers keep the whole route there and
- * ignoring it would leave every hash-routed application uncovered by Rule C.
+ * ignoring it would leave every hash-routed application uncovered by Rule C. A hash route, a
+ * fragment that starts with `#/`, is read like a path: the query inside it is ignored and one
+ * trailing slash is removed.
  *
  * FALSE POSITIVES, which this can produce.
  *
@@ -390,17 +392,22 @@ function recoveryStandsDown(observation: LandingObservation): boolean {
   return responseSignalSeen(neverRefused, declaredPath, observation.appBaseUrl);
 }
 
+/** A path with one trailing slash removed, unless the path is only that slash. */
+function withoutTrailingSlash(path: string): string {
+  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+}
+
 /**
  * The part of a parsed address that names the screen: the path with one trailing slash removed, and
  * the fragment, which a hash router uses for the whole route. The query is left out for the reason
- * given at the top of this file.
+ * given at the top of this file. A hash route, a fragment that starts with `#/`, keeps its own
+ * query inside the fragment, so it is read the same way: the part before its first `?`, with one
+ * trailing slash removed. Any other fragment, such as an in-page anchor, is compared whole.
  */
 function screenPart(parsed: URL): string {
-  const path =
-    parsed.pathname.length > 1 && parsed.pathname.endsWith('/')
-      ? parsed.pathname.slice(0, -1)
-      : parsed.pathname;
-  return `${path.length === 0 ? '/' : path}${parsed.hash}`;
+  const path = withoutTrailingSlash(parsed.pathname);
+  const fragment = parsed.hash.startsWith('#/') ? `#${withoutTrailingSlash(parsed.hash.slice(1).split('?')[0] ?? '')}` : parsed.hash;
+  return `${path.length === 0 ? '/' : path}${fragment}`;
 }
 
 /**
