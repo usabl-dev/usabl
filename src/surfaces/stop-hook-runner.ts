@@ -12,7 +12,7 @@
  *                          maps to stopHookActive to prevent recursive loops.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -32,7 +32,7 @@ import {
   type HookContext,
   type StoredReceiptPinState,
 } from './stop-hook.js';
-import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import { BYPASS_ONCE_PATH, loadReceipt, makeReceiptFs, receiptToSave, saveReceipt, type ReceiptFs } from './receipt-store.js';
 import {
   currentUid,
   deletePinFileFix,
@@ -465,23 +465,9 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<File
 }
 
 function defaultFs(root: string): StopHookRunnerFs {
+  // Receipt writes never follow a symbolic link. See makeReceiptFs.
   return {
-    readFile: async (path: string) => {
-      try {
-        return await readFile(resolve(root, path), 'utf8');
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-          return null;
-        }
-        throw err;
-      }
-    },
-    writeFile: async (path: string, contents: string) => {
-      await writeFile(resolve(root, path), contents, 'utf8');
-    },
-    mkdir: async (path: string) => {
-      await mkdir(resolve(root, path), { recursive: true });
-    },
+    ...makeReceiptFs(root),
     unlink: async (path: string) => {
       try {
         await unlink(resolve(root, path));
@@ -681,8 +667,13 @@ export async function runStopHook(
     }
 
     const result = await ports.runEngine(deps, config);
-    if (result.verdict === 'verified' && result.receipt !== null) {
-      await saveReceipt(ports.fs, result.receipt);
+    let receiptNotice: string | null = null;
+    const receipt = receiptToSave(result, { ci: false });
+    if (receipt !== null) {
+      const saved = await saveReceipt(ports.fs, receipt);
+      // A refused save changes no verdict. It is said after the decision, so the decision line
+      // still comes first.
+      receiptNotice = saved.status === 'refused' ? saved.message : null;
     }
 
     // The hook's own guard result travels with the decision, so diverged policy blocks even on a
@@ -697,6 +688,9 @@ export async function runStopHook(
       await emitProtocolBlock(ports, decision.message, options);
     } else {
       await emitProtocolAllow(ports, decision.message, options);
+    }
+    if (receiptNotice !== null) {
+      await writeStderr(ports, receiptNotice);
     }
     await writePinNotice(ports, pinNotice);
     return 0;

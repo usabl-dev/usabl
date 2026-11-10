@@ -2,8 +2,18 @@
  * Local receipt store for stop-hook fast-path re-checks.
  * This unit persists and loads local state only.
  * It must never mint a verdict, infer trust, or throw on corrupt local files.
+ *
+ * The receipt lives in the work tree, where a file can be a symbolic link that someone else
+ * committed. A write that followed it would land on any file the user can write, and in the CI
+ * judge the pull request head would pick the target. So the real store refuses a link at the
+ * folder or the file, writes a temp file opened with no-follow and exclusive create, and renames
+ * it into place, as the session pin store does.
  */
-import type { Receipt } from '../contracts/index.js';
+import { randomBytes } from 'node:crypto';
+import { constants, type Stats } from 'node:fs';
+import { lstat, mkdir, open, readFile, rename, unlink, type FileHandle } from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
+import type { Receipt, Result } from '../contracts/index.js';
 
 export const RECEIPT_DIR = '.usabl';
 export const RECEIPT_PATH = '.usabl/receipt.json';
@@ -85,10 +95,137 @@ function isReceipt(value: unknown): value is Receipt {
   );
 }
 
-export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<void> {
+/** What a save did. A refusal says what happened, what it means, and what to do, in fixed text. */
+export type ReceiptSave = { status: 'saved' } | { status: 'refused'; message: string };
+
+/**
+ * Thrown by a receipt file system that will not write through a link or onto something that is
+ * not a regular file. `path` is the repository path in the way, and the reason is fixed text that
+ * names it. Neither ever names a link target.
+ */
+export class ReceiptWriteRefused extends Error {
+  constructor(
+    readonly path: string,
+    reason: string,
+  ) {
+    super(`${path} ${reason}`);
+  }
+}
+
+export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<ReceiptSave> {
   // Receipt files stay local and gitignored so fast-path trust cannot become a committed self-accept.
-  await fs.mkdir(RECEIPT_DIR);
-  await fs.writeFile(RECEIPT_PATH, JSON.stringify(receipt, null, 2));
+  try {
+    await fs.mkdir(RECEIPT_DIR);
+    await fs.writeFile(RECEIPT_PATH, JSON.stringify(receipt, null, 2));
+  } catch (err) {
+    if (err instanceof ReceiptWriteRefused) {
+      return {
+        status: 'refused',
+        message:
+          `NOT saved - usabl did not save the receipt for this run because ${err.message}. ` +
+          'The verdict of this run stands, but the next stop runs the full check again instead of using a stored receipt. ' +
+          `To fix: remove ${err.path}, then run usabl check or stop again.`,
+      };
+    }
+    throw err;
+  }
+  return { status: 'saved' };
+}
+
+/**
+ * The receipt a run leaves on disk, or null. Only a verified run has one. A CI run saves none: the
+ * work tree there belongs to the pull request, and a CI runner never takes the stop hook fast path.
+ */
+export function receiptToSave(result: Pick<Result, 'verdict' | 'receipt'>, options: { ci: boolean }): Receipt | null {
+  if (options.ci || result.verdict !== 'verified') {
+    return null;
+  }
+  return result.receipt;
+}
+
+// Zero where the platform has no such flag. The lstat check before the open covers that case.
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+const RECEIPT_FILE_MODE = 0o600;
+
+async function lstatOrNull(path: string): Promise<Stats | null> {
+  try {
+    return await lstat(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * The real receipt file system, rooted at the repository root. Reads follow the plain path. Writes
+ * never follow a link: the folder and the file are checked with lstat, a temp file in the same
+ * folder is opened with O_NOFOLLOW and O_EXCL, and a rename puts it in place. A rename replaces
+ * the name and never follows a link at the target.
+ */
+export function makeReceiptFs(root: string): ReceiptFs {
+  return {
+    readFile: async (path) => {
+      try {
+        return await readFile(resolve(root, path), 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null;
+        }
+        throw err;
+      }
+    },
+    mkdir: async (path) => {
+      const absolute = resolve(root, path);
+      const stats = await lstatOrNull(absolute);
+      if (stats === null) {
+        await mkdir(absolute, { recursive: true });
+        return;
+      }
+      if (stats.isSymbolicLink()) {
+        throw new ReceiptWriteRefused(path, 'is a symbolic link');
+      }
+      if (!stats.isDirectory()) {
+        throw new ReceiptWriteRefused(path, 'is not a folder');
+      }
+    },
+    writeFile: async (path, contents) => {
+      const absolute = resolve(root, path);
+      const folder = dirname(absolute);
+      const folderName = dirname(path);
+      const folderStats = await lstatOrNull(folder);
+      if (folderStats?.isSymbolicLink() === true) {
+        throw new ReceiptWriteRefused(folderName, 'is a symbolic link');
+      }
+      if (folderStats === null || !folderStats.isDirectory()) {
+        throw new ReceiptWriteRefused(folderName, 'is not a folder');
+      }
+      const fileStats = await lstatOrNull(absolute);
+      if (fileStats?.isSymbolicLink() === true) {
+        throw new ReceiptWriteRefused(path, 'is a symbolic link');
+      }
+      if (fileStats !== null && !fileStats.isFile()) {
+        throw new ReceiptWriteRefused(path, 'is not a regular file');
+      }
+      const tempPath = resolve(folder, `.${basename(absolute)}.${randomBytes(8).toString('hex')}.tmp`);
+      let handle: FileHandle | null = null;
+      try {
+        handle = await open(tempPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, RECEIPT_FILE_MODE);
+        await handle.writeFile(contents, { encoding: 'utf8' });
+        await handle.sync();
+        await handle.close();
+        handle = null;
+        await rename(tempPath, absolute);
+      } finally {
+        if (handle !== null) {
+          await handle.close().catch(() => undefined);
+        }
+        // After the rename the temp name is gone. After a failure it is a stray file.
+        await unlink(tempPath).catch(() => undefined);
+      }
+    },
+  };
 }
 
 export async function loadReceipt(fs: Pick<ReceiptFs, 'readFile'>): Promise<Receipt | null> {
