@@ -23,6 +23,7 @@ import type {
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
 import { assertIso8601Utc } from "../primitives/iso8601.js";
+import { waiverMatchesFinding } from "../gate/index.js";
 import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
 import { assertIdField, InputRefusedError } from "../intake/input-refusal.js";
 
@@ -138,16 +139,6 @@ function isIso8601Utc(value: unknown): value is string {
   }
 }
 
-// The waiver match rule the gate applies (src/gate, applyWaivers): same rule, same screen, and a
-// scope of '*' or the finding's element key.
-function waiverMatches(waiver: Waiver, finding: Finding): boolean {
-  return (
-    waiver.rule === finding.rule &&
-    waiver.surface === finding.screenId &&
-    (waiver.scope === "*" || waiver.scope === finding.elementKey)
-  );
-}
-
 /**
  * The earliest expiry among the waivers this run applied, or null when no finding was waived.
  *
@@ -155,10 +146,9 @@ function waiverMatches(waiver: Waiver, finding: Finding): boolean {
  * it matches a finding the gate marked waived. A live waiver that matched nothing changes nothing
  * when it ends, so it is not bound, and the fast path is not cut short by it.
  *
- * This repeats the gate's match rule, because the gate does not say which waiver it used. If the
- * two ever differ, some waived finding is matched by no waiver here. Then the earliest expiry of
- * every live waiver is bound instead. If no waiver was live at all, `now` is bound, so the receipt
- * never verifies. Either way a drift can only bind an earlier time, never a later one.
+ * The match is the gate's own rule (waiverMatchesFinding), so the two cannot drift apart. If some
+ * waived finding is still matched by no live waiver, the earliest expiry of every live waiver is
+ * bound instead. If no waiver was live at all, `now` is bound, so the receipt never verifies.
  *
  * Expiries are ISO-8601 UTC text, checked by the waiver parser, so text order is time order.
  */
@@ -170,8 +160,8 @@ export function earliestAppliedWaiverExpiry(
   const waived = findings.filter((finding) => finding.status === "waived");
   if (waived.length === 0) return null;
   const live = waivers.filter((waiver) => waiver.expires > now);
-  const applied = live.filter((waiver) => waived.some((finding) => waiverMatches(waiver, finding)));
-  const explained = waived.every((finding) => applied.some((waiver) => waiverMatches(waiver, finding)));
+  const applied = live.filter((waiver) => waived.some((finding) => waiverMatchesFinding(waiver, finding)));
+  const explained = waived.every((finding) => applied.some((waiver) => waiverMatchesFinding(waiver, finding)));
   const bound = explained ? applied : live;
   if (bound.length === 0) return now;
   return sortBy(bound.map((waiver) => waiver.expires), (expires) => expires)[0]!;
