@@ -45,9 +45,12 @@ export const MAX_DRAFTED_TEXT = 200;
 const MAX_DRAFTED_ELEMENT = 300;
 const SHORTENED = ' (shortened)';
 
+// Lengths count characters (code points), so a cut never splits an emoji or another character
+// outside the Basic Multilingual Plane into half of a surrogate pair.
 function shorten(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - SHORTENED.length).trimEnd() + SHORTENED;
+  const characters = Array.from(text);
+  if (characters.length <= max) return text;
+  return characters.slice(0, max - SHORTENED.length).join('').trimEnd() + SHORTENED;
 }
 
 function draftedContent(image: PageImage): string {

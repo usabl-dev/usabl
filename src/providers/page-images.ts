@@ -16,7 +16,22 @@ export const IMAGE_SELECTOR = 'img, [role="img"], [role="image"], input[type="im
 // this cap so one screen cannot make the run slow or the manifest unreadable. The rest are counted.
 export const MAX_PAGE_IMAGES = 200;
 
-const OWN_ATTRIBUTES = ['alt', 'role'] as const;
+// The image's own attributes the read needs. type, aria-label, aria-labelledby, title, and value
+// tell whether an image button wrote any text of its own (see browserDefaultName).
+const OWN_ATTRIBUTES = ['alt', 'role', 'type', 'aria-label', 'aria-labelledby', 'title', 'value'] as const;
+const IMAGE_BUTTON_TEXT = ['aria-labelledby', 'aria-label', 'alt', 'value', 'title'] as const;
+
+/**
+ * Whether the tree name of an image button is the browser's own default. An input of type image
+ * with no aria-labelledby, aria-label, alt, value, or title gets a name from the browser, "Submit"
+ * in English. That is not text the page wrote, so the draft must not show it as the page's alt
+ * text. The check reads attributes, never the name, so it holds in every browser language.
+ */
+function browserDefaultName(attributes: AncestorAttributesRead): boolean {
+  const own = attributes.kind === 'chain' ? attributes.chain[0] : undefined;
+  if (own === undefined || (own['type'] ?? '').trim().toLowerCase() !== 'image') return false;
+  return IMAGE_BUTTON_TEXT.every((name) => (own[name] ?? '').trim() === '');
+}
 const DECORATIVE_ROLES = new Set(['none', 'presentation']);
 
 /**
@@ -48,11 +63,12 @@ export async function readPageImages(page: Page): Promise<PageImagesRead> {
   const images: PageImage[] = [];
   for (const match of listed) {
     const node = await page.axAt(match.selector);
+    const attributes = await page.ancestorAttributes(match.selector, OWN_ATTRIBUTES);
     images.push({
       elementPath: match.selector,
-      name: node?.name ?? null,
+      name: browserDefaultName(attributes) ? null : (node?.name ?? null),
       role: node?.role ?? null,
-      decorative: isDecorative(node?.role ?? null, await page.ancestorAttributes(match.selector, OWN_ATTRIBUTES)),
+      decorative: isDecorative(node?.role ?? null, attributes),
     });
   }
   return { images, notListed: matches.length - listed.length };

@@ -272,6 +272,17 @@ describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
     expect(json).not.toContain('#part');
   });
 
+  // Cutting by UTF-16 code units can split an emoji in two and print half of it.
+  it('never splits a character in two when it shortens page text', () => {
+    const name = `${'a'.repeat(187)}\u{1F600}${'b'.repeat(50)}`;
+    const result = resultFixture({
+      screens: [{ ...screenFixture('clusters', []), images: [{ elementPath: '#face', name, role: 'img', decorative: false }] }],
+    });
+    const content = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest')?.entries[0]?.content ?? '';
+    expect(content).toContain('(shortened)');
+    expect(content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
+
   it('says how many images were not listed', () => {
     const result = resultFixture({
       screens: [{ ...screenFixture('clusters', []), images: [], imagesNotListed: 7 }],
