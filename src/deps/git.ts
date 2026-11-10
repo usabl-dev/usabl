@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
+import { operatorText } from '../intake/config-error.js';
 
 const execFileAsync = promisify(execFile);
 const NUL = '\0';
@@ -52,9 +53,20 @@ function missingRefError(ref: string, stderr: string): Error | null {
     );
   }
   return new Error(
-    `git cannot read ${ref}. usabl reads trusted policy from that ref. Check its name, or fetch it ` +
-      'first (for example git fetch origin main), then run usabl again.',
+    `git cannot read ${operatorText(ref)}. usabl reads trusted policy from that ref. Check its name, ` +
+      `or fetch it first (${fetchExample(ref)}), then run usabl again.`,
   );
+}
+
+// A remote-tracking ref such as upstream/develop names its own fetch, so the example uses it. Any
+// other ref names no remote, so the example says how to find the default branch instead of
+// guessing that it is called main.
+function fetchExample(ref: string): string {
+  const remoteBranch = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._/-]+)$/u.exec(ref);
+  if (remoteBranch?.[1] !== undefined && remoteBranch[2] !== undefined && remoteBranch[1] !== 'refs') {
+    return `for example git fetch ${remoteBranch[1]} ${remoteBranch[2]}`;
+  }
+  return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
 }
 
 // Every listing runs with -z. Without it git quotes and escapes a name that holds a byte above
@@ -118,6 +130,12 @@ function parseNameOnly(output: string): string[] {
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
+// usabl tells a missing file from a failure by git's error text, and git translates that text
+// into the user's language. LC_ALL=C keeps it in English whatever the locale, so a missing policy
+// file never reads as a crash on one machine and as absent on another. With -z, file names are
+// raw bytes, so the locale does not change how they are listed.
+const ENGLISH_MESSAGES = { LC_ALL: 'C' };
+
 async function runGit(
   cwd: string,
   args: string[],
@@ -128,7 +146,7 @@ async function runGit(
     cwd,
     encoding: 'utf8',
     maxBuffer,
-    env: env === undefined ? process.env : { ...process.env, ...env },
+    env: { ...process.env, ...env, ...ENGLISH_MESSAGES },
   });
   return stdout;
 }
