@@ -2835,7 +2835,7 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
 `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
-`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, and `help`. `check` is the default
+`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, `import`, and `help`. `check` is the default
 when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
@@ -2915,7 +2915,14 @@ lines.
   any other; with `--port` (and `--host`, default `127.0.0.1`) it binds what it was given. Both
   run only in the generated CI judge (section 11.4).
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
-  `routes` is the only subcommand; anything else exits 2.
+- Design drift: `usabl drift design` lists the approved requirements whose Figma design file
+  changed after they were recorded (section 13.2). It exits 0 with no drift, 1 with drift, and 2
+  when it could not check. `routes` and `design` are the only drift subcommands; anything else
+  exits 2.
+- Design import: `usabl import figma <file key> --frame <Frame name>=<surface id> [--frame ...]
+  --out <file> [--owner <name>] [--min-target <css px>]` writes draft requirements, each with
+  `approved: false`, from the accessibility stamps in a Figma file (section 13.2). It never
+  overwrites a file. It exits 0 when it wrote the file and 2 otherwise. `figma` is the only source.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
   exits 0 (see section 11.9).
 - Task brief: `usabl brief [--files <path> ...] [--json]` prints what an agent reads before it
@@ -3289,7 +3296,7 @@ installed `/usabl-check` skill and the Cursor rule open with that step, and the 
 `allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
-when that is not plain, why: an intake requirement (content, flow, or voice) applies only to
+when that is not plain, why: an intake requirement (any kind but doc) applies only to
 the screen it names, the
 docs rulepack only to docs pages, an engine only when the config turns it on, and a check that
 can only tell on a live page, such as the PatternFly rulepack looking for its marker, says
@@ -3319,7 +3326,8 @@ from the tests they already run. A starting point, not the main surface.
 
 `checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
 it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
-provider per content, flow, or voice design requirement. `checkPage` reads `usabl.config.json` from
+provider per design requirement of any kind but doc, the name, heading, landmark, focus order,
+and target size checks included (section 13.1). `checkPage` reads `usabl.config.json` from
 `options.projectRoot` (default: the working directory) and loads the requirements directory it
 names through the same loader as the CLI. It reads the working tree; it does not apply a
 trusted ref. It never searches parent directories. When the caller passes `projectRoot` and
@@ -3741,18 +3749,23 @@ rules (those are built in). It does not set enforcement level.
 | `flow` | After failed save, error is announced before focus moves | Declarative interaction script added to the walk |
 | `doc` | Publish alt-text manifest for the Clusters surface | Output module generates the artifact |
 | `voice` | Deleting a row announces the deletion | Interaction contract run by the virtual screen reader provider (section 7.5) |
+| `name` | A button is named "Refresh" | Exactly one element with that role and accessible name (section 13.1) |
+| `heading` | The heading "Users" is level 1 | One heading with that name, at that level |
+| `landmark` | The screen has a main landmark | The landmark exists, by role and, when given, name |
+| `focus-order` | Focus reaches "Create user", then "Refresh" | A Tab walk from the top of the page reaches the names in that order |
+| `target-size` | The "Refresh" button is at least 24 CSS pixels | The laid-out size of that one element |
 
 ### Many shapes in, one RequirementBundle
 
 ```
-Figma export ──┐
-YAML in repo ──┼──> normalize() ──> RequirementBundle
-CSV alt text ──┘
-PF checklist ──┘
+Figma file ──────> usabl import figma ──> YAML in repo ──> normalize() ──> RequirementBundle
+YAML by hand ──────────────────────────────────┘
 ```
 
-The normalizer accepts multiple input formats and produces one `RequirementBundle`.
-In v0.2, hand-authored YAML in the repo is the primary shape.
+The normalizer produces one `RequirementBundle` from the YAML files in the requirements folder.
+Hand-authored YAML is one source. `usabl import figma` (section 13.2) writes YAML from the
+accessibility stamps in a Figma file, and that YAML goes through the same loader and the same
+review as any other.
 
 ### Guarded
 
@@ -3810,7 +3823,7 @@ any announcement; `class` is empty after trimming; `focusedRole` is not a string
 after trimming; `maxTabPath` is not a positive whole number; `kind` does not match
 `assertion.type`; or any field is unknown.
 
-A `content`, `flow`, or `voice` requirement runs only on a screen whose id is its surface. When a run
+A requirement of any kind but `doc` runs only on a screen whose id is its surface. When a run
 scans anything, each such requirement whose surface matches no configured surface, no screen
 in the route manifest, and no page in the docs manifest becomes a `not-covered` gap with ref
 `requirement:<id>` that names the surface. No run would ever plan that screen, so nothing
@@ -3819,13 +3832,130 @@ read as verified. A requirement on a known screen that the change did not touch 
 scope for that run, not a gap. The surfaces are read through the same trusted view the run
 plans coverage with. `checkPage` applies the same rule through the same code.
 
-Content and flow Drafts carry `evidenceClass: 'deterministic'` (the assertion is hard and
-repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule id
-`intake:<id>` for content and flow requirements; there is no code path that marks an intake
-draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of the two
-tiers, with the requirement in place of `voicing/`, and are `preview` unless their obligation
-class is promoted (section 7.5). A flow or voice provider can also return `voicing/silent-change`
-drafts, which are always `preview` (section 7.5.1).
+Drafts of an approved content, flow, name, heading, landmark, focus order, or target size
+requirement carry `evidenceClass: 'deterministic'` (the assertion is hard and repeatable).
+`mapRequirementsToProviders` emits them with rule id `intake:<id>`; there is no code path that
+marks an intake draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of
+the two tiers, with the requirement in place of `voicing/`, and are `preview` unless their
+obligation class is promoted (section 7.5). A flow or voice provider can also return
+`voicing/silent-change` drafts, which are always `preview` (section 7.5.1).
+
+**Approval.** A requirement with `approved: false` never blocks, whatever its kind. Its provider
+runs, and every draft it returns is `preview`, with a sentence that says the requirement is not
+approved yet. A check that returns a gap, or that throws, is shown as one `preview` draft that
+gives the reason, so an unapproved requirement cannot hold a run at `not_covered` either. A
+thrown provider keeps the partial drafts that were already `preview`. This is done where the
+providers are built (`src/intake/requirement-approval.ts`), not in the gate: the gate already
+ignores `preview`. Two gaps still apply to an unapproved requirement, because they say nothing
+checked it: a surface that matches no known screen (above), and a capability the run did not
+grant. Approving a requirement is a change to a guarded file, so it needs owner review.
+
+### 13.1 Design checks: name, heading, landmark, focus order, target size
+
+These five kinds find an element the way a screen reader user does: by role and accessible name.
+A requirement never holds a CSS selector. The roles are `button`, `link`, `heading`, `img`,
+`textbox`, `checkbox`, `menuitem`, `tab`, and the landmark roles `main`, `navigation`, `banner`,
+`contentinfo`, `complementary`, `region`, `search`, and `form`.
+
+```yaml
+  - id: users-refresh-name
+    kind: name
+    surface: users
+    description: The icon button is named "Refresh", as in the design.
+    approved: true
+    assertion: { type: name, target: { role: button, name: Refresh } }
+    source: { tool: figma, file: AbC123, node: "2:7", version: "4242" }
+```
+
+The other assertions are `{ type: heading, name, level }` with a level from 1 to 6;
+`{ type: landmark, role, name? }`; `{ type: focus-order, sequence: [name, ...] }` with 2 to 200
+names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size above 0 and up
+to 200. Names are stored trimmed. The loader refuses, as `approval_required`, an empty name, a
+heading level that is not a whole number from 1 to 6, a focus order that repeats a name, an
+unknown role, an unknown field, and a `source` whose file key, node id, or version does not fit
+its grammar.
+
+**How the element is found.** For each role usabl queries a fixed CSS list of the elements that
+can have it (for a button: `button`, `[role="button"]`, button-type inputs, and so on), reads each
+candidate's role and computed name from Chromium's accessibility tree, and keeps the ones whose
+role matches and whose name equals the requirement's name after trimming. It then compares how
+many candidates the page has in all, inside open shadow roots and same-origin frames too, with how
+many it read. The search gives one of four answers: one match, no match, more than one match, or
+some candidates out of reach. Only "one match" is used as the element. Two matches is never
+resolved by picking the first: a wrong guess is reported as unknown, never as a finding or a pass.
+
+**What each check reports.** A check that passes returns no draft. Each failure and each unknown
+is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-heading`,
+`intake-landmark`, `intake-focus-order`, `intake-target-size`), and the screen as its element.
+
+| Kind | Fails (`confidence: 'fail'`) | Unknown (`confidence: 'unverified'`, needs review) |
+|---|---|---|
+| `name` | No element has that role and name | More than one does, or a candidate is out of reach |
+| `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, or its level cannot be read |
+| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once or a candidate is out of reach; with no name, none is found and a candidate is out of reach |
+| `focus-order` | A name is never reached, or two names are reached out of order | A name is on more than one stop, a stop cannot be read, or the walk hits its cap of 200 stops |
+| `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, or its size cannot be read |
+
+A missing element is unknown for `target-size`, not a failure, because the check is about size and
+the size of nothing cannot be measured. The `name` check reports the same missing element as a
+failure.
+
+The focus order check presses Tab from the top of the page until focus returns to the body or to a
+stop it already visited, and needs the page as it loaded: it is skipped as a gap if a check that
+changes the page ran first, the same as the keyboard walk. The target size check reads the
+element's laid-out box with `getBoundingClientRect` in an isolated world, and compares the size
+as read; the message shows it to one decimal, rounded down, so 23.95 reads as 23.9 and never as 24.
+
+These checks cover the sizes, names, and order that a design states. They do not check every
+control on the page. axe's own `target-size` rule is a separate question: it runs in the docs
+profile, and it does not run in the app profile (see the WCAG table, 2.5.8).
+
+### 13.2 Design input from Figma
+
+`usabl import figma <file key> --frame <Frame name>=<surface id> [--frame ...] --out <file>
+[--owner <name>] [--min-target <css px>]` reads one Figma file with `GET /v1/files/<key>` and
+writes a new requirements file. It reads accessibility annotation stamps: component instances
+whose component name ends in "Stamp" or "Details", placed over the design element they describe. A
+stamp is linked to the element whose own area it covers most, preferring text, with ties broken by
+document order. The element's text is the accessible name, except for a Button stamp, whose name
+comes from the Button Details card with the same note number.
+
+- A Heading stamp with level h1 to h6 gives a `heading` requirement.
+- A Landmark stamp gives a `landmark` requirement.
+- A Button stamp with a Button Details card gives a `name` requirement, and, with `--min-target`, a
+  `target-size` requirement at that size.
+- Two or more Ordering stamps, each with its own whole number and its own name, give one
+  `focus-order` requirement per frame.
+
+Every note it cannot turn into a check is printed with the reason and left out of the file: a speech
+note, an image stamp, any other kind of kit note, a Dev Mode note, a relative heading level, an
+ordering stamp with no number, a card that matches no stamp, a name that is empty, longer than 200
+characters, or that the scrubber would change. Nothing is dropped without a line.
+
+Each requirement is written with `approved: false`, an id `figma-<surface>-<kind>-<n>`, the
+`--owner` value, and a `source` with the file key, the stamp's node id, and the file version. The
+command checks that the text it is about to write loads through the normal loader with every
+requirement unapproved, and writes it with an exclusive create, so it never overwrites a file. It
+refuses an unknown option, a frame given twice, a frame the file does not have, and an id a
+surface cannot have, before it writes anything. It exits 0 when it wrote the file and 2 otherwise.
+
+`usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
+the current version of each of their files, once per file, in sorted order. It lists the
+requirements whose recorded version differs from the current one, grouped by file and recorded
+version, and says when a requirement's node is no longer in the file. Unapproved drafts are left
+out. It exits 0 with no drift, 1 with drift, and 2 when it could not check: a missing token, a
+refused address, any fetch failure, or a file it has no version for. Exit 2 always says "Design
+drift was not checked." and never reads as no drift. It compares whole-file versions, so a change
+anywhere in a file lists every approved requirement drafted from that version.
+
+Both commands read the token from `FIGMA_TOKEN` only, never print it, and send it only in the
+`X-Figma-Token` header to `https://api.figma.com`, or to `FIGMA_API_BASE` when that is https or
+loopback http. They do not follow redirects. Both are loaded by a dynamic import inside their own
+command, and a test pins that no check, gate, or hook entry point can reach their code
+(threat model, Threat 18).
+
+This was tested end to end with a mock file built from Figma's published file format; not yet run
+on a real design file.
 
 ### Requirement ids are waiver identities
 
@@ -4737,7 +4867,7 @@ Categories:
 | 2.5.3 | Label in Name | A | Built (axe) | axe checks that visible label text is included in the accessible name. |
 | 2.5.4 | Motion Actuation | A | Never | Whether motion-triggered actions have alternatives is application logic. |
 | 2.5.7 | Dragging Movements | AA | Never | Whether drag operations have non-dragging alternatives is application logic. |
-| 2.5.8 | Target Size (Minimum) | AA | Planned | Measure bounding boxes of interactive elements, flag below 24x24 CSS px. Uses `getComputedStyle`/bounding box. |
+| 2.5.8 | Target Size (Minimum) | AA | Planned | Measure bounding boxes of interactive elements, flag below 24x24 CSS px. Uses `getComputedStyle`/bounding box. Today a `target-size` requirement measures each control a design names (section 13.1), and axe's own `target-size` rule runs only in the docs profile: the docs profile passes the `wcag22aa` tag, and axe runs a rule that is off by default when a tag selects it. The app profile passes no tags, so axe runs only its default rules there, and `target-size` is off by default in axe-core 4.13. |
 
 ### Principle 3: Understandable
 

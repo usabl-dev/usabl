@@ -921,6 +921,65 @@ prints the real counts for the screens chosen before it starts.
 
 ---
 
+## Threat 18: Design input from Figma
+
+**Attack:** `usabl import figma` and `usabl drift design` send a Figma personal access token over
+the network and read a design file that anyone with edit access to it can change. Three things
+could go wrong. The token could leak: into output, a file, an error message, or a request to
+another host. The network call could reach the check path, so a run, a hook, or CI would depend
+on Figma or send a token nobody meant to send. And design text (layer names, note text, component
+properties) could carry control sequences, markup, a credential, or a line written as an
+instruction to a model, and reach a terminal, a requirements file, or an agent.
+
+**Controls:**
+
+- The token is read from `FIGMA_TOKEN` only, never from a flag or a file, so it does not land in
+  shell history or in the repository. It is sent only in the `X-Figma-Token` header. Every line
+  either command prints passes through one function that replaces the token with `[token]` and
+  scrubs the rest. An error answer from Figma is never read, because it can echo the request. A
+  network error is reported by the API origin only.
+- Each command makes one GET per file, to `https://api.figma.com/v1/files/<key>`. The key must
+  fit a fixed grammar before any request is made, and is encoded into the path. Redirects are not
+  followed, because a redirect to another host would carry the header with it. A request times
+  out after 60 seconds.
+- `FIGMA_API_BASE` replaces the address, for tests and for a local mock. It must be https, or
+  plain http to 127.0.0.1, localhost, or [::1], and it may not hold a user name, a password, a
+  query, or a fragment. Whoever sets that variable chooses where the token goes: it is the same
+  trust as setting `FIGMA_TOKEN` itself. CI and the generated workflows never set either one.
+- Only the two commands call the Figma API, and only when a person runs them. The CLI loads their
+  code by a dynamic import inside each command. No module that run(), the gate, `buildDeps`, the
+  stop hook, the overlay, the CI judge, the pull request comment, checkPage, or the library entry
+  imports reaches it. Only `src/import/figma/fetch.ts` calls `fetch`, and only the two commands
+  read `FIGMA_TOKEN`.
+- Design text is data. A name goes into a requirement only after it is put on one line with
+  control and direction characters removed, and only if it is 200 characters or fewer and the
+  scrubber would not change it; otherwise the note is listed instead. Every printed note is
+  scrubbed, bounded, and printed inside the untrusted-text frame. Design text never builds a file
+  path, a selector, or a command: the design checks find elements by role and name, and the name is
+  compared as a string. Lookups in the file's own maps read only keys the map holds itself, so a
+  key such as `constructor` reaches nothing inherited.
+- What the import writes cannot block on its own. Every requirement starts `approved: false`, the
+  command checks that before it writes, and an unapproved requirement gives only `preview` drafts.
+  The file is created with an exclusive create, so the import never overwrites a file. Approving a
+  requirement is a change to a guarded file, which needs owner review.
+- A failed fetch in `usabl drift design` exits 2 with "Design drift was not checked." It is never
+  read as no drift.
+
+**Tests:** `test/import/figma/network-isolation.test.ts` (no verdict entry point reaches the Figma
+code, the CLI names it only in dynamic imports, one file calls `fetch`, two read the token),
+`test/import/figma/fetch.test.ts` and `test/import/figma/cli.test.ts` (the token is never printed
+on any failure, redirects and plain http to another host are refused, one GET to the given base, no
+file is overwritten, nothing is written approved), `test/import/figma/import.test.ts` (notes with
+control characters, markup, a credential, and an instruction-like line), and
+`test/drift/design.test.ts` (every fetch failure exits 2 and never says no drift).
+
+**What stays open:** the import has been run only against a mock file built from Figma's published
+file format, not against a real design file. A designer who can edit the file can still write a
+wrong name or level; that is why every requirement needs a person to approve it. The token is
+whatever scope the person gave it; usabl only reads files with it.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged
