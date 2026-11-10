@@ -82,15 +82,18 @@ function literalText(node: ts.Node | undefined): string | null {
 
 // The names a file calls createRequire by: its own name, and each name an import gives it, such as
 // `import { createRequire as cr } from 'node:module'`.
+// An import declaration can only be a top-level statement, so only those are read.
 function createRequireNames(tree: ts.SourceFile): Set<string> {
   const names = new Set(['createRequire']);
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportSpecifier(node) && (node.propertyName ?? node.name).text === 'createRequire') {
-      names.add(node.name.text);
+  for (const statement of tree.statements) {
+    const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const specifier of bindings.elements) {
+      if ((specifier.propertyName ?? specifier.name).text === 'createRequire') {
+        names.add(specifier.name.text);
+      }
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(tree);
+  }
   return names;
 }
 
@@ -136,7 +139,10 @@ function requireNames(tree: ts.SourceFile, creators: ReadonlySet<string>): Set<s
  * whether it is bound to a name first or called at once.
  */
 function importsOf(file: string, source: string): ImportEdge[] {
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  return edgesOf(ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+}
+
+function edgesOf(tree: ts.SourceFile): ImportEdge[] {
   const creators = createRequireNames(tree);
   const loaders = requireNames(tree, creators);
   const edges: ImportEdge[] = [];
@@ -200,8 +206,9 @@ function codeRunnersOf(file: string, source: string): string[] {
     ts.forEachChild(node, visit);
   };
   visit(tree);
-  // The vm module runs code from a string in a context of its own.
-  for (const edge of importsOf(file, source)) {
+  // The vm module runs code from a string in a context of its own. A file whose text never holds
+  // the word vm cannot name it in an import, so only the others are read for imports.
+  for (const edge of /\bvm\b/u.test(source) ? edgesOf(tree) : []) {
     if (edge.specifier === 'vm' || edge.specifier === 'node:vm') {
       found.push(`${file}: ${edge.text}`);
     }
