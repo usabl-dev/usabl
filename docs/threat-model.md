@@ -568,7 +568,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
   element. Focus inside a closed shadow root, a frame from another origin, or such a frame
   owner ends the walk with an `unverified` truncation draft, never a pass.
 - A Tab cycle that never reaches the body ends the walk with an `unverified` truncation draft,
-  never a pass. The read of the open modal dialogs that hold focus runs in the read world too.
+  never a pass. Focus on the body ends the walk as complete only when one more Tab lands on a stop
+  the walk already reached, matched by the browser's node id or by path. A page script that blurs
+  a control on focus, or a keydown handler that stops Tab and drops focus to the body, used to end
+  the walk with zero or few stops and no draft. The extra Tab then lands on a control not yet
+  walked, so the walk ends with the truncation draft instead. The read of the open modal dialogs that hold focus runs in the read world too.
   A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
   inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
   draft stays, so the screen is not covered rather than passed.
@@ -598,6 +602,14 @@ outside every table as the control in an accepted row. Either way a new barrier 
   leaves out of the accessibility tree for a `showModal()` dialog and Safari with VoiceOver hides
   for an `aria-modal` dialog. See ground-truth for the platform facts.
 
+- The live-region capture records only text in the accessibility tree. A page that writes the
+  expected text into a live region under an `aria-hidden`, `inert`, `hidden`, `display: none`, or
+  `visibility: hidden` child, where no screen reader speaks it, no longer satisfies a flow
+  requirement: a change whose added text is all hidden is not recorded, and the text recorded for
+  the region leaves the hidden parts out. These reads run in the live world, so page script cannot
+  change the computed styles or attributes they see. Text hidden only on screen, such as
+  PatternFly's screen-reader class, is still recorded, because screen readers speak it.
+
 - A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
@@ -613,7 +625,10 @@ browser does not expose. Where the browser exposes nothing, axe is told nothing 
 Page script still shares the DOM and the main thread with axe's world, so it can change the DOM
 between axe's steps and can tell from the timing that axe runs.
 
-**Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
+**Tests:** `test/providers/keyboard-walk.real.integration.test.ts` (the end of the walk in Chromium,
+a focus handler that blurs, a keydown handler that swallows Tab), `test/deps/real.integration.test.ts`
+(text added to a live region under each kind of hidden content, and the flow level), and
+`test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
 getter, a sandboxed frame, a frame in another process, a chain of processes, a frame that stops
 answering, frames axe never finds, roles from layout), `test/deps/axe-world-frames.test.ts` (removed,
 navigating, and changed frames, frames no session reaches, results that are not results), and
