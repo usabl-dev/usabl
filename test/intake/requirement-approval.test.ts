@@ -48,11 +48,17 @@ function bundleOf(...requirements: Requirement[]): RequirementBundle {
   return { version: 1, requirements };
 }
 
+// The page's whole accessibility tree holds the same heading the document search reads.
 const headingPage = () =>
   makeFakePage({
     queryAll: async () => [{ selector: 'h1' }],
     axAt: async () => axNode('Clusters'),
     countEverywhere: async () => 1,
+    fullAxTree: async () => ({
+      kind: 'tree',
+      documentNodeId: null,
+      nodes: [{ nodeId: 1, parentId: null, role: 'heading', name: 'Clusters', ignored: false, states: {}, busy: false, controls: [] }],
+    }),
   });
 
 async function scan(bundle: RequirementBundle, page = headingPage()) {

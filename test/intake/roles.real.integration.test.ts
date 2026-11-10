@@ -28,6 +28,30 @@ const SHADOW_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   </script>
 </body></html>`;
 
+// One plain Refresh button and a second one the document search cannot read as a plain candidate:
+// inside a closed shadow root, with a role attribute of two tokens, or with a role set through
+// ElementInternals.
+const SECOND_MATCH_PAGES: Readonly<Record<string, string>> = {
+  '/closed-shadow.html': `<x-closed></x-closed><script>
+    customElements.define('x-closed', class extends HTMLElement {
+      constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = '<button type="button">Refresh</button>'; }
+    });
+  </script>`,
+  '/two-tokens.html': `<div role="button menuitem" tabindex="0">Refresh</div>`,
+  '/internals.html': `<x-internals tabindex="0"></x-internals><script>
+    customElements.define('x-internals', class extends HTMLElement {
+      constructor() { super(); const internals = this.attachInternals(); internals.role = 'button'; internals.ariaLabel = 'Refresh'; }
+    });
+  </script>`,
+};
+
+function secondMatchPage(path: string): string | null {
+  const extra = SECOND_MATCH_PAGES[path];
+  return extra === undefined
+    ? null
+    : `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Two</title></head><body><main><button type="button">Refresh</button>${extra}</main></body></html>`;
+}
+
 // Three buttons in order. On the blur page, the second one drops focus when it gets it, so a Tab
 // walk falls to the body in the middle of the page.
 function focusPage(blurSecond: boolean): string {
@@ -59,13 +83,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       const url = req.url ?? '';
       res.end(
-        url.startsWith('/shadow.html')
+        secondMatchPage(url) ??
+        (url.startsWith('/shadow.html')
           ? SHADOW_PAGE
           : url.startsWith('/focus-blur.html')
             ? focusPage(true)
             : url.startsWith('/focus.html')
               ? focusPage(false)
-              : roles,
+              : roles),
       );
     });
     await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
@@ -152,6 +177,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
       expect((await resolveTarget(page, { role: 'heading', name: 'Users' })).kind).toBe('one');
     });
   });
+
+  for (const path of Object.keys(SECOND_MATCH_PAGES)) {
+    it(`never reads one match when a second element has the name (${path})`, async () => {
+      await withPage(path, async (page) => {
+        const found = await resolveTarget(page, { role: 'button', name: 'Refresh' });
+        expect(['many', 'cannot-tell', 'out-of-reach']).toContain(found.kind);
+      });
+    });
+  }
 
   async function focusOrderDrafts(page: Page): Promise<Draft[]> {
     const provider = designCheckProvider(FOCUS_ORDER);

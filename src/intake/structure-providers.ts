@@ -25,7 +25,7 @@ import type {
 } from '../contracts/index.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
-import { findByRole, resolveTarget, sameName, type TargetResolution } from './resolve-target.js';
+import { findByRole, perceivedWithRole, resolveTarget, sameName, type TargetResolution } from './resolve-target.js';
 
 /** The layer of each design check, one per kind, as the content and flow checks have. */
 export const DESIGN_CHECK_LAYERS = {
@@ -84,6 +84,9 @@ const SCREEN_PATH = 'body';
 const OUT_OF_REACH_FIX =
   'Check this requirement by hand. usabl reads the elements in the page document, not those inside a shadow root or a frame.';
 
+const CANNOT_TELL_FIX =
+  'Check this requirement by hand. An element in a closed shadow root, a role set by script through ElementInternals, or a page that changed while usabl read it can hide a second match from the document search.';
+
 interface DraftFields {
   elementPath: string;
   node: AxNode | null;
@@ -119,6 +122,10 @@ function draft(requirement: Requirement, kind: DesignKind, confidence: Draft['co
   };
 }
 
+function counted(count: number, role: TargetRole): string {
+  return `${count} ${count === 1 ? ROLE_WORD[role] : ROLE_PLURAL[role]}`;
+}
+
 function named(target: RoleTarget): string {
   return `${ROLE_WORD[target.role]} named "${target.name}"`;
 }
@@ -140,6 +147,20 @@ function refusedDraft(
       why: `${resolution.count} ${ROLE_PLURAL[target.role]} on this screen are named "${target.name}", so usabl cannot tell which one the design means, and it does not guess.`,
       fix: `Give the ${ROLE_WORD[target.role]} the design means a name no other ${ROLE_WORD[target.role]} on the screen has, or check this requirement by hand.`,
       extra: { matches: resolution.count },
+    });
+  }
+  if (resolution.kind === 'cannot-tell') {
+    const why =
+      resolution.reason === 'tree-unreadable'
+        ? `The page's accessibility tree is larger than usabl reads, so it cannot make sure that no other ${ROLE_WORD[target.role]} is named "${target.name}", and it does not guess.`
+        : `The page's accessibility tree has ${counted(resolution.inTree ?? 0, target.role)} named "${target.name}", and usabl found ${resolution.found} it can read in the page document, so it cannot tell which element the design means, and it does not guess.`;
+    return draft(requirement, kind, 'unverified', {
+      elementPath: SCREEN_PATH,
+      node: null,
+      whatUserExperiences: `Whether ${question} is unknown.`,
+      why,
+      fix: CANNOT_TELL_FIX,
+      extra: { found: resolution.found, inTree: resolution.inTree },
     });
   }
   return draft(requirement, kind, 'unverified', {
@@ -223,7 +244,7 @@ async function checkHeading(requirement: Requirement, assertion: HeadingAssertio
 }
 
 // ARIA makes a region or a form a landmark only when it has an accessible name.
-function isLandmark(role: LandmarkAssertion['role'], node: AxNode): boolean {
+function isLandmark(role: LandmarkAssertion['role'], node: { name: string | null }): boolean {
   return role !== 'region' && role !== 'form' ? true : (node.name ?? '').trim() !== '';
 }
 
@@ -264,6 +285,23 @@ async function checkLandmark(requirement: Requirement, assertion: LandmarkAssert
         why: `usabl found none in the page document, and ${search.outOfReach} possible ${ROLE_PLURAL[role]} sit where it cannot read them, such as inside a shadow root or a frame.`,
         fix: OUT_OF_REACH_FIX,
         extra: { outOfReach: search.outOfReach },
+      }),
+    ];
+  }
+  // The document search found none. The whole accessibility tree also sees closed shadow roots and
+  // roles set by script, so a landmark there is unknown, not missing.
+  const perceived = await perceivedWithRole(page, role);
+  if (perceived === null || perceived.some((node) => isLandmark(role, node))) {
+    return [
+      draft(requirement, 'landmark', 'unverified', {
+        elementPath: SCREEN_PATH,
+        node: null,
+        whatUserExperiences: `Whether the screen has a ${ROLE_WORD[role]} is unknown.`,
+        why:
+          perceived === null
+            ? `usabl found none in the page document, and the page's accessibility tree is larger than usabl reads, so it cannot make sure there is none.`
+            : `usabl found none in the page document, but the page's accessibility tree has one it cannot read there.`,
+        fix: CANNOT_TELL_FIX,
       }),
     ];
   }

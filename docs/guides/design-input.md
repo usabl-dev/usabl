@@ -89,9 +89,11 @@ Once approved, each check gives one of these:
   "Refresh", the heading "Users" is level 2 where the design says level 1, focus never reached
   "Refresh", or "Refresh" is 16 by 16 CSS pixels where the design asks for at least 24.
 - **Needs review**, when usabl cannot tell. For example: two buttons have the same name, so usabl
-  cannot pick one; a candidate sits in a shadow root or a frame that usabl cannot read; or no button
-  has the name, so its size cannot be measured. usabl never guesses. A run with a needs review
-  finding is not verified.
+  cannot pick one; a candidate sits in a shadow root or a frame that usabl cannot read; the page's
+  accessibility tree has an element with the name that the document search could not read, such as
+  one in a closed shadow root; the focus walk was cut short, for example by a control that moves
+  focus away when it gets it; or no button has the name, so its size cannot be measured. usabl
+  never guesses. A run with a needs review finding is not verified.
 
 `checkPage` in a Playwright test runs the same checks when it reads the project from
 `projectRoot`.

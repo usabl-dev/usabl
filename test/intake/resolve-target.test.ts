@@ -1,14 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AxNode, ElementRef, Page } from '../../src/contracts/index.js';
+import type { AxNode, AxTreeNode, ElementRef, Page } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { findByRole, resolveTarget } from '../../src/intake/resolve-target.js';
+import { findByRole, resolveTarget, ROLE_CANDIDATES } from '../../src/intake/resolve-target.js';
 
-function pageWith(nodes: Record<string, AxNode | null>, everywhere?: number): Page {
+// The whole accessibility tree a browser would build from these nodes: one perceived node for each
+// element it does not ignore, and any nodes the document query cannot see.
+function treeOf(nodes: ReadonlyArray<AxNode | null>): AxTreeNode[] {
+  return nodes.flatMap((node, index) =>
+    node === null
+      ? []
+      : [{ nodeId: index + 1, parentId: null, role: node.role, name: node.name, ignored: false, states: {}, busy: false, controls: [] }],
+  );
+}
+
+function pageWith(nodes: Record<string, AxNode | null>, everywhere?: number, hiddenFromQuery: AxNode[] = []): Page {
   const refs: ElementRef[] = Object.keys(nodes).map((selector) => ({ selector }));
   return makeFakePage({
     queryAll: async () => refs,
     axAt: async (selector: string) => nodes[selector] ?? null,
     countEverywhere: async () => everywhere ?? refs.length,
+    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([...Object.values(nodes), ...hiddenFromQuery]) }),
   });
 }
 
@@ -84,6 +95,89 @@ describe('resolveTarget', () => {
     const [selector] = queryAll.mock.calls[0] as unknown as [string];
     expect(selector).not.toContain('script');
     expect(countEverywhere).toHaveBeenCalledWith(selector);
+  });
+
+  it('matches a role attribute by token, because the browser reads the first role it knows', () => {
+    for (const selector of Object.values(ROLE_CANDIDATES)) {
+      expect(selector).not.toMatch(/\[role="/u);
+    }
+    expect(ROLE_CANDIDATES.button).toContain('[role~="button"]');
+  });
+
+  it('reads two matches when the tree has a second one in a closed shadow root or set by ElementInternals', async () => {
+    // The document query sees one Refresh button, and Playwright does not count the other.
+    const page = pageWith({ '#a': button('Refresh') }, 1, [button('Refresh')]);
+    expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({ kind: 'many', count: 2 });
+  });
+
+  it('refuses to pick when a candidate read came back empty and the tree holds a second match', async () => {
+    // '#b' re-rendered between the query and the read, so its read is empty, and the tree, read
+    // after, holds it.
+    const refs: ElementRef[] = [{ selector: '#a' }, { selector: '#b' }];
+    const page = makeFakePage({
+      queryAll: async () => refs,
+      axAt: async (selector: string) => (selector === '#a' ? button('Refresh') : null),
+      countEverywhere: async () => 2,
+      fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh'), button('Refresh')]) }),
+    });
+    expect((await resolveTarget(page, { role: 'button', name: 'Refresh' })).kind).toBe('many');
+  });
+
+  it('cannot tell when the tree has one match the document search did not read', async () => {
+    const page = pageWith({ '#b': button('Delete') }, 1, [button('Refresh')]);
+    expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
+      kind: 'cannot-tell',
+      reason: 'tree-differs',
+      found: 0,
+      inTree: 1,
+    });
+  });
+
+  it('cannot tell when the tree has fewer matches than the document search read', async () => {
+    const page = makeFakePage({
+      queryAll: async () => [{ selector: '#a' }],
+      axAt: async () => button('Refresh'),
+      countEverywhere: async () => 1,
+      fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),
+    });
+    expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
+      kind: 'cannot-tell',
+      reason: 'tree-differs',
+      found: 1,
+      inTree: 0,
+    });
+  });
+
+  it('cannot tell when the tree is larger than usabl reads', async () => {
+    const page = makeFakePage({
+      queryAll: async () => [{ selector: '#a' }],
+      axAt: async () => button('Refresh'),
+      countEverywhere: async () => 1,
+      fullAxTree: async () => ({ kind: 'over-budget', limit: 'nodes' }),
+    });
+    expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
+      kind: 'cannot-tell',
+      reason: 'tree-unreadable',
+      found: 1,
+      inTree: null,
+    });
+  });
+
+  it('does not count a node the tree ignores', async () => {
+    const page = makeFakePage({
+      queryAll: async () => [{ selector: '#a' }, { selector: '#hidden' }],
+      axAt: async (selector: string) => (selector === '#a' ? button('Refresh') : null),
+      countEverywhere: async () => 2,
+      fullAxTree: async () => ({
+        kind: 'tree',
+        documentNodeId: null,
+        nodes: [
+          ...treeOf([button('Refresh')]),
+          { nodeId: 9, parentId: null, role: 'button', name: null, ignored: true, states: {}, busy: false, controls: [] },
+        ],
+      }),
+    });
+    expect((await resolveTarget(page, { role: 'button', name: 'Refresh' })).kind).toBe('one');
   });
 });
 

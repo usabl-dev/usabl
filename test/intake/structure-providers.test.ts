@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AxNode, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
+import type { AxNode, AxTreeNode, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { designCheckProvider } from '../../src/intake/structure-providers.js';
 import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'users', url: 'http://127.0.0.1/users' };
+
+// The whole accessibility tree a browser would build from these nodes.
+function treeOf(nodes: readonly AxNode[]): AxTreeNode[] {
+  return nodes.map((node, index) => ({
+    nodeId: index + 1,
+    parentId: null,
+    role: node.role,
+    name: node.name,
+    ignored: false,
+    states: {},
+    busy: false,
+    controls: [],
+  }));
+}
 
 function pageWith(nodes: Record<string, AxNode>, overrides: Partial<Page> = {}): Page {
   const refs: ElementRef[] = Object.keys(nodes).map((selector) => ({ selector }));
@@ -12,6 +26,7 @@ function pageWith(nodes: Record<string, AxNode>, overrides: Partial<Page> = {}):
     queryAll: async () => refs,
     axAt: async (s: string) => nodes[s] ?? null,
     countEverywhere: async () => refs.length,
+    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf(Object.values(nodes)) }),
     ...overrides,
   });
 }
@@ -100,6 +115,38 @@ describe('name requirement', () => {
     expect(drafts[0]?.confidence).toBe('unverified');
     expect(drafts[0]?.why).toContain('shadow root or a frame');
   });
+
+  it('is unconfirmed, never a pass, when the accessibility tree has a second element the document search cannot read', async () => {
+    // A second Refresh button in a closed shadow root: the tree has it, the document query does not.
+    const page = pageWith(
+      { '#r': button('Refresh') },
+      { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh'), button('Refresh')]) }) },
+    );
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('2 buttons on this screen are named "Refresh"');
+  });
+
+  it('is unconfirmed, never a fail, when the tree has the element and the document search does not', async () => {
+    const page = pageWith(
+      {},
+      { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh')]) }) },
+    );
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toBe(
+      'The page\'s accessibility tree has 1 button named "Refresh", and usabl found 0 it can read in the page document, so it cannot tell which element the design means, and it does not guess.',
+    );
+  });
+
+  it('is unconfirmed when the accessibility tree cannot be read', async () => {
+    const page = pageWith({ '#r': button('Refresh') }, { fullAxTree: async () => ({ kind: 'over-budget', limit: 'time' }) });
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
 });
 
 describe('heading requirement', () => {
@@ -168,6 +215,14 @@ describe('landmark requirement', () => {
   it('is unconfirmed when the landmark is missing and candidates sit out of reach', async () => {
     const page = pageWith({}, { countEverywhere: async () => 1 });
     const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed, never a fail, when only the accessibility tree has the landmark', async () => {
+    const main: AxNode = { name: null, role: 'main', states: {} };
+    const page = pageWith({}, { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([main]) }) });
+    const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');
   });
 });

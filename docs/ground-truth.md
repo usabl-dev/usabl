@@ -4253,13 +4253,23 @@ unknown role, an unknown field, and a `source` whose file key, node id, or versi
 its grammar.
 
 **How the element is found.** For each role usabl queries a fixed CSS list of the elements that
-can have it (for a button: `button`, `[role="button"]`, button-type inputs, and so on), reads each
-candidate's role and computed name from Chromium's accessibility tree, and keeps the ones whose
-role matches and whose name equals the requirement's name after trimming. It then compares how
-many candidates the page has in all, inside open shadow roots and same-origin frames too, with how
-many it read. The search gives one of four answers: one match, no match, more than one match, or
-some candidates out of reach. Only "one match" is used as the element. Two matches is never
-resolved by picking the first: a wrong guess is reported as unknown, never as a finding or a pass.
+can have it (for a button: `button`, `[role~="button"]`, button-type inputs, and so on). A role
+attribute is matched by token, because the browser uses the first role token it knows, so
+`role="button menuitem"` is a candidate. usabl reads each candidate's role and computed name from
+Chromium's accessibility tree, and keeps the ones whose role matches and whose name equals the
+requirement's name after trimming. It then compares how many candidates the page has in all,
+inside open shadow roots and in every frame too, with how many it read. Last, it counts the nodes
+of the page's whole accessibility tree that are not ignored and have the role and the name. The
+browser builds that tree from every role source, so it also sees an element in a closed shadow
+root, a role set by script through ElementInternals, and a candidate whose own read came back
+empty. When the tree has two or more, the answer is more than one match. When its count differs
+from the document search, or the tree is larger than usabl reads, usabl cannot tell. The search
+gives one of five answers: one match, no match, more than one match, some candidates out of reach,
+or cannot tell. Only "one match" is used as the element. Two matches is never resolved by picking
+the first: a wrong guess is reported as unknown, never as a finding or a pass. A landmark
+requirement with no name that the document search does not find is unknown, not missing, when the
+tree has a landmark of that role or cannot be read. The tree does not cover child frames; the
+frame count above does.
 
 **What each check reports.** A check that passes returns no draft. Each failure and each unknown
 is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-heading`,
@@ -4267,11 +4277,11 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 
 | Kind | Fails (`confidence: 'fail'`) | Unknown (`confidence: 'unverified'`, needs review) |
 |---|---|---|
-| `name` | No element has that role and name | More than one does, or a candidate is out of reach |
-| `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, or its level cannot be read |
-| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once or a candidate is out of reach; with no name, none is found and a candidate is out of reach |
+| `name` | No element has that role and name | More than one does, a candidate is out of reach, or usabl cannot tell |
+| `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
+| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree cannot be read |
 | `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
-| `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, or its size cannot be read |
+| `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, or its size cannot be read |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
