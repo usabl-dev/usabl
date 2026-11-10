@@ -91,6 +91,11 @@ async function makeMenuContext(options: {
   // When true, keyboard focus sits inside the stale menu, not the one this toggle opens. Accepting
   // that as success would be a false pass: focus never reached this toggle's own menu.
   focusInStaleMenu?: boolean;
+  // The toggle's aria-haspopup and aria-expanded values, or null when it does not set them.
+  haspopup?: string | null;
+  expanded?: string | null;
+  // How many reads of the menus after the click see no menu yet, as when a menu mounts late.
+  menuMountsAfterReads?: number;
 }): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
@@ -98,6 +103,7 @@ async function makeMenuContext(options: {
   const staleMenu = element('#stale-menu');
   const menu = element('#menu');
   let isOpen = false;
+  let readsAfterClick = 0;
 
   const scriptedPage: Page = Object.assign(page, {
     // A PatternFly page, so the pack runs.
@@ -110,6 +116,10 @@ async function makeMenuContext(options: {
         return [toggle];
       }
       if (selector === SEL.menu) {
+        if (isOpen && readsAfterClick < (options.menuMountsAfterReads ?? 0)) {
+          readsAfterClick += 1;
+          return options.staleMenuAhead ? [staleMenu] : [];
+        }
         if (!isOpen) {
           return options.staleMenuAhead ? [staleMenu] : [];
         }
@@ -136,6 +146,15 @@ async function makeMenuContext(options: {
       if (key === 'Escape') {
         isOpen = false;
       }
+    },
+    getAttribute: async (selector: string, name: string) => {
+      if (selector !== toggle.selector) {
+        return null;
+      }
+      if (name === 'aria-haspopup') {
+        return options.haspopup ?? null;
+      }
+      return name === 'aria-expanded' ? (options.expanded ?? null) : null;
     },
     activeElementWithin: async (selector: string) =>
       (selector === menu.selector && isOpen && (options.focusMovesIntoMenu ?? false)) ||
@@ -318,6 +337,48 @@ describe('rulepack interaction probes', () => {
       confidence: 'fail',
       elementPath: '#menu-toggle',
     });
+  });
+
+  it('waits for a menu that mounts after the click and judges focus against it', async () => {
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({ menuAppearsOnClick: true, focusMovesIntoMenu: false, menuMountsAfterReads: 3 });
+
+    const drafts = draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state');
+
+    expect(drafts.map((d) => [d.elementPath, d.confidence])).toEqual([['#menu-toggle', 'fail']]);
+  });
+
+  for (const haspopup of ['menu', 'true']) {
+    it(`emits one unverified draft when a toggle with aria-haspopup="${haspopup}" opens no menu`, async () => {
+      const provider = makeRulepackProvider();
+      const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false, haspopup });
+
+      const drafts = draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state');
+
+      expect(drafts.map((d) => [d.elementPath, d.confidence])).toEqual([['#menu-toggle', 'unverified']]);
+      expect(drafts[0]?.why).toContain(`aria-haspopup="${haspopup}"`);
+    });
+  }
+
+  it('stays silent when a toggle that promises no menu opens none', async () => {
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false });
+
+    expect(draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state')).toEqual([]);
+  });
+
+  it('leaves a toggle that is already expanded alone, because the click would close its menu', async () => {
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false, haspopup: 'menu', expanded: 'true' });
+    let clicked = false;
+    const click = ctx.page.click.bind(ctx.page);
+    ctx.page.click = async (selector) => {
+      clicked = true;
+      await click(selector);
+    };
+
+    expect(draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state')).toEqual([]);
+    expect(clicked).toBe(false);
   });
 
   it('runs dialog probes by default when no extra checks are passed', async () => {

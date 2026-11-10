@@ -4,7 +4,7 @@
  * Focus checks stay inside Page predicates so selector strings are never compared to DOM path strings.
  */
 import { setTimeout as delay } from 'node:timers/promises';
-import type { AxNode, Draft, ProviderContext } from '../../contracts/index.js';
+import type { AxNode, Draft, ElementRef, ProviderContext } from '../../contracts/index.js';
 import { SEL } from './selectors.js';
 
 const FOCUS_SETTLE_TIMEOUT_MS = 2_500;
@@ -170,7 +170,16 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
 
   for (const toggle of toggles) {
     try {
+      // A toggle whose menu is already open closes it on the click, so the click would show no new
+      // menu and read as a promise broken. Its menu is left as it is.
+      if ((await ctx.page.getAttribute(toggle.selector, 'aria-expanded')) === 'true') {
+        continue;
+      }
       const toggleNode = await ctx.page.axAt(toggle.selector);
+      // aria-haspopup="menu", and "true", its legacy synonym, promise a menu. A PatternFly
+      // MenuToggle found by its OUIA type promises nothing by markup alone.
+      const haspopup = await ctx.page.getAttribute(toggle.selector, 'aria-haspopup');
+      const declaresMenu = haspopup === 'menu' || haspopup === 'true';
       // Record the menus already open before this toggle acts. The menu this toggle opens is one
       // that appears now but was not present before the click. Scoping the focus check to those,
       // rather than any [role=menu] on the page, fixes both directions: a stale menu sitting ahead
@@ -179,12 +188,31 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
       const menusBefore = new Set((await ctx.page.queryAll(SEL.menu)).map((menu) => menu.selector));
       await ctx.page.click(toggle.selector);
 
-      const openedMenus = (await ctx.page.queryAll(SEL.menu)).filter(
-        (menu) => !menusBefore.has(menu.selector),
-      );
+      // A menu can mount a moment after the click, so wait for it the way the dialog probe waits
+      // for its dialog. Read once at once, a late menu was missed with no draft.
+      let openedMenus: ElementRef[] = [];
+      await waitFor(async () => {
+        openedMenus = (await ctx.page.queryAll(SEL.menu)).filter((menu) => !menusBefore.has(menu.selector));
+        return openedMenus.length > 0;
+      });
       if (openedMenus.length === 0) {
-        // No new menu opened, so there is nothing to judge focus against. Do not fault the toggle.
         await ctx.page.press('Escape');
+        // A toggle that promised a menu and opened none is a promise the probe could not check.
+        // Any other toggle opened something that is not a menu, which says nothing about it.
+        if (declaresMenu) {
+          drafts.push(
+            draft(
+              ctx,
+              toggleNode,
+              'pf-kebab-expanded-state',
+              toggle.selector,
+              'unverified',
+              'Could not verify menu focus behavior.',
+              `The toggle declares aria-haspopup="${haspopup}" but no menu appeared when it was activated, so the probe could not check where focus goes.`,
+              'Confirm the toggle opens a menu, or remove aria-haspopup from it.',
+            ),
+          );
+        }
         continue;
       }
 

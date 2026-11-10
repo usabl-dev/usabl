@@ -217,7 +217,9 @@ describe('makeRulepackProvider', () => {
     expect(gapsOf(namedOutput)).toEqual([]);
   });
 
-  it('flags kebab toggles missing expanded or haspopup state and skips complete toggles', async () => {
+  // The toggles here open no menu, and the menu probe waits up to 2.5 seconds for one on each of
+  // the two runs, so this test needs more than the default 5 seconds.
+  it('flags kebab toggles missing expanded or haspopup state and skips complete toggles', { timeout: 15_000 }, async () => {
     const toggle = element('.kebab-toggle');
     const provider = makeRulepackProvider();
     const missingStatesContext = await makeContext(
