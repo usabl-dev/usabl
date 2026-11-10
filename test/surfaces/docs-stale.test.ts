@@ -188,4 +188,65 @@ describe('a report made from another tree is marked stale wherever it is listed 
       expect(artifact.staleReason).toContain('tree-after');
     }
   });
+
+  it('marks a verified report stale when the code changed while usabl docs ran', async () => {
+    const config: UsablConfig = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['app/src/**'],
+      discovery: { routerFile: 'app/src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['app/src/ClustersPage.tsx'] }],
+      guardedPaths: ['usabl.config.json'],
+    };
+    // No finding, so the run mints a receipt. The receipt reads the tree after the scan, so its
+    // tree is the one with the saved file, and only the tree read before the run shows the change.
+    const deps = makeFakeDeps({
+      changed: [{ code: 'M', path: 'app/src/ClustersPage.tsx' }],
+      files: { 'usabl.config.json': '{}', 'app/src/ClustersPage.tsx': 'export const Clusters = () => null;' },
+      headContents: { 'usabl.config.json': '{}' },
+      writeTree: 'tree-before',
+      scans: { clusters: result().screens[0]! },
+    });
+    let saved = false;
+    const writeTree = deps.git.writeTree.bind(deps.git);
+    deps.git.writeTree = async () => (saved ? 'tree-after' : writeTree());
+    const scan = deps.checkRunner.scan.bind(deps.checkRunner);
+    deps.checkRunner.scan = async (screen) => {
+      const scanned = await scan(screen);
+      saved = true;
+      return scanned;
+    };
+    const projected = await generateDocs(deps, config, { all: false });
+
+    expect(projected.artifacts.length).toBeGreaterThan(0);
+    for (const artifact of projected.artifacts) {
+      expect(artifact.boundToReceipt ?? artifact.sourceTree).toBe('tree-after');
+      expect(artifact.stale).toBe(true);
+      expect(artifact.staleReason).toContain('tree-before');
+      expect(artifact.staleReason).toContain('tree-after');
+      expect(artifact.staleReason).toContain('usabl docs');
+    }
+    const html = renderDocsHtml(projected.artifacts);
+    expect(html).not.toContain('<span class="status__label">Verified.</span>');
+    expect(html).toContain('Out of date.');
+
+    // Read back later against the tree the receipt names, the report is still stale: the scan
+    // never saw one whole tree.
+    const read = markStaleDocArtifacts(JSON.parse(projected.json).artifacts, 'tree-after');
+    expect(read.every((artifact) => artifact.stale === true)).toBe(true);
+  });
+
+  it('records the start tree when it differs from the receipt tree, and stays stale against both', () => {
+    const artifacts = collectDocArtifacts(result(), noRequirements, { sourceTree: 'tree-start' });
+
+    for (const artifact of artifacts) {
+      expect(artifact.sourceTree).toBe('tree-made');
+    }
+    expect(markStaleDocArtifacts(artifacts, 'tree-made').every((artifact) => artifact.stale === true)).toBe(true);
+    expect(markStaleDocArtifacts(artifacts, 'tree-start').every((artifact) => artifact.stale === true)).toBe(true);
+    expect(
+      markStaleDocArtifacts(collectDocArtifacts(result(), noRequirements, { sourceTree: 'tree-made' }), 'tree-made').some(
+        (artifact) => artifact.stale === true,
+      ),
+    ).toBe(false);
+  });
 });

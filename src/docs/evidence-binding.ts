@@ -29,12 +29,17 @@ const REGENERATE = 'Run usabl docs again to make it from the current code.';
  * A report is current only when it records the tree it was made from and that tree is the current
  * one. A report that records no tree is not bound to any code, and a current tree usabl could not
  * read cannot be compared, so both read as stale: silence about the tree is never evidence that
- * the report matches it.
+ * the report matches it. A report whose run started on one tree and was bound to another saw a file
+ * change during its scan, so it matches no tree and reads as stale against every one.
  */
 export function staleReason(artifact: DocArtifact, currentTree: string | null): string | null {
   const made = typeof artifact.sourceTree === 'string' && artifact.sourceTree.length > 0 ? artifact.sourceTree : null;
   if (made === null) {
     return `This report does not record the tree it was made from, so usabl cannot tell whether it matches the current code. ${REGENERATE}`;
+  }
+  const start = typeof artifact.startTree === 'string' && artifact.startTree.length > 0 ? artifact.startTree : null;
+  if (start !== null && start !== made) {
+    return `The code changed while this report was made: the run started at tree ${start}, and its receipt is bound to tree ${made}. ${REGENERATE}`;
   }
   if (currentTree === null) {
     return `usabl could not read the current tree, so it cannot tell whether this report, made from tree ${made}, matches the current code. ${REGENERATE}`;

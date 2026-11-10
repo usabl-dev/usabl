@@ -4004,8 +4004,12 @@ it was made from in `sourceTree`: the receipt's tree when the run minted one, ot
 tree `usabl docs` read before the run. A report is marked stale wherever it is listed or read
 against a tree other than its own, and also when it records no tree or the current tree cannot
 be read: the artifact gets `stale: true` and a `staleReason` that names both trees and says to
-run `usabl docs` again. `usabl docs` reads the tree again after the run, so a file saved while
-the scan ran marks the report stale in its JSON and on its `--html` page. On the page a stale
+run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file saved
+while the scan ran marks the report stale in its JSON and on its `--html` page, with or without
+a receipt. With no receipt, the report records the tree read before, and the tree read after
+differs from it. With a receipt, the receipt's tree is read after the scan, so the report also
+records the tree read before in `startTree`, and a report whose two trees differ is stale
+against every tree, the receipt's tree included. On the page a stale
 card reads "Out of date", never "Verified", and the overview counts the stale cards. A report
 saved earlier and read again is checked with `markStaleDocArtifacts(artifacts, currentTree)`
 from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence-binding.ts`.
