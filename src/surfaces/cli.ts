@@ -75,8 +75,18 @@ export interface CliOptions {
   screens: string[] | null;
 }
 
-// The value flags of serve-build and extract-build. Those commands parse their own arguments.
-const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set(['--dir', '--host', '--port', '--archive', '--into']);
+// The value flags of serve-build, extract-build, and import. Those commands parse their own
+// arguments.
+const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '--dir',
+  '--host',
+  '--port',
+  '--archive',
+  '--into',
+  '--frame',
+  '--owner',
+  '--min-target',
+]);
 
 function isFlag(value: string): boolean {
   return value.startsWith('-');
@@ -170,6 +180,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       }
       if (command === 'drift' && token === 'routes') {
         driftSubcommand = 'routes';
+        continue;
+      }
+      if (command === 'import') {
+        // `usabl import figma <file key>`: the import command reads its own words, so a file key
+        // is never taken for a command name.
         continue;
       }
       if (command === 'history' && historySubcommand === null && (token === 'record' || token === 'append')) {

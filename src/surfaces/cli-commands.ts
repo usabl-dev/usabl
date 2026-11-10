@@ -128,6 +128,25 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     flags: [CONFIG_FLAG],
   },
   {
+    name: 'import',
+    usage: 'usabl import figma <file key> --frame <Frame>=<surface> --out <file>',
+    summary: 'Draft requirements from the accessibility notes in a Figma file.',
+    flags: [
+      {
+        name: '--frame',
+        value: '<Frame>=<surface>',
+        help: 'A Figma frame and the surface id it is. Give one for each frame.',
+      },
+      { name: '--out', value: '<file>', help: 'The new requirements file. It is never overwritten.' },
+      { name: '--owner', value: '<name>', help: 'The owner each requirement records. Default: design.' },
+      {
+        name: '--min-target',
+        value: '<css px>',
+        help: 'Also draft a target size check for each button, at this size.',
+      },
+    ],
+  },
+  {
     name: 'debt',
     usage: 'usabl debt [options]',
     summary: 'List the accessibility debt that remains, by screen and rule.',

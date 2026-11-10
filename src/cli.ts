@@ -433,7 +433,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'session' &&
     opts.command !== 'serve-build' &&
     opts.command !== 'extract-build' &&
-    opts.command !== 'verify'
+    opts.command !== 'verify' &&
+    opts.command !== 'import'
   ) {
     // The command table names a command this dispatch does not run. Refuse it the same way.
     process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
@@ -454,6 +455,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (opts.command === 'verify') {
     return runVerify(opts);
+  }
+
+  if (opts.command === 'import') {
+    // The import calls the Figma API. Its code is loaded here and nowhere else in the CLI, by a
+    // dynamic import, so no check, gate, or hook path can reach it. It reads its own arguments.
+    const { runImportCommand } = await import('./import/figma/cli.js');
+    const commandAt = argv.indexOf('import');
+    const outcome = await runImportCommand(
+      argv.filter((_, index) => index !== commandAt),
+      process.env,
+    );
+    if (outcome.stdout) {
+      process.stdout.write(outcome.stdout);
+    }
+    if (outcome.stderr) {
+      process.stderr.write(outcome.stderr);
+    }
+    return outcome.exitCode;
   }
 
   // serve-build and extract-build handle a pull request's untrusted build for the CI judge. Each
