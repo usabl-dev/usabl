@@ -113,7 +113,19 @@ const FULL_LIST_NOTE = 'Run usabl check --json to see the full list in coverage.
  * the engine may carry anything here, so an entry whose fields are not strings is skipped.
  */
 function renderExcludedFiles(result: Result): string[] {
-  const listed: unknown = result.coverage.excludedFiles;
+  return renderFileNotes(result.coverage.excludedFiles, 'excluded files, not checked', 'excluded files');
+}
+
+/**
+ * What screen discovery had to assume, such as an alias import it followed two ways because the
+ * app configs and the root configs disagree. Printed like the excluded files: disclosure that does
+ * not block, under any run.
+ */
+function renderDiscoveryNotes(result: Result): string[] {
+  return renderFileNotes(result.coverage.discoveryNotes, 'discovery notes', 'discovery notes');
+}
+
+function renderFileNotes(listed: unknown, label: string, moreLabel: string): string[] {
   if (!Array.isArray(listed)) {
     return [];
   }
@@ -128,7 +140,7 @@ function renderExcludedFiles(result: Result): string[] {
   if (count === 0) {
     return [];
   }
-  const lines = [`  excluded files, not checked: ${count} (${NOTES_HEADING})`];
+  const lines = [`  ${label}: ${count} (${NOTES_HEADING})`];
   let shown = 0;
   for (const reason of [...byReason.keys()].sort()) {
     const groupRefs = [...(byReason.get(reason) ?? [])].sort().slice(0, Math.max(0, MAX_LISTED_FILES - shown));
@@ -142,7 +154,7 @@ function renderExcludedFiles(result: Result): string[] {
     lines.push(`    why: ${boundField(neutralizePrintedText(reason), 'gapReason')}`);
   }
   if (count > shown) {
-    lines.push(`    ${count - shown} more excluded files not shown. ${FULL_LIST_NOTE}`);
+    lines.push(`    ${count - shown} more ${moreLabel} not shown. ${FULL_LIST_NOTE}`);
   }
   return lines;
 }
@@ -447,6 +459,7 @@ export function formatSummary(result: Result): string {
   lines.push(...renderNotEvaluated(result));
   lines.push(...renderNotes(result));
   lines.push(...renderExcludedFiles(result));
+  lines.push(...renderDiscoveryNotes(result));
   lines.push(...renderBrowserSandbox(result));
   if (result.dirtyGuardedPaths.length > 0) {
     // A guarded file name comes from the repository and can hold an escape byte, so each name is

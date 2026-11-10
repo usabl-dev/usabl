@@ -10,8 +10,10 @@ import type { FsGlob } from '../contracts/index.js';
 import {
   type AliasConfig,
   isAliasLikeSpecifier,
-  resolveAliasSpecifier,
+  resolveAliasSpecifierEachWay,
 } from './alias-config.js';
+
+const NO_ALIASES: AliasConfig = { mappings: [], hasAliasConfig: false };
 
 export type UnresolvableImport =
   | {
@@ -25,6 +27,17 @@ export type UnresolvableImport =
       // More than one file could be what the import loads. usabl does not pick one.
       kind: 'ambiguous-candidates';
       // Every candidate that exists, sorted.
+      candidates: string[];
+    }
+  | {
+      importer: string;
+      specifier: string;
+      // The alias configs usabl reads map the import to more than one place, and usabl cannot
+      // tell which one the build uses. Every file found is linked.
+      kind: 'alias-conflict';
+      // Each path the import resolves to, sorted.
+      targets: string[];
+      // Every file found at those paths, sorted.
       candidates: string[];
     };
 
@@ -168,6 +181,36 @@ function unresolvedEntry(
     : { importer, specifier, kind: 'ambiguous-candidates', candidates: resolution.candidates };
 }
 
+// The files an alias import links to, and its disclosure when it did not resolve to exactly one
+// file. An import the configs map to more than one place resolves at each, and links every file
+// found there: dropping any of them could leave out a screen that renders the changed file.
+async function resolveAliasImport(
+  fs: FsGlob,
+  importer: string,
+  specifier: string,
+  aliasConfig: AliasConfig,
+): Promise<{ targets: string[]; disclosure: UnresolvableImport | null }> {
+  const aliasPaths = resolveAliasSpecifierEachWay(specifier, aliasConfig);
+  if (aliasPaths.length === 0) {
+    const kind = aliasConfig.hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured';
+    return { targets: [], disclosure: { importer, specifier, kind } };
+  }
+  if (aliasPaths.length === 1 && aliasPaths[0] !== undefined) {
+    const resolved = await resolveFileAtPath(fs, aliasPaths[0]);
+    const disclosure = resolved === null || 'candidates' in resolved ? unresolvedEntry(importer, specifier, resolved) : null;
+    return { targets: edgeTargets(resolved), disclosure };
+  }
+  const found = new Set<string>();
+  for (const aliasPath of aliasPaths) {
+    for (const target of edgeTargets(await resolveFileAtPath(fs, aliasPath))) found.add(target);
+  }
+  const candidates = [...found].sort();
+  if (candidates.length === 0) {
+    return { targets: [], disclosure: { importer, specifier, kind: 'file-not-found' } };
+  }
+  return { targets: candidates, disclosure: { importer, specifier, kind: 'alias-conflict', targets: aliasPaths, candidates } };
+}
+
 function pushUniqueUnresolvable(list: UnresolvableImport[], entry: UnresolvableImport): void {
   const key = `${entry.importer}:${entry.specifier}:${entry.kind}`;
   if (!list.some((item) => `${item.importer}:${item.specifier}:${item.kind}` === key)) {
@@ -184,8 +227,7 @@ export async function buildImportGraph(
   const visited = new Set<string>();
   const queue = [...entryFiles];
   const unresolvable: UnresolvableImport[] = [];
-  const mappings = aliasConfig?.mappings ?? [];
-  const hasAliasConfig = aliasConfig?.hasAliasConfig ?? false;
+  const aliases = aliasConfig ?? NO_ALIASES;
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -202,20 +244,9 @@ export async function buildImportGraph(
     const fileEdges = edges.get(file) ?? [];
     for (const specifier of extractSpecifiers(source)) {
       if (isAliasLikeSpecifier(specifier)) {
-        const aliasPath = resolveAliasSpecifier(specifier, mappings);
-        if (aliasPath === null) {
-          pushUniqueUnresolvable(unresolvable, {
-            importer: file,
-            specifier,
-            kind: hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured',
-          });
-          continue;
-        }
-        const resolved = await resolveFileAtPath(fs, aliasPath);
-        if (resolved === null || 'candidates' in resolved) {
-          pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
-        }
-        for (const target of edgeTargets(resolved)) {
+        const { targets, disclosure } = await resolveAliasImport(fs, file, specifier, aliases);
+        if (disclosure !== null) pushUniqueUnresolvable(unresolvable, disclosure);
+        for (const target of targets) {
           pushUnique(fileEdges, target);
           queue.push(target);
         }
@@ -263,25 +294,13 @@ export async function inspectDirectImports(
   if (source === null) {
     return [];
   }
-  const mappings = aliasConfig?.mappings ?? [];
-  const hasAliasConfig = aliasConfig?.hasAliasConfig ?? false;
+  const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
 
   for (const specifier of extractSpecifiers(source)) {
     if (isAliasLikeSpecifier(specifier)) {
-      const aliasPath = resolveAliasSpecifier(specifier, mappings);
-      if (aliasPath === null) {
-        pushUniqueUnresolvable(unresolvable, {
-          importer: file,
-          specifier,
-          kind: hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured',
-        });
-        continue;
-      }
-      const resolved = await resolveFileAtPath(fs, aliasPath);
-      if (resolved === null || 'candidates' in resolved) {
-        pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
-      }
+      const { disclosure } = await resolveAliasImport(fs, file, specifier, aliases);
+      if (disclosure !== null) pushUniqueUnresolvable(unresolvable, disclosure);
       continue;
     }
     if (isRelativeSpecifier(specifier)) {

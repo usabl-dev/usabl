@@ -18,6 +18,10 @@ export interface AliasMapping {
 export interface AliasConfig {
   mappings: AliasMapping[];
   hasAliasConfig: boolean;
+  // Mappings from other configs that also apply, each list in its own resolution order. An import
+  // is resolved against `mappings` and against each of these, and when they disagree every file
+  // found is followed. Absent when only one set of configs was read.
+  otherSources?: AliasMapping[][];
 }
 
 const TSCONFIG_CANDIDATES = ['tsconfig.json', 'tsconfig.app.json'];
@@ -310,6 +314,19 @@ export function resolveAliasSpecifier(specifier: string, mappings: AliasMapping[
   return null;
 }
 
+/**
+ * Every path an alias import resolves to, one per set of configs that maps it, sorted and without
+ * repeats. Empty when no config maps it. More than one path means the configs disagree.
+ */
+export function resolveAliasSpecifierEachWay(specifier: string, config: AliasConfig): string[] {
+  const found = new Set<string>();
+  for (const mappings of [config.mappings, ...(config.otherSources ?? [])]) {
+    const resolved = resolveAliasSpecifier(specifier, mappings);
+    if (resolved !== null) found.add(resolved);
+  }
+  return [...found].sort();
+}
+
 export function isAliasLikeSpecifier(specifier: string): boolean {
   // Only the conventional alias prefixes. A scoped npm package such as @patternfly/react-core also
   // starts with '@' but is a bare package, not an alias, so it must be ignored, not disclosed as an
@@ -323,15 +340,13 @@ function under(dir: string, file: string): string {
 }
 
 /**
- * The folder whose configs set the aliases for an app, found by climbing from a file of the app,
- * such as its router file, to the first folder that holds a tsconfig or a Vite config. That is the
- * folder the app's compiler and bundler read. The repository root ('') when no folder below it
- * holds one.
+ * The nearest folder at or above a file that holds one of the named configs, climbing to the
+ * repository root. The repository root ('') when no folder below it holds one.
  */
-export async function aliasConfigDir(fs: FsGlob, fromFile: string): Promise<string> {
+async function nearestConfigDir(fs: FsGlob, fromFile: string, candidates: readonly string[]): Promise<string> {
   let dir = path.dirname(path.normalize(fromFile.replace(/^\/+/u, '')));
   while (dir !== '.' && dir !== '' && !dir.startsWith('..')) {
-    for (const candidate of [...TSCONFIG_CANDIDATES, ...VITE_CONFIG_CANDIDATES]) {
+    for (const candidate of candidates) {
       if ((await fs.readFile(`${dir}/${candidate}`)) !== null) return dir;
     }
     dir = path.dirname(dir);
@@ -340,31 +355,68 @@ export async function aliasConfigDir(fs: FsGlob, fromFile: string): Promise<stri
 }
 
 /**
+ * The folders an app's aliases are read from, found by climbing from a file of the app, such as
+ * its router file: the nearest folder that holds a tsconfig, and, found on its own, the nearest
+ * folder that holds a Vite config. Each is the repository root ('') when no folder below it holds
+ * one. An app folder often holds only one of the two, and the other then sits higher up.
+ */
+export async function aliasConfigDirs(fs: FsGlob, fromFile: string): Promise<{ tsconfigDir: string; viteDir: string }> {
+  return {
+    tsconfigDir: await nearestConfigDir(fs, fromFile, TSCONFIG_CANDIDATES),
+    viteDir: await nearestConfigDir(fs, fromFile, VITE_CONFIG_CANDIDATES),
+  };
+}
+
+async function tsconfigMappingsIn(fs: FsGlob, dir: string): Promise<AliasMapping[]> {
+  const mappings: AliasMapping[] = [];
+  for (const candidate of TSCONFIG_CANDIDATES) {
+    mappings.push(...tsconfigPathMappings(await readTsconfigChain(fs, under(dir, candidate), new Set())));
+  }
+  return mappings;
+}
+
+async function viteMappingsIn(fs: FsGlob, dir: string): Promise<AliasMapping[]> {
+  for (const name of VITE_CONFIG_CANDIDATES) {
+    const candidate = under(dir, name);
+    const raw = await fs.readFile(candidate);
+    if (raw !== null) return parseViteAliases(raw, candidate);
+  }
+  return [];
+}
+
+/**
  * The aliases set by the tsconfig and Vite config in one folder, the repository root by default,
  * with every target written relative to the repository root. A tsconfig that extends another reads
  * the paths that config sets, as the compiler does.
  */
 export async function loadAliasConfig(fs: FsGlob, dir = ''): Promise<AliasConfig> {
-  const tsconfigMappings: AliasMapping[] = [];
-  for (const candidate of TSCONFIG_CANDIDATES) {
-    tsconfigMappings.push(...tsconfigPathMappings(await readTsconfigChain(fs, under(dir, candidate), new Set())));
-  }
+  return loadAliasConfigFrom(fs, dir, dir);
+}
 
-  let viteMappings: AliasMapping[] = [];
-  for (const name of VITE_CONFIG_CANDIDATES) {
-    const candidate = under(dir, name);
-    const raw = await fs.readFile(candidate);
-    if (raw !== null) {
-      viteMappings = parseViteAliases(raw, candidate);
-      break;
-    }
-  }
-
+async function loadAliasConfigFrom(fs: FsGlob, tsconfigDir: string, viteDir: string): Promise<AliasConfig> {
+  const tsconfigMappings = await tsconfigMappingsIn(fs, tsconfigDir);
+  const viteMappings = await viteMappingsIn(fs, viteDir);
   // No invented "~/ -> ./" default. A tilde import only resolves when the project actually
   // configures it; otherwise it stays disclosed as alias-unconfigured, not silently attributed.
-  const merged = mergeMappings(tsconfigMappings, viteMappings);
+  return {
+    mappings: mergeMappings(tsconfigMappings, viteMappings),
+    hasAliasConfig: tsconfigMappings.length > 0 || viteMappings.length > 0,
+  };
+}
 
-  const hasAliasConfig = tsconfigMappings.length > 0 || viteMappings.length > 0;
-
-  return { mappings: merged, hasAliasConfig };
+/**
+ * The aliases of the app a file belongs to. The app's set comes from the nearest tsconfig and the
+ * nearest Vite config at or above the file, found on their own. When either sits below the
+ * repository root, the root tsconfig and Vite config are read as a second set, as usabl read them
+ * before it looked in app folders, so aliases are never read from fewer places. usabl cannot run
+ * the build to learn which set wins, so an import the two sets map to different places resolves
+ * both ways (see resolveAliasSpecifierEachWay).
+ */
+export async function loadAppAliasConfig(fs: FsGlob, fromFile: string): Promise<AliasConfig> {
+  const { tsconfigDir, viteDir } = await aliasConfigDirs(fs, fromFile);
+  const app = await loadAliasConfigFrom(fs, tsconfigDir, viteDir);
+  if (tsconfigDir === '' && viteDir === '') return app;
+  const root = await loadAliasConfig(fs);
+  if (!root.hasAliasConfig || JSON.stringify(root.mappings) === JSON.stringify(app.mappings)) return app;
+  return { ...app, hasAliasConfig: true, otherSources: [root.mappings] };
 }

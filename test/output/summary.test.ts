@@ -727,6 +727,16 @@ describe('formatSummary long file lists', () => {
     expect(text).toContain('--json');
   });
 
+  it('prints discovery notes as disclosure that does not block', () => {
+    const discoveryNotes = [{ ref: 'apps/web/src/Home.tsx', reason: "'@/components/Card' resolves more than one way" }];
+    const text = formatSummary(
+      baseResult({ coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false, discoveryNotes } }),
+    );
+    expect(text).toContain('discovery notes: 1 (disclosed, does not block)');
+    expect(text).toContain('apps/web/src/Home.tsx');
+    expect(text).toContain("why: '@/components/Card' resolves more than one way");
+  });
+
   it('shows at most 20 other unplaced files, then the count of the rest', () => {
     const gaps = refs('src/widgets', 30).map((ref) => ({ ref, state: 'unresolved' as const, reason: 'not placed' }));
     const text = formatSummary(

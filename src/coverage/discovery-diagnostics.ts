@@ -13,10 +13,30 @@ export function formatUnresolvableImport(entry: UnresolvableImport): string {
   if (entry.kind === 'alias-unmapped') {
     return `could not resolve '${entry.specifier}' in ${entry.importer}: no alias mapping matches this prefix in tsconfig or vite config`;
   }
+  if (entry.kind === 'alias-conflict') {
+    return aliasConflictText(entry);
+  }
   if (entry.kind === 'ambiguous-candidates') {
     return `could not resolve '${entry.specifier}' in ${entry.importer}: more than one file matches (${entry.candidates.join(', ')}), and usabl does not know which one the bundler loads, so it follows all of them. Write the import with the file's extension`;
   }
   return `could not resolve '${entry.specifier}' in ${entry.importer}: resolved path has no matching file on disk`;
+}
+
+/**
+ * The sentence for an alias import that resolved more than one way. The app's configs and the
+ * repository root's configs map it to different places, and usabl cannot run the build to learn
+ * which one wins.
+ */
+export function aliasConfigConflictReason(entry: { specifier: string; targets: readonly string[]; candidates: readonly string[] }): string {
+  return (
+    `'${entry.specifier}' resolves more than one way: the tsconfig and Vite configs usabl reads map it to ${entry.targets.join(', ')}. ` +
+    `usabl cannot tell which one the build uses, so it follows every file found (${entry.candidates.join(', ')}). ` +
+    'Make the app configs and the repository root configs map this alias to one folder'
+  );
+}
+
+function aliasConflictText(entry: Extract<UnresolvableImport, { kind: 'alias-conflict' }>): string {
+  return `in ${entry.importer}: ${aliasConfigConflictReason(entry)}`;
 }
 
 // The name an import would use for a file: its name without the extension, or the folder name for

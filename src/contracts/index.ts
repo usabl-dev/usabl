@@ -316,6 +316,15 @@ export interface Coverage {
   // file is not a gap, the gate never reads this list, and it never moves a verdict. Optional so a
   // Result written before it existed still reads; absent and empty both mean nothing was excluded.
   excludedFiles?: ExcludedFile[];
+  // What screen discovery had to assume, each about one file: today an alias import that the app
+  // configs and the root configs map to different places, which usabl follows both ways.
+  // Disclosure only: the gate never reads this list and it never moves a verdict. Optional so a
+  // Result written before it existed still reads; absent and empty both mean nothing to disclose.
+  discoveryNotes?: DiscoveryNote[];
+}
+export interface DiscoveryNote {
+  ref: string; // the repository path of the file the note is about
+  reason: string; // what discovery assumed, and what would remove the doubt
 }
 export interface ExcludedFile {
   ref: string; // the repository path of the changed file

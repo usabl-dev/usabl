@@ -4,9 +4,14 @@
  * `run()` calls this planner directly, so unmapped UI must stay explicit evidence.
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
-import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
-import { aliasConfigDir, loadAliasConfig } from './alias-config.js';
-import { buildUnresolvedReason, UNPLACED_FILE_FIX, unresolvedImportsNaming } from './discovery-diagnostics.js';
+import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
+import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
+import {
+  aliasConfigConflictReason,
+  buildUnresolvedReason,
+  UNPLACED_FILE_FIX,
+  unresolvedImportsNaming,
+} from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
@@ -178,9 +183,25 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
   return seen;
 }
 
+// One note per alias import that resolved more than one way and reaches a changed UI file, so the
+// screens it added or kept are explained. Sorted by file, then import, so the list is stable.
+function aliasConflictNotes(graph: Awaited<ReturnType<typeof buildImportGraph>>, uiFiles: readonly string[]): DiscoveryNote[] {
+  const changed = new Set(uiFiles);
+  const notes: Array<DiscoveryNote & { specifier: string }> = [];
+  for (const entry of graph.unresolvable) {
+    if (entry.kind !== 'alias-conflict') continue;
+    const reaches = entry.candidates.some((candidate) => [...importClosure(graph, candidate)].some((file) => changed.has(file)));
+    if (reaches) notes.push({ ref: entry.importer, specifier: entry.specifier, reason: aliasConfigConflictReason(entry) });
+  }
+  // Plain code-unit order, so the order never depends on the machine's locale.
+  const key = (note: { ref: string; specifier: string }): string => `${note.ref}\u0000${note.specifier}`;
+  notes.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  return notes.map(({ ref, reason }) => ({ ref, reason }));
+}
+
 interface RouteGraph {
   graph: Awaited<ReturnType<typeof buildImportGraph>>;
-  aliasConfig: Awaited<ReturnType<typeof loadAliasConfig>>;
+  aliasConfig: AliasConfig;
   // The import closure of each route entry file, keyed by screen id.
   closures: Map<string, Set<string>>;
 }
@@ -191,10 +212,10 @@ async function buildRouteGraph(
   routerFile: string,
 ): Promise<RouteGraph> {
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
-  // The aliases come from the app folder, the configs its compiler and bundler read, as init reads
-  // them. In a monorepo the root configs belong to no app, and reading them resolved an app's @/
-  // imports into the wrong folder.
-  const aliasConfig = await loadAliasConfig(fs, await aliasConfigDir(fs, routerFile));
+  // The aliases come from the nearest tsconfig and the nearest Vite config at or above the router
+  // file, and from the repository root configs too. An import the two sets map to different places
+  // is followed both ways and disclosed. See loadAppAliasConfig.
+  const aliasConfig = await loadAppAliasConfig(fs, routerFile);
   const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
   const closures = new Map<string, Set<string>>();
   for (const route of attributedRoutes) {
@@ -454,6 +475,7 @@ export async function computeCoverage(
     }
   }
 
+  const discoveryNotes = aliasConflictNotes(graph, uiFiles);
   return {
     changedFiles,
     affected: [...affectedByScreen.values()],
@@ -461,5 +483,7 @@ export async function computeCoverage(
     gaps,
     nothingToCheck: false,
     ...excluded,
+    // Omitted when empty, so a Coverage with nothing to disclose has the same shape it always had.
+    ...(discoveryNotes.length === 0 ? {} : { discoveryNotes }),
   };
 }
