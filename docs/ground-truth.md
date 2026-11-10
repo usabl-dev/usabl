@@ -448,12 +448,13 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
-  excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+  excludedFiles?: ExcludedFile[]; // disclosure only: test files nothing usabl found can load
   discoveryNotes?: DiscoveryNote[]; // disclosure only: what screen discovery had to assume
 }
 
 // A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
-// a file in a test folder that no screen imports. Not a gap: the gate never reads it. Absent and
+// a test file (named like a test, or in a test folder) that no file outside the tests imports and
+// no import usabl could not follow could load. Not a gap: the gate never reads it. Absent and
 // empty both mean nothing was excluded.
 export interface ExcludedFile {
   ref: string;    // repository path
@@ -1608,33 +1609,92 @@ surface is queued under its own id, with its own readiness signal and requiremen
 does not determine which screen renders. A surface that overrides a discovered route
 (`overridesDiscoveredRoute`) has the route's id, so the two are one entry.
 
-**Test files.** A file named like a test, `*.test.*` or `*.spec.*`, is never a UI file, wherever
-it is. A file in a folder named `test`, `tests`, or `__tests__` is a UI file only when a screen
-reaches it: a route entry file's import graph includes it, or a surface lists it in its `files`.
-So a screen component kept in `src/tests/` is checked when it changes. A file in such a folder
-that matches `uiFileGlobs` and that no screen reaches, such as `src/test/setup.ts`, a helper in
-`src/__tests__/`, or a mock request handler in `src/test/`, is left out and disclosed in
-`coverage.excludedFiles`, with a reason that says usabl found no import of it and how to make it
-count. It is not a gap, so a pull request that edits only test helpers still has nothing to check.
-`usabl check` prints these files under "excluded files, not checked", marked as not blocking, on
-any run, an idle one included. It prints the first 20 and then the count of the rest; the JSON
-output holds the full list.
+**Test files.** A test file is a file under `uiFileGlobs` that is named like a test (`*.test.*` or
+`*.spec.*`) or sits in a folder named `test`, `tests`, or `__tests__`. Both kinds follow one rule:
+a test file is excluded only when usabl has looked at every place that could load it and found
+none. "No import found" is evidence only when the search was complete. For each changed test file,
+in this order:
 
-"No screen reaches it" is read from the import graph, so it is a guess when the graph holds an
-import usabl could not resolve. When an unresolved import's last path segment, with or without its
-extension, equals the file's name without its extension (or its folder name, for an `index` file),
-the file is an `unresolved` gap that names the import and the file that holds it. For example,
-`src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
-`src/tests/Dashboard.tsx` is a gap. An unresolved import that names another file changes nothing.
-A dynamic import built from a template literal, such as `` import(`../tests/${name}`) ``, names no
-file, so a file it loads stays excluded. That is a known limit.
+1. **It is a UI file** when a surface lists it in its `files`, when a route entry file's import
+   graph reaches it, or when a file that is not a test file imports it, directly or through other
+   files. For the last check usabl builds a wider import graph that starts at every file under
+   `uiFileGlobs` that is not a test file, and at every route entry file, so the answer holds when
+   routes have no entry file, as with the router fallback. This graph reads imports more fully
+   than the route graph: imports across several lines, re-exports, imports for side effects,
+   `require()` of a fixed path, and bare imports that a configured alias maps. It is built only
+   when a changed test file is not already reached by a surface or a route closure, so a run whose
+   change holds no test file reads nothing more. A test file that is a UI file is planned like any
+   other UI file: a route closure maps it, a surface rescues it, or it is an `unresolved` gap. So a
+   screen component kept in `src/tests/`, or in a file named `Widget.spec.tsx` that a screen
+   imports, is checked when it changes.
+2. **It is an `unresolved` gap** when a load usabl cannot follow, in any file the wider graph
+   followed, may load it:
+   - an import usabl could not resolve whose last path segment, with or without its extension,
+     equals the file's name without its extension (or its folder name, for an `index` file). For
+     example, `src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
+     `src/tests/Dashboard.tsx` is a gap;
+   - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A relative
+     pattern is resolved from the importer's folder and matched with usabl's own glob matcher.
+     Every literal pattern in the call is read, an array of patterns too, and a negative pattern is
+     left out, which can only name more files. A call whose argument is not a literal, a pattern
+     usabl cannot resolve (rooted at `/`, or through an alias it cannot map), a pattern with syntax
+     the matcher does not read (such as `?` or a character class), and a call whose options set
+     `base`, may load any file;
+   - an `import()` or `require()` whose argument is a template literal or is not a literal. The
+     fixed text before the first `${` is a prefix, resolved from the importer's folder (or through
+     an alias, or under a `baseUrl` for a bare start), and the call may load any file under it. A
+     call with no fixed start, or whose argument is not a string at all, such as `import(name)` or
+     `require('./tests/' + name)`, may load any file. A fixed start that names a package, such as
+     `` import(`@patternfly/react-icons/dist/esm/icons/${name}`) ``, loads no file of the app;
+   - a bare import, such as `tests/Widget`, that a tsconfig `baseUrl` resolves to it. The compiler
+     reads `baseUrl`, but a bundler reads it only with a plugin, and usabl cannot tell which one the
+     build uses, so the import is not followed. The `baseUrl` is read from the nearest tsconfig at or
+     above the router file and from the repository root tsconfig.
+
+   A file that such a load may reach through its own imports counts too: a glob that loads
+   `src/tests/Index.tsx`, which re-exports `./Widget`, may load `src/tests/Widget.tsx`. The import
+   graph records these loads in its `unresolvable` list as the kinds `glob-import`,
+   `dynamic-import`, and `base-url`. The gap reason names the file that loads files in a way usabl
+   cannot follow and what that load does, says this file may be one of them, and says what to do:
+   list the file in the `files` of a surface, or load it with a plain import that usabl can resolve.
+3. **Otherwise it is excluded**, listed in `coverage.excludedFiles` with a reason for its kind (named
+   like a test, or in a test folder) that says what is true: usabl found no import of it in any
+   file outside the tests, and no import usabl could not follow could load it. Such as
+   `src/test/setup.ts`, a helper in `src/__tests__/`, a mock request handler in `src/test/`, or a
+   `Button.test.tsx` that only the tests import. It is not a gap, so a pull request that edits only
+   tests still has nothing to check. A glob pattern that does not match the file, or a template
+   prefix that does not cover it, changes nothing.
+
+Every list is sorted, and nothing depends on the order the file system returns files in. `usabl
+baseline` and `usabl docs --all` pass every UI file through the same planner, so test files are
+placed there by the same rule, and a test file that a load usabl cannot follow may reach is a gap
+there too.
+
+The excluded files are shown on every surface, marked as not blocking, on any run, an idle one
+included. `usabl check` prints them under "excluded files, not checked". The pull request comment
+prints them under "Excluded files, not checked", each name and reason in a code span inside one
+untrusted frame. The Stop hook prints each one as a framed piece labelled "excluded, not checked",
+after every other piece. All three group files that share a reason, print the reason once, and name
+the first 20 files, then count the rest; the JSON output holds the full list. On an idle run that
+excluded files, the pull request comment and the Stop hook add a sentence that says how many files
+usabl left out and that a screen that renders one was not checked, so the run does not read as
+plain nothing to check. Near the comment's size bound, the excluded files are cut before any gap or
+finding, one group at a time, and a line counts the groups cut.
+
+This rule has a limit. A loader usabl does not know, such as a bundler plugin, a virtual module,
+an alias usabl cannot read, a `jsconfig.json` `baseUrl`, an HTML file that loads a script from a
+test folder, or a path string built far from the import, can still load a test file with no trace
+usabl can see. Then the file is excluded. usabl does not try to detect such loaders. If a screen
+renders a test file, list it in the `files` of a surface, which makes it a UI file whatever usabl
+finds.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
 `files` of a surface in `usabl.config.json`, or add the route that renders it to
 `usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
 way comes last, as discovery detail, in three labelled groups: the imports on the screens' paths
-whose last segment names the file, then the file's own imports, then every other import on the
+that may load the file (one whose last segment names it, or a glob, dynamic, or `baseUrl` load that
+covers it, as for test files), then the file's own imports, then every other import on the
 screens' paths, labelled as imports of other files that may still load this one. The first three
 entries are printed, in that order, and then the count of the rest. The reason never calls the
 file changed, because `usabl baseline` passes every UI file through the same planner. A docs source gets the docs form of the fix: add it to a
@@ -1660,7 +1720,13 @@ An import with an extension loads the file of that name when it exists. When it 
 `.js` import is read as the TypeScript file the compiler and the bundler load for it, `.ts` or
 `.tsx`, as is `.jsx` for `.tsx`, `.mjs` for `.mts`, and `.cjs` for `.cts`, at every depth of the
 graph. So `./Child.js` beside `Child.ts` links `Child.ts`. When both `.ts` and `.tsx` exist, the
-import links both and discloses the ambiguity, as above.
+import links both and discloses the ambiguity, as above. A name with a dot but no module
+extension, such as `./Widget.spec` or `./Button.styles`, loads the file of that exact name when it
+exists, and otherwise is probed against the list above like a name with no dot, as the bundler and
+the compiler do. So `./Widget.spec` links `Widget.spec.tsx`.
+
+A template literal with a `${...}` part inside `import()` is not read as a file name. It is a path
+built at run time, recorded as a load usabl cannot follow (see "Test files" above).
 
 An `@/` or `~/` import resolves through two sets of path aliases. usabl finds two folders on
 their own: the nearest folder at or above the router file that holds a `tsconfig.json` or a
