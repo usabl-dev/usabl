@@ -48,7 +48,9 @@ const scan: ScreenScan = {
   reachedSelectorPresent: null,
 };
 
-function depsAt(now: string, waivers: unknown[], tree = 'tree-a'): Deps {
+const UI_EDIT = [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }];
+
+function depsAt(now: string, waivers: unknown[], tree = 'tree-a', changed = UI_EDIT): Deps {
   const files = {
     'usabl.config.json': JSON.stringify(config),
     'usabl.routes.json': JSON.stringify({ routes: [] }),
@@ -61,7 +63,7 @@ function depsAt(now: string, waivers: unknown[], tree = 'tree-a'): Deps {
     headContents: { ...files },
     headBlobs: { 'usabl.config.json': 'blob-config', '.usabl-waivers.json': 'blob-waivers' },
     writeTree: tree,
-    changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+    changed,
     scans: { clusters: scan },
   });
 }
@@ -97,8 +99,8 @@ interface Stop {
   stdout: string;
 }
 
-async function stopAt(fs: MemoryFs, now: string, tree = 'tree-a'): Promise<Stop> {
-  const deps = depsAt(now, [liveWaiver], tree);
+async function stopAt(fs: MemoryFs, now: string, tree = 'tree-a', changed = UI_EDIT): Promise<Stop> {
+  const deps = depsAt(now, [liveWaiver], tree, changed);
   const stderr: string[] = [];
   const stdout: string[] = [];
   let engineRuns = 0;
@@ -212,5 +214,19 @@ describe('the stop hook says why a stored receipt did not verify', () => {
     expect(next.engineRuns).toBe(1);
     expect(next.stdout).toBe('');
     expect(next.stderr).not.toContain(NOT_VERIFIED_NOTICE);
+  });
+
+  it('adds no notice and stays quiet when the run after the receipt is idle', async () => {
+    const fs = new MemoryFs();
+    // Edit a UI file and stop: the run waives the accessibility barrier and mints for tree-a.
+    await stopAt(fs, MINTED, 'tree-a');
+    // Commit the change: the working tree is still tree-a, and git lists no changed file. After
+    // the waiver ends the receipt fails only on its waiver end, the hook runs the engine, and the
+    // run is idle. It checked nothing, so no sentence may say it ran a full check.
+    const next = await stopAt(fs, EXPIRES, 'tree-a', []);
+    expect(next.engineRuns).toBe(1);
+    expect(next.stderr.startsWith('NO VERDICT: IDLE')).toBe(true);
+    expect(next.stderr).not.toContain(NOT_VERIFIED_NOTICE);
+    expect(next.stdout).toBe('');
   });
 });

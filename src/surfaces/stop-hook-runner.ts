@@ -852,7 +852,10 @@ export async function runStopHook(
     };
     const decision = ports.evaluateDecision(result, ctx, config);
     const notices = [
-      ...(receiptNotUsed === null ? [] : [receiptNotUsed]),
+      // The notice says a full check ran, so it is added only when the run reached a verdict. An
+      // idle run checked nothing and a failed run proved nothing; either stop reads as it does
+      // without a stored receipt.
+      ...(receiptNotUsed === null || result.verdict === null ? [] : [receiptNotUsed]),
       ...(receiptNotice === null ? [] : [receiptNotice]),
       ...pinNotices(pinNotice),
     ];

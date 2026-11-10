@@ -3335,7 +3335,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   full check instead of using it. Why: ..." with one plain reason per failed binding, for
   example that a waiver the receipt relied on ended at a given time. The reasons are usabl's
   own sentences, each bounded. A receipt that did not verify because the files changed adds no
-  notice, so a verified stop after an edit stays quiet.
+  notice, so a verified stop after an edit stays quiet. The notice appears only when the full
+  check reached a verdict: an idle run checked nothing, and a run that failed proved nothing, so
+  those stops read as they would with no stored receipt.
 - Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
   hook reads and writes it under the repository root; `usabl check` writes it in the folder it
   runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
