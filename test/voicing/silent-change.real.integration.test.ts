@@ -214,11 +214,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       });
     });
   });
-  // Runs one flow requirement on a fresh page of the fixture and returns every draft it made.
-  async function flow(which: string, steps: Step[], expectedAnnouncement?: string): Promise<Draft[]> {
+  // Runs one flow requirement on a fresh page of the fixture and returns every draft it made. The
+  // optional earlier action runs on the page first, the way an earlier check would.
+  async function flow(which: string, steps: Step[], expectedAnnouncement?: string, earlier?: (page: Page) => Promise<void>): Promise<Draft[]> {
     const page = await driver.open(`${baseUrl}?case=${which}`);
     try {
       await page.gotoReady();
+      await earlier?.(page);
       const [provider] = mapRequirementsToProviders({
         version: 1,
         requirements: [
@@ -373,6 +375,40 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
 
     it('now hears an announcement that lands shortly after the click', async () => {
       expect(await flow('late-announce', click('#save'), 'Saved')).toEqual([]);
+    });
+
+    it('is a gap, not a pass, on an announcement an earlier action caused when its own steps announce nothing', async () => {
+      // An earlier action clicks Save, which writes "Saved" into the shown polite region, and waits
+      // for the page to settle. The flow then only presses Tab, which announces nothing.
+      const earlier = async (page: Page): Promise<void> => {
+        await page.click('#save');
+        await page.settleAfterAction();
+      };
+      const drafts = await flow('polite-save', [{ do: 'tab' }], 'Saved', earlier);
+      // The text was heard only before the flow's first step, so the flow is a gap, not a pass.
+      expect(own(drafts)).toEqual(['unverified']);
+      expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
+    });
+
+    it('does not count an announcement an earlier action started that lands 300 ms later', async () => {
+      // The earlier action clicks Save and does not wait, so "Saved" is still in flight when the
+      // flow starts. The flow waits for the page to go quiet before its first step, so the text
+      // lands in the drain the flow does not count. Its own step clicks the heading, which announces
+      // nothing.
+      const earlier = async (page: Page): Promise<void> => {
+        await page.click('#save');
+      };
+      const drafts = await flow('late-announce', click('h1'), 'Saved', earlier);
+      expect(own(drafts)).toEqual(['unverified']);
+      expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
+    });
+
+    it('still passes when a step of the flow announces, after an earlier action announced the same text', async () => {
+      const earlier = async (page: Page): Promise<void> => {
+        await page.click('#save');
+        await page.settleAfterAction();
+      };
+      expect(own(await flow('polite-save', click('#save'), 'Saved', earlier))).toEqual([]);
     });
   });
 });
