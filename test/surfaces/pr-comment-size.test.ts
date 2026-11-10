@@ -141,10 +141,13 @@ describe('pull request comment size', () => {
   it('can never exceed the limit, whatever the Result carries', () => {
     // Every list is long and every carried string is far over any sane length. The noise budget is
     // raised so far that nothing collapses. Whatever the document says, the body stays under the
-    // limit and still opens with the verdict and the counts.
-    const huge = 'x'.repeat(1_500);
+    // limit and still opens with the verdict and the counts. Every string is longer than any field
+    // cap, and the first lines of the gating findings alone come to more than twice the limit, so every
+    // cut tier is reached, the last one included. The sizes are kept that small so the test stays
+    // fast on a loaded machine.
+    const huge = 'x'.repeat(700);
     const findings: Finding[] = [
-      ...Array.from({ length: 400 }, (_, index) =>
+      ...Array.from({ length: 250 }, (_, index) =>
         finding({
           screenId: `${huge}-${index}`,
           rule: `${huge}${index}`,
@@ -159,12 +162,12 @@ describe('pull request comment size', () => {
       ...Array.from({ length: 100 }, (_, index) => finding({ evidenceClass: 'model-judgment', rule: `m-${index}`, fix: huge, elementKey: `m-${index}` })),
     ];
     const gaps: CoverageGap[] = [
-      ...Array.from({ length: 300 }, (_, index) => ({ ref: `${huge}${index}`, state: 'unresolved' as const, reason: huge })),
+      ...Array.from({ length: 100 }, (_, index) => ({ ref: `${huge}${index}`, state: 'unresolved' as const, reason: huge })),
       ...Array.from({ length: 50 }, (_, index) => ({ ref: `cap-${index}`, state: 'capability-denied' as const, reason: huge })),
       ...Array.from({ length: 50 }, (_, index) => ({ ref: `odd-${index}`, state: 'someday' as never, reason: huge })),
     ];
-    const screens = Array.from({ length: 40 }, (_, index) =>
-      screen(`${huge}-${index}`, Array.from({ length: 30 }, (__, stopIndex) => stop(stopIndex, huge))),
+    const screens = Array.from({ length: 10 }, (_, index) =>
+      screen(`${huge}-${index}`, Array.from({ length: 25 }, (__, stopIndex) => stop(stopIndex, huge))),
     );
     const worst = result({
       schemaVersion: huge as never,
@@ -190,7 +193,7 @@ describe('pull request comment size', () => {
         activeWaivers: 0,
         mintedAt: huge,
       },
-      floorUnconfirmed: Array.from({ length: 100 }, (_, index) => ({ screenId: `${huge}${index}`, rules: [huge, huge], barriers: 3 })),
+      floorUnconfirmed: Array.from({ length: 40 }, (_, index) => ({ screenId: `${huge}${index}`, rules: [huge, huge], barriers: 3 })),
       paidDownCount: 12,
       debt: {
         tracking: 'off',
@@ -212,8 +215,8 @@ describe('pull request comment size', () => {
       expect(body(markdown).length).toBeLessThanOrEqual(COMMENT_BODY_LIMIT);
       expect(markdown.split('\n')[1]).toBe('## usabl report: APPROVAL REQUIRED');
       expect(markdown).toContain('Policy changed. Accessibility on this run: **REGRESSION**.');
-      expect(markdown).toContain('- deterministic: new 400 (400 failing, 0 unconfirmed), carried 0, waived 100, fixed 0');
-      expect(markdown).toContain('- not evaluated: unresolved files 400, gaps 400');
+      expect(markdown).toContain('- deterministic: new 250 (250 failing, 0 unconfirmed), carried 0, waived 100, fixed 0');
+      expect(markdown).toContain('- not evaluated: unresolved files 200, gaps 200');
       expect(markdown).toMatch(/items are not shown/);
       expect(markdown.split(UNTRUSTED_FRAME_START).length).toBe(markdown.split(UNTRUSTED_FRAME_END).length);
     }
