@@ -133,18 +133,34 @@ async function runGit(
   return stdout;
 }
 
+// What to do when a change listing is too long: it most often holds a large folder of new files.
+const CHANGED_FILES_ADVICE =
+  'This most often means a large folder of new files that .gitignore does not cover. Add that folder to ' +
+  '.gitignore, or commit it, then run usabl again.';
+
+// What to do when the guarded path listing is too long. It lists committed files, so .gitignore
+// does not shorten it. A guarded glob that starts with a wildcard, such as **/x.json, lists every file.
+const GUARDED_LISTING_ADVICE =
+  'A guarded glob lists too many files: a guardedPaths entry that starts with a wildcard, such as ' +
+  '**/x.json, lists every file in the repository. Start the entry with a folder name, such as ' +
+  'policy/**/x.json, then run usabl again.';
+
 // A listing longer than the buffer makes execFile throw with a terse message. usabl then cannot
 // know which files changed, so the run must stop with an error a person can act on. It never
 // reads a cut-off list as the whole list.
-async function runListing(cwd: string, args: string[], maxBuffer: number): Promise<string> {
+async function runListing(
+  cwd: string,
+  args: string[],
+  maxBuffer: number,
+  advice: string = CHANGED_FILES_ADVICE,
+): Promise<string> {
   try {
     return await runGit(cwd, args, undefined, maxBuffer);
   } catch (err) {
     if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
       throw new Error(
         `git ${args[0] ?? ''} printed more than usabl reads, so usabl could not list the files it needs ` +
-          'and checked nothing. This most often means a large folder of new files that .gitignore does not ' +
-          'cover. Add that folder to .gitignore, or commit it, then run usabl again.',
+          `and checked nothing. ${advice}`,
       );
     }
     throw err;
@@ -204,7 +220,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       if (!unique.includes('')) {
         args.push('--', ...unique);
       }
-      return parseLsFiles(await runListing(cwd, args, maxBuffer));
+      return parseLsFiles(await runListing(cwd, args, maxBuffer, GUARDED_LISTING_ADVICE));
     },
     async writeTree() {
       const tempDir = await mkdtemp(join(tmpdir(), 'usabl-index-'));

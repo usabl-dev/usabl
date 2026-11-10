@@ -1131,8 +1131,14 @@ function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): bool
 
 // The paths a change under each guarded entry can touch: the files present and, for a literal
 // entry, the entry itself or a new file in its folder. The code owner limits are read for these.
-async function guardedPathSamples(deps: DoctorDeps, guardedSet: string[]): Promise<string[]> {
+// A glob entry with no file present has no path to read them for, so it is returned on its own:
+// usabl cannot name the first file a pull request adds there, and cannot check its owner yet.
+async function guardedPathSamples(
+  deps: DoctorDeps,
+  guardedSet: string[],
+): Promise<{ samples: string[]; globsWithNoFile: string[] }> {
   const samples: string[] = [];
+  const globsWithNoFile: string[] = [];
   for (const entry of guardedSet) {
     const prefix = normalizePolicyPath(entry);
     const present = await deps.fs.glob([prefix, `${prefix}/**`]);
@@ -1140,9 +1146,11 @@ async function guardedPathSamples(deps: DoctorDeps, guardedSet: string[]): Promi
     if (!/[*{]/.test(prefix)) {
       const folder = entry.endsWith('/') || present.some((path) => path.startsWith(`${prefix}/`));
       samples.push(folder ? `${prefix}/new-file` : prefix);
+    } else if (present.length === 0) {
+      globsWithNoFile.push(entry);
     }
   }
-  return samples;
+  return { samples, globsWithNoFile };
 }
 
 // Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
@@ -1181,8 +1189,13 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
   const unverifiable = [...new Set(unreconcilable)];
   // The limits of `usabl enforce policy`, in its own words, so a scope doctor reads as wired is
   // one the policy check can pass.
-  const ownerLimits = readCodeownersLimits(codeownersRaw, await guardedPathSamples(deps, guardedSet));
+  const { samples, globsWithNoFile } = await guardedPathSamples(deps, guardedSet);
+  const ownerLimits = readCodeownersLimits(codeownersRaw, samples);
   const limits = ownerLimits.ok ? ownerLimits.reasons : [ownerLimits.message];
+  const notCheckableYet =
+    globsWithNoFile.length === 0
+      ? null
+      : `These guardedPaths globs match no file yet: ${globsWithNoFile.join(', ')}. usabl cannot check their code owners, so this is not checkable yet. The first file added under each needs a CODEOWNERS rule that names a @user login, or usabl enforce policy refuses the pull request that adds it.`;
   if (uncovered.length > 0 || unverifiable.length > 0 || limits.length > 0) {
     const parts: string[] = [];
     if (uncovered.length > 0) {
@@ -1200,12 +1213,18 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
         `usabl enforce policy cannot pass a change to a guarded path here: ${limits.join('; ')}. Make the last rule that matches each guarded path name @user logins.`,
       );
     }
+    if (notCheckableYet !== null) {
+      parts.push(notCheckableYet);
+    }
     return {
       id: 'policy-scope',
       label: POLICY_SCOPE_LABEL,
       state: 'drifted',
       nextStep: parts.join(' '),
     };
+  }
+  if (notCheckableYet !== null) {
+    return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'unknown', nextStep: notCheckableYet };
   }
   return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'wired', nextStep: '' };
 }

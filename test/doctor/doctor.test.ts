@@ -452,6 +452,29 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
       expect(report.nextStep).toContain('the last CODEOWNERS rule that matches src/gate/index.ts names no owner');
     });
 
+    it('reports a glob entry with no file yet as not checkable, never as wired', async () => {
+      // CODEOWNERS covers src/gate/ but not policy/. The first file a pull request adds under
+      // policy/*.json is guarded, and the policy check refuses it, so doctor must not read wired.
+      const report = byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({
+              'usabl.config.json': configWith(['src/gate/', 'policy/*.json']),
+              'src/gate/index.ts': 'gate',
+              '.github/CODEOWNERS': `/src/gate/ @o\n${LEDGERS}`,
+            }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+          }),
+        ),
+        'policy-scope',
+      );
+      expect(report.state).toBe('unknown');
+      expect(report.nextStep).toContain('policy/*.json');
+      expect(report.nextStep).toContain('not checkable yet');
+      expect(report.nextStep).toContain('needs a CODEOWNERS rule');
+    });
+
     it('reports a guarded path whose last match is unknown, in the policy check words', async () => {
       const report = await scope(`${LEDGERS}/src/gate/ @o\ngate @p\n`);
       expect(report.state).toBe('drifted');

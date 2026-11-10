@@ -238,6 +238,21 @@ describe('makeGitReader with new untracked files', { timeout: 30_000 }, () => {
     await runGit(repoPath, ['commit', '-m', 'new files']);
     await expect(git.diffNameOnly(seed)).rejects.toThrow(/git diff printed more than usabl reads/);
   });
+
+  // The guarded path listing is long when a guarded glob starts with a wildcard, which lists the
+  // whole tree. .gitignore does not shorten a listing of committed files, so the advice names the
+  // entry's form instead.
+  it('says to start a guarded glob with a folder name when the guarded listing is too long', async () => {
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'new files']);
+    const git = makeGitReader({ cwd: repoPath, maxBuffer: 16 });
+    const error = await git.lsFilesUnder('HEAD', ['']).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('guarded glob lists too many files');
+    expect(message).toMatch(/start the entry with a folder name/i);
+    expect(message).not.toContain('.gitignore');
+  });
 });
 
 describe('makeGitReader in a repository with no commits', () => {
