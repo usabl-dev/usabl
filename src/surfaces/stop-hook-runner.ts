@@ -289,7 +289,7 @@ function driftMessage(drift: string[], continuation: boolean): string {
     `NOT verified - guarded policy drift during this session: ${drift.length} guarded file(s) changed ` +
     'since the session pins were recorded, named under "drifted files" in the untrusted text below.';
   const next = continuation
-    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this.'
+    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to make a later stop pass.'
     : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
   return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
 }
@@ -302,7 +302,7 @@ type ConfigProblem = 'differs' | 'missing' | 'unreadable' | 'unparseable';
 
 const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
   differs:
-    'usabl.config.json in the working tree differs from the last commit, so usabl did not read it and checked nothing on this stop.',
+    'usabl.config.json in the working tree differs from the last commit, so usabl did not parse it and checked nothing on this stop.',
   missing:
     'usabl.config.json is in the last commit but missing from the working tree, so usabl checked nothing on this stop.',
   unreadable:
@@ -312,13 +312,16 @@ const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
 };
 
 // A config that does not parse is not cleared by a revert when the last commit holds the same
-// bytes, so it has its own next step and its own way out.
-const UNPARSEABLE_NEXT =
-  'Next: tell the user that usabl.config.json does not parse and needs a fix. Do not edit the file to clear this block.';
+// bytes, so it has its own next step and its own way out. usabl init refuses to overwrite an
+// existing config, so the way out names --force and what it overwrites.
+const UNPARSEABLE_NEXT = 'Next: tell the user that usabl.config.json does not parse and needs a fix.';
 const UNPARSEABLE_CLEARS =
-  'This clears when usabl.config.json parses and matches the last commit. A committed config is fixed on a pull request that a code owner reviews. usabl init drafts a valid one.';
-const CHANGED_NEXT =
-  'Next: tell the user that usabl.config.json changed and needs approval on the pull request. Do not edit the file to clear this block.';
+  'This clears when usabl.config.json parses and matches the last commit. A committed config is fixed on a pull request that a code owner reviews. ' +
+  'usabl init --force drafts a valid one, and it overwrites usabl.config.json and usabl.routes.json.';
+const CHANGED_NEXT = 'Next: tell the user that usabl.config.json changed and needs approval on the pull request.';
+// A block and a continuation that went through need different words: only a block can be cleared.
+const DO_NOT_EDIT_BLOCK = 'Do not edit the file to clear this block.';
+const DO_NOT_EDIT_CONTINUATION = 'Do not edit the file to make a later stop pass.';
 
 /**
  * The message for a config that blocks before the run. It says what happened, that nothing was
@@ -330,10 +333,11 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
   }
+  const doNotEdit = continuation ? DO_NOT_EDIT_CONTINUATION : DO_NOT_EDIT_BLOCK;
   if (problem === 'unparseable') {
-    lines.push(UNPARSEABLE_NEXT, UNPARSEABLE_CLEARS);
+    lines.push(`${UNPARSEABLE_NEXT} ${doNotEdit}`, UNPARSEABLE_CLEARS);
   } else {
-    lines.push(CHANGED_NEXT, APPROVAL_REQUIRED_HOW_IT_CLEARS);
+    lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
   lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
   return framedMessage(lines, error === null ? [] : [`error: ${error}`]);

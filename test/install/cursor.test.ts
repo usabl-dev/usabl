@@ -55,6 +55,12 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('CURSOR assistant contents', () => {
+  it('the current rule says accessibility barriers', () => {
+    const rule = buildCursorRuleContents(DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(rule).toContain('- Treat usabl findings as the source of truth for machine-checkable accessibility barriers.\n');
+    expect(rule).not.toContain('machine-checkable barriers');
+  });
+
   it('declares the /usabl-check command and pins the advisory self-check command', () => {
     expect(CURSOR_COMMAND_PATH).toBe('.cursor/commands/usabl-check.md');
     expect(CURSOR_COMMAND_CONTENTS).toContain('npm exec --no -- usabl check --self-check');

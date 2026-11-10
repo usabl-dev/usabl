@@ -755,7 +755,7 @@ describe('evaluateStopDecision', () => {
       }).split('\n');
 
       expect(lines[1]).toBe(
-        'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+        'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
       );
       expect(lines[1]).not.toContain('fix each barrier');
       // The step tells the model to raise the files, so the files are named here too.
@@ -779,7 +779,7 @@ describe('evaluateStopDecision', () => {
       }).split('\n');
 
       expect(lines[1]).toBe(
-        'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+        'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
       );
       expect(lines[2]).toBe('Guarded file changed: 1, named under "guarded files" in the untrusted text below');
       expect(lines).toContain('guarded files: .usabl-waivers.json');
@@ -796,7 +796,7 @@ describe('evaluateStopDecision', () => {
       }).split('\n');
 
       expect(lines[1]).toBe(
-        'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+        'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
       );
       expect(lines[2]).toBe('Guarded file changed: 1, named under "guarded files" in the untrusted text below');
       expect(lines).toContain('guarded files: .usabl-waivers.json');

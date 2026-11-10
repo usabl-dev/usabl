@@ -139,7 +139,7 @@ When changing user interface code:
 
 - After a meaningful UI change, run \`/usabl-check\` or \`${USABL_RUN} check --self-check\` from the repository root.
 - ${USABL_MISSING_GUIDANCE}
-- Treat usabl findings as the source of truth for machine-checkable barriers.
+- Treat usabl findings as the source of truth for machine-checkable accessibility barriers.
 - Explain verdicts honestly: \`verified\`, \`regression\`, \`not_covered\`, or \`approval_required\`.
 - Do not call work verified from the self-check alone. The gate (\`usabl check\` / CI) decides proof.
 - Prefer fixing source over query-parameter previews or disabling checks.

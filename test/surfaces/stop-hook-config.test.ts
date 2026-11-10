@@ -127,6 +127,8 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     expect(reason).toContain('approval required');
     expect(reason).toContain('usabl.config.json');
     expect(reason).toContain('differs from the last commit');
+    expect(reason).toContain('so usabl did not parse it');
+    expect(reason).toContain('Do not edit the file to clear this block.');
     expect(reason).toContain('Next:');
     expect(reason).toContain('usabl bypass');
     // The working copy was never parsed and nothing ran.
@@ -140,6 +142,9 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     expect(second.stderr()).toContain('NOT verified');
     expect(second.stderr()).toContain('approval required');
     expect(second.stderr()).toContain('continuation already active');
+    // The stop went through, so nothing here is a block to clear.
+    expect(second.stderr()).not.toContain('to clear this block');
+    expect(second.stderr()).toContain('Do not edit the file to make a later stop pass.');
     expect(second.engineRuns()).toBe(0);
   });
 
@@ -187,6 +192,8 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     const reason = blockReason(h.stdout());
     expect(reason).toContain('approval required');
     expect(reason).toContain('does not parse');
+    // usabl init refuses to overwrite a config without --force, so the step names the flag.
+    expect(reason).toContain('usabl init --force');
     expect(h.engineRuns()).toBe(0);
     expect(h.stderr()).not.toContain('stop hook error');
 
@@ -194,6 +201,8 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     await runStopHookFromStdin(stopInput(true), again.ports);
     expect(again.stdout()).not.toContain('"decision":"block"');
     expect(again.stderr()).toContain('continuation already active');
+    expect(again.stderr()).not.toContain('to clear this block');
+    expect(again.stderr()).toContain('Do not edit the file to make a later stop pass.');
   });
 
   it('goes on as before when the working config matches the last commit', async () => {
@@ -452,6 +461,8 @@ describe('Stop hook reads the config at the repository root, through the real po
     expect(third.stdout()).not.toContain('"decision":"block"');
     expect(third.stderr()).toContain('guarded policy drift during this session');
     expect(third.stderr()).toContain('continuation already active');
+    expect(third.stderr()).not.toContain('to clear this');
+    expect(third.stderr()).toContain('Do not edit those files to make a later stop pass.');
     // The pins are kept, so the next stop that is not a continuation blocks again.
     expect(pins.files.size).toBe(1);
   });

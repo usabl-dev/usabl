@@ -89,7 +89,7 @@ decides a verdict.
 
 Run \`npm exec --no -- usabl check --self-check\` from the repository root.
 
-If npm says it could not determine the executable to run, usabl is not installed in this project. Tell the user. Do not install or download a package named usabl to work around it.
+If npm says it could not determine the executable to run, or that npx canceled due to missing packages, usabl is not installed in this project. Tell the user. Do not install or download a package named usabl to work around it.
 
 Report:
 

@@ -167,6 +167,10 @@ describe('every generated command runs usabl with npm exec --no', () => {
     for (const text of [CLAUDE_SKILL_CONTENTS, CLAUDE_FIX_SKILL_CONTENTS, CURSOR_COMMAND_CONTENTS, buildCursorRuleContents(['src/**'])]) {
       expect(text).toContain('usabl is not installed in this project');
       expect(text).toContain('Do not install or download a package named usabl');
+      // npm prints one of two messages for a missing package, depending on the version on the
+      // registry, so the guidance names both.
+      expect(text).toContain('could not determine the executable to run');
+      expect(text).toContain('npx canceled due to missing packages');
     }
   });
 

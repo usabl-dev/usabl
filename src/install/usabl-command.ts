@@ -25,10 +25,13 @@ export const USABL_NOT_INSTALLED_LINE =
 
 /**
  * What a skill or a Cursor file tells the assistant when the command fails because usabl is not
- * installed. The assistant must not try to fix that by fetching a package of the same name.
+ * installed. The assistant must not try to fix that by fetching a package of the same name. npm
+ * prints one of two messages for that case, depending on what the registry holds under the name,
+ * so the guidance names both.
  */
 export const USABL_MISSING_GUIDANCE =
-  'If npm says it could not determine the executable to run, usabl is not installed in this project. ' +
+  'If npm says it could not determine the executable to run, or that npx canceled due to missing packages, ' +
+  'usabl is not installed in this project. ' +
   'Tell the user. Do not install or download a package named usabl to work around it.';
 
 /** Doctor's words for a generated file that still runs the old form. */

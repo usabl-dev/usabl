@@ -86,6 +86,7 @@ const UNRECOGNIZED_CONTINUATION_STEP =
  * The work is the same work, so the same selector chooses it; only the framing differs. Nothing
  * is listed in that message beyond the gate's summary, so no step says "below", and each one
  * ends by naming the check that has to pass before the model may call the change accessible.
+ * The stop went through, so no step speaks of clearing a block.
  * This path used to tell every blocking verdict to fix the barriers, which is wrong when
  * guarded files are the only thing standing and wrong again when the work is resolving gaps.
  */
@@ -95,11 +96,11 @@ const CONTINUATION_STEPS: NextSteps = {
   notCovered:
     'Next: resolve every reason usabl reported under Not evaluated, then run usabl check before you tell the user this change is accessible.',
   approvalOnly:
-    'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+    'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithRegression:
-    'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+    'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithGaps:
-    'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+    'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
 };
 
 /**
