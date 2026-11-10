@@ -179,6 +179,24 @@
 
 ### Fixed
 
+- A flow requirement that passed only on speech from before its first step now fails. The
+  capture runs for the life of the page, so the drain a flow took before its first step held
+  every announcement since the last drain, such as one an earlier check caused, and the flow
+  counted it. The flow is now judged only on what was announced after its first step ran. That
+  drain still gives the silent change rule its background speech, and its undecidable reason no
+  longer makes the flow a gap. A flow whose own steps announce the expected text passes as
+  before.
+
+- A flow requirement with a step the driver cannot run is now not covered. A `click` with no
+  selector, a `press` with no key, and a step of an unknown kind used to run as nothing, so the
+  flow judged a page its steps never touched and could pass. The driver now checks every step
+  before it runs any. A step it cannot run makes the flow a `not-covered` gap that names the
+  step, counted from 0, and what it is missing. The requirement loader still accepts such a flow
+  step.
+
+- The silent change rule's `read failed` gap now keeps only the first line of the error, as its
+  `step threw` gap does. A browser error's later lines can quote the element's markup.
+
 - A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
   surface no longer stops the run. The search for the app's `package.json` read a file such as
   `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
