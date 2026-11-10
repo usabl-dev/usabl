@@ -2338,11 +2338,11 @@ and a name written only in other scripts slugs to nothing and matches any other 
 
 The limit to know: the readiness signal confirms every absent identity on its screen. When
 `reachedWhen` matches only the app shell, such as a header or navigation that mounts while the
-content fails to mount, the floored barriers in the missing content are marked `fixed`, and the
-run can be verified. The barrier is not lost. Once its floor entry is pruned, or the debt
+content fails to mount, the floored accessibility barriers in the missing content are marked `fixed`, and the
+run can be verified. The accessibility barrier is not lost. Once its floor entry is pruned, or the debt
 history confirms the fix and frees its slot, nothing carries it any more, so when the content
 renders again it comes back as a new finding and blocks a later change, which may be one that
-did not touch it. It never reads as a pass of that barrier for good. Point
+did not touch it. It never reads as a pass of that accessibility barrier for good. Point
 `reachedWhen` at an element of the content itself, not the shell, so a screen whose content did
 not mount never holds its signal.
 
@@ -2351,7 +2351,7 @@ screen the run did not scan already gets, so it is not paid down, it is not coun
 receipt, it is not reported as headroom, and the floor keeps its full count as debt. The verdict
 does not change and no gap is raised. Instead the run shows a notice for each such screen. It names
 the screen, the rules, and the number of barriers, and gives the fix, for example: "3 recorded
-barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
+accessibility barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
 claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
 --unconfirmed." It never names an element key, because a key carries page text. The summary line
 gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
@@ -2931,7 +2931,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   file in the work tree.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
-  "No new barrier blocks this change. It can proceed." and the stop hook allows with
+  "No new accessibility barrier blocks this change. It can proceed." and the stop hook allows with
   "VERIFIED (exit 0): the gate verified this change. You may stop.", followed by the
   receipt's `sourceTree` inside the untrusted frame when there is a receipt, with advisory
   findings shown adjacent when present. Not "no barriers": a verified run routinely
@@ -3056,7 +3056,7 @@ receipt (`_No receipt: run was not verified._` when none), then `### Conformance
 then `### Accessibility debt` when the floor holds debt or the change fixed some, for example
 "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1 is
 intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
-then the finding sections `### New barriers`, `### Known (recorded debt)`, and
+then the finding sections `### New accessibility barriers`, `### Known (recorded debt)`, and
 `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps`, then
 `### Disclosed, does not block` when any screen carries a provider note, and
@@ -3076,7 +3076,7 @@ Every carried value is cut to a fixed length, marked `[shortened, N characters o
 Coverage gaps are named up to 20 per state, and one line counts the rest of each state, as the
 transcript names up to 20 stops per screen. When the body is still over the bound, whole items
 are cut, lowest priority first: announcements, disclosed notes, advisory findings, recorded
-debt, notices for floored barriers not seen, gaps after the first of each state, the framed
+debt, notices for floored accessibility barriers not seen, gaps after the first of each state, the framed
 detail under a gating finding, the first gap of each state, and last a gating finding's first
 line. The marker, the verdict line, the approval line, the judge line, the receipt, the
 conformance counts, and the debt lines are never cut. Each section that lost items says how

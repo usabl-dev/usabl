@@ -417,7 +417,7 @@ function carriedWord(value: unknown, cap: TextCap): string {
 //   2. disclosed notes: what a check did not read, which never changes the verdict;
 //   3. advisory findings: preview and model judgment never gate;
 //   4. recorded debt: carried and waived findings the gate already accepted;
-//   5. notices for floored barriers this run did not see;
+//   5. notices for floored accessibility barriers this run did not see;
 //   6. coverage gaps after the first one of each state;
 //   7. the framed detail under a gating finding, which keeps its first line;
 //   8. the first coverage gap of each state, so every state stays named while anything else
@@ -727,7 +727,7 @@ function renderFloorUnconfirmed(result: Result): CommentSection | null {
     return null;
   }
   return section(
-    ['### Recorded barriers not seen', UNTRUSTED_FRAME_START],
+    ['### Recorded accessibility barriers not seen', UNTRUSTED_FRAME_START],
     screens.map((entry) =>
       item([framedLine({ label: 'notice', value: unconfirmedNotice(entry), cap: 'notice' })], [], 'floor-notice'),
     ),
@@ -959,7 +959,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     collapsedGating !== null
       ? [collapsedGating, blank, renderFindingGroup('Advisory (non-gating)', advisory, 'advisory')]
       : [
-          renderFindingGroup('New barriers', deterministicNew, 'recorded'),
+          renderFindingGroup('New accessibility barriers', deterministicNew, 'recorded'),
           blank,
           renderFindingGroup('Known (recorded debt)', deterministicRecorded, 'recorded', true),
           blank,

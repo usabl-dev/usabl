@@ -94,18 +94,18 @@ export const overlayClientSource = `(() => {
   // it refers to them. One name each, written once, so the sentence in the header and the heading
   // in the list can never say different things about the same finding. The terminal summary prints
   // the same two names in lower case.
-  const BLOCKING_HEADING = 'Barriers that block this run';
+  const BLOCKING_HEADING = 'Accessibility barriers that block this run';
   const RECORDED_HEADING = 'Recorded, not blocking';
   const HEADROOM_HEADING = 'Floor ahead of this run';
   // Floored barriers the run did not see on a screen it cannot show rendered. The sentences come in
   // the payload, built from the text the terminal prints, so this file keeps no copy of them.
-  const UNCONFIRMED_HEADING = 'Recorded barriers not seen';
+  const UNCONFIRMED_HEADING = 'Recorded accessibility barriers not seen';
   // The same three lines the terminal prints, word for word, so the two surfaces cannot drift.
   // They state what was counted and offer both readings of it: usabl cannot tell a paid-down
   // barrier from a page rendering fewer rows today, so it names the command for one case and says
   // the other needs nothing.
   const HEADROOM_NOTE = [
-    'This run observed fewer deterministic barriers at these identities than the floor records.',
+    'This run observed fewer deterministic accessibility barriers at these identities than the floor records.',
     'If they were fixed, run usabl floor prune to re-arm the floor.',
     'If the page shows less content today, nothing needs to change.',
   ];
@@ -766,8 +766,8 @@ export const overlayClientSource = `(() => {
       // barriers would send the developer to fix accepted debt, which is the thing the evidence
       // floor exists to stop.
       const lead = split.elsewhereBlockingTotal > 0
-        ? 'No barriers on this screen. Other screens have barriers and the gate is blocked.'
-        : 'No barriers on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
+        ? 'No accessibility barriers on this screen. Other screens have accessibility barriers and the gate is blocked.'
+        : 'No accessibility barriers on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
       return [lead, recordedNote(split)];
     }
     return split.elsewhereTotal > 0
@@ -823,7 +823,7 @@ export const overlayClientSource = `(() => {
           key: verdict.key,
           symbol: '!',
           count: null,
-          label: 'usabl: ' + word + ' elsewhere. No barriers on this screen, '
+          label: 'usabl: ' + word + ' elsewhere. No accessibility barriers on this screen, '
             + countLabel(split.hereRecorded.length, 'recorded finding') + '. Open inspector.',
         };
       }
@@ -3013,7 +3013,7 @@ export const overlayClientSource = `(() => {
         'p',
         'notice',
         count + ' floor ' + (count === 1 ? 'entry' : 'entries')
-          + ' recorded a barrier this run did not observe on a cleanly scanned screen.'
+          + ' recorded an accessibility barrier this run did not observe on a cleanly scanned screen.'
           + ' If they were fixed, run usabl floor prune to re-arm the floor.',
       ),
     );
