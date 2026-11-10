@@ -179,23 +179,46 @@
 
 ### Fixed
 
-- A flow requirement that passed only on speech from before its first step now fails. The
-  capture runs for the life of the page, so the drain a flow took before its first step held
-  every announcement since the last drain, such as one an earlier check caused, and the flow
-  counted it. The flow is now judged only on what was announced after its first step ran. That
-  drain still gives the silent change rule its background speech, and its undecidable reason no
-  longer makes the flow a gap. A flow whose own steps announce the expected text passes as
+- A flow requirement that passed only on speech recorded before its first step no longer
+  passes. The capture runs for the life of the page, so the drain a flow took before its first
+  step held every announcement since the last drain, such as one an earlier check caused, and
+  the flow counted it. The flow is now judged only on what was announced after its first step
+  ran. When the expected text was in that earlier speech and the flow's own steps did not
+  announce it, the flow is an `unverified` gap, because an earlier check may have changed the
+  page. When that speech did not hold the text either, the flow fails. Gate effect: such a flow
+  is a gap or a fail where it passed. A flow whose own steps announce the expected text passes as
   before.
 
-- A flow requirement with a step the driver cannot run is now not covered. A `click` with no
-  selector, a `press` with no key, and a step of an unknown kind used to run as nothing, so the
-  flow judged a page its steps never touched and could pass. The driver now checks every step
-  before it runs any. A step it cannot run makes the flow a `not-covered` gap that names the
-  step, counted from 0, and what it is missing. The requirement loader still accepts such a flow
-  step.
+- A flow requirement that passed only on focus that was already there is now a gap. The flow
+  passed when the control that had focus after its last step was named with the expected text,
+  even when an earlier check had put focus there and the flow's steps did not move it. The flow
+  now records the focused node and its name before its first step, and the focused name counts
+  only when the steps changed one of them. Gate effect: such a flow is an `unverified` gap where it
+  passed.
 
-- The silent change rule's `read failed` gap now keeps only the first line of the error, as its
-  `step threw` gap does. A browser error's later lines can quote the element's markup.
+- A flow requirement that was not covered only because the drain before its first step could not
+  say what was heard is now judged on its own steps. That drain is no longer read for the verdict,
+  so its reason no longer decides it. Gate effect: such a flow can now pass or fail where it was a
+  gap.
+
+- A flow requirement that expects an announcement now waits for the page to go quiet before its
+  first step, with the same wait a `click` step uses, so speech an earlier check left in flight is
+  not counted as the flow's own. Speech that lands later than that wait is still read. Gate
+  effect: on a page that does not go quiet within the wait, such a flow is `not-covered` where it
+  was judged.
+
+- A flow requirement with an incomplete step or a step field its kind does not use is now not
+  covered. A `click` with no selector, a `press` with no key, and a step of an unknown kind used to
+  run as nothing. A field the kind does not use, such as a selector on `activate`, `times` on
+  `tab`, `shift` on `press`, or `expectedAnnouncement` inside a step, was ignored, so the step ran
+  as something other than what was written. The driver now checks every step before it runs any,
+  and the gap names each such step, counted from 0, and what it is missing or what field it should
+  not have. The requirement loader still accepts such a flow step. Gate effect: such a flow is
+  `not-covered` where it was judged.
+
+- The not-covered gap for a flow or contract provider whose step threw now keeps only the first
+  line of the error, and so does the silent change rule's `read failed` gap, as its `step threw`
+  gap does. A browser error's later lines can quote the element's markup. No gate effect.
 
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
