@@ -2416,8 +2416,8 @@ The limit to know: the readiness signal confirms every absent identity on its sc
 content fails to mount, the floored accessibility barriers in the missing content are marked `fixed`, and the
 run can be verified. The accessibility barrier is not lost. Once its floor entry is pruned, or the debt
 history confirms the fix and frees its slot, nothing carries it any more, so when the content
-renders again it comes back as a new finding and blocks a later change, which may be one that
-did not touch it. It never reads as a pass of that accessibility barrier for good. Point
+renders again it comes back as a new finding. It blocks a later change only when that change's
+coverage reaches the screen, and that change may be one that did not touch the content. It never reads as a pass of that accessibility barrier for good. Point
 `reachedWhen` at an element of the content itself, not the shell, so a screen whose content did
 not mount never holds its signal.
 
@@ -4026,6 +4026,16 @@ saved earlier and read again is checked with `markStaleDocArtifacts(artifacts, c
 from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence-binding.ts`.
 No usabl command reads a saved report back; a static HTML page saved to disk cannot mark
 itself, so regenerate a page before publishing it.
+
+The tree is the working tree as git would commit it with everything added: usabl builds a
+temporary index from `git read-tree HEAD`, runs `git add -A` into it, and runs `git write-tree`
+(`writeTree` in `src/deps/git.ts`, the same function the receipt uses). So staged, unstaged, and
+untracked edits all change it. A caller of `markStaleDocArtifacts` must compute `currentTree`
+the same way, with `GIT_INDEX_FILE` set to a temporary file for all three commands. A plain
+`git write-tree` reads the real index, and `HEAD^{tree}` leaves out every edit not committed, so
+with a dirty work tree either gives another tree and every report reads as stale. That fails
+safe, but no report ever reads as current. `git add -A` skips files git ignores, so an edit to an ignored file, such
+as a generated asset the app serves, does not change the tree and does not mark a report stale.
 
 ### How to run it
 

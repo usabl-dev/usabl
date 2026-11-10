@@ -136,6 +136,17 @@ describe('a report made from another tree is marked stale wherever it is listed 
     expect(html).toMatch(/\d+ out of date/);
   });
 
+  it('says an out-of-date card may not match the current code, which holds for every stale reason', () => {
+    // A report that records no tree was not made from another version of the code: usabl cannot
+    // tell what it was made from. The footer and the overview say only what is true for every reason.
+    const noTree = markStaleDocArtifacts([{ kind: 'keyboard-paths', surface: 'clusters', entries: [], generatedAt: '' }], 'tree-now');
+
+    const html = renderDocsHtml(noTree);
+
+    expect(html).toContain('may not match the current code');
+    expect(html).not.toContain('another version of the code');
+  });
+
   it('marks the report stale when the code changed while usabl docs ran', async () => {
     const config: UsablConfig = {
       appBaseUrl: 'http://127.0.0.1:5173',

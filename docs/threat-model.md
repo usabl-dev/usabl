@@ -720,13 +720,18 @@ carry exactly one Host header that names a local host or the configured bind hos
 own port, and any Origin must be a browser's exact serialization matching that origin. Anything
 else gets 403. The Result is scrubbed before it is projected, and a failed run's reason stays in
 the dev server log. The webpack event stream carries only the event name, never a result, path,
-or page text. The webpack plugin does nothing outside development mode, so a production bundle
-has no overlay loader, no endpoints, and no source attributes.
+or page text. Neither plugin puts anything in a production build. The webpack plugin does nothing
+outside development mode. The Vite plugin adds the overlay loader and source attributes only when
+Vite resolves its config with the `serve` command: `vite build`, an SSR build, and
+`vite build --watch` run with `build`, and a tool that never resolves the config gets nothing. So
+a production bundle has no overlay loader, no endpoints, and no source attributes.
 
 **Tests:** `test/surfaces/vite-plugin.test.ts` (Host, Origin, duplicate Host, IPv6, live port),
-`test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and other port refused on
-the result, client, and event paths; production and no-mode builds carry nothing), and
-`test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
+`test/surfaces/vite-plugin-build.test.ts` (a real `vite build` carries no overlay loader, the dev
+server still serves it, and nothing is added before Vite resolves its config; this test does not
+check source attributes), `test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and
+other port refused on the result, client, and event paths; production and no-mode builds carry
+nothing), and `test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
 
 **Status:** [x] Shipped for Vite and webpack-dev-server 5.
 

@@ -288,7 +288,7 @@ function documentShell(title: string, bodyMain: string): string {
     // activation moves focus into the content instead of resuming from the link.
     `  <main id="main-content" tabindex="-1">\n${bodyMain}\n  </main>\n` +
     '  <footer class="page-footer">\n' +
-    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all. A card marked <strong>Out of date</strong> was made from another version of the code, so it is not proof for the code as it is now; run usabl docs again to make it again.</p>\n' +
+    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all. A card marked <strong>Out of date</strong> may not match the current code, so it is not proof for the code as it is now. The card says why. Run usabl docs again to make it again.</p>\n' +
     '  </footer>\n' +
     '</body>\n' +
     '</html>\n'
@@ -343,7 +343,7 @@ export function renderDocsHtml(artifacts: DocArtifact[]): string {
       : '') +
     `${observationCount} shown as observations only, with no receipt claim.` +
     (staleCount > 0
-      ? ` ${staleCount} out of date: made from another version of the code, so not proof for the code as it is now. Run usabl docs again to make them again.`
+      ? ` ${staleCount} out of date: may not match the current code, so not proof for the code as it is now. Run usabl docs again to make them again.`
       : '') +
     '</p>\n' +
     '    </section>';
