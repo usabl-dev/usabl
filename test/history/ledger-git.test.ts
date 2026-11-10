@@ -156,11 +156,20 @@ describe('the ledger sources in a real repository', () => {
   });
 
   it('reads the committed floor, never the working tree', async () => {
-    await writeFile(join(repo, '.usabl-evidence.json'), '{"version": 3, "entries": []}\n', 'utf8');
-    const read = await readLedgerSources(makeLedgerGit({ cwd: repo }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main');
+    const sources = () => readLedgerSources(makeLedgerGit({ cwd: repo }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main');
+    const committed = await sources();
+    if (committed.kind !== 'read') throw new Error(committed.message);
+    // The working tree holds the committed floor plus one more row. That row is not committed, so
+    // the ledger must not list it, and every committed row must read exactly as before.
+    const extra = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
+    await writeFile(join(repo, '.usabl-evidence.json'), `${JSON.stringify(floorOf([...PRUNED.entries, extra], 3), null, 2)}\n`, 'utf8');
+    const read = await sources();
     await writeFile(join(repo, '.usabl-evidence.json'), `${JSON.stringify(PRUNED, null, 2)}\n`, 'utf8');
     if (read.kind !== 'read') throw new Error(read.message);
-    expect(buildLedger(read.input).rows).toHaveLength(5);
+    const ledger = buildLedger(read.input);
+    expect(ledger.rows.some((row) => row.rule === extra.rule)).toBe(false);
+    expect(ledger.rows).toEqual(buildLedger(committed.input).rows);
+    expect(ledger.rows.find((row) => row.rule === N.rule)).toMatchObject({ state: 'open', daysOpen: 24 });
   });
 
   it('counts open rows to the commit an older ref names, not to today', async () => {
