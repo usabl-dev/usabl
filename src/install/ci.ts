@@ -1247,20 +1247,28 @@ export async function writeCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_B
   });
 }
 
+/** The facts the docs gate report states once something is written. */
+export const DOCS_GATE_NOTES: readonly string[] = [
+  PUBLIC_ENGINE,
+  'The judge serves the built HTML itself with usabl serve-build.',
+  REQUIRED_CHECK_NOTE,
+  WORKFLOW_BOUNDARY,
+];
+
+/** The setup steps every docs gate needs: its repository variables and the docs origin. */
+export const DOCS_GATE_SETUP_STEPS: readonly string[] = [
+  'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
+  'Point docsBaseUrl in usabl.docs.json at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs, and commit it.',
+];
+
+// The docs gate for main, without reading git. `usabl install --docs-ci` runs installDocsCi, which
+// takes the default branch from git and adds the steps that depend on it.
 export async function writeDocsCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
   return composeCiReport({
     applied: [await applyWorkflowPlan(fs, plan, pin, USABL_DOCS_GATE_WORKFLOW, 'docs gate workflow')],
     pin,
-    notes: [
-      PUBLIC_ENGINE,
-      'The judge serves the built HTML itself with usabl serve-build.',
-      REQUIRED_CHECK_NOTE,
-      WORKFLOW_BOUNDARY,
-    ],
-    setupSteps: [
-      'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
-      'Point docsBaseUrl in usabl.docs.json at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs, and commit it.',
-    ],
+    notes: DOCS_GATE_NOTES,
+    setupSteps: DOCS_GATE_SETUP_STEPS,
   });
 }
 

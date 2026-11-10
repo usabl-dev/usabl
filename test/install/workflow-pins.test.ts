@@ -6,7 +6,7 @@
  * a filled pin, so a new step or a new workflow cannot slip past them.
  */
 import { describe, expect, it } from 'vitest';
-import { gateWorkflowFor, pinEngineRef, USABL_DOCS_GATE_WORKFLOW, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { docsGateWorkflowFor, gateWorkflowFor, pinEngineRef, USABL_DOCS_GATE_WORKFLOW, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { historyWorkflow, USABL_HISTORY_WORKFLOW } from '../../src/install/history-ci.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -18,6 +18,7 @@ const DRAFTS: Array<[string, string]> = [
   // Each workflow for a default branch other than main. The branch name is the only value that
   // changes, so these must hold the same pins and the same lack of secrets.
   ['the app gate for trunk', gateWorkflowFor('trunk')],
+  ['the docs gate for trunk', docsGateWorkflowFor('trunk')],
   ['the history workflow for trunk', historyWorkflow('trunk')],
 ];
 const WORKFLOWS: Array<[string, string]> = DRAFTS.flatMap(([name, draft]): Array<[string, string]> => [

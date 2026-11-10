@@ -48,8 +48,8 @@ import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
-import { engineRefFor, planDocsCi, writeDocsCi } from './install/ci.js';
 import { installCi } from './install/history-ci.js';
+import { installDocsCi } from './install/docs-ci.js';
 import { readEnginePin } from './install/build-info.js';
 import { gitRunner } from './install/repo-git.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
@@ -283,9 +283,9 @@ async function runInstall(opts: CliOptions): Promise<number> {
     const uiFileGlobs = await readCursorUiFileGlobs(installFs, opts.configPath);
     result = await writeCursor(installFs, await planCursor(installFs, uiFileGlobs));
   } else if (opts.installTarget === 'docs-ci') {
-    // The engine pin comes from this usabl's build record, or stays the placeholder without one.
-    const pin = await readEnginePin();
-    result = await writeDocsCi(installFs, await planDocsCi(installFs, engineRefFor(pin)), pin);
+    // The engine pin comes from this usabl's build record, or stays the placeholder without one. git
+    // reads the default branch the docs gate runs on, only locally.
+    result = await installDocsCi(installFs, await readEnginePin(), gitRunner(process.cwd()));
   } else {
     // The pull request gate and the default-branch history workflow that turns on debt tracking.
     result = await installCi(installFs, await readEnginePin(), gitRunner(process.cwd()));
