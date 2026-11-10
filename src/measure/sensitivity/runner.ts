@@ -126,6 +126,17 @@ function draftPathsByIdentity(scan: ScreenScan): Map<string, string[]> {
   return paths;
 }
 
+function rulePathKey(rule: string, elementPath: string): string {
+  return JSON.stringify([rule, elementPath]);
+}
+
+/** Each rule and element path the scan's deterministic drafts report. */
+function rulePathPairs(scan: ScreenScan): Set<string> {
+  return new Set(
+    scan.drafts.filter((draft) => draft.evidenceClass === 'deterministic').map((draft) => rulePathKey(draft.rule, draft.elementPath)),
+  );
+}
+
 function seen(scan: ScreenScan): ScreenScan {
   return markUnseenScreens([scan]).screens[0] ?? scan;
 }
@@ -213,13 +224,22 @@ export async function measureEntry(
     const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
     const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);
 
-    const newGating: Finding[] =
+    const gatedNew: Finding[] =
       mutatedGate.accessibilityVerdict === 'verified'
         ? []
         : mutatedGate.findings.filter((finding) => finding.status === 'new' && finding.evidenceClass === 'deterministic');
-    if (mutatedGate.accessibilityVerdict !== 'verified' && newGating.length === 0) {
+    if (mutatedGate.accessibilityVerdict !== 'verified' && gatedNew.length === 0) {
       return result(entry, screen, 'unreadable', [], `the gate did not verify the mutated scan, and no new finding explains it: ${mutatedGate.summary}`);
     }
+
+    // The gate keys a finding by the element's name first. An edit that changes a name moves a
+    // finding the clean page already had to a new identity, so the floor cannot absorb it. A new
+    // finding whose every draft has a rule and element path the clean scan already reported is that
+    // old finding, and it is dropped.
+    const pathsByIdentity = draftPathsByIdentity(mutated);
+    const pathsBehind = (finding: Finding): string[] => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath];
+    const cleanPairs = rulePathPairs(clean);
+    const newGating = gatedNew.filter((finding) => !pathsBehind(finding).every((path) => cleanPairs.has(rulePathKey(finding.rule, path))));
 
     // An unverified finding is the checks saying they could not tell. The gate counts it as a gap,
     // not a failure, so only a definite failure can count as a catch.
@@ -233,8 +253,7 @@ export async function measureEntry(
       // The gate collapses every draft at one identity into one finding, and its representative can
       // be another element than the mutated one. So each finding is located by every draft of the
       // mutated scan behind it.
-      const pathsByIdentity = draftPathsByIdentity(mutated);
-      const pathsOf = definite.map((finding) => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath]);
+      const pathsOf = definite.map(pathsBehind);
       const places = await record.edit.locate(pathsOf.flat());
       const allowed = PLACES_FOR[entry.reportedOn];
       let next = 0;

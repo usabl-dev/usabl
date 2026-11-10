@@ -153,6 +153,30 @@ describe('measureEntry', () => {
     expect(await measureEntry(both.deps, entry(), SCREEN)).toMatchObject({ outcome: 'caught', rules: ['button-name'] });
   });
 
+  it('does not count a finding the page already had when the edit changes the name its identity was keyed on', async () => {
+    // The clean page already fails target-size on #save. The identity is keyed on the name "Save",
+    // and the edit removes that name, so the same finding comes back under a new identity.
+    const keyedOnName: Provider = {
+      id: 'keyed-on-name',
+      layer: 'axe',
+      capabilities: ['live'],
+      async run(ctx) {
+        const name = (await ctx.page.axAt('#save'))?.name ?? null;
+        return [
+          draft(ctx, 'target-size', '#save', {
+            elementName: name,
+            evidence: name === null || name === '' ? {} : { name: { value: name, source: 'ax-tree', fromTree: true } },
+          }),
+        ];
+      },
+    };
+    const { deps } = setup([keyedOnName]);
+    expect(await measureEntry(deps, entry(), SCREEN)).toMatchObject({ outcome: 'missed', rules: [] });
+
+    const both = setup([keyedOnName, namesProvider()]);
+    expect(await measureEntry(both.deps, entry(), SCREEN)).toMatchObject({ outcome: 'caught', rules: ['button-name'] });
+  });
+
   it('is unreadable, not caught, when the only new gating finding is unverified', async () => {
     const { deps } = setup([namesProvider('button-name', '#save', { confidence: 'unverified' })]);
     expect(await measureEntry(deps, entry(), SCREEN)).toEqual({
