@@ -41,7 +41,7 @@ function historyOn(records: LedgerRecord[], skipped = 0): LedgerHistory {
 }
 
 function input(snapshots: FloorSnapshot[], history: LedgerHistory = historyOn([]), over: Partial<LedgerInput> = {}): LedgerInput {
-  return { trustedRef: 'origin/main', head: commitAt(99), shallow: false, snapshots, history, now: dayAt(41), ...over };
+  return { trustedRef: 'origin/main', head: commitAt(41), headDate: dayAt(41), shallow: false, snapshots, history, ...over };
 }
 
 function rowFor(ledger: ReturnType<typeof buildLedger>, entry: FloorEntry) {
@@ -51,7 +51,7 @@ function rowFor(ledger: ReturnType<typeof buildLedger>, entry: FloorEntry) {
 }
 
 describe('buildLedger', () => {
-  it('keeps an open accessibility barrier open to the clock and labels a first baseline row', () => {
+  it('keeps an open accessibility barrier open to the head commit and labels a first baseline row', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A]))]));
     const row = rowFor(ledger, A);
     expect(row).toMatchObject({
@@ -88,7 +88,7 @@ describe('buildLedger', () => {
   });
 
   it('counts whole days as the floor of elapsed hours over 24', () => {
-    const ledger = buildLedger(input([snap(0, floorOf([A]))], historyOn([]), { now: dayAt(2, 23) }));
+    const ledger = buildLedger(input([snap(0, floorOf([A]))], historyOn([]), { headDate: dayAt(2, 23) }));
     expect(rowFor(ledger, A).daysOpen).toBe(2);
   });
 
@@ -402,7 +402,7 @@ describe('buildLedger', () => {
     expect(() => checkSpans([{ start: at(0), end: { ...at(5), by: 'history' as const } }, { start: at(8), end: null }], dayAt(41))).not.toThrow();
   });
 
-  it('gives the same ledger for the same history and the same clock', () => {
+  it('gives the same ledger for the same history', () => {
     const floor = floorOf([A, B]);
     const make = () => input([snap(0, floor), snap(7, floorOf([B]))], historyOn([scanAt(3, floor, [[B, 1]])]));
     expect(JSON.stringify(buildLedger(make()))).toBe(JSON.stringify(buildLedger(make())));

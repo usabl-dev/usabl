@@ -12,7 +12,6 @@ import { dialogAt, entryFor, floorOf, fullScreen, makeFakeHistory, recordOf } fr
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = Date.parse('2026-01-01T00:00:00.000Z');
-const NOW = new Date(START + 41 * DAY).toISOString();
 
 // The number sits in the first 12 characters, so the short form the text prints names it.
 function commitAt(position: number): string {
@@ -60,7 +59,7 @@ const LATER = floorOf([OPEN, FIXED]);
 
 describe('usabl debt ledger', () => {
   it('prints a table sorted by days open, with a totals line, from the trusted ref and the history', async () => {
-    const outcome = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main', NOW);
+    const outcome = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main');
 
     expect(outcome.exitCode).toBe(0);
     const lines = outcome.text.split('\n');
@@ -69,6 +68,7 @@ describe('usabl debt ledger', () => {
         'and the debt history at origin/usabl/history show it.',
     );
     expect(lines[1]).toBe('It reports what was observed. It decides no verdict and makes no claim about compliance.');
+    expect(lines[2]).toBe('Rows still open are counted to 000000000042, dated 2026-02-11, the commit main names. The ledger reads no clock.');
     const header = lines.findIndex((line) => line.startsWith('Days open'));
     expect(lines[header]).toMatch(/^Days open +State +First seen +Last change +Screen +Rule +Notes +Element$/u);
     const body = lines.slice(header + 1, header + 4);
@@ -96,7 +96,7 @@ describe('usabl debt ledger', () => {
       refs: { 'origin/usabl/history': 'h1' },
       commits: { h1: { '2026-01.jsonl': `${serializeRecord(scan)}\n` } },
     }).writer;
-    const outcome = await runLedger(fakeGit({ 0: floorOf([OPEN, COUNTED]), 10: later }), history, 'main', NOW);
+    const outcome = await runLedger(fakeGit({ 0: floorOf([OPEN, COUNTED]), 10: later }), history, 'main');
 
     const lines = outcome.text.split('\n');
     const header = lines.findIndex((line) => line.startsWith('Days open'));
@@ -116,7 +116,7 @@ describe('usabl debt ledger', () => {
     const one = floorOf([FIXED]);
     const empty = floorOf([]);
     const stateOf = async (floors: Record<number, EvidenceFloor | null>, history = makeFakeHistory({}).writer) => {
-      const outcome = await runLedger(fakeGit(floors), history, 'main', NOW);
+      const outcome = await runLedger(fakeGit(floors), history, 'main');
       const lines = outcome.text.split('\n');
       const row = lines[lines.findIndex((line) => line.startsWith('Days open')) + 1] ?? '';
       return row.split(/ {2,}/u)[1];
@@ -135,7 +135,7 @@ describe('usabl debt ledger', () => {
   });
 
   it('puts every printed string through the scrub, in the table and in the JSON', async () => {
-    const outcome = await runLedger(fakeGit({ 0: BASE }), historyWith(BASE), 'main', NOW);
+    const outcome = await runLedger(fakeGit({ 0: BASE }), historyWith(BASE), 'main');
 
     for (const output of [outcome.text, outcome.json]) {
       expect(output).not.toContain(UNTRUSTED_FRAME_END);
@@ -148,16 +148,16 @@ describe('usabl debt ledger', () => {
     expect(json.rows.find((row: { rule: string }) => row.rule === 'pf-focus-into-dialog').elementKey).toMatch(/^clusters\|pf-focus-into-dialog\|name:close /u);
   });
 
-  it('prints the same bytes for the same history and the same clock', async () => {
-    const first = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main', NOW);
-    const second = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main', NOW);
+  it('prints the same bytes for the same history', async () => {
+    const first = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main');
+    const second = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main');
     expect(second.text).toBe(first.text);
     expect(second.json).toBe(first.json);
   });
 
   it('says which rows an incomplete history touches, and why', async () => {
     const noHistory = makeFakeHistory({}).writer;
-    const outcome = await runLedger(fakeGit({ 0: BASE, 10: '{', 20: LATER }), noHistory, 'main', NOW);
+    const outcome = await runLedger(fakeGit({ 0: BASE, 10: '{', 20: LATER }), noHistory, 'main');
 
     expect(outcome.exitCode).toBe(0);
     const text = outcome.text;
@@ -179,14 +179,14 @@ describe('usabl debt ledger', () => {
   });
 
   it('refuses plainly when no floor was ever committed or git cannot run there', async () => {
-    const noFloor = await runLedger(fakeGit({}), historyWith(BASE), 'main', NOW);
+    const noFloor = await runLedger(fakeGit({}), historyWith(BASE), 'main');
     expect(noFloor.exitCode).toBe(2);
     expect(noFloor.text).toBe(
       'usabl debt ledger: No commit on main has ever held .usabl-evidence.json, so there are no accessibility barriers to follow. ' +
         'Run usabl baseline and commit the floor it writes.',
     );
 
-    const notRepo = await runLedger(fakeGit({}, { isRepository: async () => false }), historyWith(BASE), 'main', NOW);
+    const notRepo = await runLedger(fakeGit({}, { isRepository: async () => false }), historyWith(BASE), 'main');
     expect(notRepo.exitCode).toBe(4);
     expect(notRepo.text).toMatch(/not in a git repository/u);
 
@@ -194,7 +194,6 @@ describe('usabl debt ledger', () => {
       fakeGit({ 0: BASE }, { firstParentLine: async () => Promise.reject(new Error('fatal: bad object')) }),
       historyWith(BASE),
       'main',
-      NOW,
     );
     expect(failing.exitCode).toBe(4);
     expect(failing.text).toBe('usabl debt ledger: git could not read the history of main, so the ledger could not run.');

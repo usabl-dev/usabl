@@ -79,6 +79,27 @@ describe('usabl debt ledger on the command line', () => {
     expect((await readdir(workspace)).sort()).toEqual(before);
   });
 
+  it('reads no clock: two runs a day apart print the same bytes, counted to the tip commit', async () => {
+    await repoWithFloor();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+      expect(await main(['debt', 'ledger', '--json'])).toBe(0);
+      const first = stdout.join('');
+      stdout = [];
+      vi.setSystemTime(new Date('2026-03-02T12:00:00.000Z'));
+      expect(await main(['debt', 'ledger', '--json'])).toBe(0);
+      expect(stdout.join('')).toBe(first);
+      const ledger = JSON.parse(first);
+      // The only commit is dated 2026-01-01, so the open row has 0 days whatever the clock says.
+      expect(ledger.headDate).toBe('2026-01-01T00:00:00.000Z');
+      expect(ledger.rows[0].daysOpen).toBe(0);
+      expect(ledger).not.toHaveProperty('now');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('prints the full ledger as JSON with --json, and writes it to a file with --out', async () => {
     await repoWithFloor();
     expect(await main(['debt', 'ledger', '--json', '--out', 'ledger.json'])).toBe(0);

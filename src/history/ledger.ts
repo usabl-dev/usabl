@@ -1,6 +1,7 @@
 /**
  * The ledger of how long accessibility barriers stay open: for each floor identity, when it was
- * first seen, whether it is open, fixed, or reopened, and how many days it was or has been open.
+ * first seen, whether it is open, fixed, left the floor, or reopened, and how many days it was or
+ * has been open, with the way each number can be wrong.
  *
  * It reads two sources, in this order of trust. First, the evidence floor file's own history on
  * the trusted branch: the commit where an identity enters the floor and the commit where it leaves.
@@ -13,7 +14,7 @@
  * incomplete, the rows it touches say why, and the ledger never fills the gap with a guess.
  *
  * This is measurement only. It mints no verdict and no receipt, and no verdict path imports it.
- * Pure: the same snapshots, records, and clock always give the same ledger.
+ * Pure, and it reads no clock: the same snapshots and records always give the same ledger.
  */
 import type { EvidenceFloor, FloorEntry, IdentityBasis } from '../contracts/index.js';
 import { identityKey } from '../primitives/identity.js';
@@ -66,8 +67,9 @@ export interface LedgerInput {
   // Oldest first.
   snapshots: FloorSnapshot[];
   history: LedgerHistory;
-  // The run's clock, ISO-8601 UTC.
-  now: string;
+  // The committer date of `head`, ISO-8601 UTC. An open span ends here. The ledger reads no clock,
+  // so the same repository state always gives the same ledger.
+  headDate: string;
 }
 
 // fixed: the history showed it, with two full scans of main in a row that saw none. left-the-floor:
@@ -168,8 +170,9 @@ export interface LedgerStateTotals {
 export interface Ledger {
   schema: typeof LEDGER_SCHEMA;
   trustedRef: string;
+  // The commit the trusted ref names, and its committer date. Open rows are counted to it.
   head: string;
-  now: string;
+  headDate: string;
   shallow: boolean;
   floorCommits: number;
   history:
@@ -660,11 +663,11 @@ export function buildLedger(input: LedgerInput): Ledger {
   const built = [...rows.values()]
     .filter((row) => row.spans.length > 0)
     .map((row): LedgerRow => {
-      checkSpans(row.spans, input.now);
+      checkSpans(row.spans, input.headDate);
       const spans: LedgerSpan[] = row.spans.map((span) => ({
         start: point(span.start),
         end: span.end === null ? null : { commit: span.end.commit, date: span.end.date, by: span.end.by },
-        days: daysBetween(span.start.date, span.end?.date ?? input.now),
+        days: daysBetween(span.start.date, span.end?.date ?? input.headDate),
       }));
       const first = spans[0] as LedgerSpan;
       const last = spans[spans.length - 1] as LedgerSpan;
@@ -718,7 +721,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     schema: LEDGER_SCHEMA,
     trustedRef: input.trustedRef,
     head: input.head,
-    now: input.now,
+    headDate: input.headDate,
     shallow: input.shallow,
     floorCommits: snapshots.length,
     history:

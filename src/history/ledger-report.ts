@@ -96,6 +96,8 @@ export function formatLedger(ledger: Ledger): string {
     `usabl debt ledger: how long accessibility barriers stay open, as the floor history of ${ledger.trustedRef} ` +
       `(${ledger.head.slice(0, 12)}) and the debt history at ${historyRef} show it.`,
     'It reports what was observed. It decides no verdict and makes no claim about compliance.',
+    `Rows still open are counted to ${ledger.head.slice(0, 12)}, dated ${ledger.headDate.slice(0, 10)}, the commit ` +
+      `${ledger.trustedRef} names. The ledger reads no clock.`,
   );
   if (ledger.history.kind === 'on' && ledger.history.skipped > 0) {
     lines.push(
@@ -130,7 +132,7 @@ export function formatLedger(ledger: Ledger): string {
     '"at least N": the true number may be larger. "at most N": it may be smaller.',
     '"not known (N by the floor)": it may be larger or smaller. N is what the floor alone shows.',
     '"first baseline": seen at the first baseline; may be older.',
-    'Days are whole days between committer dates, in UTC, and to the clock for a row still open.',
+    'Days are whole days between committer dates, in UTC. A row still open counts to the commit named above.',
   );
 
   // Each reason once, with the rows it touches.
@@ -163,17 +165,17 @@ function refusal(exitCode: 2 | 4, message: string): LedgerCommandOutcome {
 
 /**
  * Reads the floor history of `trustedRef` and the history at the reader's ref, builds the ledger
- * with the run's clock `now`, and projects it. Exit 0 when it ran. Exit 2 when no floor was ever
+ * counted to the commit the ref names, and projects it. It reads no clock. Exit 0 when it ran. Exit 2 when no floor was ever
  * committed, and 4 when git could not run there or could not read the history.
  */
-export async function runLedger(git: LedgerGit, history: HistoryReader, trustedRef: string, now: string): Promise<LedgerCommandOutcome> {
+export async function runLedger(git: LedgerGit, history: HistoryReader, trustedRef: string): Promise<LedgerCommandOutcome> {
   let ledger: Ledger;
   try {
     const read = await readLedgerSources(git, history, trustedRef);
     if (read.kind === 'refused') {
       return refusal(read.reason === 'no-floor' ? 2 : 4, read.message);
     }
-    ledger = buildLedger({ ...read.input, now });
+    ledger = buildLedger(read.input);
   } catch (err) {
     if (err instanceof LedgerInvariantError) {
       return refusal(

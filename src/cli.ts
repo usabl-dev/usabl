@@ -631,7 +631,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Measurement only: how long accessibility barriers stay open, read from committed objects.
     // It scans nothing, decides no verdict, and writes a file only when --out names one.
     const ref = opts.trustedRef ?? 'HEAD';
-    const outcome = await runLedger(makeLedgerGit(), makeHistoryGit(), ref, new Date().toISOString());
+    // No clock: open rows are counted to the commit the ref names, so the same repository state
+    // always prints the same bytes.
+    const outcome = await runLedger(makeLedgerGit(), makeHistoryGit(), ref);
     if (outcome.exitCode !== 0) {
       process.stderr.write(`${opts.json ? outcome.json : outcome.text}\n`);
       return outcome.exitCode;

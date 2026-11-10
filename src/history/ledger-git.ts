@@ -98,7 +98,7 @@ export function makeLedgerGit(options: { cwd?: string } = {}): LedgerGit {
 }
 
 export type LedgerSourcesRead =
-  | { kind: 'read'; input: Omit<LedgerInput, 'now'> }
+  | { kind: 'read'; input: LedgerInput }
   | { kind: 'refused'; reason: 'not-a-repository' | 'no-ref' | 'no-floor'; message: string };
 
 function parseFloorText(text: string): { floor: EvidenceFloor; unreadable: null } | { floor: null; unreadable: string } {
@@ -206,5 +206,10 @@ export async function readLedgerSources(git: LedgerGit, history: HistoryReader, 
     ledgerHistory = { kind: 'on', ref: history.ref, head: read.head, records, skipped };
   }
 
-  return { kind: 'read', input: { trustedRef, head, shallow, snapshots, history: ledgerHistory } };
+  // The first-parent line ends at the head, so its last entry dates the head. Open spans end there.
+  const headDate = line[line.length - 1]?.date;
+  if (headDate === undefined || line[line.length - 1]?.commit !== head) {
+    throw new Error('the first-parent line does not end at the trusted ref');
+  }
+  return { kind: 'read', input: { trustedRef, head, headDate, shallow, snapshots, history: ledgerHistory } };
 }

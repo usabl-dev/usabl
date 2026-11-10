@@ -53,7 +53,7 @@ const PRUNED = floorOf([B, N, R_NEW], 3);
 //   day 19      on a side branch, the floor is migrated to version 3: R_OLD becomes R_NEW
 //   day 20  c5  that branch is merged into main
 //   day 27  c6  floor prune removes A
-//   day 30      the run's clock
+//   day 30  c7  app change, the tip of main; open rows are counted to its committer date
 //
 // The hand count the ledger must match:
 //
@@ -63,7 +63,6 @@ const PRUNED = floorOf([B, N, R_NEW], 3);
 //   N         day 6                still in the floor                    open      24
 //   R_OLD     day 0, first floor   left at the day 20 migration (a gap)  open      20, a lower bound
 //   R_NEW     day 20               entered at the migration              open      10, a lower bound
-const NOW = dayAt(30);
 
 describe('the ledger sources in a real repository', () => {
   let root = '';
@@ -110,6 +109,7 @@ describe('the ledger sources in a real repository', () => {
     await git(repo, ['switch', '--quiet', 'main']);
     await git(repo, ['merge', '--quiet', '--no-ff', 'migrate', '-m', 'merge the migration'], 20);
     await commitFloor(PRUNED, 27, 'prune A');
+    await commitApp('tip', 30);
   }, 60_000);
 
   afterAll(async () => {
@@ -121,7 +121,7 @@ describe('the ledger sources in a real repository', () => {
     if (read.kind !== 'read') throw new Error(read.message);
     expect(read.input.shallow).toBe(false);
     expect(read.input.snapshots.map((snapshot) => snapshot.date)).toEqual([dayAt(0), dayAt(6), dayAt(20), dayAt(27)]);
-    const ledger = buildLedger({ ...read.input, now: NOW });
+    const ledger = buildLedger(read.input);
 
     expect(ledger.rows.map((row) => [row.rule, row.elementKey, row.state, row.daysOpen, row.mayBeMore, row.mayBeLess])).toEqual([
       [A.rule, A.elementKey, 'left-the-floor', 27, true, true],
@@ -153,7 +153,15 @@ describe('the ledger sources in a real repository', () => {
     const read = await readLedgerSources(makeLedgerGit({ cwd: repo }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main');
     await writeFile(join(repo, '.usabl-evidence.json'), `${JSON.stringify(PRUNED, null, 2)}\n`, 'utf8');
     if (read.kind !== 'read') throw new Error(read.message);
-    expect(buildLedger({ ...read.input, now: NOW }).rows).toHaveLength(5);
+    expect(buildLedger(read.input).rows).toHaveLength(5);
+  });
+
+  it('counts open rows to the commit an older ref names, not to today', async () => {
+    const read = await readLedgerSources(makeLedgerGit({ cwd: repo }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main~1');
+    if (read.kind !== 'read') throw new Error(read.message);
+    const ledger = buildLedger(read.input);
+    expect(ledger.headDate).toBe(dayAt(27));
+    expect(ledger.rows.find((row) => row.rule === N.rule)?.daysOpen).toBe(21);
   });
 
   it('says when the history branch is missing', async () => {
@@ -168,7 +176,7 @@ describe('the ledger sources in a real repository', () => {
     const read = await readLedgerSources(makeLedgerGit({ cwd: shallow }), makeHistoryGit({ cwd: shallow, ref: 'origin/usabl/history' }), 'origin/main');
     if (read.kind !== 'read') throw new Error(read.message);
     expect(read.input.shallow).toBe(true);
-    const ledger = buildLedger({ ...read.input, now: NOW });
+    const ledger = buildLedger(read.input);
     const n = ledger.rows.find((row) => row.rule === N.rule);
     expect(n?.mayBeMoreReasons).toEqual(['shallow']);
     expect(n?.incomplete.map((gap) => gap.cause)).toEqual(['not-seen', 'record-off-line', 'shallow']);
