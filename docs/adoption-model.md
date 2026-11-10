@@ -15,7 +15,7 @@ usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
 usabl floor prune     re-arm the floor by hand (removes and lowers counts; --unconfirmed); an escape hatch
 usabl debt            list the remaining debt by screen and rule, with first-seen date, age, and trend
-usabl debt ledger     list how long each accessibility barrier stayed open, from the floor and history
+usabl debt ledger     days each accessibility barrier was open, fixed, or left the floor, and which way each count can be wrong
 usabl drift routes    check the route manifest against the app router
 ```
 
