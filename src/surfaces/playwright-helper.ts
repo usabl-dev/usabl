@@ -409,6 +409,9 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // so no provider runs on it.
     const expected = expectedAddress(options, labeledScreenId, config, pwPage.url());
     let landing: LandingObservation | null = null;
+    if (expected !== null && !isWebAddress(expected)) {
+      return finish([], [refusedAddressGap(screenId, expected)]);
+    }
     if (expected !== null) {
       // With no readiness signal, nothing has waited yet. The address is read once the page has
       // settled, the way the CLI reads it, so a router that moves to a sign-in page a moment after
@@ -529,6 +532,27 @@ function expectedAddress(
     return null;
   }
   return config.surfaces.find((surface) => surface.id === labeledScreenId)?.url ?? null;
+}
+
+// Whether an address is an http or https URL, the only kind that names a screen of an app.
+function isWebAddress(address: string): boolean {
+  try {
+    const { protocol } = new URL(address);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// The gap for an address checkPage cannot hold a page to, such as about:blank or one that does not
+// parse. The page is not checked, because it claims a screen no comparison can confirm.
+function refusedAddressGap(screenId: string, expected: string): CoverageGap {
+  return landingGap(
+    screenId,
+    `checkPage was told to hold this page to ${sanitizeUrlForDisplay(expected)}, which is not an http or https address, ` +
+      'so it cannot name a screen of the app. usabl did not check the page and reports no findings for it. ' +
+      'Pass an http or https address, or a path such as /clusters, as expectedUrl, or correct the url in usabl.config.json.',
+  );
 }
 
 function landingRef(screenId: string): string {

@@ -872,6 +872,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     expect(result.gaps[0]?.reason).toContain('/login');
   });
 
+  it('is not_covered, and does not throw, when the expected address is not http or https', async () => {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent(headingPage('Clusters'));
+      const result = await checkPage(page, { projectRoot: dir, tabCap: 10, screenId: 'blank', expectedUrl: 'about:blank' });
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:blank']);
+      expect(result.gaps[0]?.reason).toContain('not an http or https address');
+    } finally {
+      await context.close();
+    }
+  });
+
   it('applies the CLI rule for a password field when the run asserts a session the CLI way', async () => {
     const before = process.env['USABL_STORAGE_STATE'];
     process.env['USABL_STORAGE_STATE'] = join(dir, 'state.json');
