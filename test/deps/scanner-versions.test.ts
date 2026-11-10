@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  makeCachedVersionRunner,
   readChromiumVersion,
   readScannerVersions,
   revisionFromBrowserPath,
@@ -124,6 +125,44 @@ describe('readChromiumVersion', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the cached browser version read', () => {
+  it('asks an unchanged browser once and asks again after the file changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'usabl-browser-cache-'));
+    try {
+      const executable = join(root, 'chrome');
+      await writeFile(executable, 'first build', 'utf8');
+      let asked = 0;
+      const cached = makeCachedVersionRunner(async () => {
+        asked += 1;
+        return `Chromium 130.0.0.${asked}`;
+      });
+
+      await expect(cached(executable)).resolves.toBe('Chromium 130.0.0.1');
+      await expect(cached(executable)).resolves.toBe('Chromium 130.0.0.1');
+      expect(asked).toBe(1);
+
+      // An upgrade in place writes a new file, so its size or time moves and the browser is asked again.
+      await writeFile(executable, 'second, longer build', 'utf8');
+      await expect(cached(executable)).resolves.toBe('Chromium 130.0.0.2');
+      expect(asked).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not keep an answer for a path it cannot see', async () => {
+    let asked = 0;
+    const cached = makeCachedVersionRunner(async () => {
+      asked += 1;
+      return null;
+    });
+    const missing = join(tmpdir(), 'usabl-no-such-browser', 'chrome');
+    await expect(cached(missing)).resolves.toBeNull();
+    await expect(cached(missing)).resolves.toBeNull();
+    expect(asked).toBe(2);
   });
 });
 

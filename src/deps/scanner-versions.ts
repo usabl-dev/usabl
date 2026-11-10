@@ -6,6 +6,7 @@
  * gap and mints no receipt, and doctor reports it, so a read that fails is never silent.
  */
 import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
 import { UNREADABLE_SCANNER_VERSION } from "../evidence/receipt.js";
@@ -75,6 +76,36 @@ export function runBrowserVersion(executablePath: string): Promise<string | null
   });
 }
 
+/**
+ * Wraps a version runner so one process asks each browser file once. Every stop, every overlay
+ * save, and every check builds its deps, and starting the browser each time costs real time.
+ *
+ * The answer is kept by the file's identity (device, inode, size, and modification time, read
+ * through any symlink), never by its path alone. A browser upgraded in place is a new file, so it
+ * is asked again. A path it cannot stat keeps no answer.
+ */
+export function makeCachedVersionRunner(
+  run: (executablePath: string) => Promise<string | null>,
+): (executablePath: string) => Promise<string | null> {
+  const answers = new Map<string, Promise<string | null>>();
+  return async (executablePath) => {
+    let identity: string;
+    try {
+      const info = await stat(executablePath);
+      identity = JSON.stringify([executablePath, info.dev, info.ino, info.size, info.mtimeMs]);
+    } catch {
+      return run(executablePath);
+    }
+    const known = answers.get(identity);
+    if (known !== undefined) {
+      return known;
+    }
+    const answer = run(executablePath);
+    answers.set(identity, answer);
+    return answer;
+  };
+}
+
 export interface ChromiumVersionPorts {
   // Where Playwright looks for its Chromium. It honors PLAYWRIGHT_BROWSERS_PATH.
   executablePath: () => string;
@@ -83,7 +114,7 @@ export interface ChromiumVersionPorts {
 
 const REAL_PORTS: ChromiumVersionPorts = {
   executablePath: () => chromium.executablePath(),
-  runVersion: runBrowserVersion,
+  runVersion: makeCachedVersionRunner(runBrowserVersion),
 };
 
 /**
