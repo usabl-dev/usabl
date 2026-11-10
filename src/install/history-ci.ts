@@ -380,7 +380,7 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
   // The history scan starts the app with npm run dev. Without that script it has nothing to start.
   if (history.result.action !== 'refused' && !(await hasDevScript(fs))) {
     setupSteps.push(
-      `Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. Or leave ${USABL_HISTORY_WORKFLOW_PATH} out: every run then says tracking is off.`,
+      `Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. The script must start the server directly and accept --host and --port, because a script that calls another npm script does not pass them on. For example: "dev": "webpack serve --config webpack.dev.js". Or leave ${USABL_HISTORY_WORKFLOW_PATH} out: every run then says tracking is off.`,
     );
   }
   // Printed unless git shows the default branch already holds the same config bytes.

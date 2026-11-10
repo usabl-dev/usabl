@@ -113,7 +113,7 @@ describe('the steps after install --ci', () => {
     const result = await installCi(fs, FILLED, CONFIG_ON_MAIN);
 
     expect(steps(result.message)[0]).toBe(
-      '1. Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. Or leave .github/workflows/usabl-history.yml out: every run then says tracking is off.',
+      '1. Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. The script must start the server directly and accept --host and --port, because a script that calls another npm script does not pass them on. For example: "dev": "webpack serve --config webpack.dev.js". Or leave .github/workflows/usabl-history.yml out: every run then says tracking is off.',
     );
     expect(steps(result.message)).toHaveLength(4);
   });

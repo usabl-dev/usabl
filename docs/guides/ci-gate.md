@@ -81,7 +81,9 @@ or git cannot answer, it prints the step.
 
 Each other thing the run could not settle adds one step in front: pin the engine, run
 `usabl init` and set `appBaseUrl`, add a `dev` script for the history scan, or check the
-branch name the history workflow runs on.
+branch name the history workflow runs on. The `dev` script must start the server directly
+and accept `--host` and `--port`, for example `webpack serve --config webpack.dev.js`. A
+script that calls another npm script, such as `npm run start:dev`, does not pass them on.
 
 The branch rule matters. Any pull request runs the workflow as that pull request changed
 it, so a pull request that edits `.github/workflows/` can make `usabl-required` pass. Code
