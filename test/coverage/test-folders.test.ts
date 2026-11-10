@@ -6,7 +6,7 @@
  * nothing to check. A file in a test folder now counts as a UI file when the import graph reaches
  * it from a screen. A file there that no screen reaches is disclosed as excluded: it is not a gap,
  * so a pull request that edits only test helpers still has nothing to check. Files named
- * `*.test.*` or `*.spec.*` stay excluded wherever they are.
+ * `*.test.*` or `*.spec.*` follow the same rule, in test-files.test.ts.
  */
 import { describe, expect, it } from 'vitest';
 import type { UsablConfig } from '../../src/contracts/index.js';
@@ -117,11 +117,14 @@ describe('a changed file under a test folder', () => {
 });
 
 describe('a changed test or spec file', () => {
-  it('stays excluded wherever it is, even beside a screen that imports its folder', async () => {
+  it('is excluded and listed when only other test files import it, even beside a screen that imports its folder', async () => {
     const coverage = await computeCoverage(deps().fs, config, ['src/pages/Home.test.tsx', 'src/tests/Dashboard.spec.tsx']);
     expect(coverage.nothingToCheck).toBe(true);
     expect(coverage.gaps).toEqual([]);
-    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual(['src/pages/Home.test.tsx', 'src/tests/Dashboard.spec.tsx']);
+    for (const entry of coverage.excludedFiles ?? []) {
+      expect(entry.reason).toMatch(/named like a test/);
+    }
   });
 });
 
@@ -178,14 +181,16 @@ describe('a changed file under a test folder that an unresolved import may reach
     expect(coverage.excludedFiles?.[0]?.reason).toMatch(/usabl found no import of it/);
   });
 
-  // A dynamic import built from a template literal names no file usabl can read. This is a known
-  // limit, stated in the ground truth: the file stays excluded.
-  it('stays excluded when only a template-literal dynamic import could load it', async () => {
+  // A dynamic import built from a template literal may load any file under its fixed start, here
+  // src/tests/. usabl cannot tell which, so the file is a gap that names the import.
+  it('is an unresolved gap when a template-literal dynamic import may load it', async () => {
     const home = 'export async function load(name: string) { return import(`../tests/${name}`) }\n';
     const tree = treeWith(home, { [SCREEN_IN_TESTS]: 'export function Dashboard() { return <main /> }\n' });
     const coverage = await computeCoverage(depsOf(tree).fs, config, [SCREEN_IN_TESTS]);
-    expect(coverage.nothingToCheck).toBe(true);
-    expect(coverage.gaps).toEqual([]);
-    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([SCREEN_IN_TESTS]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[SCREEN_IN_TESTS, 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain('src/pages/Home.tsx');
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/');
   });
 });
