@@ -255,4 +255,18 @@ describe('makeGitReader in a repository with no commits', () => {
       /git cannot read origin\/main.*fetch it/s,
     );
   });
+
+  it('says to make a first commit when the working tree cannot be read without HEAD', async () => {
+    await writeFile(join(emptyRepo, 'screen.tsx'), 'first version\n', 'utf8');
+    const git = makeGitReader({ cwd: emptyRepo });
+    const error = await git.writeTree().then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(/no commits yet.*make a first commit/is);
+    // git's own text, such as "fatal: Not a valid object name HEAD", and the command line stay out.
+    expect(message).not.toMatch(/fatal|Command failed|read-tree/);
+  });
 });

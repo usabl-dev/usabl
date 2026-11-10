@@ -1,13 +1,13 @@
 /**
  * Real Deps builder for the live `usabl check` CLI path.
  * This unit wires adapters and providers only and must never decide verdicts.
- * Browser launch stays lazy so normal checks and type/test workflows do not open Chromium.
+ * Browser launch stays lazy: nothing opens a page until the first screen is scanned. Building the
+ * deps does run the headless shell once per process with --version, to read the Chromium version a
+ * receipt binds (see scanner-versions.ts).
  */
 import { readFile, readdir } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
 import type { BrowserDriver, Capability, Deps, UsablConfig } from "../contracts/index.js";
 import { canonicalHash, sha256 } from "../primitives/canonical.js";
 import { sortBy } from "../primitives/sortKey.js";
@@ -24,8 +24,8 @@ import { makeGitReader } from "./git.js";
 import { makeHistoryGit } from "../history/git.js";
 import { makeFsGlob } from "./fs.js";
 import { resolveStorageStatePath, type EnvReader } from "./session.js";
+import { readScannerVersions } from "./scanner-versions.js";
 
-const require = createRequire(import.meta.url);
 const RUNNER_PACKAGE_PATHS = [
   // Built entries and chunks live in dist/.
   fileURLToPath(new URL("../package.json", import.meta.url)),
@@ -141,34 +141,6 @@ async function readRunnerVersion(): Promise<string> {
   return `${version}+${engineHash}`;
 }
 
-function readDependencyVersion(packageName: string): string {
-  try {
-    const pkg: unknown = require(`${packageName}/package.json`);
-    return (
-      readVersion(
-        typeof pkg === "object" && pkg !== null
-          ? Reflect.get(pkg, "version")
-          : null,
-      ) ?? "unknown"
-    );
-  } catch {
-    return "unknown";
-  }
-}
-
-function readChromiumVersion(): string {
-  try {
-    const executablePath = chromium.executablePath();
-    const revisionMatch = /chromium[-_](\d+)/i.exec(executablePath);
-    if (revisionMatch?.[1] !== undefined) {
-      return `revision-${revisionMatch[1]}`;
-    }
-    return "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
 /**
  * The engine version and the core scanner versions, the same values buildDeps puts in Deps and a
  * receipt binds, without any optional engine. For a measurement that runs without a config.
@@ -179,11 +151,7 @@ export async function readCoreVersions(): Promise<{
 }> {
   return {
     runnerVersion: await readRunnerVersion(),
-    scannerVersions: {
-      axeCore: readDependencyVersion("axe-core"),
-      playwright: readDependencyVersion("playwright"),
-      chromium: readChromiumVersion(),
-    },
+    scannerVersions: await readScannerVersions(),
   };
 }
 
@@ -303,9 +271,8 @@ export async function buildDeps(
     clock: () => new Date().toISOString(),
     runnerVersion: await readRunnerVersion(),
     scannerVersions: {
-      axeCore: readDependencyVersion("axe-core"),
-      playwright: readDependencyVersion("playwright"),
-      chromium: readChromiumVersion(),
+      // A version it cannot read is "unknown", which the run reports as a not-covered gap.
+      ...(await readScannerVersions()),
       ...(engineVersions === undefined ? {} : { engines: engineVersions }),
     },
     browser,

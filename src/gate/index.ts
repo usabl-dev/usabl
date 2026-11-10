@@ -385,14 +385,17 @@ function collapse(group: Finding[]): Finding {
   return { ...winner, evidence, confidence: aggregateConfidence(group, winner.evidenceClass) };
 }
 
+/** Whether a waiver covers a finding: same rule, same screen, and a scope of '*' or its element key. */
+export function waiverMatchesFinding(w: Waiver, f: Finding): boolean {
+  return w.rule === f.rule && w.surface === f.screenId && (w.scope === '*' || w.scope === f.elementKey);
+}
+
 /** Expired waivers are inert. Fixed findings are never rewritten to waived. */
 function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Finding[] {
   const active = waivers.filter((w) => w.expires > now);
   return findings.map((f) => {
     if (f.status === 'fixed') return f;
-    const matched = active.some((w) =>
-      w.rule === f.rule && w.surface === f.screenId && (w.scope === '*' || w.scope === f.elementKey),
-    );
+    const matched = active.some((w) => waiverMatchesFinding(w, f));
     return matched ? { ...f, status: 'waived' } : f;
   });
 }
