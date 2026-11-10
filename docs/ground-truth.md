@@ -279,7 +279,7 @@ src/
   coverage/         import-graph.ts planner.ts route-manifest.ts docs-manifest.ts docs-planner.ts asciidoc-include-graph.ts
   gate/             index.ts
   trust/            guard.ts
-  intake/           schema.ts normalize.ts load.ts config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
+  intake/           schema.ts normalize.ts load.ts config.ts load-config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
   docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
   output/           conformance.ts summary.ts
   doctor/           index.ts
@@ -291,6 +291,7 @@ src/
   session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
+                    ledger.ts ledger-git.ts ledger-report.ts   (usabl debt ledger; measurement only, section 9)
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
     sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
@@ -402,6 +403,9 @@ export interface TranscriptStop {
   index: number;
   elementPath: string;
   announcement: AnnouncementToken[];
+  // Set only when the body had focus at this stop. The blank-page detector reads it, because a
+  // body with an id has that id as its path.
+  onBody?: true;
 }
 
 export interface ScreenScan {
@@ -587,6 +591,9 @@ export interface Page {
   drainAnnouncements(): Promise<string[]>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
+  // The browser's node id for the focused element, or null. It stays the same while the element
+  // is in the document, so the keyboard walk can tell a moved control from a new one.
+  activeElementKey(): Promise<string | null>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
   // Named attributes of the element and each element above it, nearest first, along the flat tree,
@@ -760,8 +767,26 @@ also returns a gap for each alert it could not check:
    tree, so a slotted alert climbs through its slot. It runs over CDP in an isolated
    world, so it sees slots inside closed shadow roots, which page script cannot, and a
    page that redefines `assignedSlot` or `parentNode` cannot change what it reads. An
-   alert passes only when the nearest value above it is polite or assertive and the
-   alert does not set off on itself. Its own live value does not count as a
+   alert passes only when the nearest value above it is polite or assertive, the
+   alert does not set off on itself, and neither the alert nor anything above it hides
+   its subtree from assistive technology with `aria-hidden`, `inert`, or `hidden`, by
+   the same rule the announcement capture applies. A live region inside such content
+   announces nothing, so the alert fails there, and the draft says it is hidden. The
+   ancestor read returns attributes and not tag names, so a closed `dialog` element
+   above the alert is not seen here. The fix for that case says to remove `aria-hidden`,
+   `inert`, or `hidden` from the alert and the elements above it. One case is the modal
+   pattern working as intended: a PatternFly modal sets `aria-hidden="true"` on the app
+   root, a child of the body, while it is open, and the live region works again when it
+   closes. So when the only hidden element in the chain is the body's child, and a modal
+   dialog is open outside it, the alert is judged by its live region alone, as with no
+   modal open. A modal counts as open when it is a `dialog` in the browser's `:modal`
+   state, or an element whose role and `aria-modal` make it a modal dialog, and it is in
+   the accessibility tree. The rule knows which entry of the chain is the body's child
+   only when the root element holds one body, no other child but the head, and the alert
+   is not in the head. When it cannot tell, and a modal is open, the alert gets an
+   `unverified` draft whose reason names the open modal, never a `fail`. An alert whose
+   own container is hidden, below the body's child, still fails with or without a modal.
+   Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
    its timer, and an alert with more than 512 ancestors each become their own
    not-covered gap, never a pass, and the check goes on to the other alerts.
@@ -769,7 +794,21 @@ also returns a gap for each alert it could not check:
    trigger.
 3. `pf-focus-into-dialog`: focus moves into a dialog or menu on open.
 4. `pf-kebab-expanded-state`: kebab and menu toggles carry correct aria-expanded and
-   aria-haspopup, and focus enters the menu.
+   aria-haspopup, and focus enters the menu. The menu probe clicks each toggle and waits
+   for a new menu the way the dialog probe waits for its dialog, polling for up to 2.5
+   seconds, so a menu that mounts a moment after the click is checked. When the toggle
+   declares `aria-haspopup="menu"`, or `"true"`, its legacy synonym, and no menu
+   appears, the probe emits one `unverified` draft, because it could not check where
+   focus goes. A toggle that promises no menu and opens none is not reported. A menu
+   counts as opened when it is new after the click, or when it was in the page but out of
+   the accessibility tree before the click and is in it after, as a menu toggled with the
+   `hidden` attribute is. This costs one accessibility read per menu in the page before
+   each click, and one per such hidden menu on each poll while the probe waits. A toggle
+   whose `aria-expanded` is `true` before the click is skipped when a menu is open on the
+   page, or when the element its `aria-controls` names is in the accessibility tree,
+   because the click would close that menu. With no menu open, the toggle reports a state
+   that is not true, so the probe emits one `unverified` draft that says so, and does not
+   click it.
 5. `pf-icon-button-name`: icon-only buttons, kebab toggles, and pagination arrows have
    an accessible name.
 6. `pf-table-header-assoc`: table header association is present, and empty/loading
@@ -840,16 +879,23 @@ and stay out of it.
 
 | Rule | Element | Fails when | Evidence |
 | --- | --- | --- | --- |
-| `rhds-button-accessible-label` | `rh-button` | no `accessible-label`, no default-slot text, and the tree name of the inner button is empty | tree |
+| `rhds-button-accessible-label` | `rh-button` | no `accessible-label`, no default-slot text a screen reader can reach, and the tree name of the inner button is empty | tree |
 | `rhds-cta-link` | `rh-cta` | no `href` or an empty one, and its first child in the default slot is not an `a` or a `button` | markup |
 | `rhds-tabs-paired` | `rh-tabs` | the count of `rh-tab` children in the tab slot differs from the count of `rh-tab-panel` children in the default slot | markup |
-| `rhds-dialog-name` | `rh-dialog` | no `accessible-label`, no `h1` to `h6` heading in the header or default slot, no trigger with text, and the tree name of the inner dialog is empty | tree |
+| `rhds-dialog-name` | `rh-dialog` | no `accessible-label`, no `h1` to `h6` heading with text in the header or default slot, no trigger with text, and the tree name of the inner dialog is empty | tree |
 | `rhds-switch-label` | `rh-switch` | no `accessible-label`, no `label[for]` that names its id, and the tree name of the host is empty | tree |
 | `rhds-accordion-header-parent` | `rh-accordion-header` | its parent is not `rh-accordion` | markup |
 | `rhds-skip-link-target` | `rh-skip-link` | no `href` (or an empty one) and no slotted `a`, or an `href` fragment that names no element by id (or an anchor by name) in the document, as written or percent-decoded | markup |
 
 Default slot means a child with no `slot` attribute or with `slot=""`, as the DOM assigns
-it. The component takes any unslotted heading as its name, so an `h1` counts.
+it. The component takes any unslotted heading as its name, so an `h1` counts. An empty
+heading names nothing, so it does not count as a name source, and the rule asks the tree.
+Default-slot text is only the text a screen reader can reach: text under `aria-hidden`,
+`inert`, `hidden`, a closed `dialog`, `display: none`, or `visibility: hidden` is left out,
+so an "x" under `aria-hidden` does not stand in for a name. Text hidden only on screen, such
+as a screen-reader-only class, still counts. A markup source that is missing sends the rule to
+the tree, so leaving hidden text out can only lead to more tree checks, never to a fail the
+tree does not confirm.
 
 All drafts are `deterministic`. The markup rules fail outright. The naming rules trust the
 accessibility tree: markup decides whether a name source exists, and a draft fails only when
@@ -907,8 +953,28 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
-**How the walk ends.** The walk starts on the body. Only focus on the body completes it: a
-browser moves focus there after the last control on the page. Tab that brings focus back to
+**How the walk ends.** The walk starts on the body. Only focus on the body can complete it: a
+browser moves focus there after the last control on the page. A script that blurs a control
+when it gets focus, or a keydown handler that stops Tab and drops focus, also leaves focus on
+the body, in the middle of the page. So the walk confirms the end with one more Tab. In
+Chromium, Tab after the last control moves focus to the body and the next Tab goes back to the
+first control, on a page with three controls and on a page with one; on a page with no control,
+every Tab leaves focus on the body (`test/providers/keyboard-walk.real.integration.test.ts`
+records this). The walk is complete only when that extra Tab lands on a stop it already walked.
+Any walked stop counts, not only the first, and a stop counts when it is the same element or has
+the same path. The element is matched by the browser's own node id, read over CDP
+(`Page.activeElementKey`), which does not change while the element stays in the document. So a
+first control that goes away during the walk, such as a timed banner whose removal moves every
+control after it to a new path, still wraps to a known stop, and so does a list that re-renders
+and puts a new item at the path of the first stop. When the browser gives a node id for both
+elements, a path match alone counts only for the first stop walked, so another element that took
+a later stop's path does not confirm the end. After the extra Tab, the walk discards what that
+Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
+where it did before the end was confirmed. A walk that reached no stop is complete only when
+the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
+below, which runs in the CLI only. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
+more Tab did not go back to a control the walk had reached. A page with one control or a skip
+link wraps as any other page does. Tab that brings focus back to
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
 never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
 `keyboard-walk-truncated` as `unverified`, and the cycle is the stops from the first visit of
@@ -960,6 +1026,28 @@ and frames, the walk cannot tell one control there from another. It stops and em
 `keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
 covered instead of passing. A closed shadow root that does not hold focus, such as one
 inside a focusable host, is walked past as usual.
+
+**A blank page.** Each stop of the transcript the check runner collects records whether the body
+had focus there (`onBody`), read from the page in an isolated world. A screen where every stop
+has focus on the body is unseen: a page that never rendered, one behind a login, and one that
+threw on mount all look like this, so its findings are dropped and it gets a `not-covered` gap
+(`coverage/unseen.ts`). The detector reads that fact, not the path. A body with an id has that
+id as its path, so `<body id="app">` never read as the body when the detector read the tail of
+the path, and a screen that crashed on mount read as seen. An empty transcript is no evidence
+either way, so it is not unseen. The detector runs in the CLI only. `checkPage` collects no
+transcript, so it has no blank-page detector: a blank or crashed page handed to `checkPage` reads
+as checked unless its screen declares a `reachedWhen` readiness signal that the page fails.
+
+Known limits of what the scan sees. A page with no tabbable control has a walk that stays on the
+body, so the CLI reads it as unseen. A readiness signal that holds does not change that, because
+the two detectors are independent (`coverage/unseen.ts`). In `checkPage` the same page reads as
+checked. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
+and that wait is a wall-clock limit: a menu or dialog that opens later is read as one that did
+not open, which is an `unverified` draft when the toggle or trigger promised it and nothing
+otherwise. The live-region
+capture still records text that is out of the accessibility tree in three cases it does not
+read: text under `content-visibility: hidden`, text inside a closed `details` element, and text
+under an element hidden through `ElementInternals`.
 
 The other checks that read focus treat an unreadable focus the same way. Each transcript
 stop records why its focused element could not be read. At such a stop, the interaction
@@ -1138,13 +1226,18 @@ step, with the reason in `evidence.extra.reason`:
 - `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;
 - `background announcements`: the only speech in the window came from a region that also wrote
   before the first step;
-- `step not run`: the flow driver does not run the step, such as an unknown kind, a click with no
-  selector, or a press with no key. The driver used to skip such a step without a word;
+- `step not run`: the flow driver cannot run the step as written, such as an unknown kind, a
+  click with no selector, a press with no key, or a step with a field its kind does not use. The
+  flow then runs none of its steps and is a `not-covered` gap (see "Flow steps the driver cannot
+  run" below), and the rule's gap for each such step comes with it. The driver used to skip such a
+  step without a word;
 - `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
   still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
   drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
   error, through the scrubber, because the browser's call log can quote the element's markup;
-- `read failed`: a read the rule needs failed.
+- `read failed`: a read the rule needs failed. The draft keeps only the first line of the error,
+  through the same helper as `step threw` and then the scrubber, because a browser error's later
+  lines can quote the element's markup.
 
 Only a step that was read in full, settled, and not busy is dropped when it changed nothing. A
 step that changed nothing but met `read failed`, `navigated`, `not settled`, `tree over budget`,
@@ -1152,7 +1245,7 @@ or `still busy` is still that gap, because those are checked before the trees ar
 
 Flow verdicts now read each step at its own time. The flow loop waits for the page to settle
 after each `click` or `activate` step, and drains after every step. Its verdict reads the union
-of every drain in step order, led by the drain taken before the first step. The hidden and modal
+of the drains taken after its steps, in step order. The hidden and modal
 rules (section 11.6) run when each drain is taken, so each step's text is judged against the page
 as it was after that step. Before, the flow drained once, right after its last step, with no
 wait, and judged every step's text against the page as it was then. This can change a flow
@@ -1170,6 +1263,69 @@ verdict, in both directions. A team can see these differences:
 The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 second cap, in every
 flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
 the late announcement at the flow verdict.
+
+Speech recorded before the flow's first step never counts. An earlier check can leave speech in
+flight, such as a status message that lands after its click. So before its first step the flow
+waits for the page to go quiet, with the same settle wait a `click` step uses, and then takes a
+drain. The capture runs for the life of the page, so that drain holds every announcement since the
+last drain on the page, such as one an earlier check caused, and any that landed during the wait.
+The flow's verdict never passes on that drain and never fails on it: the flow is judged only on
+what was announced after its first step ran. When the expected text is in that drain and the
+flow's own steps did not announce it, the flow is an `unverified` gap. The text was announced
+before the flow's first step, and an earlier check may have changed the page (it may have saved
+once already), so usabl cannot tell whether these steps announce it. When that drain does not
+hold the text either, the flow fails as before, or is a gap when the focused control cannot be
+read. The undecidable reason of that drain decides nothing either, since its texts are not read.
+The silent change rule still takes that drain as its background speech. The voice contract step
+runner already drained and discarded the same way.
+
+In a flow that expects an announcement, a page that does not go quiet within the wait's cap, or a
+wait that fails, makes the flow a `not-covered` gap that says so, and the flow runs none of its
+steps. A failure of the drain itself does the same, because the speech it should have cleared
+could then land in the first step's drain. A flow that expects no announcement judges no speech,
+so it runs on such a page as before. The wait costs at least 2 seconds per flow, up to the 6
+second cap. Real-Chromium tests hold this. In one, an earlier click announces "Saved" and waits,
+the flow only presses Tab, and the flow is a gap. In the other, an earlier click writes "Saved"
+300 ms later and does not wait, and the text lands in the drain the flow does not count.
+
+One limit stays. Speech an earlier check started that lands later than that wait is still read as
+the flow's own. A status message on a timer longer than the quiet window arrives in a step's drain,
+and the flow cannot tell it from speech its steps caused.
+
+Focus that was already there is not evidence. Before its first step, a flow that expects an
+announcement records the focused node, by DOM backend node id (`Page.focusedNodeId()`), and its
+accessible name. After its last step, the focused control's name counts toward the verdict only
+when the focused node or its name differs from what was recorded. When the expected text matches
+the focused control's name but neither changed, and no step's announcement held the text, the
+flow is an `unverified` gap that says focus was already on that control before the flow ran. When
+focus could not be read before the flow, whether it moved is unknown, and the same case is a gap
+that says so. A control drawn again with the same name is a new node, so it still counts as a
+change. A flow whose steps leave focus where it started, such as one that opens a dialog and
+closes it with Escape, is now a gap in this case where it passed, because an earlier check may
+have put focus there. A drain that cannot say what was heard makes the flow a gap on that reason
+unless the steps moved focus to a control with the expected name.
+
+Flow steps the driver cannot run. Before it runs any step, the flow driver checks every step. A
+`click` with no selector, a `press` with no key (a missing, empty, or blank value counts as no
+value), and a step of any kind other than `tab`, `activate`, `press`, or `click` cannot be run. An
+`activate` step presses Enter on the focused control and needs nothing more. A step that carries a
+field its kind does not use cannot be run as written either, because the driver would ignore the
+field and run something other than what was written. Examples are a selector on `activate`,
+`press`, or `tab`, a key on `click`, `times` on `tab`, `shift` on `press`, and `expectedAnnouncement`
+written inside a step, where the flow would then check nothing. A comment field such as `note` is
+an unused field too. `tab` and `activate` take only `do`, `press` takes `do` and `key`, and `click`
+takes `do` and `selector`. That list is one table beside the driver (`FLOW_STEP_FIELDS` in
+`src/intake/map-to-providers.ts`), and a test runs the driver on each kind and checks that it reads
+exactly those fields. When a step cannot be run as written, the flow runs none of its steps, takes
+no drain, and is a `not-covered` gap. The gap's reason names each such step by its number, counted
+from 0, its kind, what it is missing, and each unused field with the fields its kind takes. The
+flow never runs such a step as nothing and never passes. The requirement loader accepts these
+steps in a flow: a flow step needs only a non-empty `do` to load, and any other field loads with
+it. Only voice requirements refuse them when the file loads. So a flow file with such a step loads,
+and the driver then reports the flow as not covered. The gap of a flow provider that throws, as
+for any `ProviderRunFailed`, keeps only the first line of the error, through the same helper the
+silent change rule's gaps use, because a browser error's later lines can quote the element's
+markup.
 
 Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
 over either is the gap above. The time bound is a timer: each browser call in the read races it,
@@ -2602,6 +2758,123 @@ the first record shows the first record's date. An identity hash of a short name
 someone who can read the branch, but such a reader can already read the floor, which holds the key
 itself.
 
+### The ledger: how long accessibility barriers stay open
+
+`usabl debt ledger` lists every identity that was ever in the evidence floor on the trusted branch:
+when it was first seen, whether it is open, fixed, left the floor, or reopened, and how many days
+it was or has been open, with the way each number can be wrong. It is measurement only. It scans
+nothing, mints no verdict and no receipt, never blocks, and writes a file only when `--out` names
+one. No verdict path loads it: the gate, the run, the stop hook, the CI enforce step, and
+`checkPage` are checked by a test that walks their imports and fails if any of them, or the
+overlay host, reaches `src/cli.ts`. The CLI, which CI runs for `check` and `enforce`, loads the
+ledger only by a dynamic import inside the `debt ledger` command, and the same test fails if a
+static import comes back. The code is `src/history/ledger.ts` (the pure builder), `ledger-git.ts`
+(the two readers), and `ledger-report.ts` (the command).
+
+**Sources, in this order of trust.** First, the floor file's own history on the trusted branch:
+every commit on the first-parent line of `--trusted-ref` (default `HEAD`) that changed
+`.usabl-evidence.json`, read as committed objects. A merged branch counts at its merge commit. The
+commit where an identity enters the floor opens a span, and the commit where it leaves ends it.
+Second, the debt history at `origin/usabl/history`: records that confirm a floored accessibility
+barrier fixed, and records that show it seen again. History records are replayed in the order of
+the commits they scanned on the first-parent line, never in the order they were appended. Receipts
+are not a source, because a receipt holds counts and no identities. Nothing is read from the
+working tree. On `HEAD` of a feature branch, the floor history includes that branch's own floor
+commits.
+
+**One row per identity.** The identity is the one the floor keys on: screen, rule, and element
+key, row scope included. A row holds the screen, the rule, the element key as the floor stores it,
+first seen (commit and committer date), state, last change (commit and date), its open spans, days
+open, the two bounds below with their reasons, and the last full scan of main that saw it.
+
+- **Fixed.** Only the history shows a fix: two consecutive full scans of main, written against the
+  same floor, that both see no accessibility barrier at the identity. The fix is dated at the
+  second scan's commit. A scan with a gap on the screen is skipped and neither confirms nor breaks
+  the pair. A scan that still sees some accessibility barriers there keeps the row open. A record
+  the ledger cannot place in time blocks a fix for every identity it observes, because it may sit
+  between the two scans.
+- **Left the floor.** An identity that leaves the floor with no such pair of scans before it. A
+  fix, a floor reset, a re-baseline, a prune, a renamed screen, and a changed accessible name all
+  look the same here, and usabl cannot tell them apart without the history. Both bounds are set.
+- **Reopened.** An identity that closed, by a fix or by leaving the floor, and came back: a later
+  scan sees it after a fix, or a later floor holds it again. It is one row with every span listed
+  and days open as the sum of the spans. The text follows how the last span ended: "reopened, open
+  now", "reopened, fixed again" (a fix the history showed), "reopened, left the floor again", or
+  "reopened, open until a gap".
+- **Intermittent.** Two scans of the same source tree that see different counts show the
+  accessibility barrier comes and goes with the page content. The ledger then withdraws every fix
+  the history confirmed on that row, whether or not the row reopened since, and labels the row
+  intermittent. A withdrawn span ends where the floor alone says it ends. Debt tracking never
+  releases such an identity again either.
+
+**Which way a number can be wrong.** Every row carries two facts, each with its reasons.
+
+- `mayBeMore`: the true number could be larger. The row was already in the floor the first time
+  its screen was floored (the first baseline, a screen floored for the first time, or a partial
+  floor that was widened), it was in the oldest floor a shallow clone holds, it entered or ended at
+  a gap in the floor history, it left the floor, or commit dates go backwards along it.
+- `mayBeLess`: the true number could be smaller. There is no usable history for it (no history, an
+  unreadable one, or a history hash it shares with another identity), the history is on but no
+  full scan of main saw it during one of its spans, a record that touches it could not be placed
+  in time, it left the floor, or commit dates go backwards along it.
+
+The table prints "N days" when neither holds, "at least N" for `mayBeMore` only, "at most N" for
+`mayBeLess` only, and "not known (N by the floor)" for both. N is always the sum of the spans. The
+floor is accepted debt, not proof that an accessibility barrier is still on the page, so a span no
+scan saw is never called a lower bound. A row still open also shows the date of the last scan that
+saw it, when one did.
+
+**First seen is the earliest evidence.** It is never presented as the day an accessibility
+barrier was introduced. One in the first floor ever committed shows that commit's date, and the row
+says "seen at the first baseline; may be older".
+
+**Dates and days.** Committer dates in UTC. A committer date marks when a commit was made, not when
+it reached the branch. A span counts whole days, the floor of elapsed hours over 24, and days open
+is the sum of the spans, so a reopened row can lose up to a day per span. An open span ends at the
+committer date of the commit the trusted ref names, and the output names that commit and its
+date. The command reads no clock, so the same repository state gives byte-identical output, and an
+old ref counts to its own date. When a later commit on the line is dated before an earlier one, the
+row says that commit dates are out of order, a span that would be negative counts as 0 days, and
+both bounds are set. Nothing is clamped silently.
+
+**When history is incomplete.** The ledger names the rows a gap touches and why, never fills it
+with a guess, and never drops a row.
+
+- A shallow clone (`git rev-parse --is-shallow-repository`): rows in the oldest floor the clone
+  holds may be older.
+- A floor rewritten to a new version: an identity that leaves the floor there is not called fixed
+  or left. Its row is "open until a gap", counted to that commit, and it may have stayed open after.
+  An identity that enters there may be older under an earlier key.
+- A floor that could not be read at a commit, or a floor file that was deleted: the same rules,
+  counted from that commit.
+- A missing or unreadable history branch: every row says a fix main confirmed would not show, and
+  so may be smaller. An empty ledger says the history is missing too.
+- A history record whose commit the ledger cannot place on the first-parent line: it is not used,
+  it blocks fixes for what it observes, and the rows it touches say so.
+
+**Limits.** Each floor version is cut to its version, its scope, and its identities as it is
+read, and an identity held by many floors is one shared object. When the floor history holds more
+than 2,000,000 floor entries across its floor commits, or one git read prints more than 256 MiB,
+the command says the limit, says it did not run, and says to name a narrower ref with
+`--trusted-ref`, or to run it in a full clone if the clone is shallow. The git readers pin their
+output against the person's git config: `--no-show-signature`, `--no-color`, `--no-decorate`,
+`log.follow=false`, replace refs off, and a format of commit ids and epoch seconds only.
+
+**Output.** The terminal view is a table sorted by days open, longest first, then a totals line
+with the number of open, fixed, left the floor, and reopened rows. The median and the longest of
+each are taken over the rows where neither bound holds, the line says how many those are, and with
+none there is no median. `--json` prints the full ledger and `--out <file>` writes it to a file.
+Every string printed, in the table and in the JSON, goes through the published scrub first,
+because an element key, a screen id, or a rule can carry page-derived text. The ledger makes no
+claim about how fast a team fixes things and no claim about compliance. No result on a real
+repository is claimed here: the hand count in `test/history/ledger-git.test.ts` is a scripted
+history.
+
+**Exit codes.** 0 when it ran. 2 when no commit on the trusted ref ever held a floor. 4 when the
+folder is not in a git repository, the ref does not resolve, git cannot read the history, the
+history is larger than the limits, or the ledger's own check finds spans that overlap or count more
+days than have passed since first seen (a bug, so it prints no numbers).
+
 ### Failure taxonomy
 
 - No UI-touching files: nothing to check (`verdict: null`, exit 0). Not `not_covered`.
@@ -2798,7 +3071,8 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
 `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
-`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, and `help`. `check` is the default
+`session`, `debt` (with its `ledger` subcommand), `history`, `serve-build`, `extract-build`,
+`verify`, and `help`. `check` is the default
 when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
@@ -2861,6 +3135,15 @@ lines.
   and how many barriers are intermittent. It reads the floor (at `--trusted-ref` when given) and
   the history branch, scans nothing, and decides nothing. With tracking off it lists the floor
   and says why the dates are missing and how to turn tracking on. `--json` prints the same data.
+  `--out` is refused there, because plain `usabl debt` writes no file.
+- Debt ledger: `usabl debt ledger [--json] [--out <file>] [--trusted-ref <ref>]` is the ledger of
+  how long accessibility barriers stay open (section 9, The ledger). It reads the floor history of
+  the trusted ref (default `HEAD`) and the history branch as committed objects, prints a table
+  sorted by days open with a totals line, and writes the full ledger as JSON only when `--out`
+  names a file. Each row is open, fixed (two clean scans), left the floor, or reopened, and its days
+  say which way they can be wrong. Open rows count to the commit the ref names; it reads no clock.
+  It decides nothing. Exit 0 when it ran, 2 when no floor was ever committed, 4 when git cannot
+  run there or the history is larger than its limits.
 - History: `usabl history record --out <file>` scans every screen of main and writes one history
   record to the file; `usabl history append <file>` adds it to the local `usabl/history` branch
   on top of `origin/usabl/history` and never pushes. Both run only in the default-branch
@@ -2926,7 +3209,76 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- The repository root, then the config, before anything is parsed. The hook finds the
+  repository root with `git rev-parse --show-toplevel` from the folder it starts in, because
+  that folder follows the assistant when it changes directory. When `CLAUDE_PROJECT_DIR` is set
+  and names a folder, the hook starts there; Claude Code sets it to the project root. The
+  config, the receipt, the bypass file, the scan, and the session pin key all use the root. The
+  hook then compares the raw bytes of
+  `usabl.config.json` in the working tree with HEAD:
+  - HEAD has the config and the working copy is the same bytes: the hook parses it and goes on.
+  - HEAD has the config and the working copy differs, is missing, or cannot be read, or the
+    config does not parse: block as approval required, before anything parses the working
+    copy. The reason opens "NOT verified - approval required:", says what happened and that
+    nothing was checked, tells the model not to edit the file to clear it, says what clears it,
+    and names `usabl bypass`. Read and parse errors go inside the untrusted frame.
+  - Neither HEAD nor the working tree has the config: allow with "NOT verified - usabl is not
+    configured here: ..." and the step to run `usabl init`. Nothing runs.
+  - The working tree has the config and HEAD does not, but HEAD exists (a new, uncommitted
+    setup): the guard reports `usabl.config.json` as a changed guarded file, as it does for any
+    new guarded file, so the run goes on and ends `approval_required`, which blocks. A new
+    config that does not parse blocks as approval required before the run.
+  - A repository with no commits yet, or an orphan branch with no commit yet, has no HEAD. The
+    hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
+    fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
+    commit" step inside the untrusted frame. It does not block.
+  - Neither HEAD nor the working tree has the config, but this session already recorded pins for
+    this repository root: an earlier stop read a committed config, so the config was removed and
+    committed during the session. That is drift, and the stop goes through the drift block, with
+    `drifted files: usabl.config.json` inside the frame.
+  - The hook found no git work tree from the folder it started in, for example `.git`: allow
+    with "NOT verified - the stop hook ran in a folder outside any git work tree, or git could
+    not run there ... so it could not find the repository and checked nothing on this stop.",
+    the folder inside the untrusted frame, and the step to run `usabl check` from the project
+    root. "usabl is not configured here" is only for a real repository with no config.
+  Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
+  `loop_count` above 0), marked NOT verified, as every other block does. A continuation that
+  goes through tells the model not to edit the file to make a later stop pass; only a block
+  speaks of clearing it.
+- Input that is not JSON: allow with "NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop.", then the step to check the hook command in `.claude/settings.json` or `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check` before calling the change accessible.
+- An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
+  does not show the stderr of a Stop hook that exits 0, and sends its plain stdout to the debug
+  log. So in the Claude protocol, an allow also writes one JSON object to stdout,
+  `{"systemMessage": "..."}`, with the same text stderr gets, and Claude Code shows that field to
+  the person. It is shown for every allow except a verified stop and an idle stop that carry no
+  notice. So it covers every "NOT verified" allow, the "not configured" and "outside a work tree"
+  allows, a run that failed, bypass, every continuation, the pin notices, the "NOT saved" receipt
+  notice, and the invalid input message, and a verified or idle stop that carries a notice gets
+  the whole text. An idle stop means no UI file changed; it is not a failure to check, and a
+  message on every such stop would be noise. Carried values in it are scrubbed and framed as on
+  stderr. A verified or idle stop with no notice writes nothing to stdout. A block is sent
+  as before, as one decision object, and its notices follow on stderr. Cursor's stop hook
+  answer has no field for the person: usabl answers `{}` and writes the notice to stderr, which
+  Cursor does not show in the chat. It is in Cursor's hook output log (the Hooks output
+  channel), which a person has to open.
+- Diverged guarded policy on a run with no verdict: block, whatever the exit code. `run()`
+  ends a run where every screen was unseen with no verdict and exit 4, and the guard still
+  reported the diverged files on it. The hook counts those and the ones its own guard found
+  before the run, so a crash that carries none still blocks. The line opens with the run's
+  own verdict word, for example "NO VERDICT: RUN FAILED (exit 4): NOT verified. Guarded policy
+  files changed, so this change needs approval whatever the run found.", then the approval
+  step and the guarded file lines, with the paths inside the untrusted frame. During an active
+  continuation it allows once, marked NOT verified.
+- usabl not installed: the generated hooks run `npm exec --no -- usabl stop-hook`, which never
+  downloads a package. It runs a local or global install, or a copy already in npm's own cache,
+  and with none of those it makes one registry request and fails. The generated Claude command is
+  a POSIX shell line (`npm_config_loglevel=silent npm exec --no -- usabl stop-hook || { ...; exit
+  1; }`). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
+  usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
+  it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
+  block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets
+  the agent finish. Neither reads it as a pass, and neither is a block a person must clear.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
@@ -2935,15 +3287,28 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   committed policy as it was when the receipt was minted. A policy weakened and committed
   during the session, then checked under the weaker policy, mints a receipt that matches, and
   only the pins see that drift. The fast path records or replaces pins exactly as a full run
-  does. The line reads "VERIFIED (exit 0): a stored receipt matches this tree, the committed
-  policy, the engine, and the scanners. No new scan ran. You may stop." When this stop
+  does. The line reads "VERIFIED (exit 0, stored receipt, not re-scanned): this result comes
+  from a stored receipt. usabl did not scan this change again on this stop. The receipt matches
+  this tree, the committed policy, the engine, and the scanners. You may stop." When this stop
   compared the pins and found no drift, "Guarded policy files match the session pins." comes
-  before "No new scan ran." When the pins were not used, the line carries the
+  before "You may stop." When the pins were not used, the parentheses also carry the
   `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  A receipt is a local file with no signature. A user with a shell on the same machine can
+  write one that verifies, so the line says where the result came from (threat model, Threats
+  1 and 4).
   Detected drift prevents the fast allow: the stop blocks whether or not a receipt matches,
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
+- Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
+  hook reads and writes it under the repository root; `usabl check` writes it in the folder it
+  runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
+  or at the receipt file, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place, as the session pin store does. A save that fails for any reason, a
+  refused link or an error such as `EACCES`, changes no verdict: the hook says "NOT saved -
+  usabl did not save the receipt ..." after the decision line, and the next stop runs the full
+  check. For an error, the first line of the error follows inside the untrusted frame under
+  `reason:`.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with
@@ -2953,8 +3318,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
-- A verdict that is not one of the contract's words, or a null verdict on a run that was neither
-  idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
+- A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
+  null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
   reported, so the run proved nothing about this change." or "NO VERDICT (exit 0): NOT verified.
   usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
@@ -3093,6 +3458,28 @@ Result, or writes it to the run summary on a pull request from a fork. `usabl-po
 `usabl enforce policy --trusted-ref <base SHA>` with the head read only as git objects.
 `usabl-required` (`if: always()`, needs all five) sets the required status. Serving, scanning,
 policy, and the comment all read the one base commit the event names, never a branch ref.
+Each gate triggers on pull requests into one branch, written quoted in its `pull_request`
+trigger. The installer takes it the way it takes the history workflow's branch (below): from
+`refs/remotes/origin/HEAD`, a plain name only, main and a printed step when git names none, and
+the branch already in usabl's own file kept on a re-run. That trigger line is the only line of a
+gate that changes with the branch, and the file then names the branch: doctor and the installer
+recognise usabl's own draft for whichever plain branch the trigger names, and any other trigger
+form is drifted. The branch filter applies to the `pull_request` event only. GitHub takes no
+branch filter on `pull_request_review`, so a review on a pull request into any branch starts the
+gate. The judge then looks for the `pull_request` run that built this exact pull request, head,
+and base (below). A pull request into another branch normally has none, so the judge fails closed
+and `usabl-required` reports red on it; that red check blocks nothing on a branch that does not
+require it. When the gate, the docs gate, and the history workflow on disk name different
+branches, the installer prints one step naming each file and its branch, and changes none of
+them. A gate, docs gate, or history workflow that is byte for byte the unedited draft an earlier
+0.3.0 build wrote (a gate triggering on an unquoted `[main]`, and older comment text) is rewritten
+to this draft with the engine pin it held, if it held one. The rewrite line says when the trigger
+moved, from which branch to which, and the line to change to put it back (`origin/HEAD` can be
+stale after a rename), and says to commit the file. Doctor reads such a file as drifted and says
+to run the installer; it says the pin is kept only when the file has one. The step that places
+the engine at `../usabl` skips the unpack when that path is the checkout itself (a repository
+named usabl). It prints one line that also says an app installing usabl from `file:../usabl`
+cannot build there, and that renaming the repository fixes it.
 
 **The engine pin and the install report.** `npm run build` ends with
 `scripts/write-build-info.mjs`, which writes `dist/build-info.json`: the package version, the
@@ -3106,16 +3493,20 @@ that cannot be fetched from `usabl-dev/usabl`, makes the engine checkout fail, s
 workflow file is written when absent, left alone when identical, filled in when it is the
 unedited sentinel draft and the build has a commit, left alone with its commit named when it is
 the draft pinned to another commit, and refused when anything else differs. `usabl doctor`
-still reads a workflow that holds the sentinel as not wired: the gate on its `ci` line, and the
-history workflow on its own `history-ci` line, recognised for whichever branch its trigger names
-(no history workflow reads as missing, since it is optional). The report lists the outcome for
+still reads a workflow that holds the sentinel as not wired: the gate on its `ci` line, the docs
+gate on its own `docs-ci` line, and the history workflow on its own `history-ci` line, each
+recognised for whichever branch its trigger names and labelled with that branch (no docs gate
+and no history workflow read as missing, since both are optional). The report lists the outcome for
 each file, then the facts once, then the steps still needed: pin the engine (only with the
 sentinel), run `usabl init` or fix `appBaseUrl` (only when `usabl.config.json` has no loopback
 http `appBaseUrl` with a port), add a `dev` script (`install --ci` only, when `package.json` has
 none), merge `usabl.config.json` (and `usabl.routes.json` when the working tree has one) to the
-default branch first in their own pull request (`install --ci` only, unless git shows that
-`refs/remotes/origin/<default branch>` already holds the same bytes; the judge reads them at the
-base commit, so a pull request that adds them with the workflows cannot pass), and, when a file
+default branch first in their own pull request (for `install --docs-ci` the files are
+`usabl.config.json` and `usabl.docs.json`, and `usabl.routes.json` when the working tree has one;
+left out when git shows that `refs/remotes/origin/<default branch>` already holds the same
+bytes; the judge reads them at the base commit, so a pull request that adds them with the
+workflows cannot pass), check the branch name (when git names no default branch) or make the
+files name the same branch (when they differ), and, when a file
 was written, commit, add the branch rule, and open a pull request. Before
 init, the report reads the port from a `--port` in the `dev` script, `server.port` in the Vite
 config, or `devServer.port` in the webpack dev config (a literal, a module-level binding to one,
@@ -3146,9 +3537,20 @@ evidence. The protection is a branch rule or ruleset that requires review from c
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
 `usabl install --branch-rule` verifies the required check, code-owner review, at least one
 required approving review (a count of 0 requires no review at all), and dismissal of stale
-approvals on push, each by classic protection or by an active ruleset; a ruleset on
-`~DEFAULT_BRANCH` counts only when the repository's default branch is `main`. Each part that is
-off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`: wired only when the last
+approvals on push, each by classic protection or by an active ruleset, on the branch the gate
+workflow on disk names in its trigger. With no gate workflow, it reads the branch the docs gate
+workflow names, since the docs gate requires the same check, and its advice names
+`install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
+or no permission), it checks `main` and says it assumed it in each line that names it. An
+assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
+default branch. When GitHub reports another default branch, or cannot say which one it is, the
+result is "cannot verify": it names both branches when it can, and the next step. A default
+branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. When a gate
+names one branch and GitHub's default branch is another, the output says in one line that the
+gate covers only pull requests into the branch it names, and names the line to change. Each part
+that is off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, with the branch lines in the next step; a verified branch that
+is not GitHub's default branch reads as drifted, not wired. It also reports `workflow-owners`: wired only when the last
 `CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
 rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
@@ -3159,8 +3561,8 @@ three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it h
 build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
 `usabl doctor` reads the engine's own gate as `drifted`. That is the expected reading for the
 one repository that is its own engine. The required status check named in branch protection is
-`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is
-`main`. Both `enforce` commands read Result JSON from stdin and never call the gate.
+`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is the
+one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape
@@ -3206,10 +3608,11 @@ from `refs/remotes/origin/HEAD` in the app's clone and writes it, quoted, into t
 and the `history-scan` job's `if:`; the report names it. A name with any character outside
 letters, digits, and `. _ - /`, or no such ref, means not found: the installer writes main and
 prints a step to change it on those two lines. A re-run keeps the branch its own file already
-names. The text below says main for that branch. It builds the engine with the same `usabl-engine` job
+names. Those two lines are the only ones that carry the name; comments and step names say
+"the default branch". It builds the engine with the same `usabl-engine` job
 as the gate, and each later job fetches the archive and the record with usabl's own fetcher,
 checks the archive against `engine_digest`, and checks the unpacked tree before each engine run. Its
-`history-scan` job checks out main, reads `appBaseUrl` from main's `usabl.config.json`, starts
+`history-scan` job checks out the default branch, reads `appBaseUrl` from its `usabl.config.json`, starts
 the application with `npm run dev -- --host <host> --port <port>` on that origin, runs
 `usabl history record`, and uploads the record. An `appBaseUrl` that is missing, unreadable, or
 not an http loopback origin with an explicit port fails the job before the application starts. It runs application code, so it reads only. Its `history-append` job needs
@@ -3246,10 +3649,10 @@ not because the loop requires it.
 The gate stays at Stop. Neither path lets the agent grade its own work.
 
 **Task brief (`usabl brief`).** Before it starts a task, the agent runs
-`npx usabl brief --json --files <paths>` with the files the task will edit. At that point the
+`npm exec --no -- usabl brief --json --files <paths>` with the files the task will edit. At that point the
 tree is usually clean, so a brief of the changed files would have nothing to check. The
 installed `/usabl-check` skill and the Cursor rule open with that step, and the skill's
-`allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
+`allowed-tools` lists `Bash(npm exec --no -- usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
 when that is not plain, why: an intake requirement (content, flow, or voice) applies only to
@@ -3348,7 +3751,16 @@ that writes `Saved` into a polite region inside its dialog and closes the dialog
 is not heard: by the time the change is read, the dialog is closed, and no screen reader speaks the
 text. The hidden state is read again at drain, the way the modal state is, so a region whose
 dialog closes one task later, or after a promise that follows the write, is not heard either.
-Anything that hides the region by the drain decides, which can only make the capture hear less. It covers a region inside `aria-hidden="true"`, an
+Anything that hides the region by the drain decides, which can only make the capture hear less.
+Inside a live region, the capture records only text in the accessibility tree. A change whose
+added nodes are all out of it is not recorded, and the text recorded for the region leaves out
+every part under `aria-hidden`, `inert`, `hidden`, a closed `dialog`, `display: none`, or
+`visibility: hidden`. So text written into a polite region only under an `aria-hidden` child, which
+no screen reader speaks, cannot satisfy a flow's expected announcement. Text hidden only on
+screen stays in the tree and every screen reader speaks it, so it is still recorded: PatternFly's
+screen-reader class, a clip rectangle, a box of zero size, opacity 0, and a `display: contents`
+wrapper. Visibility is read on the element that holds each text node, so a child that sets
+`visibility: visible` inside a hidden wrapper is heard. It covers a region inside `aria-hidden="true"`, an
 `aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
 says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
 back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as
@@ -3434,6 +3846,39 @@ invisible character, throws `InputRefusedError` before `checkPage` reads the pro
 the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
+
+**The page's address.** A test whose session expired lands on a sign-in page, and the page
+handed to `checkPage` is then not the screen it is labeled with. So when `options.screenId`
+names a surface that `usabl.config.json` lists, `checkPage` holds the page to that surface's
+`url`. The caller can pass `options.expectedUrl` instead, as a full address or a path such as
+`/clusters` read against the page's own address. Only the path, with one trailing slash removed,
+and the fragment are compared. The origin and the port are set aside, because a test often runs
+on its own base URL, on another port, or on `localhost` where the config says `127.0.0.1`. The
+query is set aside too, as in the CLI's Rule C. The fragment is compared because a hash router
+keeps the whole route there. A hash route, a fragment that starts with `#/`, is read the way a
+path is: only the part before its first `?` is compared, with one trailing slash removed, so
+`#/clusters?page=2` and `#/clusters/` match `#/clusters`. Any other fragment is compared whole.
+An `expectedUrl` that is not an http or https address, such as `about:blank`, is the same
+`landing:<screenId>` gap, with a reason that says so, and `checkPage` does not throw. When the
+screen declares no readiness signal, `checkPage` first waits for the page to settle, as the CLI
+does, and then reads the address. It reads the address again after the checks, and a page that
+left its screen while they ran is the same gap, with its findings dropped. A page at another path or fragment is a `not-covered` gap with ref
+`landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
+and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
+applied to the page, with the expected address moved onto the page's own origin, so Rule C
+compares only the path and the fragment. Rules A and B fire only when the run asserts a session,
+because they are claims about a session that was asserted and did not work. A test asserts one
+with `options.signedIn: true`, or the CLI's way, with `USABL_STORAGE_STATE` set. A Playwright test
+usually signs in through its context's storage state, which usabl cannot see, so it says so with
+`signedIn`. Without `signedIn` or the variable, a sign-in page served at the screen's own path,
+as a sign-in proxy can serve it, is not caught: the path matches and Rules A and B are off. An adopted page records only the requests sent after `checkPage` was
+called, so Rule A sees a refusal only from those, and it is read again after the checks, as in the
+CLI. A rule that fires is the same `landing:<screenId>` gap. An unlabeled page, and a page whose id
+names no configured surface, claims no address, so it is not held to one unless the caller passes
+`expectedUrl`. The address check runs after the readiness wait described next. A page that the
+test opened with `setContent` is at `about:blank`, so a labeled one is a gap; serve it at the
+screen's address or leave it unlabeled. An in-page anchor changes the fragment, so a page whose
+test followed one is a gap until the caller passes `expectedUrl` with that fragment.
 
 When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
 holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits
@@ -3528,7 +3973,7 @@ optional. There is no "partial" mode and no per-surface strictness.
 Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
-exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
+exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npm exec --no -- usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch requires the `usabl-required`
 status check and review from code owners, which prints the setting and the `CODEOWNERS` lines
@@ -3729,7 +4174,9 @@ add content and flow assertions that the engine enforces alongside the default s
   aria-label against the approved string).
 - `flow` requirements become declarative interaction probes (same step runner as the
   keyboard walk probes). The silent change rule watches their click and activate steps
-  (section 7.5.1). A step the flow driver does not run is reported as a gap of that rule.
+  (section 7.5.1). A flow with a step the driver cannot run, such as a click with no selector,
+  runs none of its steps and is a `not-covered` gap that names the step (section 7.5.1). Its
+  verdict reads only what was announced after its first step ran.
 - `doc` requirements are not runtime checks; they feed the output module.
 - `voice` requirements become interaction contracts, one virtual screen reader provider each
   (section 7.5).

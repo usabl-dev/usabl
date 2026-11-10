@@ -43,25 +43,20 @@ export interface UnseenPass {
 }
 
 /**
- * A live blank page reports the document body for every tab press. The page driver writes an
- * nth-child ancestry, so the body arrives as `html > body:nth-child(2)` rather than a bare tag
- * name, and a body carrying an id would arrive as that id instead. Match the tail segment so
- * both real shapes are covered without parsing a selector.
- */
-function isDocumentBody(elementPath: string): boolean {
-  const tail = elementPath.split('>').at(-1)?.trim() ?? '';
-  return tail === 'body' || tail.startsWith('body:');
-}
-
-/**
  * The observed signature from a login-gated application scanned with no session: fifty tab
  * presses, focus never off the body, nothing focusable anywhere on the page.
+ *
+ * Each stop says whether the body had focus, as the step runner read it from the page. The path
+ * cannot say so: the page driver gives the body an nth-child path such as
+ * `html > body:nth-child(2)`, and a body with an id, such as `<body id="app">`, gets that id as its
+ * path. A detector that read the path missed that body, so a screen that crashed on mount read as
+ * seen.
  *
  * An empty transcript is not this. It means no keyboard walk was recorded, which is the absence
  * of evidence rather than evidence the screen was blank.
  */
 function isBodyOnly(scan: ScreenScan): boolean {
-  return scan.stops.length > 0 && scan.stops.every((stop) => isDocumentBody(stop.elementPath));
+  return scan.stops.length > 0 && scan.stops.every((stop) => stop.onBody === true);
 }
 
 function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {

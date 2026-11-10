@@ -1,7 +1,7 @@
 /**
  * rh-dialog naming check. Markup decides whether a name source exists: an accessible-label, an h1 to
- * h6 heading in the header or default slot, or a trigger element with text, which the component
- * uses as its fallback name. Only when there is none is the accessibility tree asked. A closed
+ * h6 heading with text in the header or default slot, or a trigger element with text, which the
+ * component uses as its fallback name. Only when there is none is the accessibility tree asked. A closed
  * dialog is absent from the tree, which is unknown rather than an empty name.
  */
 import type { Draft, ProviderContext } from '../../contracts/index.js';
@@ -34,6 +34,18 @@ export function headingsIn(host: string): string {
   ].join(', ');
 }
 
+// Whether any heading the component would take as its name has text a screen reader can reach. An
+// empty heading names nothing, so it must not let the rule skip the accessibility tree check.
+async function headingHasText(ctx: ProviderContext, host: string): Promise<boolean> {
+  for (const heading of await ctx.page.queryAll(headingsIn(host))) {
+    const markup = await ctx.page.hostMarkup(heading.selector);
+    if (markup !== null && hasText(markup.defaultSlotText)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function triggerHasText(ctx: ProviderContext, id: string | undefined): Promise<boolean> {
   if (id === undefined || !hasText(id)) {
     return false;
@@ -50,7 +62,7 @@ export async function checkRhdsDialogName(ctx: ProviderContext): Promise<Draft[]
     if (markup === null || hasText(markup.attributes['accessible-label'])) {
       continue;
     }
-    if ((await ctx.page.queryAll(headingsIn(host.selector))).length > 0) {
+    if (await headingHasText(ctx, host.selector)) {
       continue;
     }
     if (await triggerHasText(ctx, markup.attributes['trigger'])) {

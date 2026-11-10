@@ -19,6 +19,7 @@ import type {
   Step,
 } from '../contracts/index.js';
 import { AX_TREE_NODE_BUDGET, AX_TREE_TIME_BUDGET_MS } from '../deps/ax-tree.js';
+import { firstLine } from '../primitives/first-line.js';
 import { scrubOutboundData } from '../surfaces/scrub.js';
 import { compareAxTrees, isNoChange, type TreeChange } from './tree-change.js';
 
@@ -232,8 +233,8 @@ const GAP_TEXT: Record<SilentChangeGap, { why: string; fix: string }> = {
     fix: MANUAL_CHECK,
   },
   'step not run': {
-    why: 'the flow does not run this step, so nothing was judged for it',
-    fix: 'Write the step as one the flow runs: tab, activate, press with a key, or click with a selector.',
+    why: 'the flow cannot run this step as written, so it ran none of its steps and nothing was judged',
+    fix: 'Write the step as one the flow runs, with only the fields its kind uses: tab, activate, press with a key, or click with a selector.',
   },
   'step threw': {
     why: 'the step failed, so it and the steps after it were not judged',
@@ -352,12 +353,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The first line of an error message. A browser error's later lines can be its call log, which can
-// quote the element's markup and the row data in it.
-function firstLine(text: string): string {
-  return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
-}
-
 const EMPTY_TREE: AxTreeRead = { kind: 'tree', documentNodeId: null, nodes: [] };
 
 /** A new watch for one run of one step loop. */
@@ -452,7 +447,10 @@ export function makeSilentChangeWatch(): SilentChangeWatch {
         background,
       );
       if (judgment.kind === 'gap' && judgment.reason === 'read failed') {
-        outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment, detail: state.readError ?? 'the drain failed' });
+        // Only the first line of the error, as for a step that threw: its later lines can quote the
+        // element's markup.
+        const detail = state.readError === null ? 'the drain failed' : firstLine(state.readError) || null;
+        outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment, detail });
         return;
       }
       outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment });

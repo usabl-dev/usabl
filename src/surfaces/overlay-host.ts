@@ -6,7 +6,7 @@
  * Nothing here converts advisory display state into a process exit or a verdict.
  */
 import { resolve, relative } from 'node:path';
-import { loadConfig } from '../cli.js';
+import { loadConfig } from '../intake/load-config.js';
 import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';

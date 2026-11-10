@@ -50,7 +50,7 @@ async function hostileUnseenRun(): Promise<Result> {
       [HOSTILE]: {
         screenId: HOSTILE,
         url: `${config.appBaseUrl}/${HOSTILE}`,
-        stops: [{ index: 0, elementPath: BODY_PATH, announcement: [] }],
+        stops: [{ index: 0, elementPath: BODY_PATH, announcement: [], onBody: true }],
         drafts: [],
         gaps: [],
         applicability: [],

@@ -77,8 +77,14 @@ re-baseline to green.
   copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
   every screen and surface id against the shared id grammar. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
+- Limit, stated plainly: a user with a shell on the same machine can write a local receipt
+  that verifies. Every binding the receipt carries (tree, policy hash, engine and scanner
+  versions, history head) can be computed again by that user, and `mintReceipt()` is exported.
+  Receipt signing is not built. So the Stop hook's fast path says on its first line that the
+  result comes from a stored receipt and was not re-scanned. CI never reads a local receipt;
+  the CI gate scans the pull request itself.
 
-**Status:** [x] Documented in ground-truth.
+**Status:** [x] Documented in ground-truth. [ ] Receipt signing is not built.
 
 ---
 
@@ -147,9 +153,26 @@ passing bundle from another run.
   drifted file paths, the session id from the hook input, the pin store's reasons and fixes
   (which name directories from the environment), and error text. A guarded file name with a
   line break and an instruction in it is printed as data, never as usabl's own words.
-- Future: signed attestation on the receipt (engineering §7).
+- A receipt is not signed. A user with a shell on the same machine can write a receipt that
+  verifies: each binding can be computed again by the same user, and `mintReceipt()` is
+  exported. The bindings stop a receipt lifted from another run, not one written on purpose on
+  this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
+  re-scanned)" and says usabl did not scan the change again on that stop.
+- The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
+  `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
+  CI the pull request head would pick the target. The receipt store refuses a link at either
+  place, writes a temp file opened with no-follow and exclusive create, and renames it into
+  place. `usabl check --ci` saves no receipt.
+- Residual: the store checks `.usabl` with `lstat`, then opens the temp file by its full path.
+  No-follow covers only the last part of that path. A process running as the same user that
+  swaps `.usabl` for a link between the check and the open puts the temp file, and then
+  `receipt.json`, in the link's target folder. Only the same user, at the same moment, can do
+  this, and a committed link is refused before the write, so the risk is low. A save that
+  fails for any reason changes no verdict.
+- Future: signed attestation on the receipt (engineering §7). Signing is not built.
 
-**Status:** Receipt bindings ship and re-verify; cross-run signing is still open.
+**Status:** Receipt bindings ship and re-verify. Receipt signing is not built, so a same-machine
+shell user can write a receipt that verifies.
 
 ---
 
@@ -169,6 +192,24 @@ awareness.
 - When an optional commercial engine is on, its installed package version is recorded in
   `scannerVersions.engines`, so a vendor upgrade, or an engine turned on or off, fails
   `verifyReceipt` the same way. usabl cannot pin a vendor package; the operator installs it.
+- Generated hooks, skills, and Cursor files run `npm exec --no -- usabl`, never `npx usabl`.
+  With usabl not installed, `npx usabl` downloads and runs whatever package holds the npm name
+  usabl, with no prompt when stdin is piped, as it is for a hook. `npm exec --no` runs a local
+  or global install, or a copy of usabl already in npm's own cache, and otherwise fails. It never
+  downloads a package. The hooks then print one line that
+  says usabl did not run and how to install it, and exit 1, which Claude Code and Cursor treat
+  as a failed hook that does not block. The skills and the Cursor files tell the assistant not to
+  install or download a package named usabl to work around it. A reinstall rewrites a file an
+  earlier release wrote with `npx usabl`, and `usabl doctor` reports such a file as a security
+  drift. Residual: a person who types `npx usabl` by hand in a project without usabl still
+  downloads whatever holds the name. Reserving the npm name closes that, and it is a maintainer
+  action, not code.
+- Residual: with usabl not installed, `npm exec --no` still asks the registry for the usabl
+  package manifest, so each stop makes one registry request. If npm's cache already holds a copy
+  that matches the latest version on the registry, from an earlier `npx usabl` for example, `npm
+  exec --no` runs that copy without a download. That copy is whatever held the name when it was
+  cached. Today the npm name holds a placeholder with no command, so the risk is low. Installing
+  usabl in the project closes it, because a local install is found first and npm asks nothing.
 
 **Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The maintainer review rule
 for scanner bumps is process, not code.
@@ -597,6 +638,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
   inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
   draft stays, so the screen is not covered rather than passed.
+- Focus on the body ends the walk as complete only when one more Tab lands on a stop the walk
+  already reached: the same element by the browser's node id, or the same path. When the browser
+  gives a node id for both, a path match alone counts only for the first stop walked. A page
+  script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
+  body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
+  control not yet walked, so the walk ends with the truncation draft instead. A walk that reaches
+  no stop is complete only when the extra Tab leaves focus on the body, and that page is left to
+  the blank-page detector, which runs in the CLI only. `checkPage` has no blank-page detector, so
+  there a blank page is caught only by a `reachedWhen` readiness signal.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
@@ -623,6 +673,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   leaves out of the accessibility tree for a `showModal()` dialog and Safari with VoiceOver hides
   for an `aria-modal` dialog. See ground-truth for the platform facts.
 
+- The live-region capture records only text in the accessibility tree. A page that writes the
+  expected text into a live region under an `aria-hidden`, `inert`, `hidden`, `display: none`, or
+  `visibility: hidden` child, where no screen reader speaks it, no longer satisfies a flow
+  requirement: a change whose added text is all hidden is not recorded, and the text recorded for
+  the region leaves the hidden parts out. These reads run in the live world, so page script cannot
+  patch the functions they call, such as `getComputedStyle` or `getAttribute`. Page script still
+  owns the DOM and can change the styles and attributes themselves. Text hidden only on screen, such as
+  PatternFly's screen-reader class, is still recorded, because screen readers speak it.
+
 - A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
@@ -643,7 +702,10 @@ browser does not expose. Where the browser exposes nothing, axe is told nothing 
 Page script still shares the DOM and the main thread with axe's world, so it can change the DOM
 between axe's steps and can tell from the timing that axe runs.
 
-**Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
+**Tests:** `test/providers/keyboard-walk.real.integration.test.ts` (the end of the walk in Chromium,
+a focus handler that blurs, a keydown handler that swallows Tab), `test/deps/real.integration.test.ts`
+(text added to a live region under each kind of hidden content, and the flow level), and
+`test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
 getter, a sandboxed frame, a frame in another process, a chain of processes, a frame that stops
 answering, frames axe never finds, roles from layout), `test/deps/axe-world-frames.test.ts` (removed,
 navigating, and changed frames, frames no session reaches, results that are not results), and
@@ -940,17 +1002,28 @@ prints the real counts for the screens chosen before it starts.
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged
 guarded policy file (including corrupt JSON) is `approval_required` and the Stop
-hook blocks. Remaining `run()` exit 4 is an unhandled crash: git, filesystem,
-browser launch, or a parse failure of policy bytes that still match the trusted
-ref (so the guard does not short-circuit).
+hook blocks. The Stop hook compares the raw bytes of `usabl.config.json` at the
+repository root with HEAD before it parses anything, so a config that differs,
+is missing, cannot be read, or does not parse blocks as approval required
+instead of ending in a stop hook error. Remaining `run()` exit 4 is an unhandled
+crash (git, filesystem, browser launch, or a parse failure of other policy bytes
+that still match the trusted ref) or a run where every screen was unseen.
 
 **Attack if we blocked on exit 4:** a wedged Stop hook traps the operator in the
 session. They cannot continue, cannot easily recover, and may disable the hook
 entirely. That is a worse integrity outcome than an honest unverified allow.
 
-**Decision:** keep fail-open with disclosure.
+**Decision:** keep fail-open with disclosure. The disclosure reaches the person: in Claude
+Code, an allow writes its text as a `systemMessage`, which Claude Code shows, because it does
+not show the stderr of a Stop hook that exits 0. It is shown for every allow except a verified
+stop and an idle stop that carry no notice. Cursor shows the
+notice only in its hook output log, not in the chat.
 
-- `evaluateStopDecision` allows when `exitCode === 4`.
+- `evaluateStopDecision` allows when `exitCode === 4`, the verdict is null, and no guarded
+  file diverged. Diverged guarded policy blocks whatever the exit code: the hook counts the
+  paths the run carries and the ones its own guard found before the run, because a run where
+  every screen was unseen still carries them and a crash carries none. Like every block, it
+  lets one continuation through.
 - The operator sees `NO VERDICT: RUN FAILED (exit 4)`, the note that usabl is not
   blocking the stop but proved nothing about the change, and the crash summary inside
   the untrusted frame. This is not idle and not `verified`. No receipt is minted.
@@ -960,10 +1033,11 @@ entirely. That is a worse integrity outcome than an honest unverified allow.
   this policy.
 
 **Not this decision:** `regression`, `not_covered`, and `approval_required` still
-block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`. A verdict the
-hook does not recognize, and a null verdict on a run that was neither idle nor exit 4, block: they
-are not a crash the operator needs to escape, and allowing them would read an unknown answer as a
-pass.
+block. Diverged guarded policy still blocks, on exit 4 too. Exit 4 still cannot mint `verified`. A
+verdict the hook does not recognize, on any exit code, and a null verdict on a run that was neither
+idle nor exit 4, block: they are not a crash the operator needs to escape, and allowing them would
+read an unknown answer as a pass. A repository with no usabl config in the working tree or at HEAD
+is not set up for usabl: the hook allows with a plain "usabl is not configured here" note.
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 
@@ -976,6 +1050,20 @@ writes `.github/workflows/usabl-docs-gate.yml` (`src/install/ci.ts`). Both are t
 jobs. The rule they hold: no job that decides a verdict, or holds a write token, runs pull
 request head code in Node or a shell. Head code runs only in `build-app`, and as page script
 inside the judge's Chromium.
+
+Two values the installer reads reach these files: the engine pin, only as a full commit SHA, and
+the default branch, read from the clone's `refs/remotes/origin/HEAD`. The branch is written only
+when it is letters, digits, and `. _ - /`, and always quoted, into each workflow's trigger and
+nowhere else: the `pull_request` trigger of the gate and the docs gate, and the `push` trigger of
+the history workflow, which also names it in its scan job's `if:`. Any other name is not written:
+the file names `main` and the report prints a step to check it.
+
+The branch filter applies to the `pull_request` event only. GitHub takes no branch filter on
+`pull_request_review`, so a review on a pull request into any branch starts the gate. `build-app`
+does not run on a review. The judge looks for the `pull_request` run that built this exact pull
+request, head, and base. A pull request into another branch normally has none, because the branch
+filter kept the gate from running on it, so the judge fails closed and `usabl-required` reports
+red. That red check blocks nothing on a branch that does not require it, and it is never a pass.
 
 What runs where, and what each job holds:
 
@@ -1110,8 +1198,11 @@ Residual risks that remain:
   dismissal are required (classic `require_code_owner_reviews`, `required_approving_review_count`,
   `dismiss_stale_reviews`; ruleset `require_code_owner_review`, `required_approving_review_count`,
   `dismiss_stale_reviews_on_push`). A count of 0 or a dismissal that is off is not applied; a
-  value usabl cannot read is "cannot verify". A ruleset on `~DEFAULT_BRANCH` counts for `main`
-  only when the repository says `main` is its default branch. `usabl doctor` also checks that
+  value usabl cannot read is "cannot verify". Both check the branch the gate workflow on disk
+  names in its trigger, and `main`, said to be assumed, when no gate names one. A ruleset on
+  `~DEFAULT_BRANCH` counts for that branch only when the repository says it is the default
+  branch. A branch name that would form an empty, `.`, or `..` path segment is never read, and
+  the name goes into the api path as one encoded segment. `usabl doctor` also checks that
   `CODEOWNERS` gives every workflow an owner: the last rule that matches each `.yml` or `.yaml`
   file in `.github/workflows/`, and the last rule for any such file a pull request could add, must
   name valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes
@@ -1161,8 +1252,8 @@ policy job builds the base commit and decides policy from it. The tests hold it 
 `usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
 the same `usabl-engine` job, and both later jobs fetch the archive with usabl's own fetcher,
 check it against `engine_digest`, and check the unpacked tree before each engine run. Its scan
-job runs main's own application, which was merged through the gate, so it does not get the judge
-split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
+job runs the default branch's own application, which was merged through the gate, so it does not
+get the judge split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
 directory, and its content is believed, which is safe for the reason Threat 13 gives: the history
 can only make a run stricter, never greener.
 

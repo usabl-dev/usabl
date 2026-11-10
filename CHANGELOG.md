@@ -4,6 +4,66 @@
 
 ### Added
 
+- `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
+  identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
+  it was first seen, its state, and its days open, from the floor file's first-parent history and
+  the `usabl/history` records, read as committed objects. History records are replayed in commit
+  order, never in the order they were appended. A row is fixed only when two full scans of main in
+  a row see none there; a row that only left the floor is "left the floor", because a fix, a floor
+  reset, a prune, and a renamed screen look the same without the history. A row that closed and
+  came back is reopened, and its text follows how its last span ended. Every row says which way
+  its days can be wrong: `mayBeMore` (it was there at the first floor for its screen, in the
+  oldest floor of a shallow clone, or entered or ended at a gap) and `mayBeLess` (no usable
+  history, no scan saw it during a span, or a record touching it could not be placed), each with
+  its reasons. Leaving the floor and commit dates that go backwards set both. The table prints "N
+  days", "at least N", "at most N", or "not known (N by the floor)", and the median and longest
+  in the totals line are over exact rows only. Open rows count to the committer date of the
+  commit the ref names, and the output names it; the command reads no clock, so the same
+  repository state prints the same bytes. The git readers pin their output against the person's
+  git config, each floor is cut to its identities as it is read, and a history past the limits is
+  refused with the limit and what to do. `--json` prints the full ledger and `--out <file>` writes
+  it. Every printed string goes through the scrub. It is measurement only: no verdict, no receipt,
+  and the CLI loads it only by a dynamic import inside the command, so no verdict path loads it.
+  `usabl debt --out` is refused, because plain `usabl debt` writes no file. The stop hook and the
+  overlay host now read the config through `src/intake/load-config.ts`, where `loadConfig` and
+  `parseConfigText` live, instead of loading the whole CLI.
+- The gate works on any default branch. `usabl install --ci` and `usabl install --docs-ci` read
+  the default branch from the clone's `origin/HEAD` and write it, quoted, into the pull request
+  trigger of the gate and the docs gate, the same way the history workflow already took it. When
+  git cannot name a plain branch they write main and print one step that names the line to change
+  in each file. A re-run keeps the branch each file names, and doctor recognises usabl's own draft
+  for whichever branch its trigger names. When the gate, the docs gate, and the history workflow
+  name different branches, the report says so in one step and changes no file.
+  The branch filter applies to the `pull_request` event. A review starts the gate on a pull
+  request into any branch, and on a pull request into another branch the gate normally finds no
+  build of it and reports `usabl-required` red.
+  `usabl install --branch-rule` and the doctor branch rule check the protection on the branch the
+  gate names, for classic protection, ruleset includes and excludes, and `~DEFAULT_BRANCH`. With
+  no app gate they read the branch the docs gate names, and their advice names
+  `install --docs-ci`. With neither, or a gate file or trigger they cannot read, they check main
+  and say in each line that they assumed it. An assumed main is verified only when there is no
+  gate file and GitHub reports main as the default branch; when GitHub reports another default
+  branch, or cannot say, the check is not verified and names the next step. When the gate names
+  one branch and GitHub's default branch is another, they say so in one line with the line to
+  change, and doctor reads the branch protection as drifted. A default branch name from GitHub
+  that is not a plain name is neither trusted nor printed. `install --docs-ci` now says to merge
+  `usabl.config.json` and `usabl.docs.json` to the default branch first, unless git shows they are
+  there. Doctor reports the docs gate on its own line, and each workflow label names its branch.
+  Comments and step names in the workflows say "the default branch", and the gate says
+  "accessibility barriers". In a repository named usabl, the step that places the engine at
+  `../usabl` prints one line and skips the unpack, so it never unpacks over the checkout. The
+  line says that an app installing usabl from `file:../usabl` cannot build there, and that
+  renaming the repository fixes it.
+
+  If you ran `usabl install --ci` or `--docs-ci` from an earlier 0.3.0 build, run it again. Those
+  builds wrote the gates with `branches: [main]` and older comment text, so this version reads
+  them as drifted. When a file is that earlier draft with no edits, the command rewrites it to
+  this draft, keeps the engine pin it held if it held one, and gives an earlier gate the default
+  branch git names. When that branch is not main, the rewrite line says the trigger moved from
+  main and which line to change to put it back, since git does not update the default branch it
+  recorded at clone time when a team renames it. Review and commit the change. A file you edited
+  is refused as before: reconcile it by hand.
+
 - `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
   catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
   on pages one at a time in the scan browser, after the page is ready and before any check runs.
@@ -228,6 +288,105 @@
 - A floor entry with count 0 no longer yields a `fixed` finding. It accepts no barrier, so its
   absence pays nothing down. Gate effect: such an entry no longer adds to the paid-down count.
 
+- The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
+  the repository root first, so a stop in a subfolder reads the root config, the root receipt,
+  and the root bypass file. A config that differs from HEAD, is missing from the working tree,
+  cannot be read, or does not parse blocks as approval required, says what clears it, and lets
+  one continuation through. Before, a corrupt config ended in an allow with "stop hook error". A
+  repository with no config in the working tree or at HEAD allows with "usabl is not configured
+  here". A new, uncommitted config runs, and the guard holds it for approval as before, when HEAD
+  exists. A repository with no commits, or an orphan branch with none yet, has no HEAD: the stop
+  fails open with git's "make a first commit" step and does not block. Gate effect: the Stop hook
+  blocks where it allowed.
+
+- The Stop hook blocks when guarded policy diverged on a run with no verdict, whatever the exit
+  code, and lets one continuation through. A run where every screen was unseen ends with exit 4,
+  and the hook allowed every exit 4 run, so diverged policy lost its approval block. A verdict
+  usabl does not recognize now blocks on exit 4 too, as the threat model said. A crash with clean
+  policy still fails open. Gate effect: the Stop hook blocks where it allowed.
+
+- The Stop hook's fast path line now reads "VERIFIED (exit 0, stored receipt, not re-scanned)"
+  and says usabl did not scan the change again on that stop. The threat model now says a user
+  with a shell on the same machine can write a receipt that verifies, and that receipt signing
+  is not built.
+
+- The Stop hook treats a `usabl.config.json` removed and committed during a session as drift.
+  When the working tree and HEAD both lack the config, but the session already recorded pins for
+  the repository root, the stop goes through the drift block with one continuation. Before, it
+  allowed with "usabl is not configured here". A repository that never had a config still allows
+  with that note. Gate effect: the Stop hook blocks where it allowed.
+
+- A stop that starts outside any git work tree, such as inside `.git`, now says the hook could not
+  find the repository and checked nothing, names the folder inside the untrusted frame, and says
+  to run `usabl check` from the project root. Before, it said the repository had no config. The
+  hook also starts its search at `CLAUDE_PROJECT_DIR` when that names a folder, so a stop from
+  `.git` in Claude Code reads the project root. Gate effect: such a stop in Claude Code is checked,
+  and can block, where it allowed with a false note.
+
+- In Claude Code, a Stop hook allow now also writes its text as a `systemMessage` on stdout,
+  which Claude Code shows to the person. It is shown for every allow except a verified stop and
+  an idle stop that carry no notice. Claude Code does not show the stderr of a Stop hook that
+  exits 0, so every "NOT verified" allow, the pin notices, and the receipt notice were silent
+  there. A block and the Cursor answer are unchanged. Gate effect: none; the stop goes through as
+  before, and the person now sees why.
+
+- Stop hook input that is not JSON now prints a line that says the stop went through and nothing
+  was checked, and says to check the hook command in `.claude/settings.json` or
+  `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check`. Gate effect: none.
+
+- A receipt that cannot be saved for any reason, such as `EACCES` on `.usabl`, no longer changes
+  the result. Before, only a link was handled, and any other failure threw before the decision, so
+  a verified stop read "stop hook error" and `usabl check` stopped with an error. Now the verdict
+  stands and the "NOT saved" notice carries the first line of the reason inside the untrusted
+  frame. Gate effect: a verified stop reads VERIFIED where it read as a stop hook error.
+
+- Hook and assistant wording. The guidance for a missing usabl names both messages npm can print.
+  A config that differs from the last commit "did not parse"; the way out for a config that does
+  not parse names `usabl init --force` and the files it overwrites. A continuation that goes
+  through no longer says "to clear this block". The current Cursor rule says "machine-checkable
+  accessibility barriers". Gate effect: none.
+
+- A flow requirement that passed only on speech recorded before its first step no longer
+  passes. The capture runs for the life of the page, so the drain a flow took before its first
+  step held every announcement since the last drain, such as one an earlier check caused, and
+  the flow counted it. The flow is now judged only on what was announced after its first step
+  ran. When the expected text was in that earlier speech and the flow's own steps did not
+  announce it, the flow is an `unverified` gap, because an earlier check may have changed the
+  page. When that speech did not hold the text either, the flow fails. Gate effect: such a flow
+  is a gap or a fail where it passed. A flow whose own steps announce the expected text passes as
+  before.
+
+- A flow requirement that passed only on focus that was already there is now a gap. The flow
+  passed when the control that had focus after its last step was named with the expected text,
+  even when an earlier check had put focus there and the flow's steps did not move it. The flow
+  now records the focused node and its name before its first step, and the focused name counts
+  only when the steps changed one of them. Gate effect: such a flow is an `unverified` gap where it
+  passed.
+
+- A flow requirement that was not covered only because the drain before its first step could not
+  say what was heard is now judged on its own steps. That drain is no longer read for the verdict,
+  so its reason no longer decides it. Gate effect: such a flow can now pass or fail where it was a
+  gap.
+
+- A flow requirement that expects an announcement now waits for the page to go quiet before its
+  first step, with the same wait a `click` step uses, so speech an earlier check left in flight is
+  not counted as the flow's own. Speech that lands later than that wait is still read. Gate
+  effect: on a page that does not go quiet within the wait, such a flow is `not-covered` where it
+  was judged.
+
+- A flow requirement with an incomplete step or a step field its kind does not use is now not
+  covered. A `click` with no selector, a `press` with no key, and a step of an unknown kind used to
+  run as nothing. A field the kind does not use, such as a selector on `activate`, `times` on
+  `tab`, `shift` on `press`, or `expectedAnnouncement` inside a step, was ignored, so the step ran
+  as something other than what was written. The driver now checks every step before it runs any,
+  and the gap names each such step, counted from 0, and what it is missing or what field it should
+  not have. The requirement loader still accepts such a flow step. Gate effect: such a flow is
+  `not-covered` where it was judged.
+
+- The not-covered gap for a flow or contract provider whose step threw now keeps only the first
+  line of the error, and so does the silent change rule's `read failed` gap, as its `step threw`
+  gap does. A browser error's later lines can quote the element's markup. No gate effect.
+
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
   merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
@@ -281,6 +440,65 @@
   `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
   with ENOTDIR, and the run ended with no verdict. The search now starts from the file's folder,
   and a read of a path below a file returns nothing, the same as a missing file.
+
+- A keyboard walk cut short by a page script is now a truncation. A focus handler that blurs a
+  control, or a keydown handler that stops Tab and drops focus to the body, ended the walk as
+  complete. The walk now presses Tab once more after focus reaches the body and is complete only
+  when focus lands on a control it already walked. Teams will see `keyboard-walk-truncated` where
+  such a screen read as walked, and the screen as not covered unless the evidence floor holds a
+  truncation for that screen. A page with one control, a skip link, a timed banner that goes
+  away, or a list that re-renders still walks complete. After that Tab the walk puts focus back on
+  the body and discards what the Tab announced, so a flow that starts with a Tab still starts on
+  the first control.
+
+- A blank screen whose body has an id, such as `<body id="app">`, is now unseen. The blank-page
+  detector read the end of each stop's path, and that body's path is its id, so a screen that
+  crashed on mount read as seen and could verify. Teams will see the not-covered gap that says
+  usabl did not see the screen. A page whose body has an id and that renders its controls is
+  still seen.
+
+- `checkPage` now reports not covered when the page is not at its screen's address. A page
+  labeled with a surface from `usabl.config.json` is held to that surface's `url`, or to
+  `expectedUrl` when the caller passes one, by path and fragment only, and then to the CLI's
+  landing rules. A test whose session expired and landed on a sign-in page was checked as the
+  labeled screen. Teams will see a `landing:<screenId>` gap that names both addresses. With no
+  readiness signal, `checkPage` waits for the page to settle before it reads the address, and
+  reads it again after the checks, so a router that moves to a sign-in page a moment after load,
+  or while the checks run, is the same gap. A test on its own base URL or port, on `localhost`
+  where the config says `127.0.0.1`, or with a trailing slash still passes, and so does a
+  hash-routed app, whose route is compared without the query inside it and with one trailing
+  slash removed. An unlabeled page is not held to an address. A labeled page opened with
+  `setContent` is at `about:blank`, so it now reads as not covered, and an `expectedUrl` that is
+  not http or https is the same gap instead of an error.
+
+- `checkPage` takes `signedIn: true` for a test that is signed in. It turns on the two landing
+  rules that read a refused data request or a password field as a session that did not work, as
+  `USABL_STORAGE_STATE` does. Teams that pass it will see a `landing:<screenId>` gap where a
+  sign-in page was served at the screen's own path. Without it, or the variable, such a page is
+  still not caught.
+
+- The PatternFly menu probe now waits for a menu that mounts after the click, as the dialog probe
+  waits for its dialog. Teams will see `pf-kebab-expanded-state` findings on late menus that were
+  missed with no draft, and an `unverified` draft when a toggle declares `aria-haspopup="menu"`
+  or `"true"` and no menu appears. A menu that stays in the page while closed, such as one
+  toggled with the `hidden` attribute, counts as opened when the click exposes it. A toggle whose
+  menu is already open is left alone. Teams will also see an `unverified` draft on a toggle that
+  says `aria-expanded="true"` while no menu is open. A scan spends up to 2.5 seconds more on each
+  toggle that opens no menu.
+
+- The live-region capture now records only text in the accessibility tree. Text written into a
+  live region under `aria-hidden`, `inert`, `hidden`, `display: none`, or `visibility: hidden`
+  could satisfy a flow's expected announcement, though no screen reader speaks it. Teams will see
+  such a flow fail. Text hidden only on screen, such as PatternFly's screen-reader class, is
+  still heard and still passes.
+
+- `pf-toast-live-region` now flags an alert that it or an element above it hides from assistive
+  technology with `aria-hidden`, `inert`, or `hidden`, and its fix says to remove them. An alert
+  in the app root while a modal dialog is open outside it is judged by its live region as before,
+  because the modal hides the root on purpose. When the rule cannot tell which element is the
+  app root, that alert is `unverified`, never a failure. `rhds-dialog-name` no longer counts an empty heading as a name, and the RHDS rules no longer
+  count default-slot text under `aria-hidden` or other hidden content as a name, so each asks the
+  accessibility tree instead. Teams will see more true findings on those rules.
 
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
@@ -948,6 +1166,23 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
+  `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`
+  downloaded and ran whatever package held the npm name usabl, with no prompt. `npm exec --no`
+  runs a local or global install, or a copy already in npm's own cache, and never downloads. With
+  usabl not installed, each stop still makes one registry request. When usabl cannot run, the
+  Claude Code and Cursor hooks print one line that says so and how to install it, and exit 1,
+  which both treat as a failed hook that does not block. `usabl install --claude`,
+  `--claude-skill`, and `--cursor` rewrite a file the previous release wrote with `npx usabl`, and
+  still refuse any other differing file. `usabl doctor` reports such a file as a security drift and names the reinstall
+  command.
+
+- The receipt store never writes through a symbolic link. It refuses a link at `.usabl` or at
+  `.usabl/receipt.json`, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place. A committed link there could redirect the write to another file the user
+  can write. `usabl check --ci` no longer saves a receipt. A refused save is said plainly and
+  changes no verdict.
 
 - The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
   pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server

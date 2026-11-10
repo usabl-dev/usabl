@@ -13,8 +13,9 @@ import { readCodeownersLimits } from '../../src/surfaces/policy-enforce.js';
 import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
-import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { ENGINE_REF_PLACEHOLDER, USABL_DOCS_GATE_WORKFLOW, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { USABL_HISTORY_WORKFLOW, USABL_HISTORY_WORKFLOW_PATH } from '../../src/install/history-ci.js';
+import { STOP_HOOK_COMMAND } from '../../src/install/claude.js';
 import {
   CLAUDE_SKILL_CONTENTS,
   CLAUDE_SKILL_PATH,
@@ -152,7 +153,7 @@ import { usablVitePluginFromConfig } from 'usabl/vite'
 export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })] })
 `;
 const WIRED_CLAUDE = `${JSON.stringify(
-  { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'npx usabl stop-hook' }] }] } },
+  { hooks: { Stop: [{ hooks: [{ type: 'command', command: STOP_HOOK_COMMAND }] }] } },
   null,
   2,
 )}\n`;
@@ -169,7 +170,7 @@ const FOREIGN_CLAUDE = `${JSON.stringify(
 // settings.json that exists and is valid but carries no usabl Stop hook at all. This is a
 // missing surface for doctor, not a retired-path drift.
 const CLAUDE_WITHOUT_HOOK = `${JSON.stringify({ model: 'opus' }, null, 2)}\n`;
-// A bare "usabl stop-hook" command: usabl-owned but not the stable "npx usabl stop-hook".
+// A bare "usabl stop-hook" command: usabl-owned but not the stable "npm exec --no -- usabl stop-hook".
 // This is a normalize case (drifted), and its next step must not claim a retired dist path.
 const BARE_CLAUDE = `${JSON.stringify(
   { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'usabl stop-hook' }] }] } },
@@ -467,10 +468,12 @@ describe('collectDoctorReport', () => {
   it('reports every surface wired for a fully wired repo', async () => {
     const reports = await collectDoctorReport(
       doctorDeps({
-        // A fully wired repo also has the history workflow, pinned to the same commit as the gate.
+        // A fully wired repo also has the history workflow and the docs gate, pinned to the same
+        // commit as the gate.
         fs: readOnlyFs({
           ...FULLY_WIRED_FILES,
           [USABL_HISTORY_WORKFLOW_PATH]: USABL_HISTORY_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA),
+          [USABL_DOCS_GATE_WORKFLOW_PATH]: USABL_DOCS_GATE_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA),
         }),
         gh: GH_VERIFIED,
         configPath: 'usabl.config.json',

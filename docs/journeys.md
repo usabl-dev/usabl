@@ -24,7 +24,7 @@ hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usa
 |---|---|---|---|
 | 1. Prompt | Asks for a toolbar, table, and row actions | Productive, fast | Assistant edits an unmapped file, so the surface reports `not_covered` instead of proof |
 | 2. Build | Assistant edits files; `usabl check --self-check` runs mid-task as an advisory pass | Flow | Check latency breaks flow if it runs long |
-| 3. Stop | On the Stop event the hook runs `npx usabl stop-hook`; a blocking verdict (regression, approval_required, or not_covered) makes it emit a block decision | Surprise, then curiosity | "Why blocked?" if the message is unclear |
+| 3. Stop | On the Stop event the hook runs `npm exec --no -- usabl stop-hook`; a blocking verdict (regression, approval_required, or not_covered) makes it emit a block decision | Surprise, then curiosity | "Why blocked?" if the message is unclear |
 | 4. Findings | Findings print one line each, with a what, why, and fix | Clarity | Finding fatigue if noisy |
 | 5. Fix and re-check | Assistant fixes; the hook runs `check` again and reports whether the barrier is still observed | Relief | A false positive costs trust |
 | 6. Done allowed | `verified` verdict; a receipt is minted and stored so the next stop can re-check fast without a browser | Confidence | None |
