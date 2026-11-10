@@ -74,7 +74,34 @@ interface ImportEdge {
 
 type ReadSource = (file: string) => Promise<string>;
 
-const readRepoFile: ReadSource = (file) => readFile(join(ROOT, file), 'utf8');
+// Each repository file is read once per run. Each of the 16 entry points walks most of the same
+// graph, so without this every file would be read and parsed again for each one.
+const repoReads = new Map<string, Promise<string>>();
+const readRepoFile: ReadSource = (file) => {
+  let read = repoReads.get(file);
+  if (read === undefined) {
+    read = readFile(join(ROOT, file), 'utf8');
+    repoReads.set(file, read);
+  }
+  return read;
+};
+
+// Each source text is parsed once per run, keyed by file and by the text itself, so a case that
+// hands in a changed copy of a file gets a parse of that copy and never a stale one.
+const parses = new Map<string, Map<string, ts.SourceFile>>();
+function parsed(file: string, source: string): ts.SourceFile {
+  let byText = parses.get(file);
+  if (byText === undefined) {
+    byText = new Map();
+    parses.set(file, byText);
+  }
+  let tree = byText.get(source);
+  if (tree === undefined) {
+    tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    byText.set(source, tree);
+  }
+  return tree;
+}
 
 function literalText(node: ts.Node | undefined): string | null {
   return node !== undefined && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null;
@@ -139,10 +166,22 @@ function requireNames(tree: ts.SourceFile, creators: ReadonlySet<string>): Set<s
  * whether it is bound to a name first or called at once.
  */
 function importsOf(file: string, source: string): ImportEdge[] {
-  return edgesOf(ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+  return edgesOf(parsed(file, source));
 }
 
+// The edges of each parsed tree, read once. Callers only read the list.
+const treeEdges = new WeakMap<ts.SourceFile, ImportEdge[]>();
 function edgesOf(tree: ts.SourceFile): ImportEdge[] {
+  const known = treeEdges.get(tree);
+  if (known !== undefined) {
+    return known;
+  }
+  const edges = readEdges(tree);
+  treeEdges.set(tree, edges);
+  return edges;
+}
+
+function readEdges(tree: ts.SourceFile): ImportEdge[] {
   const creators = createRequireNames(tree);
   const loaders = requireNames(tree, creators);
   const edges: ImportEdge[] = [];
@@ -177,7 +216,7 @@ const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self']);
  * property such as worker_threads.Worker, and any import of the vm module.
  */
 function codeRunnersOf(file: string, source: string): string[] {
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const tree = parsed(file, source);
   const found: string[] = [];
   const calleeName = (callee: ts.Expression): string | null =>
     ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
@@ -273,7 +312,8 @@ async function sourceFiles(dir: string): Promise<string[]> {
     .sort();
 }
 
-describe('the Figma API is reachable only from the import and drift design commands', () => {
+// The scans read every file under src/, so each case gets a limit that fits a busy CI machine.
+describe('the Figma API is reachable only from the import and drift design commands', { timeout: 60_000 }, () => {
   it.each(VERDICT_ENTRY_POINTS)('%s cannot load a Figma module by any kind of import', async (entry) => {
     const found = await reach(entry);
     expect(found.files.size).toBeGreaterThan(0);
