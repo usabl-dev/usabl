@@ -31,7 +31,7 @@ import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { enrichAppFindings } from './app/source-map.js';
 import { gate, renderEvidenceOf } from './gate/index.js';
-import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
+import { earliestAppliedWaiverExpiry, mintReceipt, summarizeApplicability } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
 import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
@@ -277,6 +277,9 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
+            // When the first waiver this verdict leaned on ends, the gate counts its barrier again,
+            // so the receipt must stop standing for this tree at that moment.
+            waiverExpiresAt: earliestAppliedWaiverExpiry(gated.findings, waivers, now),
             historyHead: debt.read.head,
           })
         : null;
