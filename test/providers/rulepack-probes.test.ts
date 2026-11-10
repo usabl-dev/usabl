@@ -96,6 +96,9 @@ async function makeMenuContext(options: {
   expanded?: string | null;
   // How many reads of the menus after the click see no menu yet, as when a menu mounts late.
   menuMountsAfterReads?: number;
+  // When true, the menu stays in the page while it is closed, hidden from assistive technology,
+  // and the click exposes it, as a menu toggled with the hidden attribute is.
+  menuStaysInPage?: boolean;
 }): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
@@ -120,7 +123,7 @@ async function makeMenuContext(options: {
           readsAfterClick += 1;
           return options.staleMenuAhead ? [staleMenu] : [];
         }
-        if (!isOpen) {
+        if (!isOpen && !(options.menuStaysInPage ?? false)) {
           return options.staleMenuAhead ? [staleMenu] : [];
         }
         return options.staleMenuAhead ? [staleMenu, menu] : [menu];
@@ -134,6 +137,10 @@ async function makeMenuContext(options: {
           role: 'button',
           states: { expanded: false, haspopup: 'menu' },
         };
+      }
+      // The menu is in the accessibility tree only while it is open.
+      if (selector === menu.selector && isOpen) {
+        return axNode('Row actions', 'menu');
       }
       return null;
     },
@@ -365,6 +372,17 @@ describe('rulepack interaction probes', () => {
     const ctx = await makeMenuContext({ menuAppearsOnClick: false, focusMovesIntoMenu: false });
 
     expect(draftsOf(await provider.run(ctx)).filter((d) => d.rule === 'pf-kebab-expanded-state')).toEqual([]);
+  });
+
+  it('checks a menu that stays in the page while closed, when the click exposes it', async () => {
+    const provider = makeRulepackProvider();
+    const opens = await makeMenuContext({ menuAppearsOnClick: true, focusMovesIntoMenu: true, haspopup: 'menu', menuStaysInPage: true });
+    expect(draftsOf(await provider.run(opens)).filter((d) => d.rule === 'pf-kebab-expanded-state')).toEqual([]);
+
+    // The same menu, opened with focus left behind, is still a finding.
+    const leavesFocus = await makeMenuContext({ menuAppearsOnClick: true, focusMovesIntoMenu: false, haspopup: 'menu', menuStaysInPage: true });
+    const drafts = draftsOf(await provider.run(leavesFocus)).filter((d) => d.rule === 'pf-kebab-expanded-state');
+    expect(drafts.map((d) => [d.elementPath, d.confidence])).toEqual([['#menu-toggle', 'fail']]);
   });
 
   it('leaves a toggle that is already expanded alone, because the click would close its menu', async () => {

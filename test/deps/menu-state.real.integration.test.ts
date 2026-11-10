@@ -95,6 +95,15 @@ const MENU_PAGES: Record<string, string> = {
   ),
   // aria-haspopup promises a menu, and the click opens nothing.
   '/no-menu': menuPage(''),
+  // The menu stays in the page while it is closed, hidden with the hidden attribute. The click
+  // shows it and moves focus into it: a correct menu.
+  '/hidden-menu-focus': `<!doctype html><html lang="en"><head><title>Menu</title></head><body>
+    <button id="toggle" type="button" aria-haspopup="menu" aria-expanded="false">Actions</button>
+    <ul role="menu" id="menu" hidden><li role="menuitem" tabindex="-1">Edit</li></ul>
+    <script>const toggle = document.getElementById('toggle'); const menu = document.getElementById('menu');
+      toggle.addEventListener('click', () => { menu.hidden = false; toggle.setAttribute('aria-expanded', 'true'); menu.querySelector('[role="menuitem"]').focus(); });
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { menu.hidden = true; toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); } });</script>
+  </body></html>`,
   // The menu is open before the probe runs, and the click would close it.
   '/open-menu': `<!doctype html><html lang="en"><head><title>Menu</title></head><body>
     <button id="toggle" type="button" aria-haspopup="menu" aria-expanded="true">Actions</button>
@@ -158,6 +167,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the PatternFly menu prob
 
   it('reports a toggle that promises a menu and opens none as unverified', async () => {
     expect((await probe('/no-menu')).drafts).toEqual([['pf-kebab-expanded-state', 'unverified']])
+  })
+
+  it('checks a menu toggled with the hidden attribute, which stays in the page while closed', async () => {
+    expect((await probe('/hidden-menu-focus')).drafts).toEqual([])
   })
 
   it('leaves a menu that is already open alone', async () => {

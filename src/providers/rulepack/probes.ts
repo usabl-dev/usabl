@@ -185,7 +185,18 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
       // rather than any [role=menu] on the page, fixes both directions: a stale menu sitting ahead
       // in query order no longer causes a false fail, and focus resting in an unrelated already-open
       // menu no longer counts as this toggle's success (a false pass).
-      const menusBefore = new Set((await ctx.page.queryAll(SEL.menu)).map((menu) => menu.selector));
+      //
+      // A menu can also stay in the page while it is closed, hidden from assistive technology, as a
+      // menu toggled with the hidden attribute is. The click exposes it rather than adding it, so a
+      // menu hidden before the click and exposed after it counts as opened too.
+      const before = await ctx.page.queryAll(SEL.menu);
+      const menusBefore = new Set(before.map((menu) => menu.selector));
+      const hiddenBefore: ElementRef[] = [];
+      for (const menu of before) {
+        if ((await ctx.page.axAt(menu.selector)) === null) {
+          hiddenBefore.push(menu);
+        }
+      }
       await ctx.page.click(toggle.selector);
 
       // A menu can mount a moment after the click, so wait for it the way the dialog probe waits
@@ -193,6 +204,11 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
       let openedMenus: ElementRef[] = [];
       await waitFor(async () => {
         openedMenus = (await ctx.page.queryAll(SEL.menu)).filter((menu) => !menusBefore.has(menu.selector));
+        for (const menu of hiddenBefore) {
+          if ((await ctx.page.axAt(menu.selector)) !== null) {
+            openedMenus.push(menu);
+          }
+        }
         return openedMenus.length > 0;
       });
       if (openedMenus.length === 0) {
