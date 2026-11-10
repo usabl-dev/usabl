@@ -4,6 +4,21 @@
 
 ### Added
 
+- `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
+  identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
+  it was first seen, whether it is open, fixed, or reopened, and its days open, from the floor
+  file's first-parent history and the `usabl/history` records, read as committed objects. A fix
+  is a commit that removes the identity from the floor, or two full scans of main in a row that
+  see none there. First seen is the earliest evidence: a barrier in the first floor is labelled
+  "seen at the first baseline; may be older". A shallow clone, a floor version migration, a
+  floor that was deleted or could not be read, a missing or unreadable history, and a record it
+  cannot place each name the rows they touch, and the floor-side gaps mark days as a lower bound.
+  The table is sorted by days open with a totals line; `--json` prints the full ledger and
+  `--out <file>` writes it. Every printed string goes through the scrub. It is measurement only:
+  no verdict, no receipt, and no verdict path imports it. `usabl debt --out` is refused, because
+  plain `usabl debt` writes no file. The stop hook and the overlay host now read the config
+  through `src/intake/load-config.ts` instead of loading the whole CLI.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
