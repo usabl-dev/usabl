@@ -4,7 +4,7 @@
  *
  * `npx usabl` downloads and runs whatever package holds the npm name usabl when usabl is not
  * installed, with no prompt when stdin is piped, as it is for a hook. `npm exec --no` runs a local
- * or global install and otherwise fails with no download. A hook that cannot run usabl fails with
+ * or global install, or a copy already in npm's own cache, and otherwise fails with no download. A hook that cannot run usabl fails with
  * one plain line that says so and how to install it, on an exit code that each host treats as a
  * failed hook and not as a block: Claude Code and Cursor both let the stop go on after exit 1, and
  * show the failure as a hook error. The installers take the old `npx usabl` files as their own and
@@ -189,19 +189,33 @@ describe('every generated command runs usabl with npm exec --no', () => {
 describe('the generated hooks with usabl missing, and with usabl installed', { timeout: 60_000 }, () => {
   let dir = '';
   let emptyPrefix = '';
+  let emptyCache = '';
 
   beforeEach(async () => {
     dir = await realpath(await mkdtemp(join(tmpdir(), 'usabl-no-download-')));
     // No global usabl either: npm reads its global folder from this prefix.
     emptyPrefix = join(dir, 'empty-global');
     await mkdir(emptyPrefix);
+    // No cached usabl either: npm exec --no can run a copy already in its own cache.
+    emptyCache = join(dir, 'empty-cache');
+    await mkdir(emptyCache);
   });
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  const env = () => ({ ...process.env, npm_config_prefix: emptyPrefix, npm_config_update_notifier: 'false' });
+  // The cases prove the generated command, not this machine: an empty prefix and an empty cache,
+  // and offline, so npm never asks the registry. Offline, npm fails a missing usabl with ENOTCACHED
+  // in place of "could not determine executable to run". The command silences npm's own output,
+  // so either way the person sees only the plain line, on exit 1.
+  const env = () => ({
+    ...process.env,
+    npm_config_prefix: emptyPrefix,
+    npm_config_cache: emptyCache,
+    npm_config_offline: 'true',
+    npm_config_update_notifier: 'false',
+  });
 
   async function installFakeUsabl(): Promise<void> {
     // A local install as npm lays it out: the package, and its bin linked under node_modules/.bin.
