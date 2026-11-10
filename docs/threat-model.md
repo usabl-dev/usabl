@@ -568,14 +568,19 @@ outside every table as the control in an accepted row. Either way a new barrier 
   element. Focus inside a closed shadow root, a frame from another origin, or such a frame
   owner ends the walk with an `unverified` truncation draft, never a pass.
 - A Tab cycle that never reaches the body ends the walk with an `unverified` truncation draft,
-  never a pass. Focus on the body ends the walk as complete only when one more Tab lands on a stop
-  the walk already reached, matched by the browser's node id or by path. A page script that blurs
-  a control on focus, or a keydown handler that stops Tab and drops focus to the body, used to end
-  the walk with zero or few stops and no draft. The extra Tab then lands on a control not yet
-  walked, so the walk ends with the truncation draft instead. The read of the open modal dialogs that hold focus runs in the read world too.
+  never a pass. The read of the open modal dialogs that hold focus runs in the read world too.
   A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
   inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
   draft stays, so the screen is not covered rather than passed.
+- Focus on the body ends the walk as complete only when one more Tab lands on a stop the walk
+  already reached: the same element by the browser's node id, or the same path. When the browser
+  gives a node id for both, a path match alone counts only for the first stop walked. A page
+  script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
+  body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
+  control not yet walked, so the walk ends with the truncation draft instead. A walk that reaches
+  no stop is complete only when the extra Tab leaves focus on the body, and that page is left to
+  the blank-page detector, which runs in the CLI only. `checkPage` has no blank-page detector, so
+  there a blank page is caught only by a `reachedWhen` readiness signal.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
@@ -607,7 +612,8 @@ outside every table as the control in an accepted row. Either way a new barrier 
   `visibility: hidden` child, where no screen reader speaks it, no longer satisfies a flow
   requirement: a change whose added text is all hidden is not recorded, and the text recorded for
   the region leaves the hidden parts out. These reads run in the live world, so page script cannot
-  change the computed styles or attributes they see. Text hidden only on screen, such as
+  patch the functions they call, such as `getComputedStyle` or `getAttribute`. Page script still
+  owns the DOM and can change the styles and attributes themselves. Text hidden only on screen, such as
   PatternFly's screen-reader class, is still recorded, because screen readers speak it.
 
 - A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow

@@ -762,9 +762,20 @@ also returns a gap for each alert it could not check:
    the same rule the announcement capture applies. A live region inside such content
    announces nothing, so the alert fails there, and the draft says it is hidden. The
    ancestor read returns attributes and not tag names, so a closed `dialog` element
-   above the alert is not seen here. A PatternFly modal sets `aria-hidden="true"` on the
-   app root while it is open, so an alert in the root fails while a modal is open when
-   the screen loads. Its own live value does not count as a
+   above the alert is not seen here. The fix for that case says to remove `aria-hidden`,
+   `inert`, or `hidden` from the alert and the elements above it. One case is the modal
+   pattern working as intended: a PatternFly modal sets `aria-hidden="true"` on the app
+   root, a child of the body, while it is open, and the live region works again when it
+   closes. So when the only hidden element in the chain is the body's child, and a modal
+   dialog is open outside it, the alert is judged by its live region alone, as with no
+   modal open. A modal counts as open when it is a `dialog` in the browser's `:modal`
+   state, or an element whose role and `aria-modal` make it a modal dialog, and it is in
+   the accessibility tree. The rule knows which entry of the chain is the body's child
+   only when the root element holds one body, no other child but the head, and the alert
+   is not in the head. When it cannot tell, and a modal is open, the alert gets an
+   `unverified` draft whose reason names the open modal, never a `fail`. An alert whose
+   own container is hidden, below the body's child, still fails with or without a modal.
+   Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
    its timer, and an alert with more than 512 ancestors each become their own
    not-covered gap, never a pass, and the check goes on to the other alerts.
@@ -777,9 +788,16 @@ also returns a gap for each alert it could not check:
    seconds, so a menu that mounts a moment after the click is checked. When the toggle
    declares `aria-haspopup="menu"`, or `"true"`, its legacy synonym, and no menu
    appears, the probe emits one `unverified` draft, because it could not check where
-   focus goes. A toggle that promises no menu and opens none is not reported. A toggle
-   whose `aria-expanded` is `true` before the click is skipped, because the click would
-   close its open menu.
+   focus goes. A toggle that promises no menu and opens none is not reported. A menu
+   counts as opened when it is new after the click, or when it was in the page but out of
+   the accessibility tree before the click and is in it after, as a menu toggled with the
+   `hidden` attribute is. This costs one accessibility read per menu in the page before
+   each click, and one per such hidden menu on each poll while the probe waits. A toggle
+   whose `aria-expanded` is `true` before the click is skipped when a menu is open on the
+   page, or when the element its `aria-controls` names is in the accessibility tree,
+   because the click would close that menu. With no menu open, the toggle reports a state
+   that is not true, so the probe emits one `unverified` draft that says so, and does not
+   click it.
 5. `pf-icon-button-name`: icon-only buttons, kebab toggles, and pagination arrows have
    an accessible name.
 6. `pf-table-header-assoc`: table header association is present, and empty/loading
@@ -937,9 +955,13 @@ the same path. The element is matched by the browser's own node id, read over CD
 (`Page.activeElementKey`), which does not change while the element stays in the document. So a
 first control that goes away during the walk, such as a timed banner whose removal moves every
 control after it to a new path, still wraps to a known stop, and so does a list that re-renders
-and puts a new item at a path already walked. A walk that reached no stop is complete only when
+and puts a new item at the path of the first stop. When the browser gives a node id for both
+elements, a path match alone counts only for the first stop walked, so another element that took
+a later stop's path does not confirm the end. After the extra Tab, the walk discards what that
+Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
+where it did before the end was confirmed. A walk that reached no stop is complete only when
 the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
-below. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
+below, which runs in the CLI only. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
 more Tab did not go back to a control the walk had reached. A page with one control or a skip
 link wraps as any other page does. Tab that brings focus back to
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
@@ -1001,7 +1023,20 @@ threw on mount all look like this, so its findings are dropped and it gets a `no
 (`coverage/unseen.ts`). The detector reads that fact, not the path. A body with an id has that
 id as its path, so `<body id="app">` never read as the body when the detector read the tail of
 the path, and a screen that crashed on mount read as seen. An empty transcript is no evidence
-either way, so it is not unseen.
+either way, so it is not unseen. The detector runs in the CLI only. `checkPage` collects no
+transcript, so it has no blank-page detector: a blank or crashed page handed to `checkPage` reads
+as checked unless its screen declares a `reachedWhen` readiness signal that the page fails.
+
+Known limits of what the scan sees. A page with no tabbable control has a walk that stays on the
+body, so the CLI reads it as unseen. A readiness signal that holds does not change that, because
+the two detectors are independent (`coverage/unseen.ts`). In `checkPage` the same page reads as
+checked. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
+and that wait is a wall-clock limit: a menu or dialog that opens later is read as one that did
+not open, which is an `unverified` draft when the toggle or trigger promised it and nothing
+otherwise. The live-region
+capture still records text that is out of the accessibility tree in three cases it does not
+read: text under `content-visibility: hidden`, text inside a closed `details` element, and text
+under an element hidden through `ElementInternals`.
 
 The other checks that read focus treat an unreadable focus the same way. Each transcript
 stop records why its focused element could not be read. At such a stop, the interaction
@@ -3404,7 +3439,14 @@ names a surface that `usabl.config.json` lists, `checkPage` holds the page to th
 and the fragment are compared. The origin and the port are set aside, because a test often runs
 on its own base URL, on another port, or on `localhost` where the config says `127.0.0.1`. The
 query is set aside too, as in the CLI's Rule C. The fragment is compared because a hash router
-keeps the whole route there. A page at another path or fragment is a `not-covered` gap with ref
+keeps the whole route there. A hash route, a fragment that starts with `#/`, is read the way a
+path is: only the part before its first `?` is compared, with one trailing slash removed, so
+`#/clusters?page=2` and `#/clusters/` match `#/clusters`. Any other fragment is compared whole.
+An `expectedUrl` that is not an http or https address, such as `about:blank`, is the same
+`landing:<screenId>` gap, with a reason that says so, and `checkPage` does not throw. When the
+screen declares no readiness signal, `checkPage` first waits for the page to settle, as the CLI
+does, and then reads the address. It reads the address again after the checks, and a page that
+left its screen while they ran is the same gap, with its findings dropped. A page at another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C
@@ -3420,7 +3462,7 @@ names no configured surface, claims no address, so it is not held to one unless 
 `expectedUrl`. The address check runs after the readiness wait described next. A page that the
 test opened with `setContent` is at `about:blank`, so a labeled one is a gap; serve it at the
 screen's address or leave it unlabeled. An in-page anchor changes the fragment, so a page whose
-test followed one is a gap until the caller passes `expectedUrl`.
+test followed one is a gap until the caller passes `expectedUrl` with that fragment.
 
 When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
 holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits

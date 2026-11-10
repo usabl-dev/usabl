@@ -229,8 +229,9 @@ function truncatedWalkDraft(
  * when it gives one for both elements.
  * A walk that reached no stop has nothing to wrap to, and on a page with nothing to focus the next
  * Tab leaves focus on the body. That walk is left to the body-only detector, which reads the
- * transcript. If the next Tab lands on a control instead, a script dropped focus before the walk
- * reached it.
+ * transcript the CLI collects. checkPage has no such detector, so there a blank page is caught only
+ * by a readiness signal. If the next Tab lands on a control instead, a script dropped focus before
+ * the walk reached it.
  */
 async function endConfirmed(page: Page, walked: readonly WalkedStop[]): Promise<boolean> {
   await page.tab();
