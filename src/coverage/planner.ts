@@ -6,8 +6,8 @@
  */
 import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { loadAliasConfig } from './alias-config.js';
-import { buildUnresolvedReason } from './discovery-diagnostics.js';
-import { buildImportGraph, inspectDirectImports } from './import-graph.js';
+import { buildUnresolvedReason, UNPLACED_FILE_FIX } from './discovery-diagnostics.js';
+import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
@@ -36,10 +36,49 @@ function isTestFile(file: string): boolean {
 }
 
 const TEST_FOLDER_REASON =
-  'This file is in a test folder (test, tests, or __tests__) and no screen imports it, so usabl ' +
-  'reads it as test code and did not check it. This does not block. If a screen renders it, ' +
+  'This file is in a test folder (test, tests, or __tests__) and usabl found no import of it, so ' +
+  'usabl reads it as test code and did not check it. This does not block. If a screen renders it, ' +
   'import it from the route entry file of that screen, or add it to the files of a surface in ' +
   'usabl.config.json.';
+
+// The name an import would use for a file: its name without the extension, or the folder name for
+// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
+function importName(file: string): string {
+  const segments = file.split('/');
+  const base = segments[segments.length - 1] ?? '';
+  const stem = base.replace(/\.[^.]*$/u, '');
+  if (stem === 'index' && segments.length > 1) {
+    return segments[segments.length - 2] ?? stem;
+  }
+  return stem;
+}
+
+// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
+// `@/tests/Dashboard.js` both name a file called Dashboard.
+function importLastSegments(specifier: string): string[] {
+  const last = specifier.split('/').pop() ?? '';
+  return [last, last.replace(/\.[^.]*$/u, '')];
+}
+
+// The imports usabl could not resolve that may load this file. "No screen reaches it" is read from
+// the import graph, so an unresolved import that names the file makes that a guess.
+function unresolvedImportsNaming(file: string, unresolvable: UnresolvableImport[]): UnresolvableImport[] {
+  const name = importName(file);
+  return unresolvable.filter((entry) => importLastSegments(entry.specifier).includes(name));
+}
+
+function testFolderGapReason(entries: UnresolvableImport[]): string {
+  const imports = entries
+    .map((entry) => `'${entry.specifier}' in ${entry.importer}`)
+    .sort()
+    .join(', ');
+  return (
+    'This file is in a test folder (test, tests, or __tests__), and usabl could not resolve an import ' +
+    `that may load it: ${imports}. So usabl cannot tell whether a screen renders it, and did not check ` +
+    `it. ${UNPLACED_FILE_FIX} Or make the import resolve, for example by adding its alias to tsconfig ` +
+    'or the vite config.'
+  );
+}
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
 // starts with a double quote most likely came from a listing that quoted it, and then usabl cannot
@@ -234,22 +273,29 @@ export async function computeCoverage(
   // A file in a test folder that a screen reaches is a UI file like any other. One no screen
   // reaches is disclosed as excluded, not a gap, so a change to test helpers alone stays nothing
   // to check. A surface that lists the file in its files reaches it by the operator's word.
+  // One no screen reaches but an unresolved import may load is a gap, because "no screen reaches
+  // it" is then a guess.
   const testFolderFiles = globbedFiles.filter(isInTestFolder);
   const reachedTestFolderFiles = new Set<string>();
+  const testFolderGaps: CoverageGap[] = [];
+  const excludedFiles: ExcludedFile[] = [];
   if (testFolderFiles.length > 0) {
-    const { closures } = await loadRouteGraph();
-    for (const file of testFolderFiles) {
+    const { graph, closures } = await loadRouteGraph();
+    for (const file of [...testFolderFiles].sort()) {
       const listedBySurface = config.surfaces.some((surface) => surface.files.includes(file));
       if (listedBySurface || [...closures.values()].some((closure) => closure.has(file))) {
         reachedTestFolderFiles.add(file);
+        continue;
+      }
+      const naming = unresolvedImportsNaming(file, graph.unresolvable);
+      if (naming.length > 0) {
+        testFolderGaps.push({ ref: file, state: 'unresolved', reason: testFolderGapReason(naming) });
+      } else {
+        excludedFiles.push({ ref: file, reason: TEST_FOLDER_REASON });
       }
     }
   }
   const uiFiles = globbedFiles.filter((file) => !isInTestFolder(file) || reachedTestFolderFiles.has(file));
-  const excludedFiles: ExcludedFile[] = testFolderFiles
-    .filter((file) => !reachedTestFolderFiles.has(file))
-    .sort()
-    .map((file) => ({ ref: file, reason: TEST_FOLDER_REASON }));
   // Omitted when empty, so a Coverage with nothing excluded has the same shape it always had.
   const excluded = excludedFiles.length === 0 ? {} : { excludedFiles };
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
@@ -263,12 +309,22 @@ export async function computeCoverage(
   const dependencies = await dependencyChanges(fs, config, otherFiles, trustedRead);
   const dependencyReason = dependencies.length === 0 ? null : [...dependencies.map((change) => change.why), EVERY_SCREEN].join(' ');
   // No UI-touching files means idle. That is not the same claim as "covered".
-  if (uiFiles.length === 0 && quotedFiles.length === 0 && workspaceGaps.length === 0 && dependencyReason === null) {
+  if (
+    uiFiles.length === 0 &&
+    quotedFiles.length === 0 &&
+    testFolderGaps.length === 0 &&
+    workspaceGaps.length === 0 &&
+    dependencyReason === null
+  ) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true, ...excluded };
   }
   const quotedGaps: CoverageGap[] = quotedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: QUOTED_PATH_REASON }));
-  const unresolvedFiles: string[] = [...quotedFiles, ...workspaceGaps.map((gap) => gap.ref)];
-  const gaps: CoverageGap[] = [...quotedGaps, ...workspaceGaps];
+  const unresolvedFiles: string[] = [
+    ...quotedFiles,
+    ...testFolderGaps.map((gap) => gap.ref),
+    ...workspaceGaps.map((gap) => gap.ref),
+  ];
+  const gaps: CoverageGap[] = [...quotedGaps, ...testFolderGaps, ...workspaceGaps];
   if (uiFiles.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false, ...excluded };
   }
