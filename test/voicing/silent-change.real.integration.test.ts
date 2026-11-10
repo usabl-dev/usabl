@@ -377,7 +377,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(await flow('late-announce', click('#save'), 'Saved')).toEqual([]);
     });
 
-    it('does not pass on an announcement an earlier action caused when its own steps announce nothing', async () => {
+    it('is a gap, not a pass, on an announcement an earlier action caused when its own steps announce nothing', async () => {
       // An earlier action clicks Save, which writes "Saved" into the shown polite region, and waits
       // for the page to settle. The flow then only presses Tab, which announces nothing.
       const earlier = async (page: Page): Promise<void> => {
@@ -385,7 +385,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
         await page.settleAfterAction();
       };
       const drafts = await flow('polite-save', [{ do: 'tab' }], 'Saved', earlier);
-      expect(own(drafts)).toEqual(['fail']);
+      // The text was heard only before the flow's first step, so the flow is a gap, not a pass.
+      expect(own(drafts)).toEqual(['unverified']);
       expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
     });
 
@@ -398,7 +399,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
         await page.click('#save');
       };
       const drafts = await flow('late-announce', click('h1'), 'Saved', earlier);
-      expect(own(drafts)).toHaveLength(1);
+      expect(own(drafts)).toEqual(['unverified']);
       expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
     });
 

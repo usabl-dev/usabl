@@ -98,9 +98,19 @@ function depsFor(page: Page, providers: Provider[]): Deps {
 
 describe('a flow requirement and speech from before its first step', () => {
   it('does not pass on an announcement an earlier check caused when its own steps announce nothing', async () => {
+    // The text was heard only before the flow's first step. An earlier check may have changed the
+    // page, so whether the flow's steps announce it is unknown: a gap, never a pass or a fail.
     const live: string[] = [];
     const providers = [earlierCheck(live), ...flowProviders([{ do: 'tab' }])];
     const r = await run(depsFor(savePage(live, true), providers), config);
+    expect(r.findings.filter((f) => f.rule === 'intake:save-announces').map((f) => f.confidence)).toEqual(['unverified']);
+    expect(r.verdict).not.toBe('verified');
+    expect(r.verdict).not.toBe('regression');
+  });
+
+  it('still fails when nothing announced the expected text, before the flow or during it', async () => {
+    const live: string[] = [];
+    const r = await run(depsFor(savePage(live, false), flowProviders([{ do: 'click', selector: '#save' }])), config);
     expect(r.findings.filter((f) => f.rule === 'intake:save-announces').map((f) => f.confidence)).toEqual(['fail']);
     expect(r.verdict).toBe('regression');
   });

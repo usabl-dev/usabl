@@ -481,9 +481,10 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
-  it('fails a flow whose only match is in the drain taken before its first step', async () => {
+  it('is a gap, never a pass or a fail, when the expected text was heard only before its first step', async () => {
     // The capture runs for the life of the page, so the first drain holds what earlier checks
-    // caused. The flow's own steps announce nothing.
+    // caused. The flow's own steps announce nothing. An earlier check may have changed the page, so
+    // whether these steps announce the text is unknown.
     const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
     const provider = mapRequirementsToProviders(bundle)[0];
     const drains = [['Saved']];
@@ -498,7 +499,26 @@ describe('mapRequirementsToProviders', () => {
     const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
-    expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', confidence: 'fail', elementPath: '#save' });
+    expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '#save' });
+    expect(drafts[0]?.why).toContain('announced before the flow\'s first step');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ expectedAnnouncement: 'Saved', announcements: [], heardBeforeFirstStep: true });
+  });
+
+  it('still fails when the drain taken before its first step does not hold the expected text either', async () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [['Deleted', 'Status: Saved successfully']];
+    const context = await makeContext({
+      page: makeFakePage({
+        activeNode: vi.fn(async () => axNode('Save')),
+        activePath: vi.fn(async () => '#save'),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      }),
+    });
+
+    const drafts = draftsOf(await provider!.run(context));
+
+    expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:flow-save', 'fail']]);
     expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
   });
 

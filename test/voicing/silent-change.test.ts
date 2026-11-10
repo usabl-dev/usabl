@@ -434,10 +434,11 @@ describe('the silent change rule in a flow requirement', () => {
     });
 
     it('does not count the text the capture held before the first step: that speech came from earlier checks', async () => {
+      // The flow's own steps announce nothing, so whether they would announce the text is unknown.
       const { page } = worldPage({}, { live: [{ text: 'Saved', source: { region: 1, removalOnly: false } }] });
       const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'tab' }], 'Saved')))[0];
       const drafts = await runOne(provider, page);
-      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-flow', 'fail']]);
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-flow', 'unverified']]);
       expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
     });
 

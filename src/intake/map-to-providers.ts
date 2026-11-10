@@ -161,6 +161,33 @@ function flowUndecidableDraft(
   };
 }
 
+// The expected text was announced only before the flow's first step, which the flow does not count,
+// and its own steps did not announce it. An earlier check may have changed the page, such as by
+// saving once already, so whether these steps announce it is unknown. That is a gap, never a fail.
+function flowHeardBeforeDraft(
+  requirement: Requirement,
+  node: AxNode | null,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: `Whether the flow's steps make users hear "${expectedAnnouncement}" is unknown.`,
+    why: "The text was announced before the flow's first step, which the flow does not count, and its own steps did not announce it. An earlier check may have changed the page, so usabl cannot tell whether these steps announce it.",
+    fix: 'Check this flow by hand with a screen reader, on the page as it first loads.',
+    evidence: evidenceFromNode(node, { expectedAnnouncement, announcements, heardBeforeFirstStep: true }),
+    confidence: 'unverified',
+  };
+}
+
 function hasText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -379,7 +406,8 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   // reads it: the flow is judged only on what was announced after its first step ran. The silent
   // change rule takes it as background speech. A failure of this drain still fails the flow,
   // because the speech it should have cleared could then land in the first step's drain.
-  watch.start(await takeDrain(null));
+  const drainBefore = await takeDrain(null);
+  watch.start(drainBefore);
   // A page that did not go quiet may still speak for an earlier check during the first step. A flow
   // that judges speech cannot tell that speech from its own, so it runs none of its steps.
   if (assertion.expectedAnnouncement !== undefined && (quiet === null || !quiet.settled)) {
@@ -426,7 +454,7 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
     throw drainFailures[0];
   }
   const drain = unionOfDrains(drains);
-  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain);
+  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain, drainBefore?.texts ?? []);
   // The rule stays quiet only where it would repeat the flow's own draft for the same step. A flow
   // that fails says its last step was not heard, so the rule emits nothing for that step: a second
   // draft would be a second finding for one accessibility barrier. A flow gap about an undecidable
@@ -448,6 +476,8 @@ async function flowVerdict(
   expectedAnnouncement: string,
   node: AxNode | null,
   drain: AnnouncementDrain,
+  // The texts of the drain taken before the first step. They never pass the flow and never fail it.
+  textsBefore: readonly string[],
 ): Promise<Draft[]> {
   const announcements = drain.texts;
   const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
@@ -472,6 +502,10 @@ async function flowVerdict(
   const unreadable = await page.activeFocusUnreadable();
   if (unreadable !== null) {
     return [flowUnreadableDraft(requirement, await page.activePath(), expectedAnnouncement, announcements, unreadable)];
+  }
+
+  if (textsBefore.some((text) => trimEqual(text, expectedAnnouncement))) {
+    return [flowHeardBeforeDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements)];
   }
 
   return [
