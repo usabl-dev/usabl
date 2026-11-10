@@ -7,8 +7,10 @@ the check-agnostic core, evidence labels, design intake, Reports, and the on/off
 adoption model.
 
 This document describes usabl v0.2.2: an Apache-2.0 accessibility proof engine, published
-as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
-this document and the source disagree, the source is authoritative.
+as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Its
+library exports are `usabl`, `usabl/vite`, `usabl/webpack`, `usabl/playwright`, `usabl/docs`,
+and `usabl/measure`, each listed in the `exports` field of `package.json`. Where this
+document and the source disagree, the source is authoritative.
 
 ---
 
