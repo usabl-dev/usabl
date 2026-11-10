@@ -7,16 +7,23 @@
 - `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
   catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
   on pages one at a time in the scan browser, after the page is ready and before any check runs.
-  Each defect is scanned clean and mutated through the real checks and gated by the real gate, and
-  is recorded as caught, caught by another rule, missed, preview only, not applicable, or
-  unreadable. It runs on fixture pages that ship with usabl, with no app and no config, and with
-  `--app` on the surfaces in `usabl.config.json` too (`--screen <id> ...` names some). It writes
-  `.usabl/sensitivity.json` with the engine and scanner versions, the catalog hash, every outcome,
-  and every shipped rule the catalog does not exercise, and prints "caught N of M" with every miss
-  by name. On the fixture pages it catches 25 of 28: a visible control taken out of the Tab order
-  and a menu that does not open on Enter are missed, and a broken live region under a voice
-  requirement is preview only. It is measurement: it mints no verdict and no receipt, nothing on
-  a verdict path reads its file, and it exits 0 whenever it ran.
+  Each defect is scanned clean and mutated through the real checks and gated by the real gate. It
+  is caught only when a new, definite failure from an expected rule is on the changed element, or
+  anywhere on the screen for a defect reported there. It is unreadable whenever the scans cannot
+  say: a coverage gap, a change that did not hold through the scan, findings the checks could not
+  confirm, or a new finding away from the change. A defect already on the element is not
+  applicable, and a finding the page already had never counts. It runs on fixture pages that ship
+  with usabl, with no app and no config, and with `--app` on the surfaces in `usabl.config.json`
+  too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
+  screen's flow and voice steps, and the command prints the real page loads and step counts before
+  it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
+  hash, every outcome, and every shipped rule the catalog does not exercise, and prints "caught N of
+  M" with every miss by name. On the fixture pages it catches 24 of the 27 it can make and read: a
+  visible control taken out of the Tab order and a menu that does not open on Enter are missed, a
+  broken live region under a voice requirement is preview only, and a menu toggle that loses
+  `aria-expanded` is unreadable, because the page sets it again when the menu probe clicks the
+  toggle. It is measurement: it mints no verdict and no receipt, nothing on a verdict path reads its
+  file, and it exits 0 whenever it ran. `npm run test:sensitivity` runs its real-browser tests.
 
 - `usabl brief` prints what an agent reads before it starts a task: the screens the task's
   files reach and how each is reached, the checks that apply to each screen, the ones that do
