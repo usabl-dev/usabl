@@ -14,7 +14,8 @@ import {
 
 // The receipt binds the version of the Chromium that scans, so the read has to work on the setups
 // teams run: Playwright's own download and a custom PLAYWRIGHT_BROWSERS_PATH. A headless run starts
-// Playwright's headless shell, so that is the binary asked.
+// Playwright's headless shell, so that is the binary asked. These tests never start a browser or
+// run a file: the browser read is injected.
 
 describe('the Chromium version from the browser itself', () => {
   it('reads the version a Chromium build prints for --version', () => {
@@ -231,10 +232,21 @@ describe('the cached browser version read', () => {
 });
 
 describe('readScannerVersions', () => {
-  it('reads every version of the installed tool chain', async () => {
-    const versions = await readScannerVersions();
+  it('reads every version of the installed tool chain, with the browser read injected', async () => {
+    // The packages are read from their package.json. The browser read is a fake, so this unit test
+    // starts no browser and runs no file. The real-browser lane checks the real read.
+    const asked: string[] = [];
+    const versions = await readScannerVersions({
+      executablePath: () => FULL,
+      isFile: async (path) => path === SHELL,
+      runVersion: async (path) => {
+        asked.push(path);
+        return 'Google Chrome for Testing 151.0.7922.34\n';
+      },
+    });
     expect(versions.axeCore).toMatch(/^\d+\.\d+\.\d+/);
     expect(versions.playwright).toMatch(/^\d+\.\d+\.\d+/);
-    expect(versions.chromium).not.toBe('unknown');
+    expect(versions.chromium).toBe('151.0.7922.34');
+    expect(asked).toEqual([SHELL]);
   });
 });

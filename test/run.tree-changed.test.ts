@@ -85,7 +85,9 @@ function editedDuringScan(drafts: Draft[] = []): { deps: Deps; treeReads: () => 
   return { deps, treeReads: () => reads };
 }
 
-// A tree that changes only after the run's second read, so after everything the scan saw.
+// A tree that changes after the run's second read and before the receipt is minted: the edit lands
+// when the run reads its clock for the gate, after everything the scan saw. A receipt that reads
+// the tree at mint would bind the edited tree, which no scan saw.
 function editedAfterTheCheck(): Deps {
   const files = {
     'usabl.config.json': JSON.stringify(config),
@@ -98,15 +100,16 @@ function editedAfterTheCheck(): Deps {
     changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
     scans: { clusters: cleanScan },
   });
-  let reads = 0;
+  let edited = false;
   return {
     ...base,
+    clock: () => {
+      edited = true;
+      return base.clock();
+    },
     git: {
       ...base.git,
-      writeTree: async () => {
-        reads += 1;
-        return reads <= 2 ? 'tree-scanned' : 'tree-edited-later';
-      },
+      writeTree: async () => (edited ? 'tree-edited-later' : 'tree-scanned'),
     },
   };
 }
