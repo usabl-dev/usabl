@@ -638,6 +638,16 @@ describe('target size requirement', () => {
     expect(drafts[0]?.why).toMatch(/rotated or skewed.*clip-path/u);
   });
 
+  it('is unconfirmed, never a pass, when the box read names a limit the check has no words for', async () => {
+    // A limit added to the box read alone must still stop a pass.
+    const alone = await run(r, sized({ width: 44, height: 44, unmeasurable: ['some-new-limit' as BoxLimit] }));
+    expect(alone.map((d) => d.confidence)).toEqual(['unverified']);
+    const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: ['some-new-limit' as BoxLimit, 'clip-path'] }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toMatch(/clip-path.*a reason usabl has no description for \(some-new-limit\)/u);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ unmeasurable: ['clip-path', 'some-new-limit'] });
+  });
+
   it('names a missed hit test last, after the shapes it lists by name', async () => {
     const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: ['hit-test-missed', 'overflow-clipped'] }));
     expect(drafts).toHaveLength(1);

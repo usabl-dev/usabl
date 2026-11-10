@@ -28,6 +28,7 @@ import type {
 } from '../contracts/index.js';
 import { DESIGN_AX_TREE_NODE_LIMIT } from '../deps/ax-tree.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
+import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
 import {
@@ -646,7 +647,20 @@ const BOX_LIMIT_REASON: Readonly<Record<BoxLimit, string>> = {
     "part of the control's box cannot be hit, because something clips it or covers it, it does not take pointer events, or it is partly off the page",
 };
 
-const BOX_LIMIT_ORDER: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport', 'hit-test-missed'];
+// Every name the box read gave, known ones in the order of BOX_LIMITS and then any other, sorted,
+// so the message never depends on the order of the read. A name this check has no words for still
+// stops a pass: an unknown limit never reads as no limit.
+function boxLimitsOf(unmeasurable: readonly string[]): string[] {
+  const known = BOX_LIMITS.filter((limit) => unmeasurable.includes(limit));
+  const unknown = [...new Set(unmeasurable.filter((name) => !(BOX_LIMITS as readonly string[]).includes(name)))].sort();
+  return [...known, ...unknown];
+}
+
+function boxLimitReason(name: string): string {
+  return Object.hasOwn(BOX_LIMIT_REASON, name)
+    ? (BOX_LIMIT_REASON[name as BoxLimit] ?? '')
+    : `a reason usabl has no description for (${name})`;
+}
 
 // One decimal, rounded down, so a size below the minimum never prints as the minimum.
 function shownSize(pixels: number): number {
@@ -707,15 +721,14 @@ async function checkTargetSize(
       }),
     ];
   }
-  // In the fixed order of BOX_LIMIT_ORDER, so the message never depends on the order of the read.
-  const limits = BOX_LIMIT_ORDER.filter((limit) => box.unmeasurable.includes(limit));
+  const limits = boxLimitsOf(box.unmeasurable);
   if (limits.length > 0) {
     return [
       draft(requirement, 'target-size', 'unverified', {
         elementPath: match.selector,
         node: match.node,
         whatUserExperiences: `Whether ${question} is unknown.`,
-        why: `usabl does not measure this control, because the box it reads may be larger than the area a pointer can hit: ${limits.map((limit) => BOX_LIMIT_REASON[limit]).join('; ')}.`,
+        why: `usabl does not measure this control, because the box it reads may be larger than the area a pointer can hit: ${limits.map(boxLimitReason).join('; ')}.`,
         fix: 'Check the size of this control by hand.',
         extra: { width: box.width, height: box.height, unmeasurable: limits },
       }),

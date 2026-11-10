@@ -7,6 +7,7 @@
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import { readDesignAxTree, readFullAxTree } from './ax-tree.js';
 import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -825,8 +826,6 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   return getComputedStyle(element).getPropertyValue(cssProperty);
 }`;
 
-// The order BoxLimit values are reported in. The browser function below writes the same names.
-const BOX_LIMITS: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport', 'hit-test-missed'];
 
 // The laid-out box of the first element a selector matches, in CSS pixels, or null. The box
 // includes transforms. It also says how many boxes the element is laid out in, and each reason the
