@@ -76,7 +76,10 @@ export async function runVerifySensitivity(options: VerifySensitivityOptions, po
       // Said before it starts, with the real counts, because it loads the app many times and runs the
       // team's own flow and voice steps, which can save or delete data.
       const requirements = await ports.loadRequirements(config);
-      const warning = formatLevel2Warning(level2Cost(SENSITIVITY_CATALOG, appScreens, requirements.ok ? requirements.bundle : null));
+      const warning = formatLevel2Warning(
+        level2Cost(SENSITIVITY_CATALOG, appScreens, requirements.ok ? requirements.bundle : null),
+        requirements.ok ? null : requirements.reason,
+      );
       // Each line is scrubbed on its own, so the line breaks stay.
       ports.stderr(warning.split('\n').map(scrubString).join('\n'));
       app = await ports.level2(config, appScreens, date);

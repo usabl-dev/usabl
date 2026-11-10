@@ -97,6 +97,7 @@ describe('measureLevel2', () => {
         withoutRequirements: runner([quiet]),
         browser,
         requirements: BUNDLE,
+        requirementsError: null,
         now: NOW,
       },
       SENSITIVITY_CATALOG,
@@ -147,6 +148,45 @@ describe('runLevel2', () => {
   });
 });
 
+describe('runLevel2 when the requirements do not load', () => {
+  let cwd: string | null = null;
+
+  afterEach(async () => {
+    if (cwd !== null) await rm(cwd, { recursive: true, force: true });
+    cwd = null;
+  });
+
+  it('reads the flow and voice entries as unreadable with the load reason, never as not applicable', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'usabl-sensitivity-level2-'));
+    await mkdir(join(cwd, 'design'));
+    await writeFile(join(cwd, 'design', 'broken.yaml'), 'version: 1\nrequirements: [1, 2\n');
+    const config: UsablConfig = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['src/**'],
+      discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [{ id: 'profile', url: SCREEN.url, files: ['src/Profile.tsx'] }],
+      guardedPaths: ['usabl.config.json'],
+      requirements: 'design',
+    };
+    const measurements = await runLevel2({
+      config,
+      cwd,
+      screens: [SCREEN],
+      now: NOW,
+      entries: SENSITIVITY_CATALOG.filter((entry) => entry.needs?.requirement !== undefined),
+      editor: makeFakeMutationEditor(),
+      baseBrowser: () => countingBrowser([]),
+    });
+    expect(measurements.map(({ entry, outcome }) => [entry, outcome])).toEqual([
+      ['flow-live-region-broken', 'unreadable'],
+      ['voice-live-region-broken', 'unreadable'],
+    ]);
+    for (const measurement of measurements) {
+      expect(measurement.reason).toMatch(/^the design requirements could not be loaded, so this entry cannot be measured: requirements path design/);
+    }
+  });
+});
+
 describe('the Level 2 warning', () => {
   it('gives the real page loads and the real step count for the chosen screens', () => {
     const other: SensitivityScreen = { id: 'settings', url: 'http://127.0.0.1:5173/settings' };
@@ -166,6 +206,13 @@ describe('the Level 2 warning', () => {
     expect(warning).toContain('A step that saves or deletes data runs that many times.');
     expect(warning).not.toContain('settings:');
     expect(warning.replace(/--app\b/g, '')).not.toMatch(/—|--/);
+  });
+
+  it('says when the requirements could not be loaded', () => {
+    const warning = formatLevel2Warning(level2Cost(SENSITIVITY_CATALOG, [SCREEN], null), 'requirements path design: bad file');
+    expect(warning).toContain(
+      '  The design requirements could not be loaded, so no flow or voice steps run, and the flow and voice entries are unreadable: requirements path design: bad file',
+    );
   });
 
   it('says when no chosen screen has steps to run', () => {

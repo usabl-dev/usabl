@@ -307,6 +307,23 @@ describe('measureEntry', () => {
     expect(harness.opened).toBe(0);
   });
 
+  it('is unreadable, without loading the page, when the requirements could not be loaded', async () => {
+    const { deps, harness } = setup([namesProvider()]);
+    const failed = { ...deps, requirementsError: 'requirements path design: configured requirements directory had no yaml files' };
+    expect(await measureEntry(failed, entry({ needs: { requirement: 'flow' } }), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: [],
+      reason:
+        'the design requirements could not be loaded, so this entry cannot be measured: requirements path design: configured requirements directory had no yaml files',
+    });
+    expect((await measureEntry(failed, entry({ needs: { requirement: 'voice' } }), SCREEN)).outcome).toBe('unreadable');
+    expect(harness.opened).toBe(0);
+    // An entry that needs no requirement is measured as usual.
+    expect((await measureEntry(failed, entry(), SCREEN)).outcome).toBe('caught');
+  });
+
   it('runs an entry that needs a flow requirement on a screen one names', async () => {
     const { deps } = setup([namesProvider()]);
     const requirements: RequirementBundle = {

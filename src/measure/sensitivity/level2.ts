@@ -66,6 +66,8 @@ export interface Level2Runners {
   withoutRequirements: CheckRunner;
   browser: MutatingBrowser;
   requirements: RequirementBundle;
+  // Why the requirements could not be loaded, or null when they loaded.
+  requirementsError: string | null;
   now: string;
 }
 
@@ -83,7 +85,13 @@ export async function measureLevel2(
     const checkRunner = entry.needs?.requirement === undefined ? runners.withoutRequirements : runners.withRequirements;
     measurements.push(
       ...(await measureCatalog(
-        { checkRunner, browser: runners.browser, requirements: runners.requirements, now: runners.now },
+        {
+          checkRunner,
+          browser: runners.browser,
+          requirements: runners.requirements,
+          requirementsError: runners.requirementsError,
+          now: runners.now,
+        },
         [{ entry, screens }],
       )),
     );
@@ -108,6 +116,8 @@ export async function runLevel2(options: Level2Options): Promise<EntryMeasuremen
   // session was already printed by the first build.
   const { requirements: _requirements, ...withoutRequirementsConfig } = options.config;
   const withoutRequirements = await buildDeps(withoutRequirementsConfig, { cwd: options.cwd, browserFor, warn: () => undefined });
+  // buildDeps gives an empty bundle when the requirements fail to load, so the reason is read here.
+  const loaded = await loadLevel2Requirements(options.config, options.cwd);
   try {
     const browser = built.browser;
     if (browser === null) {
@@ -119,6 +129,7 @@ export async function runLevel2(options: Level2Options): Promise<EntryMeasuremen
         withoutRequirements: withoutRequirements.checkRunner,
         browser,
         requirements: withRequirements.requirements,
+        requirementsError: loaded.ok ? null : loaded.reason,
         now: options.now,
       },
       entries,
@@ -188,7 +199,7 @@ function plural(n: number, noun: string): string {
 }
 
 /** What Level 2 is about to do to the team's app, said before it starts, with the real counts. */
-export function formatLevel2Warning(costs: readonly Level2ScreenCost[]): string {
+export function formatLevel2Warning(costs: readonly Level2ScreenCost[], requirementsError: string | null = null): string {
   const loads = costs.reduce((total, cost) => total + cost.loads, 0);
   const lines = [
     'usabl verify sensitivity --app: this loads your app many times, with your saved session if there is one.',
@@ -196,7 +207,11 @@ export function formatLevel2Warning(costs: readonly Level2ScreenCost[]): string 
     '  On every load, the dialog and menu probes click each dialog trigger and menu toggle on the screen.',
   ];
   const stepped = costs.filter((cost) => cost.loadsWithSteps > 0 && cost.steps > 0);
-  if (stepped.length === 0) {
+  if (requirementsError !== null) {
+    lines.push(
+      `  The design requirements could not be loaded, so no flow or voice steps run, and the flow and voice entries are unreadable: ${requirementsError}`,
+    );
+  } else if (stepped.length === 0) {
     lines.push('  No chosen screen has flow or voice steps that the flow and voice entries would run, so none run.');
   } else {
     lines.push("  Only the flow and voice entries run the screen's flow and voice steps:");

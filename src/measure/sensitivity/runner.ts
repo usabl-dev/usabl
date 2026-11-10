@@ -65,6 +65,9 @@ export interface SensitivityRunnerDeps {
   checkRunner: CheckRunner;
   browser: MutatingBrowser;
   requirements: RequirementBundle;
+  // Set when the design requirements could not be loaded, with the reason. An entry that needs a
+  // requirement is then unreadable: an empty bundle would read as a screen with no requirement.
+  requirementsError?: string | null;
   // The gate reads a time for waiver expiry. No waiver is passed, so it decides nothing here.
   now: string;
 }
@@ -196,6 +199,15 @@ export async function measureEntry(
   entry: CatalogEntry,
   screen: SensitivityScreen,
 ): Promise<EntryMeasurement> {
+  if (entry.needs?.requirement !== undefined && typeof deps.requirementsError === 'string') {
+    return result(
+      entry,
+      screen,
+      'unreadable',
+      [],
+      `the design requirements could not be loaded, so this entry cannot be measured: ${deps.requirementsError}`,
+    );
+  }
   const unmet = precondition(entry, screen, deps.requirements);
   if (unmet !== null) {
     return result(entry, screen, 'not applicable', [], unmet);
