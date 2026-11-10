@@ -113,27 +113,57 @@ function parseNameOnly(output: string): string[] {
   return [...new Set(splitNul(output))];
 }
 
-async function runGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
+
+async function runGit(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+  maxBuffer: number = DEFAULT_MAX_BUFFER,
+): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
     encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
+    maxBuffer,
     env: env === undefined ? process.env : { ...process.env, ...env },
   });
   return stdout;
 }
 
-export function makeGitReader(options: { cwd?: string } = {}): GitReader {
+// A listing longer than the buffer makes execFile throw with a terse message. usabl then cannot
+// know which files changed, so the run must stop with an error a person can act on. It never
+// reads a cut-off list as the whole list.
+async function runListing(cwd: string, args: string[], maxBuffer: number): Promise<string> {
+  try {
+    return await runGit(cwd, args, undefined, maxBuffer);
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new Error(
+        `git ${args[0] ?? ''} printed more than usabl reads, so usabl could not list the files it needs ` +
+          'and checked nothing. This most often means a large folder of new files that .gitignore does not ' +
+          'cover. Add that folder to .gitignore, or commit it, then run usabl again.',
+      );
+    }
+    throw err;
+  }
+}
+
+export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}): GitReader {
   const cwd = options.cwd ?? process.cwd();
+  // The buffer size is an option only so tests can reach the over-limit path with a small repository.
+  const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
 
   return {
     async statusZ() {
-      const output = await runGit(cwd, ['status', '--porcelain', '-z']);
+      // --untracked-files=all lists each new file on its own. Without it git lists a new folder as
+      // the folder alone, and a user's status.showUntrackedFiles=no hides new files completely, so
+      // a new screen file would match no UI glob and read as nothing to check.
+      const output = await runListing(cwd, ['status', '--porcelain', '-z', '--untracked-files=all'], maxBuffer);
       return parseStatus(output);
     },
     async diffNameOnly(ref) {
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      const output = await runGit(cwd, ['diff', '--name-only', '-z', `${ref}...HEAD`]);
+      const output = await runListing(cwd, ['diff', '--name-only', '-z', `${ref}...HEAD`], maxBuffer);
       return parseNameOnly(output);
     },
     async show(ref, path) {
@@ -153,11 +183,11 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
       if (paths.length === 0) {
         return {};
       }
-      const output = await runGit(cwd, ['ls-tree', '-z', ref, '--', ...paths]);
+      const output = await runListing(cwd, ['ls-tree', '-z', ref, '--', ...paths], maxBuffer);
       return parseLsTree(output);
     },
     async lsFiles(ref, prefix) {
-      const output = await runGit(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix]);
+      const output = await runListing(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix], maxBuffer);
       return parseLsFiles(output);
     },
     async writeTree() {

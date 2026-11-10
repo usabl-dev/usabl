@@ -161,6 +161,55 @@ describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }
   });
 });
 
+// A new folder is listed by git status as the folder alone, and a user's
+// status.showUntrackedFiles=no hides untracked files from status entirely. Either way a new
+// screen file would match no UI glob, so the run would have nothing to check.
+describe('makeGitReader with new untracked files', { timeout: 30_000 }, () => {
+  const NEW_SCREEN = 'src/newdir/New.tsx';
+  const NEW_HELPER = 'src/newdir/deeper/helper.ts';
+  let repoPath = '';
+
+  beforeEach(async () => {
+    repoPath = await mkdtemp(join(tmpdir(), 'usabl-git-untracked-'));
+    await runGit(repoPath, ['init', '--initial-branch=main']);
+    await runGit(repoPath, ['config', 'user.name', 'Test User']);
+    await runGit(repoPath, ['config', 'user.email', 'test@example.com']);
+    await writeFile(join(repoPath, 'README.md'), 'seed\n', 'utf8');
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'seed']);
+    await mkdir(join(repoPath, 'src/newdir/deeper'), { recursive: true });
+    await writeFile(join(repoPath, NEW_SCREEN), 'export const New = 1;\n', 'utf8');
+    await writeFile(join(repoPath, NEW_HELPER), 'export const helper = 1;\n', 'utf8');
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('lists each file of a new folder, not the folder', async () => {
+    const entries = await makeGitReader({ cwd: repoPath }).statusZ();
+    expect(entries.map((entry) => entry.path).sort()).toEqual([NEW_HELPER, NEW_SCREEN].sort());
+    expect(entries.every((entry) => entry.code === '??')).toBe(true);
+  });
+
+  it('lists new files when the user config hides untracked files from status', async () => {
+    await runGit(repoPath, ['config', 'status.showUntrackedFiles', 'no']);
+    const paths = (await makeGitReader({ cwd: repoPath }).statusZ()).map((entry) => entry.path);
+    expect(paths.sort()).toEqual([NEW_HELPER, NEW_SCREEN].sort());
+  });
+
+  // A listing longer than the buffer usabl reads fails. The error must say what happened in plain
+  // words, so the run reports an error a person can act on, never a short list read as complete.
+  it('fails with a plain reason when a listing is longer than usabl reads', async () => {
+    const git = makeGitReader({ cwd: repoPath, maxBuffer: 16 });
+    await expect(git.statusZ()).rejects.toThrow(/git status printed more than usabl reads.*could not list/s);
+    const seed = await runGit(repoPath, ['rev-parse', 'HEAD']);
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'new files']);
+    await expect(git.diffNameOnly(seed)).rejects.toThrow(/git diff printed more than usabl reads/);
+  });
+});
+
 describe('makeGitReader in a repository with no commits', () => {
   let emptyRepo = '';
 

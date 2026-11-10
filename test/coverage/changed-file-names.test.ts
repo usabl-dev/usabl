@@ -163,3 +163,25 @@ describe('a changed file with a newline in its name', () => {
     expect(coverage.gaps).toEqual([]);
   });
 });
+
+// When git cannot list the changed files, the run cannot know what changed. That is an error the
+// run reports, never a run with nothing to check.
+describe('a run whose changed-file listing fails', () => {
+  it('reports the error and never reads as nothing to check', async () => {
+    const fake = makeFakeDeps({ files: { 'src/App.tsx': '' } });
+    const deps: Deps = {
+      ...fake,
+      git: {
+        ...fake.git,
+        statusZ: async () => {
+          throw new Error('git status printed more than usabl reads');
+        },
+      },
+    };
+    const result = await run(deps, config);
+    expect(result.coverage.nothingToCheck).toBe(false);
+    expect(result.verdict).toBeNull();
+    expect(result.exitCode).toBe(4);
+    expect(result.summary).toContain('git status printed more than usabl reads');
+  });
+});
