@@ -202,6 +202,32 @@
 
 ### Fixed
 
+- A change to a file under a glob entry in `guardedPaths`, such as `policy/*.json`, now needs
+  approval in CI, whether the pull request edits, adds, or deletes it. Before, `usabl enforce
+  policy` listed each entry with a literal git pathspec, so a glob entry listed nothing and the
+  check printed "no policy change". The local guard and the CI check now list each ref once with
+  `-z` and use one matcher, with Node's dot rule for wildcards. A file deleted locally under a
+  glob entry is now named in the local check, where the pattern text was named before. For a
+  clean tree with plain ASCII names, the receipt policy hash is unchanged. Gate effect: such a
+  change is `approval_required` in CI where it passed.
+
+- `usabl enforce policy` now reads code owners from the last `CODEOWNERS` rule that matches each
+  changed guarded path. Before, any team, email, or owner-less line anywhere in the file refused
+  the whole check, while `usabl doctor` read those lines as fine. Now such a line refuses only when
+  it is the last match for a changed guarded path. A path with no owner, and a pattern or owner
+  usabl cannot read, still refuse. `usabl doctor` reports the same limits under policy scope, in
+  the same words, so a repository whose guarded paths lack a user owner now reads as drifted
+  there. Gate effect: the policy check can pass where an unrelated team line made it refuse.
+
+- The gate breaks ties between drafts at one identity, and the debt history orders its
+  identities, by UTF-16 code units. Before, both used the machine's locale, which sorted
+  differently on different machines and read two spellings of one accented letter as equal, so
+  the finding bytes could follow arrival order. Gate effect: none on a verdict; the finding that
+  stands for an identity can now be a different draft of the same identity.
+
+- A floor entry with count 0 no longer yields a `fixed` finding. It accepts no barrier, so its
+  absence pays nothing down. Gate effect: such an entry no longer adds to the paid-down count.
+
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
   merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
