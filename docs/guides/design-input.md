@@ -9,8 +9,8 @@ browser, and a page that does not match the design fails the check.
 `usabl drift design` later tells you which approved requirements came from a design file that has
 changed since.
 
-This was tested end to end with a mock file built from Figma's published file format. It has not yet
-been run on a real design file.
+This was tested end to end with a mock file written by hand to match Figma's published file format.
+It has not yet been run on a real design file.
 
 ## What you need
 
@@ -61,7 +61,9 @@ accessible name, never by a CSS selector.
 
 A note the importer cannot read is listed with the reason and left out of the file. That includes
 speech notes such as "Announce 'Refreshing'", image stamps, Dev Mode notes, and a heading stamp with
-a relative level. Write those requirements by hand if you need them.
+a relative level. A Button Details card whose Accessible Name is a slot or is empty is listed too,
+and so is its button: usabl never uses the layer text in place of the name the card should give.
+Write those requirements by hand if you need them.
 
 Every requirement records where it came from:
 
@@ -96,6 +98,10 @@ Once approved, each check gives one of these:
   usabl reads for a design check; the focus walk was cut short, for example by a control that
   moves focus away when it gets it; or no button has the name, so its size cannot be measured.
   usabl never guesses. A run with a needs review finding is not verified.
+
+One case usabl cannot see: an element inside a closed shadow root that is itself inside a child
+frame. Neither of its counts reaches there, so on a page with child frames, a second element with
+the same name in that place can go unseen, and the check can pass on the one it read.
 
 The target size check measures the border box of a control laid out in one box. These shapes are
 needs review, with the reason, because the box can be larger than the area a pointer can hit: a

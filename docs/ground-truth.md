@@ -4316,7 +4316,10 @@ can have it (for a button: `button`, `[role~="button"]`, button-type inputs, and
 attribute is matched by token, because the browser uses the first role token it knows, so
 `role="button menuitem"` is a candidate. usabl reads each candidate's role and computed name from
 Chromium's accessibility tree, and keeps the ones whose role matches and whose name equals the
-requirement's name once white space is collapsed on both. It then compares how many candidates the page has in all,
+requirement's name once white space is collapsed on both: each run of ASCII white space (tab, line
+feed, form feed, carriage return, space) is one space, and none is left at either end. Any other
+character, a no-break space too, is part of the name. The focus order check reads names by the
+same rule. It then compares how many candidates the page has in all,
 inside open shadow roots and in every frame too, with how many it read. Last, it counts the nodes
 of the page's whole accessibility tree that are not ignored and have the role and the name. The
 browser builds that tree from every role source, so it also sees an element in a closed shadow
@@ -4328,7 +4331,10 @@ or cannot tell. Only "one match" is used as the element. Two matches is never re
 the first: a wrong guess is reported as unknown, never as a finding or a pass. A landmark
 requirement with no name that the document search does not find is unknown, not missing, when the
 tree has a landmark of that role or has more than 20000 nodes. The tree does not cover child
-frames; the frame count above does.
+frames; the frame count above does. Known limit: an element in a closed shadow root inside a child
+frame is seen by neither count. The frame count reads only open shadow roots, and the tree covers
+only the main frame. So on a page with child frames, a second match there goes unseen, and the one
+match usabl reads can count as the only one.
 
 **How the tree is read.** The design checks read the whole tree with one
 `Accessibility.getFullAXTree` call. The read has no time limit and no timer, so no clock decides a
@@ -4416,8 +4422,9 @@ comes from the Button Details card with the same note number.
 
 Every note it cannot turn into a check is printed with the reason and left out of the file: a speech
 note, an image stamp, any other kind of kit note, a Dev Mode note, a relative heading level, an
-ordering stamp with no number, a card that matches no stamp, a name that is empty, longer than 200
-characters, or that the scrubber would change. Nothing is dropped without a line.
+ordering stamp with no number, a card that matches no stamp, a card whose name is a slot, a name
+that is empty, longer than 200 characters, or that the scrubber would change. Nothing is dropped
+without a line.
 
 Each requirement is written with `approved: false`, an id `figma-<surface>-<kind>-<n>`, the
 `--owner` value, and a `source` with the file key, the stamp's node id, and the file version. The
@@ -4426,7 +4433,8 @@ requirement unapproved, and writes it with an exclusive create, so it never over
 refuses an unknown option, a frame given twice, a frame the file does not have, and an id a
 surface cannot have, before it writes anything. It exits 0 when it wrote the file and 2 otherwise.
 Both commands read an answer from Figma up to 256 MiB; an answer that states or reaches a larger
-size is a fetch failure that says so.
+size is a fetch failure that says so. The cap bounds the size of the answer, not peak memory:
+reading, joining, decoding, and parsing one answer under the cap can need several times its size.
 
 `usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
 the current version of each of their files, once per file, in sorted order. It lists the
@@ -4445,10 +4453,15 @@ command, and a test pins that no check, gate, or hook entry point can reach thei
 (threat model, Threat 18).
 
 A component property can be a slot, whose value is an id object, not text. The reader accepts a
-file that uses one, and a slot property never reads as text.
+file that uses one, and a slot property never reads as text. A Button Details card whose
+Accessible Name is a slot, or is empty, is listed with the reason. When no other card with its note
+number has a name usabl can read, the Button stamp with that number is listed too, and so is an
+Ordering stamp on the same element: the layer text is never used in place of the name the card
+was meant to give.
 
-This was tested end to end with a mock file built from Figma's published file format; not yet run
-on a real design file.
+This was tested end to end with a mock file written by hand to match Figma's published file
+format; not yet run on a real design file. The local Figma types are written the same way, and
+nothing in the repository checks them against Figma's own package yet.
 
 ### Requirement ids are waiver identities
 

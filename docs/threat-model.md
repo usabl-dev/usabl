@@ -1041,8 +1041,10 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
   fit a fixed grammar before any request is made, and is encoded into the path. Redirects are not
   followed, because a redirect to another host would carry the header with it. A request times
   out after 60 seconds. An answer is read up to 256 MiB, a chunk at a time, and one that states
-  or reaches a larger size is refused with a message that says so, so a hostile or broken answer
-  cannot fill memory.
+  or reaches a larger size is refused with a message that says so. The cap bounds the size of the
+  answer, not the peak memory of the process: the chunks, the joined bytes, the decoded text,
+  and the parsed file are each held while the next is built, so one answer under the cap can
+  need several times its size in memory.
 - `FIGMA_API_BASE` replaces the address, for tests and for a local mock. It must be https, or
   plain http to 127.0.0.1, localhost, or [::1], and it may not hold a user name, a password, a
   query, or a fragment. Whoever sets that variable chooses where the token goes: it is the same
@@ -1050,8 +1052,13 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
 - Only the two commands call the Figma API, and only when a person runs them. The CLI loads their
   code by a dynamic import inside each command. No module that run(), the gate, `buildDeps`, the
   stop hook, the overlay, the CI judge, the pull request comment, checkPage, or the library entry
-  imports reaches it. Only `src/import/figma/fetch.ts` calls `fetch`, and only the two commands
-  read `FIGMA_TOKEN`.
+  imports reaches it. The test reads imports from the syntax tree and follows each static import,
+  re-export, type import, dynamic `import()`, `require()`, and call made through a
+  `createRequire` result. It fails on `eval`, `Function`, and `new Worker` anywhere under `src/`,
+  because they run code an import graph cannot follow. The two loads whose module it cannot read
+  load an optional package by name, and the engine loader refuses at run time any name that is
+  not a bare package name, so neither can load a file in this repository. Only
+  `src/import/figma/fetch.ts` calls `fetch`, and only the two commands read `FIGMA_TOKEN`.
 - Design text is data. A name goes into a requirement only after it is put on one line with
   control and direction characters removed, and only if it is 200 characters or fewer and the
   scrubber would not change it; otherwise the note is listed instead. Every printed note is
@@ -1070,15 +1077,18 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
   read as no drift.
 
 **Tests:** `test/import/figma/network-isolation.test.ts` (no verdict entry point reaches the Figma
-code, the CLI names it only in dynamic imports, one file calls `fetch`, two read the token),
+code, the CLI names it only in dynamic imports, one file calls `fetch`, two read the token, no
+`eval`, `Function`, or `new Worker` in `src/`), `test/providers/engines/shared.test.ts` (the
+engine loader refuses a name that is not a bare package name),
 `test/import/figma/fetch.test.ts` and `test/import/figma/cli.test.ts` (the token is never printed
 on any failure, redirects and plain http to another host are refused, one GET to the given base, no
 file is overwritten, nothing is written approved), `test/import/figma/import.test.ts` (notes with
 control characters, markup, a credential, and an instruction-like line), and
 `test/drift/design.test.ts` (every fetch failure exits 2 and never says no drift).
 
-**What stays open:** the import has been run only against a mock file built from Figma's published
-file format, not against a real design file. A designer who can edit the file can still write a
+**What stays open:** the import has been run only against a mock file written by hand to match
+Figma's published file format, not against a real design file. The answer size cap does not bound
+peak memory (above). A designer who can edit the file can still write a
 wrong name or level; that is why every requirement needs a person to approve it. The token is
 whatever scope the person gave it; usabl only reads files with it.
 
