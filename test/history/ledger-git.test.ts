@@ -14,7 +14,7 @@ import { appendRecord } from '../../src/history/append.js';
 import { makeHistoryGit } from '../../src/history/git.js';
 import { buildLedger } from '../../src/history/ledger.js';
 import { makeLedgerGit, readLedgerSources } from '../../src/history/ledger-git.js';
-import { runLedger } from '../../src/history/ledger-report.js';
+import { daysCell, runLedger } from '../../src/history/ledger-report.js';
 import { serializeRecord } from '../../src/history/record.js';
 import { dialogAt, entryFor, floorOf, fullScreen, recordOf, rowButton } from './helpers.js';
 
@@ -52,22 +52,29 @@ const PRUNED = floorOf([B, N, R_NEW], 3);
 //
 //   day  0  c0  baseline floor (version 2): A, B, R_OLD
 //   day  6  c1  a later baseline floors N
-//   day  8  c2  app change; a scan of main sees B absent
+//   day  8  c2  app change; a scan of main sees A and N, and B absent
 //   day 10  c3  app change; a second scan sees B absent, so the fix is confirmed here
-//   day 15  c4  app change; a scan sees B again on a new source tree
+//   day 15  c4  app change; a scan sees A, N, and B again, on a new source tree
 //   day 19      on a side branch, the floor is migrated to version 3: R_OLD becomes R_NEW
 //   day 20  c5  that branch is merged into main
 //   day 27  c6  floor prune removes A
 //   day 30  c7  app change, the tip of main; open rows are counted to its committer date
 //
-// The hand count the ledger must match:
+// No scan sees R_OLD or R_NEW: the scans list A, B, and N only.
 //
-//   identity  first seen           what happened                         state     days open
-//   A         day 0, first floor   left the floor on day 27              fixed     27
-//   B         day 0, first floor   fixed day 10, seen again day 15       reopened  10 + 15 = 25
-//   N         day 6                still in the floor                    open      24
-//   R_OLD     day 0, first floor   left at the day 20 migration (a gap)  open      20, a lower bound
-//   R_NEW     day 20               entered at the migration              open      10, a lower bound
+// The hand count the ledger must match. "more": the true number may be larger. "less": it may be
+// smaller. The label is what the table prints.
+//
+//   identity  days            state           more                         less               label
+//   A         27 - 0 = 27     left the floor  first floor, left the floor  left the floor     not known (27 by the floor)
+//   B         (10 - 0) +      reopened        first floor                  span 1 not seen    not known (25 by the floor)
+//             (30 - 15) = 25
+//   N         30 - 6 = 24     open            no                           no, seen 8 to 15   24 days
+//   R_OLD     20 - 0 = 20     open until gap  first floor, ended at gap    never seen         not known (20 by the floor)
+//   R_NEW     30 - 20 = 10    open            entered at the migration     never seen         not known (10 by the floor)
+//
+// A only left the floor, so it is not called fixed. B's first span was closed by two clean scans,
+// but no scan saw B in it before then. N is the one exact row, so the open median is N's 24 days.
 
 describe('the ledger sources in a real repository', () => {
   let root = '';
@@ -137,6 +144,14 @@ describe('the ledger sources in a real repository', () => {
       [R_OLD.rule, R_OLD.elementKey, 'open', 20, true, true],
       [R_NEW.rule, R_NEW.elementKey, 'open', 10, true, true],
     ]);
+    expect(ledger.rows.map((row) => daysCell(row))).toEqual([
+      'not known (27 by the floor)',
+      'not known (25 by the floor)',
+      '24 days',
+      'not known (20 by the floor)',
+      'not known (10 by the floor)',
+    ]);
+    expect(ledger.rows.map((row) => row.lastSeen?.date ?? null)).toEqual([dayAt(15), dayAt(15), dayAt(15), null, null]);
     const b = ledger.rows[1];
     expect(b?.spans.map((span) => [span.start.date, span.end?.date ?? null, span.end?.by ?? null])).toEqual([
       [dayAt(0), dayAt(10), 'history'],
