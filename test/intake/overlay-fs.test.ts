@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FsGlob, GitReader } from '../../src/contracts/index.js';
 import { loadRequirements } from '../../src/intake/load.js';
 import { toVoiceContract } from '../../src/intake/map-to-providers.js';
 import { overlayRequirementsFs } from '../../src/intake/overlay-fs.js';
+import { makeFsGlob } from '../../src/deps/fs.js';
+import { makeGitReader } from '../../src/deps/git.js';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import { testConfig } from '../helpers.js';
+
+const execFileAsync = promisify(execFile);
 
 function scriptedFs(files: Record<string, string>): FsGlob {
   return {
@@ -190,5 +199,77 @@ requirements:
     await expect(overlayFs.glob(['requirements/**/*.yaml'])).resolves.toEqual(['requirements/base.yaml']);
     await expect(overlayFs.readFile('requirements/base.yaml')).resolves.toContain('requirement-baseline');
     await expect(overlayFs.readFile('docs/local-note.md')).resolves.toBe('working-tree note');
+  });
+});
+
+// Real git, because the defect lived in how the git adapter lists names. Without -z, git quoted
+// `requirements/Über.yaml`, the quoted name matched no requirements glob, and the file was not
+// loaded under a trusted ref, with nothing said.
+describe('overlayRequirementsFs with a trusted requirement file git would quote', { timeout: 30_000 }, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('loads the file from the trusted ref beside the other requirement files', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-overlay-names-'));
+    const git = async (args: string[]): Promise<void> => {
+      await execFileAsync('git', args, { cwd: root });
+    };
+    await git(['init', '--initial-branch=main']);
+    await git(['config', 'user.name', 'Test User']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'core.quotePath', 'true']);
+    await mkdir(join(root, 'requirements'), { recursive: true });
+    await writeFile(
+      join(root, 'requirements/Über.yaml'),
+      `
+version: 1
+requirements:
+  - id: requirement-non-ascii-file
+    kind: content
+    surface: clusters
+    description: Requirement kept in a file with a non-ASCII name
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Required heading
+    approved: true
+`,
+      'utf8',
+    );
+    await writeFile(
+      join(root, 'requirements/base.yaml'),
+      `
+version: 1
+requirements:
+  - id: requirement-ascii-file
+    kind: content
+    surface: clusters
+    description: Requirement kept in a file with an ASCII name
+    assertion:
+      type: content
+      selector: h2
+      expectedText: Second heading
+    approved: true
+`,
+      'utf8',
+    );
+    await git(['add', '-A']);
+    await git(['commit', '-m', 'requirements']);
+
+    const config = testConfig({ requirements: 'requirements/' });
+    const overlayFs = overlayRequirementsFs(makeFsGlob({ cwd: root }), makeGitReader({ cwd: root }), config, 'main');
+    const result = await loadRequirements(overlayFs, config);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.bundle.requirements.map((requirement) => requirement.id)).toEqual([
+      'requirement-ascii-file',
+      'requirement-non-ascii-file',
+    ]);
   });
 });

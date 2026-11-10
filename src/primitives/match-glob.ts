@@ -61,14 +61,16 @@ export function expandBraces(pattern: string): string[] | null {
 }
 
 function compileToRegExp(pattern: string): RegExp {
-  // Encode **/? first so src/**/*.tsx matches src/App.tsx and deeper files.
+  // Encode **/? first so src/**/*.tsx matches src/App.tsx and deeper files. `**` becomes
+  // [\s\S]*, which matches any character, a newline too: git allows a newline in a file name,
+  // and `.` would skip it, so such a changed file would read as outside the globs.
   return new RegExp(
     '^' +
       pattern
         .replace(/[.+^${}()|[\]\\]/g, '\\$&')
         .replace(/\*\*\/?/g, '\x00')
         .replace(/\*/g, '[^/]*')
-        .replace(/\x00/g, '.*') +
+        .replace(/\x00/g, '[\\s\\S]*') +
       '$',
   );
 }
