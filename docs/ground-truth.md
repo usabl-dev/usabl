@@ -4373,7 +4373,8 @@ of the page's whole accessibility tree that are not ignored and have the role an
 browser builds that tree from every role source, so it also sees an element in a closed shadow
 root, a role set by script through ElementInternals, and a candidate whose own read came back
 empty. When the tree has two or more, the answer is more than one match. When its count differs
-from the document search, or the tree has more than 20000 nodes, usabl cannot tell. The search
+from the document search, the tree has more than 20000 nodes, or the browser's answer holds no list
+of nodes (the field is missing or is not a list), usabl cannot tell. The search
 gives one of five answers: one match, no match, more than one match, some candidates out of reach,
 or cannot tell. Only "one match" is used as the element. Two matches is never resolved by picking
 the first: a wrong guess is reported as unknown, never as a finding or a pass. A landmark
@@ -4387,7 +4388,13 @@ match usabl reads can count as the only one.
 **How the tree is read.** The design checks read the whole tree with one
 `Accessibility.getFullAXTree` call. The read has no time limit and no timer, so no clock decides a
 design check. Its only bound is the node count: a tree with more than 20000 nodes is not read, and
-each check that needs it is needs review with a reason that names the limit. Measured in Chromium,
+each check that needs it is needs review with a reason that names the limit. An answer with no
+list of nodes is not read as a tree with no nodes: it is unreadable, and each check that needs it
+is needs review with a reason that says so. A read that never returns is bounded by nothing in
+usabl. In CI, the job's own time limit ends it (a workflow that `usabl install --ci` writes sets
+none, so GitHub's default applies), and the job is cancelled, so the required check is not green.
+In the Stop hook, the agent's hook timeout ends it with no verdict. It never reads as a pass.
+Measured in Chromium,
 the largest fixture page returns 172 nodes, and the `usabl-app` screens measured for the silent
 change rule return 179 to 300. The read keeps the same nodes as the silent change rule's read but
 reads no sort state, which no design check uses. It is read once per page state: every design
@@ -4401,7 +4408,7 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 
 | Kind | Fails (`confidence: 'fail'`) | Unknown (`confidence: 'unverified'`, needs review) |
 |---|---|---|
-| `name` | No element has that role and name | More than one does, a candidate is out of reach, or usabl cannot tell |
+| `name` | No element has that role and name, and none has it once all white space is collapsed | More than one does, a candidate is out of reach, usabl cannot tell, or no element has the name but one has it once all white space is collapsed (the reason names the character and where it is) |
 | `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
 | `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
 | `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
@@ -4409,7 +4416,11 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
-failure.
+failure, with one exception. When no element has the name, but one has it once white space of any
+kind is collapsed and trimmed on both sides, the check is needs review, never a failure, because a
+person looking at the page sees the name the design gives. The reason names the character and
+where it sits, for example: a button on this screen is named "Refresh" followed by a no-break
+space.
 
 The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
 from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it
@@ -4440,12 +4451,35 @@ the box it reads can be larger than the area a pointer can hit:
   body, only hidden and clip count, because their scrolling is the viewport's;
 - the element, or an element above it, is fixed or sticky, and the element reaches past the
   viewport;
-- the walk up passes 512 elements.
+- the walk up passes 512 elements;
+- the hit test misses (below).
 
 The walk up follows the flat tree, through slots and out of shadow roots, and skips inline
 elements and elements with no box for overflow. A fixed element that escapes an ancestor that
-clips is still read as clipped, which only ever asks for review. The check does not measure
-overlap with other elements that cover part of the control, or the spacing between targets.
+clips is still read as clipped, which only ever asks for review.
+
+The list above cannot name every shape, so a pass also needs a hit test, read last in the same
+browser function. usabl scrolls the control into view (centered, with instant scrolling), reads
+its box again, and asks `document.elementFromPoint` what is at five points: the center, and the
+middle of each edge, 1 CSS pixel in. Edge middles are used, not corners, so a round or
+pill-shaped control is not flagged. A point is a hit only when the answer is the control or an
+element inside it; an answer of null, outside the viewport, is a miss. Any miss is needs review,
+with the reason that part of the control's box cannot be hit: something clips it or covers it, it
+does not take pointer events, or it is partly off the page. The real-browser tests in
+`test/intake/roles.real.integration.test.ts` hold that each of these is needs review, with a box
+large enough to pass: a clipping element that is itself scaled, or sits inside a scaled element
+(no named shape sees either); `content-visibility: auto` on a short element above; a control
+partly left of the page; `pointer-events: none`; and a control half covered by another element.
+They also hold that a plain button, a round one, one in a box that scrolls without cutting it off,
+and one far down a long page still pass. Before the function returns, it puts back the scroll position of the window and of each
+element on the walk up whose position changed. It has no timer and does not wait. The size it
+reports is the first read, before the scroll. So a pass means the box is large enough, no shape
+above holds, and all five points were hit. A control covered only at a corner still passes, and
+the check does not measure the spacing between targets.
+
+The check measures the control alone: a label that makes the real target larger, such as the
+label of a checkbox, is not counted, so a small checkbox can fail although its real target is
+larger. The importer drafts target size checks for buttons only.
 
 These checks cover the sizes, names, and order that a design states. They do not check every
 control on the page. axe's own `target-size` rule is a separate question: it runs in the docs
@@ -4505,7 +4539,15 @@ file that uses one, and a slot property never reads as text. A Button Details ca
 Accessible Name is a slot, or is empty, is listed with the reason. When no other card with its note
 number has a name usabl can read, the Button stamp with that number is listed too, and so is an
 Ordering stamp on the same element: the layer text is never used in place of the name the card
-was meant to give.
+was meant to give. When a readable card and an unreadable card share a note number, which name the
+designer meant is a guess, so no requirement is drafted from either: both cards are listed, and so
+are the Button stamp with that number and an Ordering stamp on the same element, whichever card
+comes first in the layers.
+
+A name is copied from design text after the characters that make a display lie are removed, and
+with the white space rule the page match uses: each run of ASCII white space is one space, with
+none at either end. A no-break space stays where it is, as the page keeps it. Text that is only
+white space, of any kind, is no name.
 
 This was tested end to end with a mock file written by hand to match Figma's published file
 format; not yet run on a real design file. The local Figma types are written the same way, and

@@ -15,12 +15,17 @@
   than 256 MiB (this bounds the size of the answer, not the peak memory of the process). They are
   the only commands that call the Figma API. A test reads every verdict entry point's imports from
   the syntax tree, following each static import, re-export, type import, dynamic `import()`,
-  `require()`, and call made through a `createRequire` result, and fails when one reaches that
-  code; it also fails on `eval`, `Function`, and `new Worker` anywhere under `src/`, which run code
-  an import graph cannot follow. The two loads it cannot read load an optional package by name,
-  and the engine loader refuses at run time any name that is not a bare package name. A Button
-  Details card whose name cannot be read, such as one whose Accessible Name is a slot, is listed
-  with the reason, and its button is listed too instead of taking the layer text as its name. The
+  `require()`, and call made through a `createRequire` result (under any name an import gives
+  it), and fails when one reaches that code; it also fails on `eval` (by its own name or as a
+  property of `globalThis`, `window`, or `self`), `Function`, `new Worker`, and any import of the
+  `vm` module anywhere under `src/`, which run code an import graph cannot follow. The two loads
+  it cannot read load an optional package by name, and the engine loader refuses at run time any
+  name that is not a bare name, so it never loads a path or a URL; a bare name can still load a
+  Node.js built-in module or this package's own entry. A Button Details card whose name cannot be
+  read, such as one whose Accessible Name is a slot, is listed with the reason, and its button is
+  listed too instead of taking the layer text as its name. When a readable and an unreadable card
+  share a note number, nothing is drafted from either, and both are listed. A name keeps a
+  no-break space where the design has one, as the page does. The
   drafted file starts with a comment that says the names in it are text copied from the design
   file and are data, not instructions. With no requirements folder configured,
   `usabl drift design` says so. Tested end to end with a mock file written by hand to match
@@ -30,17 +35,25 @@
   names in order), and `target-size` (the laid-out border box in CSS pixels). A name matches with
   each run of ASCII white space read as one space and none at either end, as the browser reports
   it; any other character, such as a no-break space, is part of the name. A page that does not
-  match fails. When usabl cannot tell, the result is needs review, never a guess: two elements
-  share the name, the page's accessibility tree has a match the document search could not read
-  (such as one in a closed shadow root or with a role set through ElementInternals), the tree has
-  more than 20000 nodes, a candidate sits in a frame or open shadow root, the focus walk was cut
-  short (it uses the keyboard walk's end rule), or the control to measure has a shape usabl does
-  not measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
+  match fails, except that a name that differs only in white space a person cannot see is needs
+  review, and the reason names the character and where it is. When usabl cannot tell, the result
+  is needs review, never a guess: two elements share the name, the page's accessibility tree has a
+  match the document search could not read (such as one in a closed shadow root or with a role
+  set through ElementInternals), the tree has more than 20000 nodes, the browser's tree answer has
+  no list of nodes, a candidate sits in a frame or open shadow root, the focus walk was cut short
+  (it uses the keyboard walk's end rule), or the control to measure has a shape usabl does not
+  measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
   `clip-path`, `clip`, or mask; an element above it hides or scrolls its overflow and the control
-  reaches past that element's edges; or it is fixed or sticky and reaches past the viewport. The
-  tree read has no time limit, only the node limit, so no clock decides a check, and the design
-  checks on one screen share one read. Known limit: an element in a closed shadow root inside a
-  child frame is seen by neither count, so on a page with child frames a second match there can
+  reaches past that element's edges; it is fixed or sticky and reaches past the viewport; or a hit
+  test misses. Target size passes only when the browser confirms, with the control scrolled into
+  view, that its center and the middle of each edge land on the control, so a covered control, one
+  that takes no pointer events, one partly off the page, and one inside a scaled clipping element
+  are needs review; every scroll position is put back. A control covered only at a corner still
+  passes, and the check measures the control alone, not a label that makes it larger. The tree
+  read has no time limit, only the node limit, so no clock decides a check; nothing in usabl
+  bounds a read that never returns, and in CI the job's time limit cancels it, which is never a
+  pass. The design checks on one screen share one read. Known limit: an element in a closed
+  shadow root inside a child frame is seen by neither count, so on a page with child frames a second match there can
   go unseen. `checkPage` runs them too.
 - `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
   identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when

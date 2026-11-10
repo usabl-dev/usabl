@@ -1108,8 +1108,11 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
   stop hook, the overlay, the CI judge, the pull request comment, checkPage, or the library entry
   imports reaches it. The test reads imports from the syntax tree and follows each static import,
   re-export, type import, dynamic `import()`, `require()`, and call made through a
-  `createRequire` result. It fails on `eval`, `Function`, and `new Worker` anywhere under `src/`,
-  because they run code an import graph cannot follow. The two loads whose module it cannot read
+  `createRequire` result, under any name an import gives `createRequire`. It fails on `eval` by
+  its own name or as a property of `globalThis`, `window`, or `self`, on `Function`, on
+  `new Worker`, and on any import of `node:vm` or `vm`, anywhere under `src/`, because they run
+  code an import graph cannot follow. It reads names as written, so `eval` reached some other way,
+  such as through a variable that holds the global object, is not found. The two loads whose module it cannot read
   load an optional package by name. The engine loader refuses at run time any name that is not a
   bare name, so it never loads a path or a URL. It loads packages and Node.js built-in modules by
   bare name, and it can resolve this package's own entry, which is built from `src/index.ts`, an
@@ -1134,7 +1137,7 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
 
 **Tests:** `test/import/figma/network-isolation.test.ts` (no verdict entry point reaches the Figma
 code, the CLI names it only in dynamic imports, one file calls `fetch`, two read the token, no
-`eval`, `Function`, or `new Worker` in `src/`), `test/providers/engines/shared.test.ts` (the
+`eval`, `Function`, `new Worker`, or `vm` import in `src/`), `test/providers/engines/shared.test.ts` (the
 engine loader refuses a name that is not a bare package name),
 `test/import/figma/fetch.test.ts` and `test/import/figma/cli.test.ts` (the token is never printed
 on any failure, redirects and plain http to another host are refused, one GET to the given base, no

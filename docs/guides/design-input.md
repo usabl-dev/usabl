@@ -63,7 +63,12 @@ A note the importer cannot read is listed with the reason and left out of the fi
 speech notes such as "Announce 'Refreshing'", image stamps, Dev Mode notes, and a heading stamp with
 a relative level. A Button Details card whose Accessible Name is a slot or is empty is listed too,
 and so is its button: usabl never uses the layer text in place of the name the card should give.
-Write those requirements by hand if you need them.
+When a readable card and an unreadable card share a note number, both cards and the button are
+listed, because which name the designer meant is a guess. Write those requirements by hand if you
+need them.
+
+A name keeps a no-break space where the design has one, because the page keeps it too. Other
+white space is read the way the browser reads an accessible name.
 
 Every requirement records where it came from:
 
@@ -95,9 +100,12 @@ Once approved, each check gives one of these:
   cannot pick one; a candidate sits in a shadow root or a frame that usabl cannot read; the page's
   accessibility tree has an element with the name that the document search could not read, such as
   one in a closed shadow root; the page's accessibility tree has more than 20000 nodes, the most
-  usabl reads for a design check; the focus walk was cut short, for example by a control that
-  moves focus away when it gets it; or no button has the name, so its size cannot be measured.
-  usabl never guesses. A run with a needs review finding is not verified.
+  usabl reads for a design check; the browser gave an accessibility tree usabl could not read; the
+  focus walk was cut short, for example by a control that moves focus away when it gets it; or no
+  button has the name, so its size cannot be measured. A name that differs from the design only in
+  white space a person cannot see is needs review too, and the reason names the character, for
+  example: a button on this screen is named "Refresh" followed by a no-break space. usabl never
+  guesses. A run with a needs review finding is not verified.
 
 One case usabl cannot see: an element inside a closed shadow root that is itself inside a child
 frame. Neither of its counts reaches there, so on a page with child frames, a second element with
@@ -108,8 +116,16 @@ needs review, with the reason, because the box can be larger than the area a poi
 control that wraps onto two lines; a control that it or an element above it rotates or skews; a
 `clip-path`, `clip`, or mask on it or above it; an element above it that hides or scrolls its
 overflow when the control reaches past its edges; and a fixed or sticky control that reaches past
-the viewport. A translate or a scale is measured. The check does not measure overlap with other
-elements or the spacing between targets.
+the viewport. A translate or a scale is measured.
+
+A list of shapes cannot name them all, so a pass also needs a hit test. usabl scrolls the control
+into view and asks the browser what is at five points of its box: the center, and the middle of
+each edge, just inside. If any point is not the control or something inside it, the check is
+needs review: something clips or covers part of the control, it does not take pointer events, or
+it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
+usabl puts every scroll position back afterwards. So a pass means the box is large enough and all
+five points were hit. A control covered only at a corner still passes, and the check does not
+measure the spacing between targets.
 
 The check measures the control alone. A label that makes the real target larger is not counted,
 so a 16 pixel checkbox whose label a person can also click can fail a 24 pixel minimum. The
