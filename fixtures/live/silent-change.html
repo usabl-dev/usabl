@@ -34,6 +34,8 @@
       //   rerender       Save is drawn again with the same name and the new button takes focus.
       //   toast          Save writes a plain paragraph, and one line of a toast already shown dismisses
       //                  itself, so the record holds only a removal.
+      //   frame-focus    Edit writes a plain paragraph and moves focus to a named button inside a
+      //                  same-origin child frame, which the tree read does not cover.
       //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
       //                  the dialog in a later step.
       //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
@@ -156,6 +158,15 @@
         on('save', () => {
           say('Saved');
           document.getElementById('signed-in').remove();
+        });
+      } else if (which === 'frame-focus') {
+        draw(
+          '<button type="button" id="edit">Edit name</button>' +
+            '<iframe id="editor" title="Editor" srcdoc="<!doctype html><title>Editor</title><button type=button>Save name</button>"></iframe>',
+        );
+        on('edit', () => {
+          say('Editing');
+          document.getElementById('editor').contentDocument.querySelector('button').focus();
         });
       } else if (which === 'dialog-heard') {
         draw(

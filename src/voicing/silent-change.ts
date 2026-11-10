@@ -130,8 +130,12 @@ export function judgeActionStep(observation: ActionStepObservation, background: 
 
   // Did focus move to a named control. Identity is the backend node id. Focus on the control that
   // received the action is never a move: a mouse click focuses it before the click fires.
-  const focusKnown = observation.focusUnreadableAfter === null;
   const { focusAfter, focusBefore } = observation;
+  // The focus read follows same-origin child frames, and the tree read covers only the main frame.
+  // Focus on a node that is not the acted control and is not in the tree after the step, such as a
+  // control in a child frame, cannot be judged: it is never a move and never a finding.
+  const focusOutsideTree = focusAfter !== null && focusAfter !== acted && after.nodes.every((entry) => entry.nodeId !== focusAfter);
+  const focusKnown = observation.focusUnreadableAfter === null && !focusOutsideTree;
   const landed = perceivedIn(after, focusAfter);
   const landedName = trimmedName(landed);
   const elsewhere = focusAfter !== null && focusAfter !== focusBefore && focusAfter !== acted;
@@ -212,7 +216,7 @@ const GAP_TEXT: Record<SilentChangeGap, { why: string; fix: string }> = {
     fix: 'Name the control with a CSS selector that matches one element, in the document or in one open shadow root.',
   },
   'focus unreadable': {
-    why: 'the element that has focus could not be read, such as one inside a closed shadow root or a frame from another origin',
+    why: 'the element that has focus could not be read, such as one inside a closed shadow root, a frame from another origin, or a child frame the tree read does not cover',
     fix: MANUAL_CHECK,
   },
   'replaced focus': {

@@ -1117,7 +1117,9 @@ step, with the reason in `evidence.extra.reason`:
 - `unreadable control`: the page changed and the click selector names no one element in the
   document or one open shadow root, because it matches nothing, is not CSS the browser parses,
   or matches in both the document and a shadow root, where the click's own order cannot be read;
-- `focus unreadable`: the focused element cannot be read (section 7.3);
+- `focus unreadable`: the focused element cannot be read (section 7.3), or focus after the step
+  is on a node that is not the acted control and is not in the tree read after the step, such as
+  a control inside a same-origin child frame, which the tree read does not cover;
 - `replaced focus`: focus ended on a new node with the same name as the acted control or the
   node that had focus before, so the read cannot tell a re-render from a move;
 - `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;

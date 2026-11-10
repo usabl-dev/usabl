@@ -645,6 +645,14 @@ describe('judgeActionStep', () => {
     });
   });
 
+  it('reads focus on a node outside the tree after the step, such as one in a child frame, as focus unreadable', () => {
+    // The focus read follows same-origin frames, and the tree read covers only the main frame.
+    const step = { do: 'click', selector: '#save' };
+    expect(judgeActionStep(observation({ step, focusAfter: 99 }), background)).toEqual({ kind: 'gap', reason: 'focus unreadable' });
+    // Never a pass on the frame's focus, and never a finding, whatever the tree says.
+    expect(judgeActionStep(observation({ step, focusBefore: 10, focusAfter: 99 }), background)).toEqual({ kind: 'gap', reason: 'focus unreadable' });
+  });
+
   it('reads speech when the drain before the first step held text of unknown source as background', () => {
     const drain = { texts: ['Saved'], undecidable: null, sources: [{ region: 1, removalOnly: false }] };
     expect(judgeActionStep(observation({ drain }), { regions: new Set(), unknown: true })).toEqual({ kind: 'gap', reason: 'background announcements' });

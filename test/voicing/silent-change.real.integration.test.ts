@@ -302,6 +302,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
     it('never hears a toast line that dismissed itself, because the record holds only a removal', async () => {
       expect(outcome(await flow('toast', click('#save')))).toEqual(['finding']);
     });
+
+    it('reports a click that moves focus into a same-origin child frame as a gap, focus unreadable', async () => {
+      const drafts = await flow('frame-focus', click('#edit'));
+      expect(outcome(drafts)).toEqual(['focus unreadable']);
+      expect(drafts[0]?.confidence).toBe('unverified');
+    });
   });
 
   describe('determinism', () => {
