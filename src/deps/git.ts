@@ -59,6 +59,19 @@ function missingRefError(ref: string, stderr: string): Error | null {
   );
 }
 
+// HEAD does not exist, so the working tree cannot be read against it. A new repository with no
+// commits, or an orphan branch with none yet, lands here. git's own text is left out: the message
+// says what happened and the step that clears it.
+function noHeadForTreeError(stderr: string): Error | null {
+  if (!/not a valid object name|invalid object name/i.test(stderr)) {
+    return null;
+  }
+  return new Error(
+    'git cannot read HEAD, so usabl cannot read the working tree to check it. This repository has ' +
+      'no commits yet, or the branch has none. Make a first commit, then run usabl again.',
+  );
+}
+
 // Every listing runs with -z. Without it git quotes and escapes a name that holds a byte above
 // 0x7f, a newline, a tab, or a double quote, and a quoted name matches no glob, so a changed
 // screen could read as nothing to check. Names are split on NUL and never trimmed: a name may
@@ -228,7 +241,11 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       const tempDir = await mkdtemp(join(tmpdir(), 'usabl-index-'));
       const env = { GIT_INDEX_FILE: join(tempDir, 'index') };
       try {
-        await runGit(cwd, ['read-tree', 'HEAD'], env);
+        try {
+          await runGit(cwd, ['read-tree', 'HEAD'], env);
+        } catch (err) {
+          throw noHeadForTreeError(readErrorStderr(err)) ?? err;
+        }
         await runGit(cwd, ['add', '-A', '--', '.'], env);
         return (await runGit(cwd, ['write-tree'], env)).trim();
       } finally {

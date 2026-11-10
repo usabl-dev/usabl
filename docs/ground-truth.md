@@ -458,17 +458,20 @@ export interface ExcludedFile {
 }
 
 export interface Receipt {
-  schemaVersion: 1;
-  sourceTree: string;
+  schemaVersion: 2;
+  sourceTree: string;             // the tree read before planning, unchanged after the scan
   baseRevision: string | null;
+  historyHead: string | null;     // the debt history commit the run read
   policyHash: string;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: { axeCore: string; playwright: string; chromium: string; engines?: Record<string, string> };
   surfaces: string[];
   coverage: { checked: string[]; notCovered: string[] };
+  applicability: { screenId: string; applied: number; abstained: number }[];
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
+  waiverExpiresAt?: string | null; // earliest end of the waivers applied; absent on older receipts
   signature?: string;             // reserved for later signed attestation; unused today
   mintedAt: string;
 }
@@ -3113,16 +3116,41 @@ What this does not cover:
 
 ### Receipt binding
 
-Five bindings are compared on re-verification:
-- `sourceTree`: hash of the working tree (git write-tree on a temporary index).
+Five bindings are compared on re-verification, plus the waiver end below:
+- `sourceTree`: hash of the working tree (git write-tree on a temporary index), read before the
+  run plans. The run reads it again after the scan and every policy read, before the gate. If
+  the two reads differ, a file changed during the check: the run carries a not-covered gap
+  (ref `working tree`), is never verified, and mints no receipt. The receipt binds the first
+  read, so an edit after the second read moves the tree away from it. An idle run is left idle.
+  Every run reads the tree first, so a repository with no commits, where git has no HEAD to read
+  the tree against, ends with no verdict and exit 4, and the summary says to make a first commit.
+  Known limits: two reads see the tree only at those two moments. An edit made during the scan
+  and undone before the second read leaves the reads equal, so the run is verified and the
+  receipt binds a tree the scan did not see as it was. A dev server that still serves an older
+  build than the tree is scanned, and the receipt binds the newer tree. Both stay verified today.
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
   source). A change to any shipped engine file moves this hash, so a receipt minted by
   one engine build cannot re-verify under a tampered or upgraded engine.
-- `scannerVersions`: the axe-core, Playwright, and Chromium versions that decided the
-  verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
-  invalidates the receipt.
+- `scannerVersions`: the axe-core, Playwright, and Chromium versions the run scanned with.
+  `verifyReceipt` compares these too, so a swapped or upgraded scanner
+  invalidates the receipt. The package versions come from each package's `package.json`.
+  The Chromium version is that of Playwright's headless shell (`chrome-headless-shell`),
+  because a run launches Chromium headless with no channel and Playwright starts the headless
+  shell for that, not the full browser `chromium.executablePath()` names. usabl finds the
+  headless shell in the full browser's browsers folder, at the revision the
+  `chromium-headless-shell` entry names in the `browsers.json` of the installed `playwright-core`
+  package, with Playwright's layout. It checks the file exists and binds what it prints for
+  `--version` (for example `151.0.7922.34`). This holds for Playwright's download and a custom
+  `PLAYWRIGHT_BROWSERS_PATH`. The revision never comes from the full browser's folder name, and
+  no other shell folder on disk is used. When the headless shell prints none, it is the revision
+  in the name of its folder (`revision-1234` from `chromium_headless_shell-1234`), a form no real
+  version has. When the list cannot be read, names no single revision, or gives the entry a
+  per-platform override, or the shell's folder is missing, or neither read gives a value, the
+  version is `unknown`; the full browser's version is never bound in its place. Such a run carries a not-covered gap (ref `scanner versions`) that names the fix,
+  mints no receipt, and `usabl doctor` reports the browser as drifted with the same fix. An
+  unreadable version never matches on verify, on either side.
   When an optional commercial engine is on, `scannerVersions.engines` maps its id to the
   installed package version, and `verifyReceipt` compares that map too: a version change,
   or an engine turned on or off, invalidates the receipt. An absent map and an empty one
@@ -3132,9 +3160,20 @@ Five bindings are compared on re-verification:
   lower the debt a run accepts, so a receipt minted before the history moved stops matching,
   and the Stop hook's fast path falls back to a full run. Added in receipt schema version 2. A
   stored version 1 receipt is not read, which costs one full run.
+- `waiverExpiresAt`: the earliest expiry among the waivers the run applied, or null when it
+  applied none. A waiver applied when it was live at the run's clock and matched a finding the
+  gate marked waived. Once the injected clock reaches this time the gate counts the waived
+  accessibility barrier again, so `verifyReceipt` fails the receipt and the Stop hook's fast
+  path runs a full check from that moment, and not before. The receipt finds the waivers it
+  binds with the gate's own match rule (`waiverMatchesFinding`), so there is one rule. If a
+  waived finding still matches no live waiver, the earliest live waiver is bound instead, which
+  can only bind an earlier time. A receipt that counts a waived finding but
+  binds no time, or binds a value that is not an ISO-8601 UTC time, does not verify. A receipt
+  minted before this field existed has none; it verifies only when it counted no waived finding.
+  The schema version stays 2, because that absent value is read safely.
 
 A source-tree change or committed policy change invalidates the receipt, and so does an
-engine or scanner change or a move of the history branch.
+engine or scanner change, a move of the history branch, or the end of a waiver it applied.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
@@ -3418,6 +3457,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
+- A stored receipt that does not verify: the hook runs the full check, as before. When the
+  receipt's tree still matches, so something other than an edit stopped it, a notice follows
+  the decision line: "Note: The stored receipt for this tree did not verify, so this stop ran a
+  full check instead of using it. Why: ..." with one plain reason per failed binding, for
+  example that a waiver the receipt relied on ended at a given time. The reasons are usabl's
+  own sentences, each bounded. A receipt that did not verify because the files changed adds no
+  notice, so a verified stop after an edit stays quiet. The notice appears only when the full
+  check reached a verdict: an idle run checked nothing, and a run that failed proved nothing, so
+  those stops read as they would with no stored receipt.
 - Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
   hook reads and writes it under the repository root; `usabl check` writes it in the folder it
   runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
@@ -4436,10 +4484,11 @@ against a tree other than its own, and also when it records no tree or the curre
 be read: the artifact gets `stale: true` and a `staleReason` that names both trees and says to
 run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file saved
 while the scan ran marks the report stale in its JSON and on its `--html` page, with or without
-a receipt. With no receipt, the report records the tree read before, and the tree read after
-differs from it. With a receipt, the receipt's tree is read after the scan, so the report also
-records the tree read before in `startTree`, and a report whose two trees differ is stale
-against every tree, the receipt's tree included. On the page a stale
+a receipt. A run whose files changed during the scan is not covered and mints no receipt, so
+the report records the tree read before, and the tree read after differs from it. A receipt
+binds the tree the run read before it planned. If that differs from the tree `usabl docs` read
+before the run, the report also records the earlier tree in `startTree`, and a report whose two
+trees differ is stale against every tree, the receipt's tree included. On the page a stale
 card reads "Out of date", never "Verified", and the overview counts the stale cards. A report
 saved earlier and read again is checked with `markStaleDocArtifacts(artifacts, currentTree)`
 from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence-binding.ts`.

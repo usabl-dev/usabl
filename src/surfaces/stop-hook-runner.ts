@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
-import { verifyReceipt } from '../evidence/receipt.js';
+import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
@@ -476,22 +476,39 @@ async function verifyStoredReceipt(
   deps: Deps,
   config: UsablConfig,
   pins: StoredReceiptPinState,
-): Promise<{ verified: boolean; details: string }> {
+): Promise<{ verified: boolean; details: string; notice: string | null }> {
   const receipt = await loadReceipt(ports.fs);
   if (receipt === null) {
-    return { verified: false, details: 'no local receipt found' };
+    return { verified: false, details: 'no local receipt found', notice: null };
   }
 
   // Fast-path verification reuses the same verifier as run() so trust rules cannot diverge.
   const currentSourceTree = await deps.git.writeTree();
   const verification = await verifyReceipt(deps, config, receipt, currentSourceTree);
   if (verification.valid) {
-    return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree, pins) };
+    return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree, pins), notice: null };
   }
   return {
     verified: false,
     details: `receipt mismatch in ${verification.failedFields.join(', ') || 'unknown field'}`,
+    notice: receiptNotUsedNotice(receiptFailureReasons(receipt, verification.failedFields, deps.clock()), verification.failedFields),
   };
+}
+
+/**
+ * Why the stored receipt for this tree was not used, or null. Files changed since the receipt was
+ * minted is the normal reason for a full check, so it adds no notice and a verified stop after an
+ * edit stays quiet. Any other reason, such as a waiver that ended, is said after the decision. The
+ * reasons are usabl's own sentences, so they are printed as usabl's words, each bounded.
+ */
+function receiptNotUsedNotice(reasons: readonly string[], failedFields: readonly string[]): string | null {
+  if (failedFields.includes('sourceTree') || reasons.length === 0) {
+    return null;
+  }
+  return (
+    'Note: The stored receipt for this tree did not verify, so this stop ran a full check instead of using it. ' +
+    `Why: ${reasons.map((reason) => boundField(reason, 'gapReason')).join('; ')}.`
+  );
 }
 
 function errorMessage(err: unknown): string {
@@ -831,6 +848,7 @@ export async function runStopHook(
       }
     }
 
+    let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
       // The stored receipt only offers a fast allow. A receipt the hook cannot read or check is no
@@ -838,7 +856,8 @@ export async function runStopHook(
       const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
-      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked' }));
+      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
+      receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
         await emitProtocolAllow(
           ports,
@@ -867,7 +886,14 @@ export async function runStopHook(
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
-    const notices = [...(receiptNotice === null ? [] : [receiptNotice]), ...pinNotices(pinNotice)];
+    const notices = [
+      // The notice says a full check ran, so it is added only when the run reached a verdict. An
+      // idle run checked nothing and a failed run proved nothing; either stop reads as it does
+      // without a stored receipt.
+      ...(receiptNotUsed === null || result.verdict === null ? [] : [receiptNotUsed]),
+      ...(receiptNotice === null ? [] : [receiptNotice]),
+      ...pinNotices(pinNotice),
+    ];
     if (decision.block) {
       // A block is sent as before. The notices follow it on stderr.
       await emitProtocolBlock(ports, decision.message, options);
