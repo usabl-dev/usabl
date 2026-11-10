@@ -352,6 +352,30 @@ describe('the silent change rule in a flow requirement', () => {
       expect(result.drafts[1]?.why).toContain('the steps after it were not judged');
     });
 
+    it('step threw: the draft keeps only the first line of the error, never the call log', async () => {
+      const message = [
+        'click timed out on #delete after 5000ms',
+        'Call log:',
+        '  - waiting for locator(\'#delete\')',
+        '  - locator resolved to <button id="delete" aria-label="Delete alice@example.com">Delete</button>',
+      ].join('\n');
+      const { page } = worldPage({
+        '#delete': () => {
+          throw new Error(message);
+        },
+      });
+      const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#delete' }])))[0];
+      if (provider === undefined) throw new Error('no provider');
+      const result = await runProviders([provider], { page, screen: SCREEN, config: testConfig() }, ['live']);
+      const threw = silent(result.drafts);
+      expect(reasons(threw)).toEqual(['step threw']);
+      expect(threw[0]?.why).toContain('(click timed out on #delete after 5000ms)');
+      const shown = JSON.stringify(threw);
+      expect(shown).not.toContain('Call log');
+      expect(shown).not.toContain('alice');
+      expect(shown).not.toContain('<button');
+    });
+
     it('every gap is preview and unverified, with the step in its evidence', async () => {
       const drafts = await flowDrafts({ '#save': (world) => (addSavedText(world), (world.settled = false)) });
       expect(drafts[0]).toMatchObject({

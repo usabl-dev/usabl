@@ -348,6 +348,12 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// The first line of an error message. A browser error's later lines can be its call log, which can
+// quote the element's markup and the row data in it.
+function firstLine(text: string): string {
+  return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
+}
+
 const EMPTY_TREE: AxTreeRead = { kind: 'tree', documentNodeId: null, nodes: [] };
 
 /** A new watch for one run of one step loop. */
@@ -457,7 +463,7 @@ export function makeSilentChangeWatch(): SilentChangeWatch {
         elementPath: state?.elementPath ?? (typeof step.selector === 'string' ? step.selector : `step-${index}`),
         role: state?.role ?? null,
         judgment: { kind: 'gap', reason: 'step threw' },
-        detail: errorText(error),
+        detail: firstLine(errorText(error)) || null,
       });
     },
 

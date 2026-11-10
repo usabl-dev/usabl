@@ -1121,7 +1121,8 @@ step, with the reason in `evidence.extra.reason`:
   selector, or a press with no key. The driver used to skip such a step without a word;
 - `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
   still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
-  drafts for the steps that ran come with it;
+  drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
+  error, through the scrubber, because the browser's call log can quote the element's markup;
 - `read failed`: a read the rule needs failed.
 
 A step that changed nothing is not reported at all, whichever of these it would have met.
