@@ -20,7 +20,7 @@ import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install
 import { gateBranchTarget, verifyBranchRule, REQUIRED_CHECK, type BranchTarget, type GhReader } from '../install/branch-rule.js';
 import { workflowTriggerBranch } from '../install/repo-git.js';
 import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
-import { DOCS_GATE_BRANCHED, GATE_BRANCHED, isEarlierDraft, type BranchedWorkflow } from '../install/workflow-branch.js';
+import { DOCS_GATE_BRANCHED, GATE_BRANCHED, earlierDraftPin, type BranchedWorkflow } from '../install/workflow-branch.js';
 import { HISTORY_BRANCHED } from '../install/history-ci.js';
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
@@ -638,11 +638,16 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
 }
 
 // The next step for a workflow file that is the unedited draft an earlier 0.3.0 build wrote, or
-// null when it is not. Install rewrites such a file and keeps its pin, so the step says to run it.
+// null when it is not. Install rewrites such a file and keeps a pin it holds, so the step says to run
+// it. It promises to keep the pin only when the file has one.
 function earlierDraftStep(raw: string | null, workflow: BranchedWorkflow, what: string, command: string): string | null {
-  return isEarlierDraft(raw, workflow)
-    ? `The ${what} is the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. Run "${command}": it rewrites the file and keeps its engine pin.`
-    : null;
+  const pin = earlierDraftPin(raw, workflow);
+  if (pin === null) return null;
+  const rewrite =
+    pin === 'pinned'
+      ? 'it rewrites the file and keeps its engine pin.'
+      : 'it rewrites the file. The file has no engine pin yet, so install pins the engine to the commit this usabl was built from, or prints the line to edit.';
+  return `The ${what} is the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. Run "${command}": ${rewrite}`;
 }
 
 async function collectCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {

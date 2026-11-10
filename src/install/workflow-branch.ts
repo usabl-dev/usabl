@@ -59,8 +59,19 @@ export function branchNamedBy(raw: string | null, workflow: BranchedWorkflow): s
 
 /** Whether the file on disk is the unedited draft an earlier 0.3.0 build wrote, pinned or not. */
 export function isEarlierDraft(raw: string | null, workflow: BranchedWorkflow): boolean {
+  return earlierDraftPin(raw, workflow) !== null;
+}
+
+/**
+ * For a file that is the unedited draft an earlier 0.3.0 build wrote: pinned when it holds an engine
+ * commit, placeholder when it still holds the placeholder. null when it is not that draft.
+ */
+export function earlierDraftPin(raw: string | null, workflow: BranchedWorkflow): 'pinned' | 'placeholder' | null {
   const earlier = workflow.earlierFor(raw);
-  return raw !== null && earlier !== null && classifyWorkflow(raw, earlier) !== 'drifted';
+  if (raw === null || earlier === null) return null;
+  const state = classifyWorkflow(raw, earlier);
+  if (state === 'wired') return 'pinned';
+  return state === 'unpinned' ? 'placeholder' : null;
 }
 
 /**
