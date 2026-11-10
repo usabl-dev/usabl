@@ -536,8 +536,9 @@ export async function runBaseline(
     };
   }
 
-  // A partial baseline over runs that were already complete is just a complete baseline. The flag
-  // is a no-op, so fall through to the complete write below and omit the scope field.
+  // A partial baseline over incomplete runs floors only the screens both scans saw cleanly. Over
+  // runs that were already complete the flag is a no-op: this branch is skipped, and the complete
+  // write after it runs and omits the scope field.
   if (opts.partial === true && incompleteRun !== undefined) {
     // Clean in both scans. A screen with a gap in either one is skipped.
     const cleanInSecond = cleanlyScannedScreenIds(second);

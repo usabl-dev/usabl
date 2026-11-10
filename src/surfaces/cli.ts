@@ -20,7 +20,9 @@ export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'cursor' | '
 export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--claude-skill', '--cursor', '--ci', '--docs-ci', '--branch-rule'] as const;
 
 export interface CliOptions {
-  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
+  // The command name as typed. CLI_COMMANDS in ./cli-commands.ts lists every command usabl knows;
+  // a name it does not list is refused before any command runs.
+  command: string;
   staticOnly: boolean;
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
@@ -367,7 +369,7 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
     return null;
   }
   // Exactly one target is wired per run. Zero or several is ambiguous, so refuse and name
-  // the four valid flags rather than half-wire an integration the operator did not choose.
+  // every valid target flag rather than half-wire an integration the operator did not choose.
   if (opts.installTarget !== null) {
     return null;
   }
