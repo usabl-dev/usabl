@@ -132,6 +132,34 @@ describe('pf-toast-live-region: residual false greens', () => {
   });
 });
 
+describe('pf-toast-live-region: alerts hidden from assistive technology', () => {
+  // A live region inside content hidden from assistive technology announces nothing, so an alert
+  // there is as silent as one outside any live region. The rule read only the live values.
+  it('flags an alert in a polite region inside an aria-hidden="true" wrapper', async () => {
+    expect(await draftsFor(`<div aria-hidden="true"><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert in a polite region inside an inert wrapper', async () => {
+    expect(await draftsFor(`<div inert><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert in a polite region inside a hidden wrapper', async () => {
+    expect(await draftsFor(`<div hidden><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert that is itself aria-hidden="true" inside a polite region', async () => {
+    expect(
+      await draftsFor(
+        `<div aria-live="polite"><div class="pf-v6-c-alert" aria-hidden="true"><h4 class="pf-v6-c-alert__title">Saved</h4></div></div>`,
+      ),
+    ).toBe(1);
+  });
+
+  it('passes an alert in a polite region inside an aria-hidden="false" wrapper', async () => {
+    expect(await draftsFor(`<div aria-hidden="false"><div aria-live="polite">${ALERT}</div></div>`)).toBe(0);
+  });
+});
+
 describe('pf-toast-live-region: contained alerts stay silent', () => {
   it('passes an alert in a role="status" host that sits inside an aria-live="off" wrapper', async () => {
     // The nearest live value wins, and the status host is nearer than the off wrapper.

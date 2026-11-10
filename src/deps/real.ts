@@ -203,6 +203,35 @@ export const HIDDEN_FACTS_IMPL = `
   });
 `;
 
+/**
+ * Browser-side helpers: which elements take what they hold out of the accessibility tree, and the
+ * text of a subtree that stays in it. They need liveResolver and hiddenFacts in scope. An element
+ * hides its subtree by aria-hidden, inert, the hidden attribute, a closed dialog, or display none.
+ * Text hidden only on screen, by PatternFly's screen-reader class, a clip rectangle, a box of zero
+ * size, or opacity, stays in the tree and every screen reader speaks it, so none of those counts.
+ * Visibility is inherited and a child can set it back to visible, so it is read on the element
+ * that holds each text node. The caller checks the node it starts from; exposedText leaves out
+ * every part below it that is hidden.
+ */
+const EXPOSED_TEXT_IMPL = `
+  const hidesSubtree = (element) =>
+    liveResolver.hiddenInChain([hiddenFacts(element)]) || getComputedStyle(element).display === 'none';
+  const exposedText = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const element = node.parentElement;
+      return element && getComputedStyle(element).visibility === 'visible' ? node.data : '';
+    }
+    if (!(node instanceof Element) || hidesSubtree(node)) {
+      return '';
+    }
+    let text = '';
+    for (const child of node.childNodes) {
+      text += exposedText(child);
+    }
+    return text;
+  };
+`;
+
 // Browser-side live-region capture used by both document-start injection and adoptPage install.
 // Keep this the only implementation: the CLI and checkPage
 // must hear the same announcements, so a fix to what counts as a live region has to land in both
@@ -326,12 +355,7 @@ const LIVE_CAPTURE_IMPL = `
     }
     return found;
   };
-  // Whether an element takes itself and all it holds out of the accessibility tree: aria-hidden,
-  // inert, the hidden attribute, a closed dialog, or display none. Text hidden only on screen, by
-  // PatternFly's screen-reader class, a clip rectangle, a box of zero size, or opacity, stays in
-  // the tree and every screen reader speaks it, so none of those counts.
-  const hidesSubtree = (element) =>
-    liveResolver.hiddenInChain([hiddenFacts(element)]) || getComputedStyle(element).display === 'none';
+  ${EXPOSED_TEXT_IMPL}
   // Whether a node is in the accessibility tree: nothing on its flat-tree walk hides it, and a text
   // node's element is not visibility hidden. Visibility is inherited and a child can set it back
   // to visible, so it is read on the text's own element rather than on the walk.
@@ -341,22 +365,6 @@ const LIVE_CAPTURE_IMPL = `
       return false;
     }
     return node instanceof Element || getComputedStyle(element).visibility === 'visible';
-  };
-  // The text of a subtree that is in the accessibility tree. The caller has checked the node
-  // itself; this leaves out every part below it that is hidden.
-  const exposedText = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const element = node.parentElement;
-      return element && getComputedStyle(element).visibility === 'visible' ? node.data : '';
-    }
-    if (!(node instanceof Element) || hidesSubtree(node)) {
-      return '';
-    }
-    let text = '';
-    for (const child of node.childNodes) {
-      text += exposedText(child);
-    }
-    return text;
   };
   // Whether a change put text a screen reader can reach into the region. Added nodes that are all
   // out of the accessibility tree say nothing, and a changed text node out of it says nothing. A
@@ -717,8 +725,13 @@ const SHADOW_ELEMENT_FUNCTION = `function (hostQuery, innerQuery) {
 
 // The markup facts of the first element a selector matches, or null. Node types are compared by
 // number, and every read goes through this world's own prototypes, so page script cannot change
-// what an attribute, a slot assignment, or a text read returns.
+// what an attribute, a slot assignment, or a text read returns. The default-slot text is only the
+// text a screen reader can reach: a rule reads it as a name source and skips its accessibility
+// tree check, so an "x" under aria-hidden must not count as a name.
 const HOST_MARKUP_FUNCTION = `function (query) {
+  const liveResolver = (${createLiveResolver.toString()})();
+  ${HIDDEN_FACTS_IMPL}
+  ${EXPOSED_TEXT_IMPL}
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
     return null;
@@ -732,7 +745,7 @@ const HOST_MARKUP_FUNCTION = `function (query) {
     // slot="" is the default slot, the same as no slot attribute.
     const toDefaultSlot = node.nodeType === 3 || (node.nodeType === 1 && (node.getAttribute('slot') || '') === '');
     if (toDefaultSlot) {
-      text += ' ' + (node.textContent || '');
+      text += ' ' + exposedText(node);
     }
   }
   return { defined: element.matches(':defined'), attributes, defaultSlotText: text.replace(/\\s+/g, ' ').trim() };

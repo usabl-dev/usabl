@@ -3,13 +3,25 @@
  * This unit must never claim the temporal announcement half. It only proves containment.
  */
 import type { AncestorAttributesRead, CoverageGap, Draft, ProviderContext } from '../../contracts/index.js';
-import { effectiveLiveValue, type LiveAttributes } from './live-value.js';
+import { effectiveLiveValue, hiddenInChain, type HiddenAttributes, type LiveAttributes } from './live-value.js';
 import { SEL } from './selectors.js';
 
-const LIVE_ATTRIBUTES = ['aria-live', 'role'] as const;
+const LIVE_ATTRIBUTES = ['aria-live', 'role', 'aria-hidden', 'inert', 'hidden'] as const;
 
 function toLiveAttributes(record: Record<string, string | null>): LiveAttributes {
   return { ariaLive: record['aria-live'] ?? null, role: record['role'] ?? null };
+}
+
+// The hidden facts the ancestor read can give. The read returns attributes and not the tag name, so
+// a closed dialog element is not seen here. A missing fact can only let an alert pass that the
+// capture would not hear, never flag one it would.
+function toHiddenAttributes(record: Record<string, string | null>): HiddenAttributes {
+  return {
+    ariaHidden: record['aria-hidden'] ?? null,
+    inert: (record['inert'] ?? null) !== null,
+    hidden: (record['hidden'] ?? null) !== null,
+    closedDialog: false,
+  };
 }
 
 const GAP_REF = 'provider:pf-rulepack/pf-toast-live-region';
@@ -75,7 +87,10 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
     // silences it even inside a live container.
     const containerIsLive = effectiveLiveValue(nodes.slice(1)) !== 'off';
     const contentIsLive = effectiveLiveValue(nodes) !== 'off';
-    if (containerIsLive && contentIsLive) {
+    // A live region inside content hidden from assistive technology announces nothing, so the alert
+    // or anything above it that hides its subtree silences it as surely as no live region does.
+    const hidden = hiddenInChain(read.chain.map(toHiddenAttributes));
+    if (containerIsLive && contentIsLive && !hidden) {
       continue;
     }
 
@@ -90,7 +105,9 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
       elementName: node?.name ?? null,
       role: node?.role ?? null,
       whatUserExperiences: 'A toast appears but assistive technology may not announce it.',
-      why: 'No polite or assertive live region reaches the alert.',
+      why: hidden
+        ? 'The alert, or an element above it, is hidden from assistive technology by aria-hidden, inert, or hidden, so no live region announces it.'
+        : 'No polite or assertive live region reaches the alert.',
       fix: 'Render the alert inside a live region container that remains mounted.',
       evidence: {
         name: { value: node?.name ?? null, source: 'ax-tree', fromTree: true },
