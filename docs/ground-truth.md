@@ -2547,7 +2547,7 @@ every commit on the first-parent line of `--trusted-ref` (default `HEAD`) that c
 `.usabl-evidence.json`, read as committed objects. A merged branch counts at its merge commit. The
 commit where an identity enters the floor opens it, and the commit where it leaves closes it as
 fixed. Second, the debt history at `origin/usabl/history`: a record that confirms a floored
-barrier fixed, and a record that shows it seen again. Receipts are not a source, because a receipt
+accessibility barrier fixed, and a record that shows it seen again. Receipts are not a source, because a receipt
 holds counts and no identities. Nothing is read from the working tree.
 
 **One row per identity.** The identity is the one the floor keys on: screen, rule, and element
@@ -2556,9 +2556,9 @@ first seen (commit and committer date), state, last change (commit and date), it
 days open.
 
 - **Fixed in the history.** Two consecutive full scans of main, written against the same floor,
-  that both see no barrier at the identity. The fix is dated at the second scan's commit. A scan
-  with a gap on the screen is skipped and neither confirms nor breaks the pair. A scan that still
-  sees some barriers there keeps the row open: the ledger counts an identity fixed only when none
+  that both see no accessibility barrier at the identity. The fix is dated at the second scan's
+  commit. A scan with a gap on the screen is skipped and neither confirms nor breaks the pair. A
+  scan that still sees some accessibility barriers there keeps the row open: the ledger counts an identity fixed only when none
   is left.
 - **Reopened.** A fixed identity that a later scan sees again, or that a later floor holds again.
   It is one row with state `reopened`, every open span listed, and days open as the sum of the
@@ -2568,8 +2568,8 @@ days open.
   fix. The ledger withdraws it, keeps the span open, labels the row intermittent, and does not
   release it from the history again, the same rule debt tracking uses.
 
-**First seen is the earliest evidence.** It is never presented as the day a barrier was
-introduced. A barrier in the first floor ever committed shows that commit's date, and the row says
+**First seen is the earliest evidence.** It is never presented as the day an accessibility
+barrier was introduced. One in the first floor ever committed shows that commit's date, and the row says
 "seen at the first baseline; may be older".
 
 **Dates and days.** Committer dates in UTC. A span counts whole days, the floor of elapsed hours

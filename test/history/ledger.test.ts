@@ -51,7 +51,7 @@ function rowFor(ledger: ReturnType<typeof buildLedger>, entry: FloorEntry) {
 }
 
 describe('buildLedger', () => {
-  it('keeps an open barrier open to the clock and labels a first baseline row', () => {
+  it('keeps an open accessibility barrier open to the clock and labels a first baseline row', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A]))]));
     const row = rowFor(ledger, A);
     expect(row).toMatchObject({
@@ -70,7 +70,7 @@ describe('buildLedger', () => {
     expect(row.spans).toEqual([{ start: { commit: commitAt(0), date: dayAt(0) }, end: null, days: 41 }]);
   });
 
-  it('dates a barrier floored after the first baseline from its own commit, with no baseline label', () => {
+  it('dates an accessibility barrier floored after the first baseline from its own commit, with no baseline label', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A])), snap(10, floorOf([A, B]))]));
     expect(rowFor(ledger, B)).toMatchObject({ firstSeen: { commit: commitAt(10) }, firstSeenAtFirstBaseline: false, daysOpen: 31 });
     expect(rowFor(ledger, A).firstSeenAtFirstBaseline).toBe(true);
@@ -81,7 +81,7 @@ describe('buildLedger', () => {
     expect(rowFor(ledger, A).daysOpen).toBe(2);
   });
 
-  it('marks a barrier fixed when it leaves the floor', () => {
+  it('marks an accessibility barrier fixed when it leaves the floor', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A, B])), snap(9, floorOf([B]))]));
     const row = rowFor(ledger, A);
     expect(row).toMatchObject({ state: 'fixed', daysOpen: 9, lastChange: { commit: commitAt(9), date: dayAt(9) } });
@@ -90,7 +90,7 @@ describe('buildLedger', () => {
     ]);
   });
 
-  it('marks a barrier fixed at the record that confirms the fix: two full scans in a row that see none', () => {
+  it('marks an accessibility barrier fixed at the record that confirms the fix: two full scans in a row that see none', () => {
     const floor = floorOf([A, B]);
     const ledger = buildLedger(
       input([snap(0, floor)], historyOn([scanAt(3, floor, [[A, 0], [B, 1]]), scanAt(5, floor, [[A, 0], [B, 1]])])),
@@ -125,14 +125,14 @@ describe('buildLedger', () => {
     expect(rowFor(ledger, A)).toMatchObject({ state: 'fixed', daysOpen: 5 });
   });
 
-  it('keeps a barrier open while a scan still sees some of it', () => {
+  it('keeps an accessibility barrier open while a scan still sees some of it', () => {
     const counted = entryFor(dialogAt(1, { rule: 'button-name' }), 3);
     const floor = floorOf([counted]);
     const ledger = buildLedger(input([snap(0, floor)], historyOn([scanAt(3, floor, [[counted, 1]]), scanAt(5, floor, [[counted, 1]])])));
     expect(rowFor(ledger, counted).state).toBe('open');
   });
 
-  it('lists a barrier that was fixed and came back as one reopened row with its open spans summed', () => {
+  it('lists an accessibility barrier that was fixed and came back as one reopened row with its open spans summed', () => {
     const floor = floorOf([A]);
     const ledger = buildLedger(
       input(
@@ -150,7 +150,7 @@ describe('buildLedger', () => {
     expect(row.lastChange).toEqual({ commit: commitAt(8), date: dayAt(8) });
   });
 
-  it('keeps the reopened state when a barrier that came back is fixed again', () => {
+  it('keeps the reopened state when an accessibility barrier that came back is fixed again', () => {
     const floor = floorOf([A]);
     const ledger = buildLedger(
       input(
@@ -170,7 +170,7 @@ describe('buildLedger', () => {
     expect(row.daysOpen).toBe(9);
   });
 
-  it('reopens a barrier that left the floor and was floored again', () => {
+  it('reopens an accessibility barrier that left the floor and was floored again', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A])), snap(4, floorOf([])), snap(10, floorOf([A]))]));
     const row = rowFor(ledger, A);
     expect(row.state).toBe('reopened');

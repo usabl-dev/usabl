@@ -4,12 +4,12 @@
  *
  * It reads two sources, in this order of trust. First, the evidence floor file's own history on
  * the trusted branch: the commit where an identity enters the floor and the commit where it leaves.
- * Second, the debt history records: the record that confirms a floored barrier fixed, and the
- * records that show it seen again. Receipts are not a source, because a receipt holds counts and
+ * Second, the debt history records: the record that confirms a floored accessibility barrier
+ * fixed, and the records that show it seen again. Receipts are not a source, because a receipt holds counts and
  * no identities.
  *
- * "First seen" is the earliest evidence, never the day a barrier was introduced. A barrier in the
- * first floor shows that floor's date and is labelled as maybe older. When the history is
+ * "First seen" is the earliest evidence, never the day an accessibility barrier was introduced. One
+ * in the first floor shows that floor's date and is labelled as maybe older. When the history is
  * incomplete, the rows it touches say why, and the ledger never fills the gap with a guess.
  *
  * This is measurement only. It mints no verdict and no receipt, and no verdict path imports it.
@@ -106,7 +106,7 @@ export interface LedgerRow {
   elementKey: string | null;
   identityBasis: IdentityBasis;
   firstSeen: LedgerPoint;
-  // True when the first evidence is the first floor ever committed. The barrier may be older.
+  // True when the first evidence is the first floor ever committed. It may be older.
   firstSeenAtFirstBaseline: boolean;
   state: LedgerState;
   lastChange: LedgerPoint;
@@ -266,7 +266,7 @@ export function buildLedger(input: LedgerInput): Ledger {
         at,
         leave:
           `The floor file was deleted at ${short(snapshot.commit)}. That is not a fix, so the ledger cannot tell whether ` +
-          'this barrier was fixed. Its days are counted to that commit.',
+          'this accessibility barrier was fixed. Its days are counted to that commit.',
         enter: `The floor file was deleted at ${short(snapshot.commit)} and written again later, so this identity may be older.`,
       };
       for (const row of rows.values()) if (row.inFloor) closeLeaving(row, at, cause);
@@ -333,7 +333,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     if (row.intermittent) return;
     const end = lastEnd(row);
     if (differs) {
-      // The same code gave two readings, so the barrier comes and goes with the page content. A fix
+      // The same code gave two readings, so it comes and goes with the page content. A fix
       // the history confirmed was not a fix, only a scan that did not show it.
       row.intermittent = true;
       row.pendingZero = null;
