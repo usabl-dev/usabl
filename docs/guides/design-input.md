@@ -111,6 +111,11 @@ overflow when the control reaches past its edges; and a fixed or sticky control 
 the viewport. A translate or a scale is measured. The check does not measure overlap with other
 elements or the spacing between targets.
 
+The check measures the control alone. A label that makes the real target larger is not counted,
+so a 16 pixel checkbox whose label a person can also click can fail a 24 pixel minimum. The
+importer drafts target size checks for buttons only, so this matters only for a target size
+requirement you write by hand for another kind of control.
+
 `checkPage` in a Playwright test runs the same checks when it reads the project from
 `projectRoot`.
 
