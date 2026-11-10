@@ -4,6 +4,29 @@
 
 ### Added
 
+- `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
+  catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
+  on pages one at a time in the scan browser, after the page is ready and before any check runs.
+  Each defect is scanned clean and mutated through the real checks and gated by the real gate. It
+  is caught only when a new, definite failure from an expected rule is on the changed element, or
+  anywhere on the screen for a defect reported there. It is unreadable whenever the scans cannot
+  say: a coverage gap, findings the checks could not confirm, a new finding away from the change,
+  or a change that did not hold through the scan with nothing caught. A catch stands when the page
+  puts the change back later in the scan, and its row says so. A defect already on the element is not
+  applicable, and a finding the page already had never counts. It runs on fixture pages that ship
+  with usabl, with no app and no config, and with `--app` on the surfaces in `usabl.config.json`
+  too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
+  screen's flow and voice steps, and the command prints the real page loads and step counts before
+  it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
+  hash, every outcome, and every rule of the checks that can block (axe, PatternFly, RHDS, keyboard
+  walk, docs) that the catalog does not exercise, and prints "caught N of
+  M" with every miss by name. On the fixture pages it catches 25 of the 28 it can make and read: a
+  visible control taken out of the Tab order and a menu that does not open on Enter are missed, and
+  a broken live region under a voice requirement is preview only. A menu toggle that loses
+  `aria-expanded` is caught, with a note that the page sets it again when the menu probe clicks the
+  toggle. It is measurement: it mints no verdict and no receipt, nothing on a verdict path reads its
+  file, and it exits 0 whenever it ran. `npm run test:sensitivity` runs its real-browser tests.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
@@ -236,6 +259,47 @@
   not parse names `usabl init --force` and the files it overwrites. A continuation that goes
   through no longer says "to clear this block". The current Cursor rule says "machine-checkable
   accessibility barriers". Gate effect: none.
+
+- A flow requirement that passed only on speech recorded before its first step no longer
+  passes. The capture runs for the life of the page, so the drain a flow took before its first
+  step held every announcement since the last drain, such as one an earlier check caused, and
+  the flow counted it. The flow is now judged only on what was announced after its first step
+  ran. When the expected text was in that earlier speech and the flow's own steps did not
+  announce it, the flow is an `unverified` gap, because an earlier check may have changed the
+  page. When that speech did not hold the text either, the flow fails. Gate effect: such a flow
+  is a gap or a fail where it passed. A flow whose own steps announce the expected text passes as
+  before.
+
+- A flow requirement that passed only on focus that was already there is now a gap. The flow
+  passed when the control that had focus after its last step was named with the expected text,
+  even when an earlier check had put focus there and the flow's steps did not move it. The flow
+  now records the focused node and its name before its first step, and the focused name counts
+  only when the steps changed one of them. Gate effect: such a flow is an `unverified` gap where it
+  passed.
+
+- A flow requirement that was not covered only because the drain before its first step could not
+  say what was heard is now judged on its own steps. That drain is no longer read for the verdict,
+  so its reason no longer decides it. Gate effect: such a flow can now pass or fail where it was a
+  gap.
+
+- A flow requirement that expects an announcement now waits for the page to go quiet before its
+  first step, with the same wait a `click` step uses, so speech an earlier check left in flight is
+  not counted as the flow's own. Speech that lands later than that wait is still read. Gate
+  effect: on a page that does not go quiet within the wait, such a flow is `not-covered` where it
+  was judged.
+
+- A flow requirement with an incomplete step or a step field its kind does not use is now not
+  covered. A `click` with no selector, a `press` with no key, and a step of an unknown kind used to
+  run as nothing. A field the kind does not use, such as a selector on `activate`, `times` on
+  `tab`, `shift` on `press`, or `expectedAnnouncement` inside a step, was ignored, so the step ran
+  as something other than what was written. The driver now checks every step before it runs any,
+  and the gap names each such step, counted from 0, and what it is missing or what field it should
+  not have. The requirement loader still accepts such a flow step. Gate effect: such a flow is
+  `not-covered` where it was judged.
+
+- The not-covered gap for a flow or contract provider whose step threw now keeps only the first
+  line of the error, and so does the silent change rule's `read failed` gap, as its `step threw`
+  gap does. A browser error's later lines can quote the element's markup. No gate effect.
 
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the

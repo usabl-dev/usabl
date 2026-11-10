@@ -73,6 +73,9 @@ describe('parseCliArgs', () => {
       cursorStopHook: false,
       isolatedBrowser: false,
       files: null,
+      verifySubcommand: null,
+      verifyApp: false,
+      screens: null,
     });
   });
 
@@ -113,6 +116,9 @@ describe('parseCliArgs', () => {
       cursorStopHook: false,
       isolatedBrowser: false,
       files: null,
+      verifySubcommand: null,
+      verifyApp: false,
+      screens: null,
     });
   });
 
@@ -196,6 +202,9 @@ describe('parseCliArgs', () => {
       cursorStopHook: false,
       isolatedBrowser: false,
       files: null,
+      verifySubcommand: null,
+      verifyApp: false,
+      screens: null,
     });
   });
 
