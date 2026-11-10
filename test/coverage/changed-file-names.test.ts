@@ -146,6 +146,25 @@ describe('a changed path that still looks quoted', () => {
     expect(coverage.gaps[0]?.state).toBe('unresolved');
     expect(coverage.gaps[0]?.reason).toMatch(/quoted/);
   });
+
+  // git -z lists a real name as written, so a file can be named "draft".md. Only a name that
+  // starts and ends with a double quote has the shape git prints for a quoted name.
+  it('is only a path that starts and ends with a double quote', async () => {
+    const fs = makeFakeDeps({ files: { 'src/App.tsx': '' } }).fs;
+    const coverage = await computeCoverage(fs, config, ['"draft".md']);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect(coverage.gaps).toEqual([]);
+  });
+
+  it('has a reason that is also true for a real file with that name', async () => {
+    const fs = makeFakeDeps({ files: { 'src/App.tsx': '' } }).fs;
+    const coverage = await computeCoverage(fs, config, ['"notes"']);
+    expect(coverage.unresolvedFiles).toEqual(['"notes"']);
+    const reason = coverage.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/starts and ends with a double quote/);
+    expect(reason).toMatch(/may be a real file name/);
+    expect(reason).toMatch(/rename/i);
+  });
 });
 
 describe('a changed file with a newline in its name', () => {

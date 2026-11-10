@@ -81,17 +81,19 @@ function testFolderGapReason(entries: UnresolvableImport[]): string {
 }
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
-// starts with a double quote most likely came from a listing that quoted it, and then usabl cannot
-// tell which file it names. Reading it as a file outside the UI globs would let a changed screen
-// pass as nothing to check, so it is a gap instead.
+// starts and ends with a double quote has the shape git prints for a name it quoted, and then usabl
+// cannot tell which file it names. Reading it as a file outside the UI globs would let a changed
+// screen pass as nothing to check, so it is a gap instead. A real name such as "draft".md does not
+// have that shape and is read as the file it names.
 function looksQuoted(file: string): boolean {
-  return file.startsWith('"');
+  return file.length >= 2 && file.startsWith('"') && file.endsWith('"');
 }
 
 const QUOTED_PATH_REASON =
-  'This changed path starts with a double quote, which is how git prints a name it quoted, so ' +
-  'usabl cannot tell which file it names and did not check it. List changed files with git -z, ' +
-  'which never quotes a name, or pass the file names as git stores them.';
+  'This changed path starts and ends with a double quote. That is how git prints a name it quoted, ' +
+  'so usabl cannot tell which file it names, and did not check it. It may be a real file name of ' +
+  'that shape. If the list came from git, list changed files with git -z, which never quotes a name. ' +
+  'If it is a real file, rename it so the name does not start and end with a double quote.';
 
 function routeUrl(baseUrl: string, routePath: string): string {
   const joinBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
