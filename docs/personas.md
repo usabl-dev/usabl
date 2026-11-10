@@ -11,7 +11,7 @@ below.
 
 ---
 
-## Primary personas (challenge brief)
+## Primary personas
 
 ### Priya - product UI engineer
 
@@ -58,7 +58,7 @@ not "James-approved."
 
 ---
 
-## Extended personas (brief implies)
+## Extended personas
 
 ### Morgan - engineering lead
 
