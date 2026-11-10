@@ -180,6 +180,18 @@ try {
   assert.ok(Array.isArray(docsResult.artifacts), 'usabl docs did not emit an artifacts array');
   assert.equal(docsResult.artifacts.length, 0, 'usabl docs invented artifacts with no config');
 
+  // usabl/docs is a library subpath export too, so prove it resolves from the installed package.
+  const docsProbe = [
+    "const m = await import('usabl/docs');",
+    "for (const name of ['generateDocs', 'collectDocArtifacts', 'projectDocs']) {",
+    "  if (typeof m[name] !== 'function') throw new Error(name + ' not exported');",
+    '}',
+    "process.stdout.write('docs-ok');",
+  ].join('\n');
+  const docsImport = run(process.execPath, ['--input-type=module', '-e', docsProbe], { cwd: consumer });
+  assert.equal(docsImport.status, 0, failure('usabl/docs import', docsImport));
+  assert.match(docsImport.stdout, /docs-ok/);
+
   // The Fleet Insights measurement harness ships as a library subpath export, deliberately
   // separate from the gate CLI. Prove usabl/measure resolves from the installed package.
   const measureProbe = [

@@ -385,6 +385,27 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  // Chromium names an image button with no text of its own "Submit". The read must not hand that
+  // default to the alt-text draft as text the page wrote.
+  it('does not read the browser default name of an image button as page text', async () => {
+    const pixel = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    const html =
+      '<!doctype html><html lang="en"><head><title>Image buttons</title></head><body><main><form>' +
+      `<input id="go" type="image" src="${pixel}">` +
+      `<input id="find" type="image" src="${pixel}" alt="Find">` +
+      '</form></main></body></html>';
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    try {
+      await page.gotoReady();
+      const read = await readPageImages(page);
+      const byId = (id: string) => read.images.find((image) => image.elementPath.includes(id));
+      expect(byId('go')?.name).toBeNull();
+      expect(byId('find')?.name).toBe('Find');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('resolves aria-labelledby through the AX tree', async () => {
     const page = await driver.open(fixture.url);
     try {

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { loadAliasConfig, resolveAliasSpecifier } from '../../src/coverage/alias-config.js';
+import {
+  aliasConfigDirs,
+  loadAliasConfig,
+  loadAppAliasConfig,
+  resolveAliasSpecifier,
+  resolveAliasSpecifierEachWay,
+} from '../../src/coverage/alias-config.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
@@ -127,6 +133,129 @@ export default {
       }),
     );
     expect(config.mappings.find((m) => m.prefix === '@/')?.target).toBe('src/');
+  });
+});
+
+// The configs of one folder give that folder's aliases, with targets written relative to the
+// repository root. An app's set comes from the nearest tsconfig and the nearest Vite config, found
+// on their own, and the root set is read beside it.
+describe('loadAliasConfig for an app folder', () => {
+  it('reads only the tsconfig and Vite config of the folder it is given', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '~/*': ['root/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+        'packages/admin/vite.config.ts': `export default { resolve: { alias: { '#lib': '/lib' } } };`,
+      }),
+      'packages/admin',
+    );
+    expect(config.mappings).toContainEqual({ prefix: '@/', target: 'packages/admin/src/' });
+    // A leading slash in a Vite alias is the Vite root, which is the app folder.
+    expect(config.mappings).toContainEqual({ prefix: '#lib/', target: 'packages/admin/lib/' });
+    expect(config.mappings.some((mapping) => mapping.target.startsWith('root'))).toBe(false);
+  });
+
+  it('finds the tsconfig folder and the Vite config folder on their own, climbing from a file', async () => {
+    const fs = fsOf({
+      'tsconfig.json': '{}',
+      'packages/admin/tsconfig.json': '{}',
+      'packages/admin/src/App.tsx': '',
+    });
+    expect(await aliasConfigDirs(fs, 'packages/admin/src/App.tsx')).toEqual({ tsconfigDir: 'packages/admin', viteDir: '' });
+    expect(await aliasConfigDirs(fs, 'src/App.tsx')).toEqual({ tsconfigDir: '', viteDir: '' });
+    expect(await aliasConfigDirs(fsOf({ 'tsconfig.json': '{}', 'apps/web/vite.config.mts': '' }), 'apps/web/src/main.tsx')).toEqual({
+      tsconfigDir: '',
+      viteDir: 'apps/web',
+    });
+  });
+
+  it('reads the app set and the root set, and keeps the root set only when it differs', async () => {
+    const appOnlyVite = await loadAppAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['apps/web/src/*'] } } }),
+        'apps/web/vite.config.ts': 'export default {};',
+      }),
+      'apps/web/src/router.tsx',
+    );
+    expect(appOnlyVite.mappings).toEqual([{ prefix: '@/', target: 'apps/web/src/' }]);
+    expect(appOnlyVite.otherSources).toBeUndefined();
+
+    const disagreeing = await loadAppAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['legacy/*'] } } }),
+        'apps/web/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+      }),
+      'apps/web/src/router.tsx',
+    );
+    expect(disagreeing.mappings).toEqual([{ prefix: '@/', target: 'apps/web/src/' }]);
+    expect(disagreeing.otherSources).toEqual([[{ prefix: '@/', target: 'legacy/' }]]);
+    expect(resolveAliasSpecifierEachWay('@/components/Card', disagreeing)).toEqual([
+      'apps/web/src/components/Card',
+      'legacy/components/Card',
+    ]);
+    expect(resolveAliasSpecifierEachWay('~/x', disagreeing)).toEqual([]);
+  });
+});
+
+describe('loadAliasConfig with extends and single-file paths', () => {
+  it('reads paths from the config a tsconfig extends, resolved from that config', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.base.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@shared/*': ['packages/shared/src/*'], '@/*': ['packages/admin/src/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ extends: '../../tsconfig.base' }),
+      }),
+      'packages/admin',
+    );
+    expect(config.hasAliasConfig).toBe(true);
+    expect(config.mappings).toContainEqual({ prefix: '@/', target: 'packages/admin/src/' });
+  });
+
+  it('reads an extends list, where a later config wins, and lets the child paths replace the parent ones', async () => {
+    const fs = fsOf({
+      'a.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['from-a/*'] } } }),
+      'b.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['from-b/*'] } } }),
+      'tsconfig.json': JSON.stringify({ extends: ['./a.json', './b.json'] }),
+    });
+    expect((await loadAliasConfig(fs)).mappings).toEqual([{ prefix: '@/', target: 'from-b/' }]);
+    const child = fsOf({
+      'base.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['base/*'] } } }),
+      'tsconfig.json': JSON.stringify({ extends: './base.json', compilerOptions: { paths: { '~/*': ['own/*'] } } }),
+    });
+    expect((await loadAliasConfig(child)).mappings).toEqual([{ prefix: '~/', target: 'own/' }]);
+  });
+
+  it('resolves inherited paths from the baseUrl the child sets', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.base.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ extends: '../../tsconfig.base.json', compilerOptions: { baseUrl: '.' } }),
+      }),
+      'packages/admin',
+    );
+    expect(config.mappings).toEqual([{ prefix: '@/', target: 'packages/admin/src/' }]);
+  });
+
+  it('stops on an extends cycle and on a config it cannot read', async () => {
+    const fs = fsOf({
+      'a.json': JSON.stringify({ extends: './tsconfig.json' }),
+      'tsconfig.json': JSON.stringify({ extends: './a.json' }),
+    });
+    expect((await loadAliasConfig(fs)).mappings).toEqual([]);
+    const missing = fsOf({ 'tsconfig.json': JSON.stringify({ extends: './gone.json', compilerOptions: { paths: { '@/*': ['src/*'] } } }) });
+    expect((await loadAliasConfig(missing)).mappings).toEqual([{ prefix: '@/', target: 'src/' }]);
+  });
+
+  it('reads a single-file path, which matches only the exact specifier', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({
+          compilerOptions: { baseUrl: '.', paths: { '@/theme': ['src/styles/theme.ts'], '@/*': ['src/*'] } },
+        }),
+      }),
+    );
+    expect(resolveAliasSpecifier('@/theme', config.mappings)).toBe('src/styles/theme.ts');
+    expect(resolveAliasSpecifier('@/theme/dark', config.mappings)).toBe('src/theme/dark');
+    expect(resolveAliasSpecifier('@/Home', config.mappings)).toBe('src/Home');
   });
 });
 

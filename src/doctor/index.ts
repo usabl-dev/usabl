@@ -26,6 +26,8 @@ import { HISTORY_BRANCHED } from '../install/history-ci.js';
 import { compileCodeownersPattern, readCodeownersLine, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
+import { uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
+import type { UsablConfig } from '../contracts/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { scannerNamesText, scannerVersionFix, unreadableScanners } from '../evidence/receipt.js';
 import type { ScannerVersions } from '../contracts/index.js';
@@ -209,8 +211,9 @@ async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
       nextStep: `No usabl config. Run "usabl init" to create ${deps.configPath}.`,
     };
   }
+  let config: UsablConfig;
   try {
-    parseUsablConfig(raw);
+    config = parseUsablConfig(raw);
   } catch {
     return {
       id: 'config',
@@ -218,6 +221,13 @@ async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
       state: 'drifted',
       nextStep: `${deps.configPath} is present but does not parse as a usabl config. Fix the JSON, or re-run "usabl init".`,
     };
+  }
+  // usabl check refuses a config with an empty uiFileGlobs list, so it is not wired. Same rule and
+  // sentence as the loader. A docs manifest read error propagates to guardRead, as above.
+  const refusal =
+    config.uiFileGlobs.length === 0 ? uiFileGlobsRefusal(config, await deps.fs.readFile('usabl.docs.json'), deps.configPath) : null;
+  if (refusal !== null) {
+    return { id: 'config', label: CONFIG_LABEL, state: 'drifted', nextStep: refusal };
   }
   return { id: 'config', label: CONFIG_LABEL, state: 'wired', nextStep: '' };
 }

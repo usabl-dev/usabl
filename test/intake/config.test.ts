@@ -923,6 +923,62 @@ describe('loadConfig', () => {
     await loadConfig(path, (line) => warnings.push(line));
     expect(warnings).toHaveLength(2);
   });
+
+  // A path given with --config that does not exist was told to "pass --config <path>", which it
+  // already did. The message now says to check that path.
+  it('tells a missing --config file to check the path, not to pass --config', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'other.json');
+    const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
+    expect(message).toContain(`${path} not found`);
+    expect(message).toContain('Check the path given to --config');
+    expect(message).not.toContain('or pass --config <path>');
+  });
+
+  // A config with no UI globs reads no change as a UI change, so every run said nothing to check
+  // and exited 0, which reads like a pass on a run that looked at nothing.
+  it('refuses empty uiFileGlobs when there is no docs manifest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    const docsManifest = join(dir, 'usabl.docs.json');
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/uiFileGlobs/);
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(path);
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/usabl\.docs\.json/);
+  });
+
+  it('keeps a docs-only repository working: empty uiFileGlobs loads when usabl.docs.json names a page', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    const docsManifest = join(dir, 'usabl.docs.json');
+    await writeFile(
+      docsManifest,
+      JSON.stringify({
+        format: 'asciidoc-modular',
+        docsBaseUrl: 'http://127.0.0.1:4000',
+        builtRoot: 'build/html',
+        pages: [{ pageId: 'install', url: '/install/index.html', assemblyFile: 'assemblies/install.adoc', sources: [] }],
+        sharedGlobs: [],
+      }),
+      'utf8',
+    );
+    const config = await loadConfig(path, () => {}, docsManifest);
+    expect(config.uiFileGlobs).toEqual([]);
+  });
+
+  // A manifest file alone is not a documentation-only repository: one with no pages, or one that
+  // does not load, checks nothing, so the run would still say nothing to check.
+  it('refuses empty uiFileGlobs when usabl.docs.json names no page or does not load', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    const docsManifest = join(dir, 'usabl.docs.json');
+    for (const docs of ['{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}', '{not json']) {
+      await writeFile(docsManifest, docs, 'utf8');
+      await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/empty uiFileGlobs list/);
+    }
+  });
 });
 
 describe('parseUsablConfig userinfo without a scheme and two slashes', () => {

@@ -20,6 +20,8 @@ function memoryFs(files: Record<string, string>): InitFs & { store: Record<strin
     writeFile: async (path, contents) => {
       store[path] = contents;
     },
+    // A memory store has no symbolic links, so every path is its own real path.
+    realpath: async (path) => path,
     store,
   };
 }

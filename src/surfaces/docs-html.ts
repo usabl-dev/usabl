@@ -65,6 +65,11 @@ const PAGE_DRAFTED_NOTE =
 // that is gone, so a receipt on it proves nothing about the code as it is now.
 type Proof = 'verified' | 'bound-no-evidence' | 'observation' | 'stale';
 
+/** Whether usabl drafted this artifact from the page, read from the artifact or its entries. */
+function isPageDrafted(artifact: DocArtifact): boolean {
+  return artifact.origin === 'page' || artifact.entries.some((entry) => entry.origin === 'page');
+}
+
 /** Whether this artifact is bound to a minted receipt for its surface. */
 function isBound(artifact: DocArtifact): boolean {
   return typeof artifact.boundToReceipt === 'string' && artifact.boundToReceipt.length > 0;
@@ -121,12 +126,15 @@ function renderStatus(artifact: DocArtifact, hasEvidence: boolean): string {
     );
   }
   if (state === 'bound-no-evidence') {
+    // Entries from a content requirement are what someone expects the page to say. Entries drafted
+    // from the page are what it says now, so they are never called expectations.
+    const what = isPageDrafted(artifact) ? 'text drafted from the page' : 'expectations';
     return (
       `<p class="status status--intake">` +
       `<span class="status__mark" aria-hidden="true">◆</span> ` +
       `<span class="status__label">Not proof.</span> ` +
       `Bound to receipt <code>${hash}</code>${when}, but no per-entry evidence was ` +
-      `minted, so these entries are expectations, not per-element proof.` +
+      `minted, so these entries are ${what}, not per-element proof.` +
       `</p>`
     );
   }
@@ -143,7 +151,7 @@ function renderStatus(artifact: DocArtifact, hasEvidence: boolean): string {
 /** One artifact rendered as a captioned, scoped table (or an empty note). */
 function renderArtifact(artifact: DocArtifact): string {
   const label = KIND_LABEL[artifact.kind];
-  const drafted = artifact.entries.some((entry) => entry.origin === 'page');
+  const drafted = isPageDrafted(artifact);
   // Text drafted from the page is what the page says now, not an expectation anyone wrote.
   const [firstCol, secondCol] = drafted ? PAGE_DRAFTED_COLUMNS : KIND_COLUMNS[artifact.kind];
   const hasEvidence = artifact.entries.some((entry) => Boolean(entry.evidenceRef));
@@ -157,7 +165,11 @@ function renderArtifact(artifact: DocArtifact): string {
   if (drafted) parts.push(PAGE_DRAFTED_NOTE);
 
   if (artifact.entries.length === 0) {
-    parts.push(`<p class="artifact__empty">No entries were generated for this surface.</p>`);
+    parts.push(
+      drafted
+        ? `<p class="artifact__empty">The page showed no images on this screen.</p>`
+        : `<p class="artifact__empty">No entries were generated for this surface.</p>`,
+    );
     parts.push('</section>');
     return parts.join('');
   }
@@ -288,7 +300,7 @@ function documentShell(title: string, bodyMain: string): string {
     // activation moves focus into the content instead of resuming from the link.
     `  <main id="main-content" tabindex="-1">\n${bodyMain}\n  </main>\n` +
     '  <footer class="page-footer">\n' +
-    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all. A card marked <strong>Out of date</strong> may not match the current code, so it is not proof for the code as it is now. The card says why. Run usabl docs again to make it again.</p>\n' +
+    '    <p>This page is a generated artifact, not a verdict. A card is proof only when it is <strong>Verified</strong>: bound to a minted receipt with per-entry evidence. A card marked <strong>Not proof</strong> shows a receipt but has no per-entry evidence, so its entries are expectations, or text drafted from the page, and not per-element proof. A card marked <strong>Not verified</strong> is an observation of what the interface announced, with no receipt at all. A card marked <strong>Out of date</strong> may not match the current code, so it is not proof for the code as it is now. The card says why. Run usabl docs again to make it again.</p>\n' +
     '  </footer>\n' +
     '</body>\n' +
     '</html>\n'
@@ -339,7 +351,7 @@ export function renderDocsHtml(artifacts: DocArtifact[]): string {
     `${groups.length} surface${groups.length === 1 ? '' : 's'}. ` +
     `${verifiedCount} bound to a minted receipt and shown as verified; ` +
     (intakeCount > 0
-      ? `${intakeCount} bound to a receipt without per-entry evidence, shown as expectations; `
+      ? `${intakeCount} bound to a receipt without per-entry evidence, shown as not proof; `
       : '') +
     `${observationCount} shown as observations only, with no receipt claim.` +
     (staleCount > 0

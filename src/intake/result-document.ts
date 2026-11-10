@@ -411,6 +411,10 @@ function coverage(value: unknown, field: string): Coverage {
   if (has(source, 'excludedFiles')) {
     out.excludedFiles = list(source['excludedFiles'], at(field, 'excludedFiles'), excludedFile);
   }
+  // Absent in a Result from an engine that had nothing to disclose about discovery. Same shape.
+  if (has(source, 'discoveryNotes')) {
+    out.discoveryNotes = list(source['discoveryNotes'], at(field, 'discoveryNotes'), excludedFile);
+  }
   return out;
 }
 

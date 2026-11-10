@@ -24,8 +24,8 @@ export interface RoutesDriftOutcome {
 // Drift compares route urls only and never reads manifest provenance, so it asks for the routes
 // alone. That keeps every caller, including tests, free of a field this comparison does not use.
 export function computeRoutesDrift(
-  configured: Pick<RouteManifest, 'routes'>,
-  discovered: Pick<RouteManifest, 'routes'>,
+  configured: { routes: ReadonlyArray<Pick<RouteManifest['routes'][number], 'url'>> },
+  discovered: { routes: ReadonlyArray<Pick<RouteManifest['routes'][number], 'url'>> },
 ): RoutesDrift {
   const configuredUrls = new Set(configured.routes.map((r) => r.url));
   const discoveredUrls = new Set(discovered.routes.map((r) => r.url));
@@ -138,7 +138,11 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
           '',
         ].join('\n');
 
-  if (discovered.routes.length === 0 && configured.routes.length > 0) {
+  // A route check sets aside, because its path gives a screen id that is refused or that another
+  // path also gives, is still a route the router declares. Drift counts it, so a sidecar that
+  // names it reports no removal and one that omits it reports it as added.
+  const declared = { routes: [...discovered.routes, ...(discovered.unusable ?? []).map(({ url }) => ({ url }))] };
+  if (declared.routes.length === 0 && configured.routes.length > 0) {
     return {
       exitCode: 2,
       stderr:
@@ -147,7 +151,7 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
     };
   }
 
-  const drift = computeRoutesDrift(configured, discovered);
+  const drift = computeRoutesDrift(configured, declared);
   const report = `${formatDriftReport(drift)}${acknowledgedSection}`;
   if (open.length > 0) {
     return {

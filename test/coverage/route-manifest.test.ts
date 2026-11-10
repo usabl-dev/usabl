@@ -113,6 +113,25 @@ describe('parseRouteManifest', () => {
     expect(manifest.routes).toEqual([{ screenId: 'settings-profile', url: '/settings/profile', entryFile: null }]);
   });
 
+  // /a-b and /a/b both give the id a-b. Two screens under one id let one absorb the other's
+  // findings, and the duplicate stopped the whole run. Both are kept apart as routes usabl cannot
+  // name, so a wide-blast change reports each as a gap and every other route still runs.
+  it('sets aside fallback routes whose paths give the same screen id instead of stopping the run', async () => {
+    const fs = fsOf({
+      'src/router.tsx': `
+        export const App = () => <Routes>
+          <Route path="/a-b" element={<A />} />
+          <Route path="/a/b" element={<B />} />
+          <Route path="/c" element={<C />} />
+        </Routes>;
+      `,
+    });
+    const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
+    expect(manifest.routes).toEqual([{ screenId: 'c', url: '/c', entryFile: null }]);
+    expect(manifest.unusable?.map((route) => route.url)).toEqual(['/a-b', '/a/b']);
+    expect(manifest.unusable?.every((route) => route.reason.includes('same screen id'))).toBe(true);
+  });
+
   it('maps fallback root path to screen id root', async () => {
     const fs = fsOf({
       'src/router.tsx': `

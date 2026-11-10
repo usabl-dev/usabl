@@ -22,6 +22,8 @@ function memoryFs(files: Record<string, string>): InitFs & { store: Record<strin
     writeFile: async (path, contents) => {
       store[path] = contents;
     },
+    // A memory store has no symbolic links, so every path is its own real path.
+    realpath: async (path) => path,
     store,
   };
 }
@@ -95,6 +97,35 @@ describe('usabl init --app on a monorepo', () => {
     expect(web.notes.some((line) => line.includes('packages/shared'))).toBe(false);
   });
 
+  // The root package.json can list workspaces anywhere, such as libs/*. Looking only in packages/*
+  // and apps/* missed a shared library the app depends on.
+  it('names a workspace package outside packages/* and apps/* that the root workspaces list', async () => {
+    const files: Record<string, string> = {
+      ...monorepo(),
+      'package.json': JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*', 'libs/*'] }),
+      'libs/widgets/package.json': JSON.stringify({ name: '@mono/widgets' }),
+    };
+    const adminManifest = JSON.parse(files['packages/admin/package.json'] ?? '{}') as Record<string, Record<string, string>>;
+    files['packages/admin/package.json'] = JSON.stringify({
+      ...adminManifest,
+      dependencies: { ...(adminManifest['dependencies'] ?? {}), '@mono/widgets': 'workspace:*' },
+    });
+    const admin = await inferInit(memoryFs(files), { appDir: 'packages/admin' });
+    const note = admin.notes.find((line) => line.includes('libs/widgets'));
+    expect(note).toMatch(/^Review: /);
+    expect(note).toContain('@mono/widgets');
+  });
+
+  // A config drafted with --app checks that app only. The other apps init can see are named, so a
+  // reader does not take the config to cover the whole repository.
+  it('names the apps that --app leaves out', async () => {
+    const admin = await inferInit(memoryFs(monorepo()), { appDir: 'packages/admin' });
+    const note = admin.notes.find((line) => line.includes('does not check'));
+    expect(note).toMatch(/^Review: /);
+    expect(note).toContain('packages/web');
+    expect(note).not.toContain('packages/admin,');
+  });
+
   it('drafts the web app and says it could not read a port set by code', async () => {
     const draft = await inferInit(memoryFs(monorepo()), { appDir: 'packages/web' });
     expect(draft.config.appBaseUrl).toBe('http://127.0.0.1:5173');
@@ -131,6 +162,8 @@ describe('usabl init --app on a monorepo', () => {
       writeFile: async () => {
         throw new Error('this test never writes');
       },
+      // The fixture tree holds no symbolic links.
+      realpath: async (path) => path,
     };
     const globs = ['packages/*', 'packages/{web,admin}', '**', 'packages/we?', 'packages/[w]eb', '!packages/web', 'packages/web/*'];
     for (const fs of [memoryFs(monorepo()), realFs]) {
@@ -244,6 +277,8 @@ describe('usabl init with no --app on a monorepo', () => {
       writeFile: async () => {
         throw new Error('this test never writes');
       },
+      // The fixture tree holds no symbolic links.
+      realpath: async (path) => path,
     };
     await expect(inferInit(fs)).rejects.toThrow(/packages\/admin\n {2}packages\/web\n/);
     const draft = await inferInit(fs, { appDir: 'packages/admin' });

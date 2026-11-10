@@ -70,6 +70,26 @@ describe('readPageImages', () => {
     expect(read.notListed).toBe(3);
   });
 
+  // An image button with no text of its own gets a name from the browser, "Submit" in English.
+  // That name is not text the page wrote, so the draft must not show it as the page's alt text.
+  it('does not read the browser default name of an image button as text on the page', async () => {
+    const { page } = pageWith(
+      {
+        '#go': { name: 'Submit', role: 'button', states: {} },
+        '#search': { name: 'Search', role: 'button', states: {} },
+        '#labelled': { name: 'Find', role: 'button', states: {} },
+      },
+      undefined,
+      {
+        '#go': { type: 'image', alt: null, 'aria-label': null, 'aria-labelledby': null, title: null, value: null, role: null },
+        '#search': { type: 'image', alt: 'Search', 'aria-label': null, 'aria-labelledby': null, title: null, value: null, role: null },
+        '#labelled': { type: 'IMAGE', alt: null, 'aria-label': null, 'aria-labelledby': 'find-label', title: null, value: null, role: null },
+      },
+    );
+    const read = await readPageImages(page);
+    expect(read.images.map((image) => image.name)).toEqual([null, 'Search', 'Find']);
+  });
+
   it('reads the same page the same way twice', async () => {
     const { page } = pageWith({
       '#b': { name: 'B', role: 'img', states: {} },

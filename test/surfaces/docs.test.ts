@@ -242,6 +242,47 @@ describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
     expect(artifacts.filter((artifact) => artifact.kind === 'alt-text-manifest')).toHaveLength(0);
   });
 
+  it('marks a manifest drafted from a page that showed no images as drafted from the page', () => {
+    const result = resultFixture({ screens: [{ ...screenFixture('clusters', []), images: [] }] });
+    const manifest = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest');
+    expect(manifest?.entries).toEqual([]);
+    expect(manifest?.origin).toBe('page');
+  });
+
+  // Doc artifacts are published like the CLI JSON and the pull request comment, so a URL in page
+  // text loses its query and fragment there too, where a preview token or session value can sit.
+  it('strips the query and fragment from a URL in page text, as published output does', () => {
+    const result = resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', [
+            {
+              index: 0,
+              elementPath: '#share',
+              announcement: [{ kind: 'name', text: 'Open https://example.test/doc?session=PREVIEWSECRET#part', fromTree: true, source: 'ax-tree' }],
+            },
+          ]),
+          images: [{ elementPath: '#qr', name: 'https://example.test/qr?token=PREVIEWSECRET', role: 'img', decorative: false }],
+        },
+      ],
+    });
+    const json = JSON.stringify(collectDocArtifacts(result, noRequirements));
+    expect(json).toContain('https://example.test/doc');
+    expect(json).not.toContain('PREVIEWSECRET');
+    expect(json).not.toContain('#part');
+  });
+
+  // Cutting by UTF-16 code units can split an emoji in two and print half of it.
+  it('never splits a character in two when it shortens page text', () => {
+    const name = `${'a'.repeat(187)}\u{1F600}${'b'.repeat(50)}`;
+    const result = resultFixture({
+      screens: [{ ...screenFixture('clusters', []), images: [{ elementPath: '#face', name, role: 'img', decorative: false }] }],
+    });
+    const content = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest')?.entries[0]?.content ?? '';
+    expect(content).toContain('(shortened)');
+    expect(content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
+
   it('says how many images were not listed', () => {
     const result = resultFixture({
       screens: [{ ...screenFixture('clusters', []), images: [], imagesNotListed: 7 }],

@@ -294,4 +294,68 @@ describe('makeGitReader in a repository with no commits', () => {
     // git's own text, such as "fatal: Not a valid object name HEAD", and the command line stay out.
     expect(message).not.toMatch(/fatal|Command failed|read-tree/);
   });
+
+  // The default branch is not always main, so the example fetches the ref that was named, or says
+  // how to find the default branch when the ref names no remote.
+  it('builds the fetch example from the ref, never a fixed main', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    const named = await git.show('upstream/develop', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(named).toContain('git fetch upstream develop');
+    expect(named).not.toContain('origin main');
+    const bare = await git.show('release', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(bare).toContain('git remote show origin');
+    expect(bare).not.toContain('origin main');
+  });
+});
+
+// usabl reads git's error text to tell a missing file from a failure. git translates that text
+// when the user's locale asks for another language, so a German locale turned a missing policy file
+// into a crash. This machine may have no git translations, so a stand-in git answers in German
+// unless LC_ALL is C, the way a translated git does.
+describe('makeGitReader under a non-English locale', { timeout: 30_000 }, () => {
+  let repoPath = '';
+  let binDir = '';
+  const saved = { PATH: process.env['PATH'], LC_ALL: process.env['LC_ALL'], LANG: process.env['LANG'], LANGUAGE: process.env['LANGUAGE'] };
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+    binDir = await mkdtemp(join(tmpdir(), 'usabl-git-locale-bin-'));
+    const realGit = (await execFileAsync('which', ['git'], { encoding: 'utf8' })).stdout.trim();
+    const script = [
+      '#!/bin/sh',
+      'if [ "$LC_ALL" != "C" ]; then',
+      '  case "$2" in',
+      "    HEAD:*) echo \"fatal: Pfad '${2#HEAD:}' existiert nicht in 'HEAD'\" >&2; exit 128 ;;",
+      "    *) echo \"fatal: ungültiger Objektname '${2%%:*}'.\" >&2; exit 128 ;;",
+      '  esac',
+      'fi',
+      `exec "${realGit}" "$@"`,
+      '',
+    ].join('\n');
+    await writeFile(join(binDir, 'git'), script, { encoding: 'utf8', mode: 0o755 });
+    process.env['PATH'] = `${binDir}:${saved.PATH ?? ''}`;
+    process.env['LC_ALL'] = 'de_DE.UTF-8';
+    process.env['LANG'] = 'de_DE.UTF-8';
+    process.env['LANGUAGE'] = 'de';
+  });
+
+  afterEach(async () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(repoPath, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+  });
+
+  it('reads a missing file at a ref as absent, not as a failure', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD', 'missing.tsx')).resolves.toBeNull();
+    await expect(git.show('HEAD', 'screen.tsx')).resolves.toBe('first version\n');
+  });
+
+  it('still names the fix when the trusted ref does not exist', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('origin/nope', 'usabl.config.json')).rejects.toThrow(/git cannot read origin\/nope/);
+  });
 });

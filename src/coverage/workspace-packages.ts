@@ -347,6 +347,20 @@ function unreadableRootGap(file: string, unreadable: UnreadableWorkspaceRoot, re
   };
 }
 
+/**
+ * The folders of the workspace packages the repository root lists, in package.json "workspaces"
+ * and pnpm-workspace.yaml, sorted. Empty when the root lists none or cannot be read: a caller that
+ * only adds notes reads that as nothing more to name.
+ */
+export async function workspacePackageDirs(fs: FsGlob): Promise<string[]> {
+  try {
+    return await workspaceDirs(fs, [...new Set(await workspacePatterns((file) => fs.readFile(file)))]);
+  } catch (err) {
+    if (err instanceof UnreadableWorkspaceRoot) return [];
+    throw err;
+  }
+}
+
 /** Reads a file at the trusted ref, or null when that ref has no such file. */
 export type TrustedRead = (file: string) => Promise<string | null>;
 

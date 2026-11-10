@@ -18,6 +18,8 @@ function memoryFs(files: Record<string, string>): InitFs & { store: Record<strin
     writeFile: async (path, contents) => {
       store[path] = contents;
     },
+    // A memory store has no symbolic links, so every path is its own real path.
+    realpath: async (path) => path,
     store,
   };
 }
@@ -59,6 +61,35 @@ describe('parseCliArgs init', () => {
 });
 
 describe('inferInit', () => {
+  // Vite loads vite.config.mts and .cts too, and a change to the config can reach every screen.
+  // Leaving them out of wide blast let a config change read as nothing to check.
+  it.each(['vite.config.mts', 'vite.config.cts', 'vite.config.mjs', 'vite.config.cjs'])(
+    'drafts %s as a wide-blast file',
+    async (name) => {
+      const files = fixtureFiles();
+      const vite = files['vite.config.ts'] ?? '';
+      delete files['vite.config.ts'];
+      const draft = await inferInit(memoryFs({ ...files, [name]: vite }));
+      expect(draft.config.discovery.wideBlastGlobs).toContain(name);
+    },
+  );
+
+  // When usabl cannot find or parse the exported config at all, saying the file "sets server.port
+  // and server.https with code" claims something usabl never saw.
+  it('says it could not read the exported config, not that the config sets the port with code', async () => {
+    for (const vite of ['export default makeConfig()\n', 'export default {\n']) {
+      const draft = await inferInit(memoryFs(fixtureFiles({ 'vite.config.ts': vite })));
+      const note = draft.notes.find((line) => line.includes('vite.config.ts')) ?? '';
+      expect(note).toMatch(/^Review: usabl could not read the config that vite\.config\.ts exports/);
+      expect(note).not.toContain('with code usabl does not run');
+      expect(note).toContain('Set appBaseUrl in usabl.config.json');
+    }
+    const byCode = await inferInit(
+      memoryFs(fixtureFiles({ 'vite.config.ts': 'export default { server: { port: Number(process.env.PORT) } }\n' })),
+    );
+    expect(byCode.notes.some((line) => line.includes('sets server.port with code usabl does not run'))).toBe(true);
+  });
+
   it('infers vite origin, proven React Router entry files, and skips catch-all routes', async () => {
     const fs = memoryFs(fixtureFiles());
     const draft = await inferInit(fs);
@@ -492,6 +523,36 @@ describe('what init writes is what usabl accepts', () => {
     }
     return '';
   }
+
+  // /cluster-list and /cluster/list both give the id cluster-list. A sidecar with both fails to
+  // load, and one without either lets that screen go unscanned, so nothing is written.
+  it('refuses the whole draft when two route paths give the same screen id, and names both lines', async () => {
+    const both = routerWithExtraRoute('/cluster/list').replace(
+      '<Route path="/clusters" element={<Clusters />} />',
+      '<Route path="/clusters" element={<Clusters />} />\n      <Route path="/cluster-list" element={<Clusters />} />',
+    );
+    const fs = memoryFs(fixtureFiles({ 'src/App.tsx': both }));
+    const message = await refusalOf(fs);
+    expect(message).toContain('usabl init refused to write usabl.config.json and usabl.routes.json');
+    expect(message).toContain('the same screen id');
+    expect(message).toContain('src/App.tsx line 10');
+    expect(message).toContain('src/App.tsx line 11');
+    expect(fs.store['usabl.routes.json']).toBeUndefined();
+  });
+
+  // init reads the router and refuses on the collision before it looks at any file, so "run usabl
+  // init again" refused again. The steps that work write the files by hand and check the sidecar.
+  it('gives steps for colliding route ids that do not loop back into init', async () => {
+    const both = routerWithExtraRoute('/cluster/list').replace(
+      '<Route path="/clusters" element={<Clusters />} />',
+      '<Route path="/clusters" element={<Clusters />} />\n      <Route path="/cluster-list" element={<Clusters />} />',
+    );
+    const message = await refusalOf(memoryFs(fixtureFiles({ 'src/App.tsx': both })));
+    expect(message).toContain('write usabl.config.json and usabl.routes.json by hand');
+    expect(message).toContain('a screen id of its own for each route');
+    expect(message).toContain('run usabl drift routes');
+    expect(message).not.toContain('init again');
+  });
 
   it('refuses the whole draft when a route path holds a raw space, and names the file and line', async () => {
     // A raw space in a route path rides straight through screenIdFromUrl into the id. The route

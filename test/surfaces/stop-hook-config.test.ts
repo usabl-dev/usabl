@@ -205,6 +205,56 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     expect(again.stderr()).toContain('Do not edit the file to make a later stop pass.');
   });
 
+  // A config with an empty uiFileGlobs list reads no change as a UI change, so the run said IDLE and
+  // "You may stop." on every stop without looking at anything. It takes the path of every other
+  // config that cannot be used: one block, then the continuation goes through.
+  it('blocks a config with an empty uiFileGlobs list instead of saying idle, and lets the continuation through', async () => {
+    const EMPTY = JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2);
+    for (const docs of [null, '{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}']) {
+      const h = harness({ working: found(EMPTY), head: found(EMPTY) });
+      h.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+      const reads: string[] = [];
+      h.ports.fs.readFile = async (path) => {
+        reads.push(path);
+        return path === 'usabl.docs.json' ? docs : null;
+      };
+      await runStopHookFromStdin(stopInput(false), h.ports);
+      const reason = blockReason(h.stdout());
+      expect(reason).toContain('approval required');
+      expect(reason).toContain('usabl.config.json has an empty uiFileGlobs list');
+      expect(reason).toContain('src/**/*.tsx');
+      expect(reason).not.toContain('IDLE');
+      expect(reads).toContain('usabl.docs.json');
+      expect(h.engineRuns()).toBe(0);
+    }
+
+    const again = harness({ working: found(EMPTY), head: found(EMPTY) });
+    again.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    await runStopHookFromStdin(stopInput(true), again.ports);
+    expect(again.stdout()).not.toContain('"decision":"block"');
+    expect(again.stderr()).toContain('usabl.config.json has an empty uiFileGlobs list');
+    expect(again.stderr()).toContain('continuation already active');
+    expect(again.engineRuns()).toBe(0);
+  });
+
+  it('runs a docs-only config whose usabl.docs.json names a page', async () => {
+    const EMPTY = JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2);
+    const h = harness({ working: found(EMPTY), head: found(EMPTY) });
+    h.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    h.ports.fs.readFile = async (path) =>
+      path === 'usabl.docs.json'
+        ? JSON.stringify({
+            format: 'asciidoc-modular',
+            docsBaseUrl: 'http://127.0.0.1:4000',
+            builtRoot: 'build/html',
+            pages: [{ pageId: 'install', url: '/install/index.html', assemblyFile: 'assemblies/install.adoc', sources: [] }],
+            sharedGlobs: [],
+          })
+        : null;
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    expect(h.engineRuns()).toBe(1);
+  });
+
   it('goes on as before when the working config matches the last commit', async () => {
     const h = harness({ working: found(COMMITTED), head: found(COMMITTED) });
     await runStopHookFromStdin(stopInput(false), h.ports);
