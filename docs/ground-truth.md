@@ -3790,12 +3790,14 @@ of the router: the new config would be checked against routes `init` did not der
 another app's after `--app` names a different folder. The refusal names the file to review, and
 says to delete it and run `init --force` again if it does not list this app's screens.
 
-Every command that loads `usabl.config.json` refuses a config with empty `uiFileGlobs`, such
-as one written by hand or by an older `init`, and stops with exit 4 before it runs, the same
-way it stops on any other config error. The refusal says why and names the fix. A
+The CLI's config loader refuses a config with empty `uiFileGlobs`, such as one written by
+hand or by an older `init`. `usabl check` and every other command that loads the config file
+through it, the dev-server overlay included, stop with exit 4 before they run, the same way
+they stop on any other config error. The refusal says why and names the fix. A
 documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
-exists in the folder usabl runs in: the docs manifest says what to check. The Stop hook
-parses the config itself and does not apply this refusal.
+exists in the folder usabl runs in: the docs manifest says what to check. The Stop hook,
+`usabl doctor`, and the Playwright helper parse the config themselves and do not apply this
+refusal.
 
 ### Brownfield adoption (prove what you touch)
 

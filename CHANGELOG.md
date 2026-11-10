@@ -987,13 +987,14 @@
 
 ### Changed
 
-- Exit code: a `usabl.config.json` with an empty `uiFileGlobs` list now stops every command that
-  loads it with a config error, exit 4, where `usabl check` used to exit 0 as nothing to check.
+- Exit code: a `usabl.config.json` with an empty `uiFileGlobs` list now stops `usabl check` and
+  the other commands that load it through the CLI's config loader with a config error, exit 4,
+  where `usabl check` used to exit 0 as nothing to check.
   With no UI globs, no change was ever a UI change, so every run read as idle without looking at
   anything. The message names the fix. A documentation-only repository still loads: when
   `usabl.docs.json` exists in the folder usabl runs in, an empty list is accepted. Scripts that
-  read exit 0 from such a config now see 4. The Stop hook parses the config itself and does not
-  apply this refusal.
+  read exit 0 from such a config now see 4. The Stop hook, `usabl doctor`, and the Playwright
+  helper parse the config themselves and do not apply this refusal.
 
 - Flow requirements now read each step at its own time. A flow waits for the page to settle
   after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and
