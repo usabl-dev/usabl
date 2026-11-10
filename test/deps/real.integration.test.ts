@@ -731,11 +731,16 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       return scan.drafts.map((draft) => [draft.rule, draft.confidence]);
     }
 
-    it('fails a flow whose expected announcement is written only under an aria-hidden child', async () => {
+    // Each runs a whole scan: the readiness wait, the walk, and a flow that now waits at least two
+    // seconds for the page to settle after its click. That is more than the default five seconds on
+    // a loaded machine, so each gets the budget the other flow tests in Chromium use.
+    const FLOW_SCAN_BUDGET_MS = 60_000;
+
+    it('fails a flow whose expected announcement is written only under an aria-hidden child', { timeout: FLOW_SCAN_BUDGET_MS }, async () => {
       expect(await flowDrafts('<span aria-hidden="true">Saved</span>')).toEqual([['intake:save-announces', 'fail']]);
     });
 
-    it('passes a flow whose expected announcement is PatternFly screen-reader text', async () => {
+    it('passes a flow whose expected announcement is PatternFly screen-reader text', { timeout: FLOW_SCAN_BUDGET_MS }, async () => {
       expect(await flowDrafts('<span class="pf-v6-screen-reader">Saved</span>')).toEqual([]);
     });
   });
