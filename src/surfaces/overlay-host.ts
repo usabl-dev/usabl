@@ -371,8 +371,12 @@ export function projectOverlay(
         elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
         identityBasis: finding.identityBasis,
         whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
-        why: finding.why,
-        fix: finding.fix,
+        // Framed by carrier, not by author, as the pull request comment frames them. why and fix are
+        // provider prose for a curated rule, but for every other axe rule they fall back to axe's
+        // failure summary, which quotes attribute values from the page. The client unwraps the frame
+        // before it shows either one.
+        why: frameUntrusted(finding.why),
+        fix: frameUntrusted(finding.fix),
         appSource: finding.appSource ?? null,
       };
     }),

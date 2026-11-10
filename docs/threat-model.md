@@ -514,6 +514,16 @@ its own, so a rule is whatever that runner wrote, and a pull request author choo
 any file they add under a guarded directory, so a guarded path is text that author wrote.
 Deciding by author does not survive either case, so these surfaces now decide by carrier too.
 
+The dev-server overlay's result endpoint frames each finding's text by carrier as well: the
+element path, name, role, and key, what a user experiences, why it matters, and the fix. Why and
+the fix used to be passed through unframed because a provider writes them, but for every axe rule
+without a curated note they are axe's failure summary, which quotes the page. The overlay client
+unwraps the frame before it shows a value and writes every value with `textContent`, so a person
+reads the plain text. Fields the client matches on are not framed, because a frame would break the
+match: the rule, layer, screen id, severity, and status, and each coverage gap's ref, which the
+overlay compares with the screen url exactly. A gap's reason and the gate's summary are not framed
+on this endpoint yet.
+
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
