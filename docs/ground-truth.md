@@ -279,7 +279,7 @@ src/
   coverage/         import-graph.ts planner.ts route-manifest.ts docs-manifest.ts docs-planner.ts asciidoc-include-graph.ts
   gate/             index.ts
   trust/            guard.ts
-  intake/           schema.ts normalize.ts load.ts config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
+  intake/           schema.ts normalize.ts load.ts config.ts load-config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
   docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
   output/           conformance.ts summary.ts
   doctor/           index.ts
@@ -291,6 +291,7 @@ src/
   session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
+                    ledger.ts ledger-git.ts ledger-report.ts   (usabl debt ledger; measurement only, section 9)
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
     sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
@@ -2753,6 +2754,123 @@ the first record shows the first record's date. An identity hash of a short name
 someone who can read the branch, but such a reader can already read the floor, which holds the key
 itself.
 
+### The ledger: how long accessibility barriers stay open
+
+`usabl debt ledger` lists every identity that was ever in the evidence floor on the trusted branch:
+when it was first seen, whether it is open, fixed, left the floor, or reopened, and how many days
+it was or has been open, with the way each number can be wrong. It is measurement only. It scans
+nothing, mints no verdict and no receipt, never blocks, and writes a file only when `--out` names
+one. No verdict path loads it: the gate, the run, the stop hook, the CI enforce step, and
+`checkPage` are checked by a test that walks their imports and fails if any of them, or the
+overlay host, reaches `src/cli.ts`. The CLI, which CI runs for `check` and `enforce`, loads the
+ledger only by a dynamic import inside the `debt ledger` command, and the same test fails if a
+static import comes back. The code is `src/history/ledger.ts` (the pure builder), `ledger-git.ts`
+(the two readers), and `ledger-report.ts` (the command).
+
+**Sources, in this order of trust.** First, the floor file's own history on the trusted branch:
+every commit on the first-parent line of `--trusted-ref` (default `HEAD`) that changed
+`.usabl-evidence.json`, read as committed objects. A merged branch counts at its merge commit. The
+commit where an identity enters the floor opens a span, and the commit where it leaves ends it.
+Second, the debt history at `origin/usabl/history`: records that confirm a floored accessibility
+barrier fixed, and records that show it seen again. History records are replayed in the order of
+the commits they scanned on the first-parent line, never in the order they were appended. Receipts
+are not a source, because a receipt holds counts and no identities. Nothing is read from the
+working tree. On `HEAD` of a feature branch, the floor history includes that branch's own floor
+commits.
+
+**One row per identity.** The identity is the one the floor keys on: screen, rule, and element
+key, row scope included. A row holds the screen, the rule, the element key as the floor stores it,
+first seen (commit and committer date), state, last change (commit and date), its open spans, days
+open, the two bounds below with their reasons, and the last full scan of main that saw it.
+
+- **Fixed.** Only the history shows a fix: two consecutive full scans of main, written against the
+  same floor, that both see no accessibility barrier at the identity. The fix is dated at the
+  second scan's commit. A scan with a gap on the screen is skipped and neither confirms nor breaks
+  the pair. A scan that still sees some accessibility barriers there keeps the row open. A record
+  the ledger cannot place in time blocks a fix for every identity it observes, because it may sit
+  between the two scans.
+- **Left the floor.** An identity that leaves the floor with no such pair of scans before it. A
+  fix, a floor reset, a re-baseline, a prune, a renamed screen, and a changed accessible name all
+  look the same here, and usabl cannot tell them apart without the history. Both bounds are set.
+- **Reopened.** An identity that closed, by a fix or by leaving the floor, and came back: a later
+  scan sees it after a fix, or a later floor holds it again. It is one row with every span listed
+  and days open as the sum of the spans. The text follows how the last span ended: "reopened, open
+  now", "reopened, fixed again" (a fix the history showed), "reopened, left the floor again", or
+  "reopened, open until a gap".
+- **Intermittent.** Two scans of the same source tree that see different counts show the
+  accessibility barrier comes and goes with the page content. The ledger then withdraws every fix
+  the history confirmed on that row, whether or not the row reopened since, and labels the row
+  intermittent. A withdrawn span ends where the floor alone says it ends. Debt tracking never
+  releases such an identity again either.
+
+**Which way a number can be wrong.** Every row carries two facts, each with its reasons.
+
+- `mayBeMore`: the true number could be larger. The row was already in the floor the first time
+  its screen was floored (the first baseline, a screen floored for the first time, or a partial
+  floor that was widened), it was in the oldest floor a shallow clone holds, it entered or ended at
+  a gap in the floor history, it left the floor, or commit dates go backwards along it.
+- `mayBeLess`: the true number could be smaller. There is no usable history for it (no history, an
+  unreadable one, or a history hash it shares with another identity), the history is on but no
+  full scan of main saw it during one of its spans, a record that touches it could not be placed
+  in time, it left the floor, or commit dates go backwards along it.
+
+The table prints "N days" when neither holds, "at least N" for `mayBeMore` only, "at most N" for
+`mayBeLess` only, and "not known (N by the floor)" for both. N is always the sum of the spans. The
+floor is accepted debt, not proof that an accessibility barrier is still on the page, so a span no
+scan saw is never called a lower bound. A row still open also shows the date of the last scan that
+saw it, when one did.
+
+**First seen is the earliest evidence.** It is never presented as the day an accessibility
+barrier was introduced. One in the first floor ever committed shows that commit's date, and the row
+says "seen at the first baseline; may be older".
+
+**Dates and days.** Committer dates in UTC. A committer date marks when a commit was made, not when
+it reached the branch. A span counts whole days, the floor of elapsed hours over 24, and days open
+is the sum of the spans, so a reopened row can lose up to a day per span. An open span ends at the
+committer date of the commit the trusted ref names, and the output names that commit and its
+date. The command reads no clock, so the same repository state gives byte-identical output, and an
+old ref counts to its own date. When a later commit on the line is dated before an earlier one, the
+row says that commit dates are out of order, a span that would be negative counts as 0 days, and
+both bounds are set. Nothing is clamped silently.
+
+**When history is incomplete.** The ledger names the rows a gap touches and why, never fills it
+with a guess, and never drops a row.
+
+- A shallow clone (`git rev-parse --is-shallow-repository`): rows in the oldest floor the clone
+  holds may be older.
+- A floor rewritten to a new version: an identity that leaves the floor there is not called fixed
+  or left. Its row is "open until a gap", counted to that commit, and it may have stayed open after.
+  An identity that enters there may be older under an earlier key.
+- A floor that could not be read at a commit, or a floor file that was deleted: the same rules,
+  counted from that commit.
+- A missing or unreadable history branch: every row says a fix main confirmed would not show, and
+  so may be smaller. An empty ledger says the history is missing too.
+- A history record whose commit the ledger cannot place on the first-parent line: it is not used,
+  it blocks fixes for what it observes, and the rows it touches say so.
+
+**Limits.** Each floor version is cut to its version, its scope, and its identities as it is
+read, and an identity held by many floors is one shared object. When the floor history holds more
+than 2,000,000 floor entries across its floor commits, or one git read prints more than 256 MiB,
+the command says the limit, says it did not run, and says to name a narrower ref with
+`--trusted-ref`, or to run it in a full clone if the clone is shallow. The git readers pin their
+output against the person's git config: `--no-show-signature`, `--no-color`, `--no-decorate`,
+`log.follow=false`, replace refs off, and a format of commit ids and epoch seconds only.
+
+**Output.** The terminal view is a table sorted by days open, longest first, then a totals line
+with the number of open, fixed, left the floor, and reopened rows. The median and the longest of
+each are taken over the rows where neither bound holds, the line says how many those are, and with
+none there is no median. `--json` prints the full ledger and `--out <file>` writes it to a file.
+Every string printed, in the table and in the JSON, goes through the published scrub first,
+because an element key, a screen id, or a rule can carry page-derived text. The ledger makes no
+claim about how fast a team fixes things and no claim about compliance. No result on a real
+repository is claimed here: the hand count in `test/history/ledger-git.test.ts` is a scripted
+history.
+
+**Exit codes.** 0 when it ran. 2 when no commit on the trusted ref ever held a floor. 4 when the
+folder is not in a git repository, the ref does not resolve, git cannot read the history, the
+history is larger than the limits, or the ledger's own check finds spans that overlap or count more
+days than have passed since first seen (a bug, so it prints no numbers).
+
 ### Failure taxonomy
 
 - No UI-touching files: nothing to check (`verdict: null`, exit 0). Not `not_covered`.
@@ -2957,7 +3075,8 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
 `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
-`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, and `help`. `check` is the default
+`session`, `debt` (with its `ledger` subcommand), `history`, `serve-build`, `extract-build`,
+`verify`, and `help`. `check` is the default
 when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
@@ -3020,6 +3139,15 @@ lines.
   and how many barriers are intermittent. It reads the floor (at `--trusted-ref` when given) and
   the history branch, scans nothing, and decides nothing. With tracking off it lists the floor
   and says why the dates are missing and how to turn tracking on. `--json` prints the same data.
+  `--out` is refused there, because plain `usabl debt` writes no file.
+- Debt ledger: `usabl debt ledger [--json] [--out <file>] [--trusted-ref <ref>]` is the ledger of
+  how long accessibility barriers stay open (section 9, The ledger). It reads the floor history of
+  the trusted ref (default `HEAD`) and the history branch as committed objects, prints a table
+  sorted by days open with a totals line, and writes the full ledger as JSON only when `--out`
+  names a file. Each row is open, fixed (two clean scans), left the floor, or reopened, and its days
+  say which way they can be wrong. Open rows count to the commit the ref names; it reads no clock.
+  It decides nothing. Exit 0 when it ran, 2 when no floor was ever committed, 4 when git cannot
+  run there or the history is larger than its limits.
 - History: `usabl history record --out <file>` scans every screen of main and writes one history
   record to the file; `usabl history append <file>` adds it to the local `usabl/history` branch
   on top of `origin/usabl/history` and never pushes. Both run only in the default-branch
