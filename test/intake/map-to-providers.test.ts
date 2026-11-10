@@ -847,6 +847,23 @@ describe('mapRequirementsToProviders', () => {
       await expect(runFlowStep(makeFakePage(), { do: 'constructor' })).rejects.toThrow('cannot run step kind constructor');
     });
 
+    it('separates steps with one semicolon and uses none inside a step', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'hover' }, { do: 'click', key: 'Enter' }, { do: 'tab', times: 2 }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+
+      const error = await provider!.run(await makeContext()).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+      const message = error instanceof Error ? error.message : '';
+      const parts = message.split('; ');
+      expect(parts).toHaveLength(3);
+      expect(parts[0]).toMatch(/step 0 \(hover\): the flow does not run this kind of step, so write do as /u);
+      expect(parts[1]).toMatch(/^step 1 \(click\): /u);
+      expect(parts[2]).toMatch(/^step 2 \(tab\): /u);
+    });
+
     it('names every step it cannot run, in step order', async () => {
       const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press' }, { do: 'tab' }, { do: 'click' }] });
       const provider = mapRequirementsToProviders(bundle)[0];

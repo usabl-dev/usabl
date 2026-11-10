@@ -233,8 +233,8 @@ const GAP_TEXT: Record<SilentChangeGap, { why: string; fix: string }> = {
     fix: MANUAL_CHECK,
   },
   'step not run': {
-    why: 'the flow does not run this step, so nothing was judged for it',
-    fix: 'Write the step as one the flow runs: tab, activate, press with a key, or click with a selector.',
+    why: 'the flow cannot run this step as written, so it ran none of its steps and nothing was judged',
+    fix: 'Write the step as one the flow runs, with only the fields its kind uses: tab, activate, press with a key, or click with a selector.',
   },
   'step threw': {
     why: 'the step failed, so it and the steps after it were not judged',

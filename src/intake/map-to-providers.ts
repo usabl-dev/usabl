@@ -285,7 +285,7 @@ function withArticle(kind: string): string {
 function problemsForFlow(step: Step): string[] {
   const fields = FLOW_STEP_FIELDS.get(step.do);
   if (fields === undefined) {
-    return ['the flow does not run this kind of step; write do as tab, activate, press with a key, or click with a selector'];
+    return ['the flow does not run this kind of step, so write do as tab, activate, press with a key, or click with a selector'];
   }
   const problems: string[] = [];
   if (step.do === 'click' && !hasText(step.selector)) {

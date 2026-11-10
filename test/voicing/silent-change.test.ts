@@ -337,6 +337,17 @@ describe('the silent change rule in a flow requirement', () => {
       expect(calls).not.toContain('press');
     });
 
+    it('step not run: the draft says the flow ran none of its steps', async () => {
+      const { page } = worldPage({});
+      const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'tab' }, { do: 'activate', selector: '#save' }])))[0];
+      if (provider === undefined) throw new Error('no provider');
+      const result = await runProviders([provider], { page, screen: SCREEN, config: testConfig() }, ['live']);
+      const drafts = silent(result.drafts);
+      expect(reasons(drafts)).toEqual(['step not run']);
+      expect(drafts[0]?.why).toBe('usabl could not judge the step: the flow cannot run this step as written, so it ran none of its steps and nothing was judged.');
+      expect(drafts[0]?.fix).toContain('with only the fields its kind uses');
+    });
+
     it('step threw: the step and those after it are unjudged, and the flow still fails with the same gap', async () => {
       const { page } = worldPage({
         '#save': addSavedText,
