@@ -23,7 +23,7 @@ import { makeGitReader } from '../deps/git.js';
 import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
-import { parseConfigText } from '../cli.js';
+import { parseConfigText } from '../intake/load-config.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
 import { frameUntrustedBlock } from './scrub.js';

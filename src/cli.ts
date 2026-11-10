@@ -30,7 +30,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { configUrlWarningsByUrl, parseUsablConfig } from './intake/config.js';
+import { loadConfig, parseConfigText } from './intake/load-config.js';
 import {
   ciRefusal,
   installRefusal,
@@ -74,54 +74,9 @@ import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
 import { makeBrief, normalizeTaskFiles } from './brief/index.js';
 import { formatBrief } from './output/brief.js';
 
-// The configured url warnings this process has already printed. It holds config urls, which may
-// carry a query, so it is never printed and never leaves the process.
-const warnedConfigUrls = new Set<string>();
-
-export async function loadConfig(
-  path = 'usabl.config.json',
-  warn: (line: string) => void = (line) => {
-    process.stderr.write(`${line}\n`);
-  },
-): Promise<UsablConfig> {
-  // Targets come from config so the same engine can run in local, CI, and preview environments.
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') {
-      // The first error a new user meets. Name the command that writes the file.
-      throw new Error(`${path} not found. Run "usabl init" to draft it, or pass --config <path>.`);
-    }
-    throw error;
-  }
-  return parseConfigText(raw, warn);
-}
-
-/**
- * Parse config text that was already read, with the same checks and warnings as loadConfig. The
- * Stop hook reads the bytes itself, compares them with the last commit, and parses only the bytes
- * it compared, so the file is never read twice.
- */
-export function parseConfigText(
-  raw: string,
-  warn: (line: string) => void = (line) => {
-    process.stderr.write(`${line}\n`);
-  },
-): UsablConfig {
-  const config = parseUsablConfig(raw);
-  // A configured URL with a query or a fragment loads, and the operator is told where it is
-  // printed. Once per process for each field and url: the dev-server plugin loads the config on
-  // every save, and the same warning on every save buries the output it sits in.
-  for (const { url, warning } of configUrlWarningsByUrl(config)) {
-    const key = `${warning}\u0000${url}`;
-    if (!warnedConfigUrls.has(key)) {
-      warnedConfigUrls.add(key);
-      warn(warning);
-    }
-  }
-  return config;
-}
+// The config loader lives in intake so the stop hook and the overlay host can read config without
+// loading every command. Re-exported here for callers that import it from the CLI.
+export { loadConfig, parseConfigText };
 
 async function readStdin(): Promise<string> {
   const chunks: string[] = [];
@@ -672,8 +627,34 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
+  if (opts.command === 'debt' && opts.debtSubcommand === 'ledger') {
+    // Measurement only: how long accessibility barriers stay open, read from committed objects.
+    // It scans nothing, decides no verdict, and writes a file only when --out names one.
+    const ref = opts.trustedRef ?? 'HEAD';
+    // Loaded here and nowhere else in the CLI, by a dynamic import, so the process that runs check
+    // or enforce in CI never loads the ledger.
+    const [{ makeLedgerGit }, { runLedger }] = await Promise.all([import('./history/ledger-git.js'), import('./history/ledger-report.js')]);
+    // No clock: open rows are counted to the commit the ref names, so the same repository state
+    // always prints the same bytes.
+    const outcome = await runLedger(makeLedgerGit(), makeHistoryGit(), ref);
+    if (outcome.exitCode !== 0) {
+      process.stderr.write(`${opts.json ? outcome.json : outcome.text}\n`);
+      return outcome.exitCode;
+    }
+    if (opts.outPath !== null) {
+      await writeFile(opts.outPath, `${outcome.json}\n`, 'utf8');
+      process.stderr.write(`Wrote the full ledger to ${scrubString(opts.outPath)}.\n`);
+    }
+    process.stdout.write(`${opts.json ? outcome.json : outcome.text}\n`);
+    return 0;
+  }
+
   if (opts.command === 'debt') {
     // A projection of the floor and the history. It scans nothing and never decides a verdict.
+    if (opts.outPath !== null) {
+      process.stderr.write('usabl: --out is for usabl debt ledger. usabl debt writes no file; use --json to print its data.\n');
+      return 2;
+    }
     const git = makeGitReader();
     const readFloor = async (): Promise<string | null> => {
       if (opts.trustedRef !== null) {
