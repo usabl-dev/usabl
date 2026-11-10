@@ -202,6 +202,29 @@
 
 ### Fixed
 
+- Setup and discovery read truer for a new team. git runs with `LC_ALL=C`, so a missing
+  policy file at a ref reads as absent under any locale, where a translated git error crashed the
+  run; the missing-ref message builds its fetch example from the ref instead of assuming `main`.
+  The import graph follows `./Child.js` to `Child.ts` (and `.jsx`, `.mjs`, `.cjs` to their
+  TypeScript names) at every depth. Path aliases come from the app folder of the router file at
+  check time, as `init` reads them, and a tsconfig `extends` chain and single-file `paths`
+  entries are read. Two router paths that give one screen id, such as `/a-b` and `/a/b`, are set
+  aside as gaps instead of stopping the run, and `init` refuses that draft. `init` drafts every
+  Vite config name as wide blast, names workspace packages from the root `workspaces` list, names
+  the apps `--app` leaves out, and says when it could not read the exported Vite config at all.
+- Terminal and report output. The discovery detail of an unplaced file lists the import that
+  names the file first and labels each group, so an unrelated file no longer reads as if it held
+  another file's imports, and the reason no longer calls a baseline file changed. The baseline
+  list of unplaced files prints 20 and the count of the rest, and every baseline line goes
+  through the surface scrubber. A grouped gradient contrast entry keeps each element's source
+  line. A missing `--config` file is told to check that path. The connection-refused reason names
+  the url once.
+- `usabl docs` drops the query and fragment from URLs in published artifacts, page text
+  included, as the CLI JSON and the pull request comment do. A page-drafted alt-text manifest
+  carries its origin, so an empty one says the page showed no images, and its state line no
+  longer calls the page's text expectations. An image button's browser default name is not
+  drafted as page text, and shortened text is never cut inside a character.
+
 - The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
   the repository root first, so a stop in a subfolder reads the root config, the root receipt,
   and the root bypass file. A config that differs from HEAD, is missing from the working tree,
@@ -963,6 +986,14 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- Exit code: a `usabl.config.json` with an empty `uiFileGlobs` list now stops every command that
+  loads it with a config error, exit 4, where `usabl check` used to exit 0 as nothing to check.
+  With no UI globs, no change was ever a UI change, so every run read as idle without looking at
+  anything. The message names the fix. A documentation-only repository still loads: when
+  `usabl.docs.json` exists in the folder usabl runs in, an empty list is accepted. Scripts that
+  read exit 0 from such a config now see 4. The Stop hook parses the config itself and does not
+  apply this refusal.
 
 - Flow requirements now read each step at its own time. A flow waits for the page to settle
   after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and
