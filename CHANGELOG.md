@@ -214,11 +214,12 @@
   `.git` in Claude Code reads the project root. Gate effect: such a stop in Claude Code is checked,
   and can block, where it allowed with a false note.
 
-- In Claude Code, a Stop hook allow that carries a notice now also writes the notice as a
-  `systemMessage` on stdout, which Claude Code shows to the person. Claude Code does not show the
-  stderr of a Stop hook that exits 0, so every "NOT verified" allow, the pin notices, and the
-  receipt notice were silent there. A verified allow with no notice, a block, and the Cursor answer
-  are unchanged. Gate effect: none; the stop goes through as before, and the person now sees why.
+- In Claude Code, a Stop hook allow now also writes its text as a `systemMessage` on stdout,
+  which Claude Code shows to the person. It is shown for every allow except a verified stop and
+  an idle stop that carry no notice. Claude Code does not show the stderr of a Stop hook that
+  exits 0, so every "NOT verified" allow, the pin notices, and the receipt notice were silent
+  there. A block and the Cursor answer are unchanged. Gate effect: none; the stop goes through as
+  before, and the person now sees why.
 
 - Stop hook input that is not JSON now prints a line that says the stop went through and nothing
   was checked, and says to check the hook command in `.claude/settings.json` or

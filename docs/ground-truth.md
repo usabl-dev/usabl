@@ -2929,12 +2929,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
   does not show the stderr of a Stop hook that exits 0, and sends its plain stdout to the debug
-  log. So in the Claude protocol, an allow that carries a notice also writes one JSON object to
-  stdout, `{"systemMessage": "..."}`, with the same text stderr gets, and Claude Code shows that
-  field to the person. That covers every "NOT verified" allow, the "not configured" and "outside
-  a work tree" allows, a run that failed or had nothing to check, the pin notices, the "NOT
-  saved" receipt notice, and the invalid input message. Carried values in it are scrubbed and
-  framed as on stderr. A VERIFIED allow with no notice writes nothing to stdout. A block is sent
+  log. So in the Claude protocol, an allow also writes one JSON object to stdout,
+  `{"systemMessage": "..."}`, with the same text stderr gets, and Claude Code shows that field to
+  the person. It is shown for every allow except a verified stop and an idle stop that carry no
+  notice. So it covers every "NOT verified" allow, the "not configured" and "outside a work tree"
+  allows, a run that failed, bypass, every continuation, the pin notices, the "NOT saved" receipt
+  notice, and the invalid input message, and a verified or idle stop that carries a notice gets
+  the whole text. An idle stop means no UI file changed; it is not a failure to check, and a
+  message on every such stop would be noise. Carried values in it are scrubbed and framed as on
+  stderr. A verified or idle stop with no notice writes nothing to stdout. A block is sent
   as before, as one decision object, and its notices follow on stderr. Cursor's stop hook
   answer has no field for the person: usabl answers `{}` and writes the notice to stderr, which
   Cursor does not show in the chat. It is in Cursor's hook output log (the Hooks output
