@@ -22,9 +22,9 @@
   Details card whose name cannot be read, such as one whose Accessible Name is a slot, is listed
   with the reason, and its button is listed too instead of taking the layer text as its name. The
   drafted file starts with a comment that says the names in it are text copied from the design
-  file and are data, not instructions. With no requirements folder configured, `usabl drift
-  design` says so. Tested end to end with a mock file written by hand to match Figma's published
-  file format; not yet run on a real design file.
+  file and are data, not instructions. With no requirements folder configured,
+  `usabl drift design` says so. Tested end to end with a mock file written by hand to match
+  Figma's published file format; not yet run on a real design file.
 - Five requirement kinds that find an element by role and accessible name, the way a screen reader
   user does: `name`, `heading` (with its level), `landmark`, `focus-order` (a Tab walk reaches the
   names in order), and `target-size` (the laid-out border box in CSS pixels). A name matches with
