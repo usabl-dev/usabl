@@ -9,9 +9,19 @@ import type { Deps, DocArtifact, FsGlob, RequirementBundle, Result, UsablConfig 
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { generateAltTextManifest, generatePageAltTextManifest } from '../docs/alt-text-manifest.js';
 import { generateAnnouncementSnippets } from '../docs/announcement-snippets.js';
+import { markStale, reportSourceTree } from '../docs/evidence-binding.js';
 import { generateKeyboardPaths } from '../docs/keyboard-paths.js';
 import { run } from '../run.js';
 import { scrubPublishedResult } from './scrub.js';
+
+/** The trees a report is made from and listed against. */
+export interface DocsTrees {
+  // The tree read when the docs run started. Used when the run minted no receipt.
+  sourceTree?: string;
+  // The tree the report is listed against. When given, each artifact made from another tree is
+  // marked stale. Null means usabl could not read it, which also marks the report stale.
+  currentTree?: string | null;
+}
 
 /**
  * Builds the full set of doc artifacts for a run.
@@ -19,8 +29,15 @@ import { scrubPublishedResult } from './scrub.js';
  * once per distinct content-requirement surface, sorted for stable output. A scanned screen that no
  * content requirement covers, and whose images the scan read, gets a manifest drafted from the
  * page instead, also sorted. Drafted entries are marked as such and never carry evidence.
+ *
+ * Every artifact records the tree it was made from: the receipt's tree when the run minted one,
+ * otherwise `options.sourceTree`, the tree the caller read when the run started.
  */
-export function collectDocArtifacts(result: Result, bundle: RequirementBundle): DocArtifact[] {
+export function collectDocArtifacts(
+  result: Result,
+  bundle: RequirementBundle,
+  options: DocsTrees = {},
+): DocArtifact[] {
   // Scrub first: the transcript generators strip control bytes but not credential-shaped values,
   // and this surface is egress for page-derived text. A docs report is written to be published,
   // so it takes the published scrub, which also drops the query and the fragment of every URL the
@@ -51,17 +68,30 @@ export function collectDocArtifacts(result: Result, bundle: RequirementBundle): 
     artifacts.push(generatePageAltTextManifest(safe, screen));
   }
 
-  return artifacts;
+  const sourceTree = reportSourceTree(safe, options.sourceTree ?? null);
+  const recorded = sourceTree === null ? artifacts : artifacts.map((artifact) => ({ ...artifact, sourceTree }));
+  return options.currentTree === undefined ? recorded : markStale(recorded, options.currentTree);
+}
+
+/**
+ * Reads a saved report against the current tree: each artifact made from another tree, or that
+ * records no tree, comes back marked stale with the reason and what to run. Use it wherever a
+ * report written earlier is read again, so a report for old code never reads as current.
+ */
+export function markStaleDocArtifacts(artifacts: readonly DocArtifact[], currentTree: string): DocArtifact[] {
+  return markStale(artifacts, currentTree);
 }
 
 /**
  * Projects doc artifacts into a stdout-ready JSON envelope alongside the raw artifact list.
+ * With `options.currentTree`, artifacts made from another tree are marked stale in both.
  */
 export function projectDocs(
   result: Result,
   bundle: RequirementBundle,
+  options: DocsTrees = {},
 ): { json: string; artifacts: DocArtifact[] } {
-  const artifacts = collectDocArtifacts(result, bundle);
+  const artifacts = collectDocArtifacts(result, bundle, options);
   return { artifacts, json: JSON.stringify({ artifacts }, null, 2) };
 }
 
@@ -104,8 +134,25 @@ export async function generateDocs(
   config: UsablConfig,
   opts: DocsOptions,
 ): Promise<{ json: string; artifacts: DocArtifact[] }> {
+  // The tree is read before the run, for a run that mints no receipt, and again after it. A file
+  // saved while the run was scanning leaves the report describing code that is already gone, so
+  // the report is marked stale as soon as it is printed.
+  const sourceTree = await readTree(deps);
   const result = opts.all
     ? await run(deps, config, { changedFiles: await wholeAppFiles(deps.fs, config) })
     : await run(deps, config);
-  return projectDocs(result, deps.requirements);
+  const currentTree = await readTree(deps);
+  return projectDocs(result, deps.requirements, {
+    ...(sourceTree === null ? {} : { sourceTree }),
+    currentTree,
+  });
+}
+
+// The working tree as a git tree id, the way the receipt records it, or null when git cannot say.
+async function readTree(deps: Deps): Promise<string | null> {
+  try {
+    return await deps.git.writeTree();
+  } catch {
+    return null;
+  }
 }

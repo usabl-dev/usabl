@@ -3818,8 +3818,18 @@ AI can propose alt text or doc copy. usabl publishes only entries with
 
 ### Bound to evidence
 
-Each DocArtifact is bound to the code state via `boundToReceipt`. If the code changes
-and the receipt is invalidated, stale docs are marked as needing regeneration.
+Each DocArtifact is bound to the code state via `boundToReceipt`, and records the git tree
+it was made from in `sourceTree`: the receipt's tree when the run minted one, otherwise the
+tree `usabl docs` read before the run. A report is marked stale wherever it is listed or read
+against a tree other than its own, and also when it records no tree or the current tree cannot
+be read: the artifact gets `stale: true` and a `staleReason` that names both trees and says to
+run `usabl docs` again. `usabl docs` reads the tree again after the run, so a file saved while
+the scan ran marks the report stale in its JSON and on its `--html` page. On the page a stale
+card reads "Out of date", never "Verified", and the overview counts the stale cards. A report
+saved earlier and read again is checked with `markStaleDocArtifacts(artifacts, currentTree)`
+from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence-binding.ts`.
+No usabl command reads a saved report back; a static HTML page saved to disk cannot mark
+itself, so regenerate a page before publishing it.
 
 ### How to run it
 

@@ -121,10 +121,10 @@ blockers in an issue.
 
 ---
 
-## Docs output honesty (three states)
+## Docs output honesty (four states)
 
 The `usabl docs --html` page renders artifacts; it never mints a verdict. Each artifact
-reads as one of three states, and the states are separated in words, not by color:
+reads as one of four states, and the states are separated in words, not by color:
 
 - **Verified.** The artifact is bound to a minted receipt and its entries carry per-entry
   evidence. Only this state reads as proof.
@@ -133,6 +133,10 @@ reads as one of three states, and the states are separated in words, not by colo
   is the current example: it binds to a receipt but mints no per-entry evidence.
 - **Not verified (observation).** The artifact is not bound to any receipt, so it is an
   observation of what the interface announced, with no receipt claim.
+- **Out of date.** The artifact was made from another git tree than the current one, or it
+  records no tree, so it is not proof for the code as it is now, whatever receipt it names.
+  The card names both trees and says to run `usabl docs` again. This state outranks the
+  other three.
 
 An alt-text manifest drafted from the page, because no content requirement covers the
 surface, also carries a "Drafted from the page" note under its state. The note says the
