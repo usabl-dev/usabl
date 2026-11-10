@@ -99,9 +99,12 @@ new UsablWebpackPlugin({ cwd: __dirname }),
 The plugin does nothing unless webpack runs in development mode.
 
 `install --ci` writes the workflows with the engine pinned to the commit your usabl copy
-was built from, so a clean build of a release tag needs no hand edit. If the copy was built
-from a tree with changes, or outside git, the pin stays a placeholder and the command names
-the line to edit. The workflows need no secret, and they take the app's host and port from
+was built from, so a clean build of a release tag needs no hand edit. The build records
+that commit in `dist/build-info.json`. A dirty tree is one with an uncommitted change or
+any untracked file that git does not ignore. If the copy was built from a dirty tree, or
+outside git, the record has `clean: false` or no commit, the pin stays a placeholder, and
+the command names the line to edit. A publish from such a build stops: `prepublishOnly`
+fails unless the record holds a full commit SHA and `clean: true`. The workflows need no secret, and they take the app's host and port from
 `appBaseUrl` in `usabl.config.json`. The command ends with only the steps still needed. See
 the [CI gate guide](docs/guides/ci-gate.md).
 

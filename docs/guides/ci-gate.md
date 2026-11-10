@@ -27,7 +27,8 @@ branch or a tag.
 When the record has no such commit, the pin stays the placeholder
 `PIN_TO_A_TRUSTED_USABL_COMMIT`. That happens when usabl was built outside git, or from a
 tree with uncommitted or untracked changes. The command says which, and names the line to
-edit in each file. Until the line holds a commit, the engine checkout fails and the gate
+edit in each file. A release cannot ship that way: `prepublishOnly` fails unless the record
+holds a full commit SHA and `clean: true`. Until the line holds a commit, the engine checkout fails and the gate
 blocks. The same is true of a commit that is not on `usabl-dev/usabl`: the gate fails
 closed, never open.
 
