@@ -221,11 +221,6 @@
   date" and never "Verified". `markStaleDocArtifacts` from `usabl/docs` checks a saved report
   against the current tree.
 
-- `usabl enforce accessibility` no longer passes a Result with no accessibility verdict and
-  exit 0 unless the Result also says nothing was to check. Any other such Result exits 4, as the
-  pull request comment and the Stop hook already read it. Gate effect: the CI judge blocks such a
-  Result.
-
 - The Vite plugin adds the overlay loader only in `vite serve`, so a production build no longer
   carries a request for a module only the dev server answers.
 
