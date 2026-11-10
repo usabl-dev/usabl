@@ -359,7 +359,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     }
   }
 
-  function observedRows(record: HistoryRecord, act: (row: RowState, count: number) => void): void {
+  function observedRows(record: HistoryRecord, act: (row: RowState, count: number) => void, inFloorOnly = true): void {
     for (const screen of record.screens) {
       if (screen.coverage !== 'full') continue;
       for (const identity of screen.identities) {
@@ -378,7 +378,7 @@ export function buildLedger(input: LedgerInput): Ledger {
           continue;
         }
         const row = matches[0];
-        if (row === undefined || !row.inFloor) continue;
+        if (row === undefined || (inFloorOnly && !row.inFloor)) continue;
         if (identity.rule !== row.entry.rule || identity.basis !== row.entry.identityBasis) continue;
         act(row, identity.count);
       }
@@ -395,18 +395,14 @@ export function buildLedger(input: LedgerInput): Ledger {
     }
   }
 
+  const unplaced: HistoryRecord[] = [];
   if (input.history.kind === 'on') {
     for (const placed of input.history.records) {
       if (placed.at === null) {
-        const where = input.shallow
-          ? 'which this shallow clone does not hold'
-          : `which is not on the first-parent line of ${input.trustedRef}`;
-        const detail =
-          `A history record names commit ${short(placed.record.commit)}, ${where}, so the ledger could not place it in time. ` +
-          'It is not used, so a fix or a return it shows is not counted.';
+        // It cannot be placed in time, so it may sit between two absences. It breaks a pending pair.
+        unplaced.push(placed.record);
         observedRows(placed.record, (row) => {
           row.pendingZero = null;
-          addGap(row, { cause: 'record-off-line', detail }, false);
         });
         continue;
       }
@@ -416,6 +412,28 @@ export function buildLedger(input: LedgerInput): Ledger {
     }
   }
   applyUpTo(Infinity);
+  // Named after the whole floor history is known, so a row it touches is named even when the
+  // record came before that row's first floor in append order.
+  const unplacedByRow = new Map<RowState, string[]>();
+  for (const record of unplaced) {
+    observedRows(
+      record,
+      (row) => {
+        const commits = unplacedByRow.get(row) ?? [];
+        if (!commits.includes(short(record.commit))) commits.push(short(record.commit));
+        unplacedByRow.set(row, commits);
+      },
+      false,
+    );
+  }
+  for (const [row, commits] of unplacedByRow) {
+    const where = input.shallow ? 'this shallow clone does not hold' : `are not on the first-parent line of ${input.trustedRef}`;
+    const detail =
+      `${commits.length} history record${commits.length === 1 ? '' : 's'} name${commits.length === 1 ? 's' : ''} ` +
+      `commits that ${where} (${commits.join(', ')}), so the ledger could not place them in time. ` +
+      'They are not used, so a fix or a return they show is not counted.';
+    addGap(row, { cause: 'record-off-line', detail }, false);
+  }
   if (pendingBreak !== null) {
     // The floor at the head of the trusted branch could not be read.
     const cause: FloorBreak = pendingBreak;
