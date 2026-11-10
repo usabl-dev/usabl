@@ -546,7 +546,7 @@ function differential(input: GateInput): Differential {
   // and is disclosed in floorUnconfirmed. Both tests are presence tests on sets, so the result does
   // not depend on order.
   for (const e of floorByKey.values()) {
-    // A count of 0 accepts no barrier, so its absence pays nothing down and is never fixed.
+    // A count of 0 accepts no accessibility barrier, so its absence pays nothing down and is never fixed.
     if (e.count === 0) continue;
     if (!floorEntryAbsent(e, countByGroup)) continue;
     if (!input.cleanlyScannedScreens.has(e.screenId)) continue;

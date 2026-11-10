@@ -157,8 +157,8 @@ describe('fixed is only claimed for a screen that was measured this run', () => 
 });
 
 describe('a floor entry with count 0', () => {
-  // A count of 0 accepts no barrier, so there is nothing at that identity to pay down. Reading its
-  // absence as "fixed" claimed a paydown that never happened.
+  // A count of 0 accepts no accessibility barrier, so there is nothing at that identity to pay
+  // down. Reading its absence as "fixed" claimed a paydown that never happened.
   const zeroFloor = (): EvidenceFloor => {
     const floor = floorWith('clusters', 'zero-rule');
     return { ...floor, entries: floor.entries.map((entry) => ({ ...entry, count: 0 })) };
@@ -172,7 +172,7 @@ describe('a floor entry with count 0', () => {
     expect(find(out.findings, 'zero-rule')).toEqual([]);
   });
 
-  it('still reads a barrier observed there as new', () => {
+  it('still reads an accessibility barrier observed there as new', () => {
     const findings = buildFindings(
       gateInput({
         floor: zeroFloor(),
