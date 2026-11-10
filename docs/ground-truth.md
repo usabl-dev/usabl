@@ -2967,23 +2967,38 @@ dropped, a `..` segment takes away the segment before it, and `.` alone is the w
 `./src/gate/`, `src/gate//`, and `src/gate` guard the same files. Every later step reads that
 form. Nothing compares the raw entry text with git output.
 
+A brace group is expanded before anything else, as Node's glob does, and each expansion is put
+through the canonical form and the matcher on its own. So a `.` or `..` inside a brace alternative
+is read as the path it names: `{.,b}/y.json` guards `y.json` and `b/y.json`, and
+`{policy,b/..}/rules.json` guards `policy/rules.json` and `rules.json`.
+
 The guard never throws because of what an entry says, and never guards less because it cannot
-read one. An entry in a form the matcher cannot evaluate the way Node's glob does is read wide: a
-brace range such as `{1..3}` or `{a..c}`, `?`, `[ ]`, `( )`, a `\` escape, a nested or unbalanced
-brace, or a `..` after a wildcard guards the literal folder above the first segment the matcher
-cannot evaluate, so `policy/rule{1..3}.json` guards `policy/`. An entry with no such folder, one
-that starts with `/` or has a `..` that leaves the root, guards the whole tree. The same reading is
-used at the trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's
-approval, and the pull request that repairs the entry can merge with one. `usabl enforce policy`
-names each entry read this way, in every outcome, and says how to write it; `usabl doctor` does
-too. A local run has no field for that sentence, so its Result names only the changed files.
-Config load refuses these glob forms in every glob list and says to list the alternatives of a
-range with commas, so a new config never holds one. An older config, or a trusted ref's config,
-can. An empty entry is the whole tree.
+read one. An expansion in a form the matcher cannot evaluate the way Node's glob does is read wide:
+a brace range such as `{1..3}` or `{a..c}`, `?`, `[ ]`, `( )`, a `\` escape, or a nested or
+unbalanced brace guards the literal folder above the first segment the matcher cannot evaluate, so
+`policy/rule{1..3}.json` guards `policy/`. An expansion with no such folder guards the whole tree:
+one that starts with `/`, one with a `..` that leaves the root, and one with a `..` anywhere after
+a wildcard, since a wildcard can stand for any number of folders and a later `..` can climb above
+any of them, so `policy/*/../../x.json` guards the whole tree. The same reading is used at the
+trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's approval,
+and the pull request that repairs the entry can merge with one. `usabl enforce policy` names each
+entry read this way, in every outcome, and says how to write it; `usabl doctor` does too. A local
+run has no field for that sentence, so its Result names only the changed files.
+
+Config load refuses every form the guard can only read wide, so a new config never holds one. It
+refuses the glob forms above in every glob list and says to list the alternatives of a range with
+commas. In `guardedPaths` it also refuses an entry that starts with `/` (and shows the same path
+without it), one with a `..` that leaves the root, one with a `..` after a wildcard, and one with a
+`.` or `..` segment inside a brace alternative, and says how to write each. Entries that loaded and
+worked before still load and read in canonical form: `./src/gate/`, `src/gate//`, `.`, and
+`a/../b` outside braces and before any wildcard. An older config, or a trusted ref's config, can
+hold a refused form, and the guard reads it wide as above. An empty entry is the whole tree.
 
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
-glob rule applies to them.
+glob rule applies to them. A `guardedPaths` entry with the same text as `requirements` is read both
+ways, as that path and as a glob, and the guard guards what either reading matches, so
+`requirements: "policy/*"` with `guardedPaths: ["policy/*"]` guards `policy/rule1.json`.
 
 Config load refuses a `guardedPaths` entry with white space at the start or end, and shows the
 entry in quotes. The limit that remains: an entry that is a valid path but names nothing, such as
@@ -3327,12 +3342,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
     fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
     commit" step inside the untrusted frame. It does not block.
-  - The guard, the session pin computation, or the stored receipt check fails for any other
-    reason, such as a git listing past the read limit: the hook cannot tell whether guarded policy
-    changed, so it blocks with "NOT verified - approval required: usabl could not tell whether
-    guarded policy files changed, because the guard failed ..." and the error's first line inside
-    the untrusted frame, as it blocks for diverged guarded files. Before, such a failure fell to the
-    internal error allow below.
+  - The guard or the session pin computation fails for any other reason, such as a git listing
+    past the read limit: the hook cannot tell whether guarded policy changed, so it blocks with
+    "NOT verified - approval required: usabl could not tell whether guarded policy files changed,
+    because the guard failed ..." and the error's first line inside the untrusted frame, as it
+    blocks for diverged guarded files. Before, such a failure fell to the internal error allow
+    below.
+  - Reading or checking the stored receipt fails: the receipt only offers a fast allow, so the
+    hook drops the fast path and runs the full check, and the decision is the run's.
   - Neither HEAD nor the working tree has the config, but this session already recorded pins for
     this repository root: an earlier stop read a committed config, so the config was removed and
     committed during the session. That is drift, and the stop goes through the drift block, with

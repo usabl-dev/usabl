@@ -338,21 +338,26 @@ the tool errored, not because the page is accessible.
   added, or deleted file under an entry in any form config load accepts needs approval in both
   places, except a dot-named file under a glob entry (see the known limit below). Config load
   refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
-  `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses an entry with white space
-  at either end. The guard never throws on what an entry says and never guards less because it
-  cannot read one. An entry in one of those forms, or with a `..` after a wildcard, guards the
-  literal folder above the first segment the matcher cannot evaluate; one that starts with `/` or
-  has a `..` that leaves the root guards the whole tree. This holds wherever the guard reads it: a
-  loaded config, an older config, or a trusted ref's config. A change there needs a code owner's
-  approval, which a review can give, so the pull request that repairs the entry can merge. `usabl
-  enforce policy` and `usabl doctor` name each entry read this way and say how to write it. The
-  `requirements` folder is read as a literal path.
+  `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses a `guardedPaths` entry
+  with white space at either end, one that starts with `/`, one with a `..` that leaves the root
+  or comes after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and
+  says how to write it. The guard expands a brace group first and reads each expansion on its own,
+  so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what an entry says and
+  never guards less because it cannot read one. An expansion in a form the matcher cannot evaluate
+  guards the literal folder above the first segment it cannot evaluate; one that starts with `/`,
+  has a `..` that leaves the root, or has a `..` anywhere after a wildcard guards the whole tree.
+  This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
+  ref's config. A change there needs a code owner's approval, which a review can give, so the pull
+  request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each
+  entry read this way and say how to write it. The `requirements` folder is read as a literal
+  path; a `guardedPaths` entry with the same text is read both as that path and as a glob.
 
-- The Stop hook blocks once when the guard, the session pin computation, or the stored receipt
-  check fails, because it then cannot tell whether guarded policy changed, and lets the
-  continuation through marked NOT verified. Before, the hook's catch allowed with "stop hook
-  error", so a guard that threw let a session stop with a waiver edit unchecked. A folder outside
-  any work tree and a repository with no commits keep their honest allow.
+- The Stop hook blocks once when the guard or the session pin computation fails, because it then
+  cannot tell whether guarded policy changed, and lets the continuation through marked NOT
+  verified. Before, the hook's catch allowed with "stop hook error", so a guard that threw let a
+  session stop with a waiver edit unchecked. A stored receipt that cannot be read or checked only
+  loses its fast allow: the hook runs the full check, and the decision is the run's. A folder
+  outside any work tree and a repository with no commits keep their honest allow.
 
 - `usabl enforce policy` matches a `CODEOWNERS` pattern the way GitHub's documentation says for
   the forms it shows. A wildcard in the last segment of a pattern with a slash does not match

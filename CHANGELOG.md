@@ -289,25 +289,38 @@
   expands a range and reads `\` as an escape, while usabl's matcher reads both as text, so a
   guarded file that only a range named passed in CI with "no policy change". Config load also
   refuses a `guardedPaths` entry with white space at either end, which named no file and guarded
-  nothing, and shows it in quotes. Gate effect: a config with such an entry no longer loads.
+  nothing, and shows it in quotes. It also refuses a `guardedPaths` entry that starts with `/`
+  (and shows the same path without it), one with a `..` that leaves the root, one with a `..`
+  after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and says how to
+  write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before any wildcard still load. Gate
+  effect: a config with such an entry no longer loads.
+
+- The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
+  expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed
+  in the pattern, so `{.,b}/y.json` and `{policy,b/..}/rules.json` never matched the root
+  `y.json` or `rules.json` in CI. Gate effect: a change to such a file is `approval_required`
+  where it passed.
 
 - The guard reads a `guardedPaths` entry it cannot evaluate wide, where an older config or a
-  trusted ref's config holds one. A range, `?`, `[ ]`, `( )`, `\`, a nested or unbalanced brace, or
-  a `..` after a wildcard guards the literal folder above the first segment the matcher cannot
-  evaluate, so `policy/rule{1..3}.json` guards `policy/`. An entry that starts with `/`, or has a
-  `..` that leaves the root, guards the whole tree. The same reading holds at the trusted ref, at
-  HEAD, and on the working tree. `usabl enforce policy` names each such entry in its output and says
-  how to write it, and `usabl doctor` does too. The `requirements` folder and the always-guarded
-  ledgers are read as literal paths. Gate effect: a change under that folder is
-  `approval_required` where it could pass, a code owner's approval clears it, and the pull request
-  that repairs the entry can merge with one.
+  trusted ref's config holds one. A range, `?`, `[ ]`, `( )`, `\`, or a nested or unbalanced brace
+  guards the literal folder above the first segment the matcher cannot evaluate, so
+  `policy/rule{1..3}.json` guards `policy/`. An entry that starts with `/`, has a `..` that leaves
+  the root, or has a `..` anywhere after a wildcard guards the whole tree, so
+  `policy/*/../../x.json` guards the root `x.json`. The same reading holds at the trusted ref, at
+  HEAD, and on the working tree. `usabl enforce policy` names each such entry in its output and
+  says how to write it, and `usabl doctor` does too. The `requirements` folder and the
+  always-guarded ledgers are read as literal paths, and a `guardedPaths` entry with the same text
+  as `requirements` is read both as that path and as a glob. Gate effect: a change under that
+  folder is `approval_required` where it could pass, a code owner's approval clears it, and the
+  pull request that repairs the entry can merge with one.
 
-- The Stop hook blocks once when the guard, the session pin computation, or the stored receipt
-  check fails, with the reason and the first line of the error, and lets the continuation through
-  marked NOT verified. Before, such a failure, for example a guarded listing past the read limit,
-  allowed with "NOT verified - stop hook error". A folder outside any work tree and a repository
-  with no commits still allow with their own notes. Gate effect: the Stop hook blocks where it
-  allowed.
+- The Stop hook blocks once when the guard or the session pin computation fails, with the reason
+  and the first line of the error, and lets the continuation through marked NOT verified. Before,
+  such a failure, for example a guarded listing past the read limit, allowed with "NOT verified -
+  stop hook error". A stored receipt that cannot be read or checked does not block: the hook drops
+  the fast path and runs the full check, and the decision is the run's. A folder outside any work
+  tree and a repository with no commits still allow with their own notes. Gate effect: the Stop
+  hook blocks where it allowed.
 
 - `usabl enforce policy` now reads code owners from the last `CODEOWNERS` rule that matches each
   changed guarded path. Before, any team, email, or owner-less line anywhere in the file refused
