@@ -86,6 +86,11 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
   };
 
   return Object.assign(page, {
+    // Focus on the body with no starting point, as focusBody leaves a real page: the next Tab goes
+    // to the first control.
+    focusBody: async () => {
+      cursor = -1;
+    },
     tab: async () => {
       spec.onTab?.();
       advance();
@@ -388,6 +393,40 @@ describe('makeKeyboardWalkProvider', () => {
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3, afterBody: '#b' });
 
     expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+  });
+
+  it('leaves focus on the body after a complete walk, so the next Tab lands on the first stop', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3 });
+
+    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+    await page.tab();
+
+    expect(await page.activePath()).toBe('#a');
+  });
+
+  it('discards what the Tab that confirms the end announced, so the next check does not hear it', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2 });
+    // A capture that holds what each Tab caused until a drain: landing on the first control writes
+    // into a live region, as a focus handler can.
+    let pending: string[] = [];
+    const tab = page.tab.bind(page);
+    page.tab = async () => {
+      await tab();
+      if ((await page.activePath()) === '#a') {
+        pending.push('Welcome back');
+      }
+    };
+    page.drainAnnouncements = async () => {
+      const texts = pending;
+      pending = [];
+      return texts;
+    };
+
+    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+
+    expect(await page.drainAnnouncements()).toEqual([]);
   });
 
   it('discloses truncation when one more Tab after the body lands on a control not yet walked', async () => {

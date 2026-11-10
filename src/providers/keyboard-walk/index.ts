@@ -232,6 +232,18 @@ function truncatedWalkDraft(
  */
 async function endConfirmed(page: Page, walked: readonly WalkedStop[]): Promise<boolean> {
   await page.tab();
+  const confirmed = await landedOnWalkedStop(page, walked);
+  // Flows and voice contracts run after the walk on the same page and start from wherever focus
+  // is. Before the end was confirmed, the walk left focus on the body, so the next Tab went to the
+  // first control. The extra Tab moved focus off the body and may have made a focus handler write
+  // into a live region. Both are undone here: what that Tab announced is discarded, and focus goes
+  // back to the body, so the next check starts where it always did and hears nothing the walk did.
+  await page.drainAnnouncements();
+  await page.focusBody();
+  return confirmed;
+}
+
+async function landedOnWalkedStop(page: Page, walked: readonly WalkedStop[]): Promise<boolean> {
   if (walked.length === 0) {
     return page.activeElementIs('body');
   }

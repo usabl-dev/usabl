@@ -164,6 +164,11 @@ function pages(crossOrigin: string): Record<string, string> {
     '/end-three': page('<button type="button" id="one">One</button><a href="#x" id="two">Two</a><input id="three" aria-label="Three" />'),
     '/end-one': page('<button type="button" id="only">Only</button>'),
     '/end-none': page('<p>Nothing here can take focus.</p>'),
+    // A first control whose focus handler writes into a live region, as a greeting can.
+    '/end-greets': page(
+      '<div aria-live="polite" id="status"></div><button type="button" id="one">One</button><button type="button" id="two">Two</button>' +
+        `<script>document.getElementById('one').addEventListener('focus', () => { document.getElementById('status').textContent = 'Welcome back'; });</script>`,
+    ),
     // A focus handler that blurs its control, so focus falls to the body in the middle of the page.
     '/end-blur': page(
       '<button type="button">One</button><button type="button" id="blurs">Two</button><button type="button">Three</button>' +
@@ -643,6 +648,30 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       }
     });
   }
+
+  // The walk runs before flows and voice contracts on the same page. A flow starts from wherever
+  // focus is, so the walk must leave the page as it found it: focus on the body, and nothing its
+  // own Tabs caused left in the capture.
+  it('leaves focus on the body after a complete walk, so a flow whose first step is a Tab lands on the first control', async () => {
+    const opened = await open('/end-three');
+    try {
+      expect(await walk(opened)).toEqual([]);
+      const flow = await makeStepRunner().run(opened, [{ do: 'tab' }]);
+      expect(flow.map((stop) => stop.elementPath)).toEqual(['#one']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('leaves nothing its own Tabs announced for the next check to hear', async () => {
+    const opened = await open('/end-greets');
+    try {
+      expect(await walk(opened)).toEqual([]);
+      expect(await opened.drainAnnouncements()).toEqual([]);
+    } finally {
+      await opened.close();
+    }
+  });
 
   it('keeps the path of every element outside shadow roots and frames as it was', async () => {
     const opened = await open('/light-only');
