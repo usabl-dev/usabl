@@ -673,6 +673,94 @@ describe('computeCoverage', () => {
     expect(orphan.gaps[0]?.reason).toContain('more than one file');
   });
 
+  // A monorepo app's own tsconfig sets its aliases. Reading only the root config resolved the
+  // app's @/ imports into the root src folder, so a changed component the app renders mapped to
+  // no screen.
+  it('resolves aliases from the app folder of the router file in a monorepo', async () => {
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+      'packages/admin/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'packages/admin/src/Home.tsx' }],
+      }),
+      'packages/admin/src/router.tsx': '',
+      'packages/admin/src/Home.tsx': `import { Card } from '@/components/Card';`,
+      'packages/admin/src/components/Card.tsx': `export const Card = 1;`,
+    });
+    const config: UsablConfig = {
+      ...baseConfig,
+      uiFileGlobs: ['packages/admin/src/**/*.tsx'],
+      discovery: { routerFile: 'packages/admin/src/router.tsx', wideBlastGlobs: [] },
+    };
+    const cov = await computeCoverage(fs, config, ['packages/admin/src/components/Card.tsx']);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.affected.map((screen) => screen.screenId)).toEqual(['home']);
+  });
+
+  // The tsconfig and the Vite config of an app can sit in different folders. Reading only the
+  // nearest folder that holds either one dropped the other, so a screen that imports a shared file
+  // through an alias was left out while the change still mapped to another screen.
+  const sharedCardConfig: UsablConfig = {
+    ...baseConfig,
+    uiFileGlobs: ['apps/web/src/**/*.tsx', 'legacy/**/*.tsx'],
+    discovery: { routerFile: 'apps/web/src/router.tsx', wideBlastGlobs: [] },
+  };
+  const sharedCardFiles = {
+    'usabl.routes.json': JSON.stringify({
+      routes: [
+        { screenId: 'home', url: '/home', entryFile: 'apps/web/src/Home.tsx' },
+        { screenId: 'settings', url: '/settings', entryFile: 'apps/web/src/Settings.tsx' },
+      ],
+    }),
+    'apps/web/src/router.tsx': '',
+    'apps/web/src/Home.tsx': `import { Card } from '@/components/Card';`,
+    'apps/web/src/Settings.tsx': `import { Card } from './components/Card';`,
+    'apps/web/src/components/Card.tsx': `export const Card = 1;`,
+  };
+
+  it('reads the root tsconfig paths when the app folder holds only a Vite config', async () => {
+    const fs = fsOf({
+      ...sharedCardFiles,
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['apps/web/src/*'] } } }),
+      'apps/web/vite.config.ts': `import tsconfigPaths from 'vite-tsconfig-paths';\nexport default { plugins: [tsconfigPaths({ root: '../..' })] };`,
+    });
+    const cov = await computeCoverage(fs, sharedCardConfig, ['apps/web/src/components/Card.tsx']);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.affected.map((screen) => screen.screenId).sort()).toEqual(['home', 'settings']);
+  });
+
+  it('reads the root Vite aliases when the app folder holds only a tsconfig', async () => {
+    const fs = fsOf({
+      ...sharedCardFiles,
+      'apps/web/tsconfig.json': JSON.stringify({ compilerOptions: { strict: true } }),
+      'vite.config.ts': `export default { root: 'apps/web', resolve: { alias: { '@': './apps/web/src' } } };`,
+    });
+    const cov = await computeCoverage(fs, sharedCardConfig, ['apps/web/src/components/Card.tsx']);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.affected.map((screen) => screen.screenId).sort()).toEqual(['home', 'settings']);
+  });
+
+  // When the app configs and the root configs map one prefix to different folders, usabl cannot
+  // tell which one the build uses. It follows both and says so.
+  it('follows every folder an alias maps to and discloses that it resolved more than one way', async () => {
+    const fs = fsOf({
+      ...sharedCardFiles,
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['legacy/*'] } } }),
+      'apps/web/vite.config.ts': `export default { resolve: { alias: { '@': './src' } } };`,
+      'legacy/components/Card.tsx': `export const Card = 1;`,
+    });
+    for (const changed of ['apps/web/src/components/Card.tsx', 'legacy/components/Card.tsx']) {
+      const cov = await computeCoverage(fs, sharedCardConfig, [changed]);
+      expect(cov.unresolvedFiles).toEqual([]);
+      expect(cov.affected.map((screen) => screen.screenId)).toContain('home');
+      expect(cov.discoveryNotes).toHaveLength(1);
+      expect(cov.discoveryNotes?.[0]?.ref).toBe('apps/web/src/Home.tsx');
+      expect(cov.discoveryNotes?.[0]?.reason).toContain("'@/components/Card'");
+      expect(cov.discoveryNotes?.[0]?.reason).toContain('apps/web/src/components/Card.tsx, legacy/components/Card.tsx');
+      expect(cov.discoveryNotes?.[0]?.reason).toContain('more than one way');
+    }
+  });
+
   it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),

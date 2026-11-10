@@ -13,7 +13,8 @@ import { validateId } from '../intake/id-grammar.js';
 import { SESSION_STATE_PATH, STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
-import { readViteServer } from './vite-server.js';
+import { workspacePackageDirs } from '../coverage/workspace-packages.js';
+import { readViteServer, viteConfigReadable } from './vite-server.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -60,6 +61,10 @@ export interface InitFs {
   readFile(path: string): Promise<string | null>;
   glob(patterns: string[]): Promise<string[]>;
   writeFile(path: string, contents: string): Promise<void>;
+  // Where a path really is, through symbolic links, written relative to the repository root with
+  // forward slashes: '' for the root, a path that starts with '../' or an absolute path when it is
+  // outside. Null when nothing is at the path.
+  realpath(path: string): Promise<string | null>;
 }
 
 export interface InitDraft {
@@ -214,6 +219,15 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
         'glob characters * ? [ ] { } !, such as packages/web. Nothing was written.',
     );
   }
+  // A folder written inside the repository can be a symbolic link to one outside it. A draft for
+  // it would check files the repository does not hold, so the real path decides.
+  const real = await fs.realpath(cleaned);
+  if (real !== null && (posix.isAbsolute(real) || real === '..' || real.startsWith('../'))) {
+    throw new Error(
+      `usabl init refused --app ${operatorText(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
+        'outside this repository. Pass the app folder inside the repository. Nothing was written.',
+    );
+  }
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
   // A file counts only when its path starts with the folder as written, so the folder exists.
   const inside = (await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).filter((file) => file.startsWith(`${cleaned}/`));
@@ -320,7 +334,10 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     if (typeof deps === 'object' && deps !== null) for (const name of Object.keys(deps)) depends.add(name);
   }
   const notes: string[] = [];
-  const manifests = await fs.glob(APP_PARENTS.map((parent) => `${parent}/*/package.json`));
+  // The packages the root workspaces list, wherever they sit, and the usual parent folders, which
+  // a repository with no workspaces field still uses.
+  const listed = (await workspacePackageDirs(fs)).map((dir) => `${dir}/package.json`);
+  const manifests = new Set([...(await fs.glob(APP_PARENTS.map((parent) => `${parent}/*/package.json`))), ...listed]);
   for (const manifest of [...manifests].sort()) {
     const dir = posix.dirname(manifest);
     if (dir === appDir || isSkippedPath(manifest)) continue;
@@ -342,12 +359,8 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
  * route unattributed, which is the safe direction.
  */
 async function appAliases(fs: InitFs, appDir: string): Promise<AliasMapping[]> {
-  if (appDir === '') return (await loadAliasConfig(fs)).mappings;
-  const scoped = { readFile: (path: string) => fs.readFile(under(appDir, path)), glob: fs.glob };
-  return (await loadAliasConfig(scoped)).mappings.map(({ prefix, target }) => {
-    const joined = posix.normalize(posix.join(appDir, target));
-    return { prefix, target: target.endsWith('/') && !joined.endsWith('/') ? `${joined}/` : joined };
-  });
+  // The same reader usabl check uses, so init and check resolve an app's aliases alike.
+  return (await loadAliasConfig(fs, appDir)).mappings;
 }
 
 function under(dir: string, path: string): string {
@@ -415,7 +428,14 @@ function draftBaseUrl(viteFile: string | null, raw: string | null): { appBaseUrl
   const port = 'value' in server.port ? server.port.value : 5173;
   const https = 'value' in server.https && server.https.value;
   const appBaseUrl = `${https ? 'https' : 'http'}://127.0.0.1:${port}`;
-  if (unread.length > 0) {
+  if (unread.length > 0 && !viteConfigReadable(raw, viteFile)) {
+    // The file does not parse, or exports its config in a shape usabl does not read, such as the
+    // result of a call. usabl never saw the settings, so it does not say how they are set.
+    notes.push(
+      `Review: usabl could not read the config that ${viteFile} exports, so it could not read server.port ` +
+        `or server.https. Using ${appBaseUrl}. ${setIt}`,
+    );
+  } else if (unread.length > 0) {
     notes.push(
       `Review: ${viteFile} sets ${unread.join(' and ')} with code usabl does not run, so it could not read ` +
         `${unread.length === 1 ? 'it' : 'them'}. Using ${appBaseUrl}. ${setIt}`,
@@ -433,6 +453,17 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
   const notes: string[] = [];
   const app = await chooseAppDir(fs, options.appDir);
   if (app.note !== null) notes.push(app.note);
+  if (options.appDir !== undefined && app.dir !== '') {
+    // The config checks this app only, so the other apps init can see are named. Without that, a
+    // reader can take one app's config to cover the whole repository.
+    const others = (await findAppDirs(fs)).filter((found) => found !== app.dir);
+    if (others.length > 0) {
+      notes.push(
+        `Review: this config checks only ${app.dir}. usabl init also found ${others.length === 1 ? 'this app' : 'these apps'}, ` +
+          `which it does not check: ${others.map((found) => operatorText(found)).join(', ')}.`,
+      );
+    }
+  }
   const appFile = (path: string): string => under(app.dir, path);
   if (app.dir !== '') notes.push(...(await workspaceDependencyNotes(fs, app.dir)));
 
@@ -492,6 +523,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       notes.push(`Review: ${where}: ${entry.reason}`);
     }
     let attributed = 0;
+    const wheresById = new Map<string, string[]>();
     for (const route of parsed) {
       const where = `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`;
       if (!isProvenRoutePath(route.path)) {
@@ -552,6 +584,23 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         url: route.path,
         entryFile,
       });
+      wheresById.set(screenId, [...(wheresById.get(screenId) ?? []), where]);
+    }
+    // Two route paths can give one id: /a-b and /a/b both give a-b. A sidecar with both is refused
+    // when usabl reads it, and one without either never scans that screen, so nothing is written.
+    const colliding = [...wheresById.values()].filter((wheres) => wheres.length > 1);
+    if (colliding.length > 0) {
+      throw new Error(
+        [
+          'usabl init refused to write usabl.config.json and usabl.routes.json: route paths in the router file give the ' +
+            'same screen id, so usabl could not tell those screens apart, and a sidecar that left one out would never ' +
+            'scan it. Nothing was written. The routes that share an id:',
+          ...colliding.map((wheres) => `  ${wheres.map((where) => operatorText(where)).join(' and ')}`),
+          // init reads the router before any file on disk, so running it again refuses again.
+          'Fix: write usabl.config.json and usabl.routes.json by hand, with a screen id of its own for each route in ' +
+            'usabl.routes.json. Then run usabl drift routes to check the sidecar against the router file.',
+        ].join('\n'),
+      );
     }
     notes.push(`Attributed ${attributed} of ${routes.length} routes to local entry files.`);
     if (routerRaw.includes('path="*"') || routerRaw.includes("path='*'")) {
@@ -591,7 +640,8 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       'src/App.jsx',
     ].map(appFile),
     ...(routerFile.length > 0 ? [routerFile] : []),
-    ...['index.html', 'src/index.html', 'vite.config.ts', 'vite.config.js'].map(appFile),
+    // Every name Vite loads its config from, so a .mts or .cts config is wide blast too.
+    ...['index.html', 'src/index.html', ...VITE_CONFIG_CANDIDATES].map(appFile),
     ...(await fs.glob([appFile('src/**/*.css')])),
   ];
   const wideBlastGlobs: string[] = [];

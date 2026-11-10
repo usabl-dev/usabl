@@ -66,7 +66,7 @@ Start your app's dev server, then draft your configuration, record the barriers 
 are already there, and check a change:
 
 ```bash
-npx usabl init       # drafts usabl.config.json and usabl.routes.json from your code
+npx usabl init       # drafts usabl.config.json, and usabl.routes.json when it finds routes
 npx usabl baseline   # scans every mapped screen twice and drafts .usabl-evidence.json
 npx usabl check
 ```

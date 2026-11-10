@@ -4,9 +4,14 @@
  * `run()` calls this planner directly, so unmapped UI must stay explicit evidence.
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
-import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
-import { loadAliasConfig } from './alias-config.js';
-import { buildUnresolvedReason, UNPLACED_FILE_FIX } from './discovery-diagnostics.js';
+import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
+import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
+import {
+  aliasConfigConflictReason,
+  buildUnresolvedReason,
+  UNPLACED_FILE_FIX,
+  unresolvedImportsNaming,
+} from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
@@ -40,32 +45,6 @@ const TEST_FOLDER_REASON =
   'usabl reads it as test code and did not check it. This does not block. If a screen renders it, ' +
   'import it from the route entry file of that screen, or add it to the files of a surface in ' +
   'usabl.config.json.';
-
-// The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
-function importName(file: string): string {
-  const segments = file.split('/');
-  const base = segments[segments.length - 1] ?? '';
-  const stem = base.replace(/\.[^.]*$/u, '');
-  if (stem === 'index' && segments.length > 1) {
-    return segments[segments.length - 2] ?? stem;
-  }
-  return stem;
-}
-
-// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
-// `@/tests/Dashboard.js` both name a file called Dashboard.
-function importLastSegments(specifier: string): string[] {
-  const last = specifier.split('/').pop() ?? '';
-  return [last, last.replace(/\.[^.]*$/u, '')];
-}
-
-// The imports usabl could not resolve that may load this file. "No screen reaches it" is read from
-// the import graph, so an unresolved import that names the file makes that a guess.
-function unresolvedImportsNaming(file: string, unresolvable: UnresolvableImport[]): UnresolvableImport[] {
-  const name = importName(file);
-  return unresolvable.filter((entry) => importLastSegments(entry.specifier).includes(name));
-}
 
 function testFolderGapReason(entries: UnresolvableImport[]): string {
   const imports = entries
@@ -204,9 +183,25 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
   return seen;
 }
 
+// One note per alias import that resolved more than one way and reaches a changed UI file, so the
+// screens it added or kept are explained. Sorted by file, then import, so the list is stable.
+function aliasConflictNotes(graph: Awaited<ReturnType<typeof buildImportGraph>>, uiFiles: readonly string[]): DiscoveryNote[] {
+  const changed = new Set(uiFiles);
+  const notes: Array<DiscoveryNote & { specifier: string }> = [];
+  for (const entry of graph.unresolvable) {
+    if (entry.kind !== 'alias-conflict') continue;
+    const reaches = entry.candidates.some((candidate) => [...importClosure(graph, candidate)].some((file) => changed.has(file)));
+    if (reaches) notes.push({ ref: entry.importer, specifier: entry.specifier, reason: aliasConfigConflictReason(entry) });
+  }
+  // Plain code-unit order, so the order never depends on the machine's locale.
+  const key = (note: { ref: string; specifier: string }): string => `${note.ref}\u0000${note.specifier}`;
+  notes.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  return notes.map(({ ref, reason }) => ({ ref, reason }));
+}
+
 interface RouteGraph {
   graph: Awaited<ReturnType<typeof buildImportGraph>>;
-  aliasConfig: Awaited<ReturnType<typeof loadAliasConfig>>;
+  aliasConfig: AliasConfig;
   // The import closure of each route entry file, keyed by screen id.
   closures: Map<string, Set<string>>;
 }
@@ -214,9 +209,13 @@ interface RouteGraph {
 async function buildRouteGraph(
   fs: FsGlob,
   attributedRoutes: ReadonlyArray<{ screenId: string; entryFile: string }>,
+  routerFile: string,
 ): Promise<RouteGraph> {
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
-  const aliasConfig = await loadAliasConfig(fs);
+  // The aliases come from the nearest tsconfig and the nearest Vite config at or above the router
+  // file, and from the repository root configs too. An import the two sets map to different places
+  // is followed both ways and disclosed. See loadAppAliasConfig.
+  const aliasConfig = await loadAppAliasConfig(fs, routerFile);
   const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
   const closures = new Map<string, Set<string>>();
   for (const route of attributedRoutes) {
@@ -268,7 +267,7 @@ export async function computeCoverage(
   // whether a screen reaches it, and the screen mapping below asks which screens do.
   let routeGraph: Promise<RouteGraph> | null = null;
   const loadRouteGraph = (): Promise<RouteGraph> => {
-    routeGraph ??= buildRouteGraph(fs, attributedRoutes);
+    routeGraph ??= buildRouteGraph(fs, attributedRoutes, config.discovery.routerFile);
     return routeGraph;
   };
 
@@ -357,7 +356,7 @@ export async function computeCoverage(
       gaps.push({
         ref: route.url,
         state: 'skipped',
-        reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id, or change the route path.`,
+        reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id of its own, or change the route path.`,
       });
     }
     // The same holds for a route the router fallback could not read, and for a router file that
@@ -476,6 +475,7 @@ export async function computeCoverage(
     }
   }
 
+  const discoveryNotes = aliasConflictNotes(graph, uiFiles);
   return {
     changedFiles,
     affected: [...affectedByScreen.values()],
@@ -483,5 +483,7 @@ export async function computeCoverage(
     gaps,
     nothingToCheck: false,
     ...excluded,
+    // Omitted when empty, so a Coverage with nothing to disclose has the same shape it always had.
+    ...(discoveryNotes.length === 0 ? {} : { discoveryNotes }),
   };
 }

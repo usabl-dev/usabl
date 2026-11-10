@@ -11,7 +11,7 @@
  */
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, relative, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
@@ -129,6 +129,23 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     process.stderr.write(`usabl: ${message}\n`);
     return 4;
   }
+}
+
+/**
+ * init's realpath port. The real path of a path in the folder usabl runs in, through symbolic
+ * links, relative to that folder's own real path and with forward slashes. On another drive it is
+ * absolute, written with a leading slash so init reads it as outside. Null when nothing is there.
+ */
+async function realpathFromRoot(path: string): Promise<string | null> {
+  let real: string;
+  try {
+    real = await realpath(path);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const fromRoot = relative(await realpath(process.cwd()), real).split(sep).join('/');
+  return isAbsolute(fromRoot) && !fromRoot.startsWith('/') ? `/${fromRoot}` : fromRoot;
 }
 
 function readEventPayload(): unknown {
@@ -539,6 +556,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       writeFile: async (path, contents) => {
         await writeFile(path, contents, 'utf8');
       },
+      realpath: realpathFromRoot,
     };
     let draft;
     try {
@@ -849,7 +867,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     if (!prepared.ok) {
       process.stderr.write(`usabl: ${prepared.message}\n`);
-      return 2;
+      return prepared.exitCode;
     }
     judge = prepared;
   }

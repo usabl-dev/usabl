@@ -85,6 +85,30 @@ describe('formatSummary groups gradient contrast results per screen', () => {
     expect(out).toContain('        elements (1):\n          .btn-s\n');
   });
 
+  // A finding printed on its own carries its source line. Grouped, that line was dropped, so the
+  // reader lost the file to open for every grouped element.
+  it('keeps the source line of each grouped element', () => {
+    const out = formatSummary(
+      resultWith([
+        contrast('clusters', '.btn-b', 'bgGradient', {
+          appSource: { tier: 'renderer', file: 'src/Toolbar.tsx', line: 42, candidates: [] },
+        }),
+        contrast('clusters', '.btn-a', 'bgGradient', {
+          appSource: { tier: 'import-chain', file: null, line: null, candidates: ['src/A.tsx', 'src/B.tsx'] },
+        }),
+        contrast('clusters', '.btn-c', 'bgGradient'),
+      ]),
+    );
+    expect(out).toContain(
+      '        elements (3):\n' +
+        '          .btn-a\n' +
+        '            candidates: src/A.tsx, src/B.tsx\n' +
+        '          .btn-b\n' +
+        '            source: src/Toolbar.tsx:42\n' +
+        '          .btn-c\n',
+    );
+  });
+
   it('prints every element in full on its own line, however many there are', () => {
     const paths = Array.from(
       { length: 12 },

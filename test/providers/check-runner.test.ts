@@ -398,6 +398,26 @@ describe('makeCheckRunner', () => {
     expect(reason).toContain('ERR_CONNECTION_REFUSED');
   });
 
+  // The browser's message ends with "at <url>", and the reason already names the url, so it printed
+  // twice. The reason keeps the browser's error code and names the url once.
+  it('names the url once when nothing answered', async () => {
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> => {
+          throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SCREEN.url}\nCall log:\n  - navigating to "${SCREEN.url}"`);
+        },
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+    const reason = (await runner.scan(SCREEN)).gaps[0]?.reason ?? '';
+    expect(reason.split(SCREEN.url)).toHaveLength(2);
+    expect(reason).toContain('The browser said net::ERR_CONNECTION_REFUSED.');
+  });
+
   it('names no setting when the runner cannot tell where the screen url came from', async () => {
     const runner = makeCheckRunner({
       browser: {

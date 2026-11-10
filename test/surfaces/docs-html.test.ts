@@ -235,4 +235,26 @@ describe('renderDocsHtml page-drafted alt text', () => {
     expect(html).toContain('<th scope="col">Expected text</th>');
     expect(html).not.toContain('Drafted from the page.');
   });
+
+  // Text drafted from the page is what the page says now. Calling it "expectations" said someone
+  // wrote it down as what the page must say.
+  it('does not call page-drafted entries expectations', () => {
+    const statusOf = (html: string): string => /<p class="status status--intake">.*?<\/p>/su.exec(html)?.[0] ?? '';
+    const status = statusOf(renderDocsHtml([drafted]));
+    expect(status).toContain('Not proof.');
+    expect(status).toContain('text drafted from the page');
+    expect(status).not.toContain('expectations');
+    expect(statusOf(renderDocsHtml([boundWithoutEvidence()]))).toContain('expectations');
+  });
+
+  // With no entries, the drafted card and the requirement card read the same, so a reader could not
+  // tell "the page showed no images" from "no requirement lists any".
+  it('tells an empty page-drafted manifest apart from an empty requirement manifest', () => {
+    const fromPage = renderDocsHtml([boundWithoutEvidence({ entries: [], origin: 'page' })]);
+    const fromRequirements = renderDocsHtml([boundWithoutEvidence({ entries: [] })]);
+    expect(fromPage).toContain('Drafted from the page.');
+    expect(fromPage).toContain('The page showed no images on this screen.');
+    expect(fromRequirements).not.toContain('Drafted from the page.');
+    expect(fromRequirements).toContain('No entries were generated for this surface.');
+  });
 });

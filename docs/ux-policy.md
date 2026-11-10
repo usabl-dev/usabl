@@ -141,7 +141,10 @@ reads as one of four states, and the states are separated in words, not by color
 An alt-text manifest drafted from the page, because no content requirement covers the
 surface, also carries a "Drafted from the page" note under its state. The note says the
 text came from the page, usabl did not check it, and a person must review every entry.
-Such a card is never verified, because its entries carry no evidence.
+Such a card is never verified, because its entries carry no evidence. Its state line calls
+the entries text drafted from the page, never expectations, because nobody wrote them as
+what the page must say. A drafted manifest with no entries says the page showed no images,
+so it reads apart from a requirement manifest with no entries.
 
 The overlay and HUD follow the caption rule above: label live output as an accessibility
 preview, never as verified proof.

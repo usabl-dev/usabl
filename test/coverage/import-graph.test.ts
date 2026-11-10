@@ -193,6 +193,47 @@ describe('buildImportGraph', () => {
     expect(graph.get('src/ClustersPage.tsx')).toContain('src/ClusterTable.ts');
   });
 
+  // TypeScript ESM code imports a .ts file under its built name, ./Child.js. The bundler and the
+  // compiler both load Child.ts for it, so the graph must follow it past the entry file, or a
+  // change to Child.ts maps to no screen.
+  it('follows a .js import to the .ts file the compiler loads for it', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import { Child } from './Child.js';\nimport { Row } from './Row.jsx';\nimport { util } from './util.mjs';`,
+      'src/Child.ts': `import { Leaf } from './Leaf.js';`,
+      'src/Leaf.tsx': `export const Leaf = 1;`,
+      'src/Row.tsx': `export const Row = 1;`,
+      'src/util.mts': `export const util = 1;`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/Child.ts', 'src/Row.tsx', 'src/util.mts']);
+    expect(graph.get('src/Child.ts')).toEqual(['src/Leaf.tsx']);
+    expect(graph.unresolvable).toEqual([]);
+  });
+
+  it('keeps a real .js file when it exists, and links both TypeScript names when both exist', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import { A } from './A.js';\nimport { B } from './B.js';`,
+      'src/A.js': `export const A = 1;`,
+      'src/A.ts': `export const A = 1;`,
+      'src/B.ts': `export const B = 1;`,
+      'src/B.tsx': `export const B = 1;`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/A.js', 'src/B.ts', 'src/B.tsx']);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './B.js',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/B.ts', 'src/B.tsx'],
+    });
+  });
+
+  it('still records a .js import with no file under any name as file-not-found', async () => {
+    const fs = fsOf({ 'src/Page.tsx': `import { Gone } from './Gone.js';` });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.unresolvable).toEqual([{ importer: 'src/Page.tsx', specifier: './Gone.js', kind: 'file-not-found' }]);
+  });
+
   it('terminates BFS on cycles', async () => {
     const fs = fsOf({
       'src/A.tsx': `import { B } from './B';`,

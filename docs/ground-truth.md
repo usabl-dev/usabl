@@ -7,8 +7,10 @@ the check-agnostic core, evidence labels, design intake, Reports, and the on/off
 adoption model.
 
 This document describes usabl v0.2.2: an Apache-2.0 accessibility proof engine, published
-as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
-this document and the source disagree, the source is authoritative.
+as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Its
+library exports are `usabl`, `usabl/vite`, `usabl/webpack`, `usabl/playwright`, `usabl/docs`,
+and `usabl/measure`, each listed in the `exports` field of `package.json`. Where this
+document and the source disagree, the source is authoritative.
 
 ---
 
@@ -447,6 +449,7 @@ export interface Coverage {
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
   excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+  discoveryNotes?: DiscoveryNote[]; // disclosure only: what screen discovery had to assume
 }
 
 // A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
@@ -455,6 +458,15 @@ export interface Coverage {
 export interface ExcludedFile {
   ref: string;    // repository path
   reason: string; // why it was left out, and what would make it count
+}
+
+// What screen discovery had to assume, about one file. Today that is an alias import that the
+// app configs and the repository root configs map to different places, which usabl follows both
+// ways when a changed file is reached through it. Not a gap: the gate never reads it. Absent and
+// empty both mean nothing to disclose.
+export interface DiscoveryNote {
+  ref: string;    // repository path of the importing file
+  reason: string; // what was assumed, and what would remove the doubt
 }
 
 export interface Receipt {
@@ -735,8 +747,9 @@ exactly. Only its words differ: it says axe could not measure the contrast becau
 background is a gradient, and that a person should check the text against the lightest
 and the darkest part of the gradient (4.5:1, or 3:1 for large text). PatternFly 6 buttons
 draw a gradient, so a screen can carry many of these. The terminal summary prints them as
-one entry per screen and status, with the count and every element path, after the other
-findings in the same list. The collapsed views (pull request comment, Stop hook, self
+one entry per screen and status, with the count and every element path, each followed by
+the source or candidate lines that element's finding carries, after the other findings in
+the same list. The collapsed views (pull request comment, Stop hook, self
 check) give them a group of their own, so they never merge with a contrast result axe did
 measure. Every other contrast result, including other needs-review reasons, is printed as
 before. None of this changes a finding, an identity, the floor, a verdict, an exit code,
@@ -1620,13 +1633,19 @@ file, so a file it loads stays excluded. That is a known limit.
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
 `files` of a surface in `usabl.config.json`, or add the route that renders it to
 `usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
-way comes last, as discovery detail. A docs source gets the docs form of the fix: add it to a
+way comes last, as discovery detail, in three labelled groups: the imports on the screens' paths
+whose last segment names the file, then the file's own imports, then every other import on the
+screens' paths, labelled as imports of other files that may still load this one. The first three
+entries are printed, in that order, and then the count of the rest. The reason never calls the
+file changed, because `usabl baseline` passes every UI file through the same planner. A docs source gets the docs form of the fix: add it to a
 page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case is a shared file,
 such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
 the first such file in its gap list and then lists every other one with its reason, sorted.
 `usabl baseline` scans every UI file, so it is where these show up first: its refusal on
-incomplete coverage, and its `--partial` report, list every such file with its reason, sorted. No
-page text is printed in either list.
+incomplete coverage, and its `--partial` report, list such files with their reasons, sorted: the
+first 20, then the count of the rest, the same bound `usabl check` uses. No page text is printed
+in either list, and every line goes through the surface scrubber, because a path or an import in
+source can hold credential-shaped text or a forged frame marker.
 
 An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
@@ -1635,7 +1654,33 @@ one candidate exists, for example `Widget.vue` beside `Widget.tsx`, usabl does n
 import links every candidate, so a change to any of them maps to the screen. That can scan a
 screen that does not render the changed file, and never leaves out one that does. The ambiguity
 is still disclosed: the gap of a changed file that maps to no screen names every candidate of an
-ambiguous import on its way. Write the import with its extension to resolve it. One case is not disclosed: an extension outside
+ambiguous import on its way. Write the import with its extension to resolve it.
+
+An import with an extension loads the file of that name when it exists. When it does not, a
+`.js` import is read as the TypeScript file the compiler and the bundler load for it, `.ts` or
+`.tsx`, as is `.jsx` for `.tsx`, `.mjs` for `.mts`, and `.cjs` for `.cts`, at every depth of the
+graph. So `./Child.js` beside `Child.ts` links `Child.ts`. When both `.ts` and `.tsx` exist, the
+import links both and discloses the ambiguity, as above.
+
+An `@/` or `~/` import resolves through two sets of path aliases. usabl finds two folders on
+their own: the nearest folder at or above the router file that holds a `tsconfig.json` or a
+`tsconfig.app.json`, and the nearest one that holds a Vite config. Each is the repository root
+when no folder below it holds one. The tsconfig and the Vite config in those folders give the
+app's set. When either folder is below the root, the root `tsconfig.json`, `tsconfig.app.json`,
+and Vite config give a second set, read as they were before usabl looked in app folders, so
+aliases are never read from fewer places. usabl cannot run the build to learn which set the app
+uses. An import that the two sets map to different places resolves at each, every file found is
+linked, and coverage discloses it in `discoveryNotes`, printed as discovery notes that do not
+block. Within one set, a Vite alias comes first, in the order the config declares it, because
+the bundler applies it before anything else, so a Vite wildcard alias wins over a tsconfig entry
+for the same prefix. tsconfig `paths` fill in the prefixes Vite does not set. A tsconfig
+`extends` chain is followed through relative paths, nearest config first: `paths` comes whole
+from the nearest config that sets it, and its targets are read from the nearest `baseUrl`, or
+from the config that sets `paths` when no config sets one. An extends that names a package, such
+as `@tsconfig/node20`, is not read, because it resolves through `node_modules`. A `paths` entry
+with no wildcard, such as `"@/theme": ["src/styles/theme.ts"]`, maps that one specifier, and
+among the tsconfig entries it matches before a wildcard. An alias usabl does not read leaves its
+import unresolved, which is disclosed, never a silent pass. One case is not disclosed: an extension outside
 the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
 with that extension is not seen and the file usabl did find is attributed.
 
@@ -4186,15 +4231,19 @@ scaffold policy.
 folder (below), and takes the first that holds route code. It reads routes from it as described
 in [Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
 `wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
-`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config, and
+`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config (any of `vite.config.ts`, `.js`, `.mts`, `.mjs`, `.cts`, or `.cjs`), and
 the CSS files under `src/` exist in the app folder, because a change to any of them can reach
-every screen. Path aliases come from the `tsconfig.json`, `tsconfig.app.json`, and Vite config in
-the app folder, the configs that app's compiler and bundler read.
+every screen. To attribute a route import written through an alias, `init` reads the
+`tsconfig.json`, `tsconfig.app.json`, and Vite config in the app folder only. A route whose
+import goes through an alias set anywhere else stays unattributed, which `init` counts in its
+report; it does not guess the entry file.
 
 **Which app `init` drafts.** `usabl init --app <dir>` drafts the app in that folder, written
 relative to the repository root, such as `usabl init --app packages/web`. A folder outside the
 repository, one with no files, and one written with a glob character (`*`, `?`, `[`, `]`, `{`,
-`}`, or `!`) are refused, because a glob could name several apps at once. With no flag, `init`
+`}`, or `!`) are refused, because a glob could name several apps at once. A folder written
+inside the repository whose real path, through symbolic links, is outside it is refused too,
+with exit 2, because its draft would check files the repository does not hold. With no flag, `init`
 drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
 `src/**/*.jsx` files. Otherwise it
 looks below the root: a folder with a Vite config two levels down anywhere, or three under
@@ -4202,7 +4251,8 @@ looks below the root: a folder with a Vite config two levels down anywhere, or t
 `node_modules`, `dist`, `build`, `coverage`, and hidden folders. When it finds one app, it drafts
 that app and says so in a `Review:` note. When it finds more than one, it refuses, writes
 nothing, lists every app it found, sorted, and names the `--app` flag to use, because a config
-drafted for the wrong app checks the wrong files.
+drafted for the wrong app checks the wrong files. With `--app`, when `init` finds other apps the
+same way, a `Review:` note says the config checks only that app and names the others, sorted.
 
 Every path `init` writes stays relative to the repository root: `uiFileGlobs`, the router file,
 `wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
@@ -4210,7 +4260,8 @@ Every path `init` writes stays relative to the repository root: `uiFileGlobs`, t
 them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
 app treats a change in another app as no UI change. A workspace package the app depends on is
 different, because the app may render components from it. When the app's `package.json` depends
-on a package found under `packages/` or `apps/`, a `Review:` note names it and says to add its
+on a package found under `packages/` or `apps/`, or in a folder the root `workspaces` field or
+`pnpm-workspace.yaml` lists, a `Review:` note names it and says to add its
 files to `uiFileGlobs`. `init` does not add them itself, because it cannot tell which of the
 package's files the app renders.
 
@@ -4287,8 +4338,26 @@ of the router: the new config would be checked against routes `init` did not der
 another app's after `--app` names a different folder. The refusal names the file to review, and
 says to delete it and run `init --force` again if it does not list this app's screens.
 
-`usabl check` itself does not refuse a config with empty `uiFileGlobs` yet. Such a config,
-written by hand or by an older `init`, still reads as nothing to check on every run.
+A config with empty `uiFileGlobs`, such as one written by hand or by an older `init`, is
+refused on every path that reads a config to decide what to check. One rule decides it, and
+each path prints the same sentence, which says why and names the fix:
+
+- The CLI's config loader. `usabl check` and every other command that loads the config file
+  through it, the dev-server overlay included, stop with exit 4 before they run, the same way
+  they stop on any other config error.
+- The CI judge, `check --ci --trusted-ref <ref> --isolated-browser`. It reads the config at the
+  trusted ref and never calls the loader, so it applies the rule itself, with exit 4.
+- The Stop hook. It never says idle for such a config. It blocks the stop as approval
+  required, as it does for a config that does not parse, and lets one continuation through.
+- `usabl doctor` reports the config as drifted, with the same sentence as its next step.
+
+A documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
+loads and names at least one page: the docs manifest says what to check. A manifest that is
+only there, with no pages or that does not load, does not count. Each path reads the manifest
+from where it reads policy: the folder usabl runs in for the loader and doctor, the trusted ref
+for the CI judge, and the repository root for the Stop hook. The Playwright helper reads the
+config only for its design requirements and checks the one page a test hands it, so a run of
+it never reads as idle and it does not apply this rule.
 
 ### Brownfield adoption (prove what you touch)
 
@@ -4788,7 +4857,10 @@ screen the planners can reach is scanned, whatever git status says. Nothing else
 coverage changes: a file no screen owns is still a coverage gap, and that gap still stops
 the run from minting a receipt. It is still a generator. It exits 0, mints no verdict of
 its own, and takes every honesty state from receipt binding, exactly as the per-change
-mode does.
+mode does. In practice that means `--all` mints no receipt in most apps: one UI file that no
+route or surface reaches, such as a shared layout imported through an alias usabl cannot
+follow, is a coverage gap, so every card reads as not verified. Map those files, as the gap
+reasons say, to get bound cards.
 
 When no content requirement covers a scanned screen, the alt-text manifest for that
 screen is drafted from the page instead. The docs run reads each image on the screen
@@ -4796,12 +4868,18 @@ screen is drafted from the page instead. The docs run reads each image on the sc
 and role from the accessibility tree. Gating runs never read them. Each entry is the
 image's element path and the text it has now. An image with no name reads `Marked
 decorative on the page.` when its own `alt` is empty or its role is `none` or
-`presentation`, and `No text alternative on the page.` otherwise.
+`presentation`, and `No text alternative on the page.` otherwise. An `input type="image"`
+with no `aria-labelledby`, `aria-label`, `alt`, `value`, or `title` gets a name from the
+browser, "Submit" in English. That name is not text the page wrote, so it is drafted as
+`No text alternative on the page.`, read from the attributes and never from the name, so the
+browser's language does not change it.
 That text is untrusted page text. It passes the published scrub, which also drops the query and
-the fragment of any URL the page repeats, element paths included, each string is cut to a
-fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
-screen, with one more entry that counts the rest. Every drafted entry has `origin:
-'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a
+the fragment of any URL the page repeats, element paths included. Each string is cut to a fixed
+number of characters, never inside a character, and marked `(shortened)` when cut, and at most
+200 images are listed per screen, with one more entry that counts the rest. Every drafted entry
+has `origin: 'page'` and `status: 'draft'`, and never an `evidenceRef`. The manifest itself
+carries `origin: 'page'` too, so a screen that showed no images still reads as drafted from the
+page, and its card says the page showed no images. It never becomes a check, a
 requirement, or an approval. The HTML page labels such a card "Drafted from the page" and
 says a person must review every entry. A screen that has content requirements keeps the
 manifest built from them, and a screen whose images could not be read, or that usabl did
@@ -5142,6 +5220,21 @@ a verified receipt over a real failure.
 
 usabl refuses any id that could stand for more than one screen, checked when coverage is planned,
 before the idle return, because a docs page can be scanned in a run where no app file changed.
+
+The router fallback joins the segments of a path with `-`, so two paths can give one id: `/a-b`
+and `/a/b` both give `a-b`. Neither route is named. Both are set aside like a route whose derived
+id fails the grammar, so a wide-blast change records each as a `skipped` gap, and every other
+route still runs. Only a wide-blast change names them. A narrow change, one whose files match no
+wide-blast glob, maps a changed file to screens through route entry files, and a route read from
+the router has none, set aside or not. So, unless a surface lists it, the changed file maps to no
+screen and is reported as an `unresolved` gap that names the file, and the routes set aside are
+not mentioned. `usabl drift routes` still counts every route set aside as a route the router
+declares: a sidecar that names it reports no removal, and a sidecar that omits it reports it as
+added, so drift never says "No drift detected" for a route check never scans. `usabl init` refuses the whole draft in that case, names the file and line of
+each route that shares an id, and says to write `usabl.config.json` and `usabl.routes.json` by
+hand, with a screen id of its own for each route, then run `usabl drift routes` to check the
+sidecar against the router file. Running `init` again would refuse again, because it reads the
+router before any file on disk.
 
 **A surface and a discovered route may share an id, but the config has to say so.** Set
 `"overridesDiscoveredRoute": true` on the surface. That is how a surface controls the scan URL for

@@ -5,9 +5,9 @@
  * stopping before it starts.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../../src/cli.js';
@@ -56,5 +56,47 @@ describe('check --isolated-browser with a trusted ref', () => {
     // The changed config is a guarded-path change, so the run waits for approval, never a pass.
     expect(result.dirtyGuardedPaths).toContain('usabl.config.json');
     expect(code).not.toBe(0);
+  }, 60_000);
+
+  // The judge builds its config from the trusted ref and never calls the loader, so an empty
+  // uiFileGlobs list there read every change as nothing to check and exited 0. The docs manifest
+  // that would excuse it is read at the trusted ref too, so the head cannot add one to pass.
+  const commitEmptyGlobs = async (files: Record<string, string>): Promise<string> => {
+    await writeFile(join(repo, 'usabl.config.json'), JSON.stringify({ ...testConfig(), uiFileGlobs: [] }), 'utf8');
+    for (const [name, text] of Object.entries(files)) {
+      await mkdir(dirname(join(repo, name)), { recursive: true });
+      await writeFile(join(repo, name), text, 'utf8');
+    }
+    await execFileAsync('git', ['add', 'usabl.config.json', ...Object.keys(files)], { cwd: repo });
+    await execFileAsync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-q', '-m', 'empty globs'], { cwd: repo });
+    return (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+  };
+
+  it('refuses a trusted config with an empty uiFileGlobs list, exit 4, with the workflow command line', async () => {
+    const base = await commitEmptyGlobs({ 'src/App.tsx': 'export const App = 1;\n' });
+    await writeFile(join(repo, 'src/App.tsx'), 'export const App = 2;\n', 'utf8');
+    const code = await main(['check', '--ci', '--trusted-ref', base, '--isolated-browser', '--json']);
+    expect(code).toBe(4);
+    expect(stdout.join('')).toBe('');
+    expect(stderr.join('')).toContain('usabl.config.json has an empty uiFileGlobs list');
+  }, 60_000);
+
+  it('reads the docs manifest that would excuse it at the trusted ref, not in the head', async () => {
+    const base = await commitEmptyGlobs({ 'usabl.docs.json': '{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}' });
+    await writeFile(
+      join(repo, 'usabl.docs.json'),
+      JSON.stringify({
+        format: 'asciidoc-modular',
+        docsBaseUrl: 'http://127.0.0.1:4000',
+        builtRoot: 'build/html',
+        pages: [{ pageId: 'install', url: '/install/index.html', assemblyFile: 'assemblies/install.adoc', sources: [] }],
+        sharedGlobs: [],
+      }),
+      'utf8',
+    );
+    const code = await main(['check', '--ci', '--trusted-ref', base, '--isolated-browser', '--json']);
+    expect(code).toBe(4);
+    expect(stdout.join('')).toBe('');
+    expect(stderr.join('')).toContain('usabl.config.json has an empty uiFileGlobs list');
   }, 60_000);
 });

@@ -12,6 +12,7 @@
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
 import { parseUsablConfig } from '../intake/config.js';
+import { uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { judgeDisclosure } from './disclosure.js';
 import { allowedOriginsFrom, blockedOriginLabel, type BrowserIsolation } from './request-filter.js';
 
@@ -28,7 +29,9 @@ export type PreparedJudge =
   // config is the trusted config, or null when there is no trusted ref or it has no readable
   // config. In the second case the caller must not take runtime settings from the head.
   | { ok: true; isolation: BrowserIsolation; config: UsablConfig | null; finish: (result: Result) => Result }
-  | { ok: false; message: string };
+  // exitCode 2 is a workflow error, such as a bad build digest. 4 is a trusted config that cannot
+  // be used, the same as any other config error.
+  | { ok: false; message: string; exitCode: 2 | 4 };
 
 // The settings that change how the judge runs rather than what it plans. When the trusted ref has
 // no readable config, the head's copy is still used to plan, and these are taken out of it, so the
@@ -50,12 +53,19 @@ function parseTrusted(raw: string | null): UsablConfig | null {
 export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJudge> {
   const digestCheck = judgeDisclosure(0, input.buildDigestEnv);
   if (!digestCheck.ok) {
-    return { ok: false, message: digestCheck.message };
+    return { ok: false, message: digestCheck.message, exitCode: 2 };
   }
   const read = (path: string): Promise<string | null> =>
     input.trustedRef === null ? input.readWorking(path) : input.readAtRef(input.trustedRef, path);
   const configRaw = await read(input.trustedRef === null ? input.configPath : 'usabl.config.json');
   const docsRaw = await read('usabl.docs.json');
+  // The judge runs on this config and never calls the loader, so it applies the loader's rule for
+  // an empty uiFileGlobs list here, with the docs manifest read from the same trusted ref.
+  const trustedConfig = input.trustedRef === null ? null : parseTrusted(configRaw);
+  const refusal = trustedConfig === null ? null : uiFileGlobsRefusal(trustedConfig, docsRaw, 'usabl.config.json');
+  if (refusal !== null) {
+    return { ok: false, message: refusal, exitCode: 4 };
+  }
   const origins = allowedOriginsFrom(configRaw, docsRaw);
   if (origins.length === 0) {
     input.log(
@@ -79,7 +89,7 @@ export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJu
   return {
     ok: true,
     isolation,
-    config: input.trustedRef === null ? null : parseTrusted(configRaw),
+    config: trustedConfig,
     finish: (result) => ({
       ...result,
       judge: { isolatedBrowser: true, blockedRequests: blocked, buildDigest: digestCheck.judge.buildDigest },
