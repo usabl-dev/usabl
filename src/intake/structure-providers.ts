@@ -123,6 +123,11 @@ const TREE_OVER_LIMIT = `The page's accessibility tree has more than ${DESIGN_AX
 
 const TREE_OVER_LIMIT_FIX = `Check this requirement by hand, or check a smaller screen, such as one page of a long list. usabl reads at most ${DESIGN_AX_TREE_NODE_LIMIT} accessibility tree nodes for a design check.`;
 
+// The start of the reason for a tree answer that held no list of nodes. Each use ends it.
+const TREE_UNREADABLE = 'The browser gave an accessibility tree usabl could not read,';
+
+const TREE_UNREADABLE_FIX = 'Check this requirement by hand, or run the check again. The browser answered without a list of accessibility tree nodes.';
+
 interface DraftFields {
   elementPath: string;
   node: AxNode | null;
@@ -187,15 +192,18 @@ function refusedDraft(
   }
   if (resolution.kind === 'cannot-tell') {
     const overLimit = resolution.reason === 'tree-over-limit';
+    const noOther = `so it cannot make sure that no other ${ROLE_WORD[target.role]} is named "${target.name}", and it does not guess.`;
     const why = overLimit
-      ? `${TREE_OVER_LIMIT} so it cannot make sure that no other ${ROLE_WORD[target.role]} is named "${target.name}", and it does not guess.`
-      : `The page's accessibility tree has ${counted(resolution.inTree ?? 0, target.role)} named "${target.name}", and usabl found ${resolution.found} it can read in the page document, so it cannot tell which element the design means, and it does not guess.`;
+      ? `${TREE_OVER_LIMIT} ${noOther}`
+      : resolution.reason === 'tree-unreadable'
+        ? `${TREE_UNREADABLE} ${noOther}`
+        : `The page's accessibility tree has ${counted(resolution.inTree ?? 0, target.role)} named "${target.name}", and usabl found ${resolution.found} it can read in the page document, so it cannot tell which element the design means, and it does not guess.`;
     return draft(requirement, kind, 'unverified', {
       elementPath: SCREEN_PATH,
       node: null,
       whatUserExperiences: `Whether ${question} is unknown.`,
       why,
-      fix: overLimit ? TREE_OVER_LIMIT_FIX : CANNOT_TELL_FIX,
+      fix: overLimit ? TREE_OVER_LIMIT_FIX : resolution.reason === 'tree-unreadable' ? TREE_UNREADABLE_FIX : CANNOT_TELL_FIX,
       extra: {
         found: resolution.found,
         inTree: resolution.inTree,
@@ -437,19 +445,20 @@ async function checkLandmark(
   // The document search found none. The whole accessibility tree also sees closed shadow roots and
   // roles set by script, so a landmark there is unknown, not missing.
   const perceived = await perceivedWithRole(page, role, tree);
-  if (perceived === null) {
+  if ('unread' in perceived) {
+    const overLimit = perceived.unread === 'tree-over-limit';
     return [
       draft(requirement, 'landmark', 'unverified', {
         elementPath: SCREEN_PATH,
         node: null,
         whatUserExperiences: `Whether the screen has a ${ROLE_WORD[role]} is unknown.`,
-        why: `usabl found none in the page document. ${TREE_OVER_LIMIT} so it cannot make sure there is none.`,
-        fix: TREE_OVER_LIMIT_FIX,
-        extra: { nodeLimit: DESIGN_AX_TREE_NODE_LIMIT },
+        why: `usabl found none in the page document. ${overLimit ? TREE_OVER_LIMIT : TREE_UNREADABLE} so it cannot make sure there is none.`,
+        fix: overLimit ? TREE_OVER_LIMIT_FIX : TREE_UNREADABLE_FIX,
+        ...(overLimit ? { extra: { nodeLimit: DESIGN_AX_TREE_NODE_LIMIT } } : {}),
       }),
     ];
   }
-  if (perceived.some((node) => isLandmark(role, node))) {
+  if (perceived.nodes.some((node) => isLandmark(role, node))) {
     return [
       draft(requirement, 'landmark', 'unverified', {
         elementPath: SCREEN_PATH,

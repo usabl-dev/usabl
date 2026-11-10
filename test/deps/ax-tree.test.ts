@@ -289,6 +289,14 @@ describe('readDesignAxTree', () => {
     expect(fast.kind).toBe('tree');
   });
 
+  it('reads an answer with no list of nodes as unreadable, never as a tree with no nodes', async () => {
+    for (const answer of [{}, { nodes: 'x' }, { nodes: { length: 1 } }, null, 'tree']) {
+      expect({ answer, read: await readDesignAxTree(async () => answer) }).toEqual({ answer, read: { kind: 'unreadable' } });
+    }
+    // An empty list is a real answer: a tree with no nodes.
+    expect(await readDesignAxTree(async () => ({ nodes: [] }))).toEqual({ kind: 'tree', nodes: [] });
+  });
+
   it(`reads a tree of exactly ${DESIGN_AX_TREE_NODE_LIMIT} nodes`, async () => {
     expect((await readDesignAxTree(async () => sized(DESIGN_AX_TREE_NODE_LIMIT))).kind).toBe('tree');
   });

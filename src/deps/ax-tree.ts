@@ -273,7 +273,12 @@ export const DESIGN_AX_TREE_NODE_LIMIT = 20000;
 export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead> {
   const result = await send('Accessibility.getFullAXTree');
   const rawNodes = getProp(result, 'nodes');
-  if (Array.isArray(rawNodes) && rawNodes.length > DESIGN_AX_TREE_NODE_LIMIT) {
+  // An answer with no list of nodes is not an empty tree. Read as one, it would let a name check
+  // report a missing element on a page it never read.
+  if (!Array.isArray(rawNodes)) {
+    return { kind: 'unreadable' };
+  }
+  if (rawNodes.length > DESIGN_AX_TREE_NODE_LIMIT) {
     return { kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT };
   }
   return { kind: 'tree', nodes: axTreeFromCdp(result).nodes };

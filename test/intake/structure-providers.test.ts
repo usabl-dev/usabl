@@ -103,6 +103,16 @@ describe('name requirement', () => {
     expect(drafts[0]?.confidence).toBe('fail');
   });
 
+  it('is unconfirmed, never a fail, when the accessibility tree answer could not be read', async () => {
+    const page = pageWith({}, { designAxTree: async () => ({ kind: 'unreadable' }) });
+    const drafts = await run(r, page);
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      'The browser gave an accessibility tree usabl could not read, so it cannot make sure that no other button is named "Refresh", and it does not guess.',
+    );
+    expect(drafts[0]?.whatUserExperiences).not.toContain('There is no button');
+  });
+
   it('is unconfirmed, and names the hidden character, when the page name differs only by a no-break space', async () => {
     const drafts = await run(r, pageWith({ '#r': button('Refresh ') }));
     expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
@@ -317,6 +327,15 @@ describe('landmark requirement', () => {
     expect(drafts[0]?.confidence).toBe('unverified');
     expect(drafts[0]?.why).toBe(
       `usabl found none in the page document. The page's accessibility tree has more than ${DESIGN_AX_TREE_NODE_LIMIT} nodes, the most usabl reads for a design check, so it cannot make sure there is none.`,
+    );
+  });
+
+  it('is unconfirmed, never a fail, when the accessibility tree answer could not be read', async () => {
+    const page = pageWith({}, { designAxTree: async () => ({ kind: 'unreadable' }) });
+    const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      'usabl found none in the page document. The browser gave an accessibility tree usabl could not read, so it cannot make sure there is none.',
     );
   });
 });

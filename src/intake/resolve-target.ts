@@ -68,7 +68,11 @@ export interface RoleSearch {
 // Why the search cannot tell whether its matches are all the matches. 'tree-differs': the whole
 // accessibility tree has another number of elements with this role and name than the document
 // search read. 'tree-over-limit': the tree has more nodes than DESIGN_AX_TREE_NODE_LIMIT.
-export type CannotTellReason = 'tree-differs' | 'tree-over-limit';
+// 'tree-unreadable': the browser's answer held no list of nodes.
+export type CannotTellReason = 'tree-differs' | 'tree-over-limit' | 'tree-unreadable';
+
+// Why the whole tree could not be used: it was not read, or it could not be.
+export type TreeUnread = 'tree-over-limit' | 'tree-unreadable';
 
 // Where a search gets the page's whole accessibility tree. The design checks share one read per
 // page state, so each check is handed the read rather than asking the page again.
@@ -114,20 +118,23 @@ export async function findByRole(page: Page, role: TargetRole): Promise<RoleSear
 
 /**
  * The nodes of the page's whole accessibility tree that assistive technology perceives with a
- * role, or null when the tree has more nodes than usabl reads. The browser builds the tree from
- * every role source, closed shadow roots included. It does not cover child frames, which
- * countEverywhere does.
+ * role, or why the tree could not be used: it has more nodes than usabl reads, or the browser's
+ * answer could not be read. The browser builds the tree from every role source, closed shadow
+ * roots included. It does not cover child frames, which countEverywhere does.
  */
 export async function perceivedWithRole(
   page: Page,
   role: TargetRole,
   readTree: DesignTreeSource = () => page.designAxTree(),
-): Promise<AxTreeNode[] | null> {
+): Promise<{ nodes: AxTreeNode[] } | { unread: TreeUnread }> {
   const tree = await readTree();
-  if (tree.kind !== 'tree') {
-    return null;
+  if (tree.kind === 'over-limit') {
+    return { unread: 'tree-over-limit' };
   }
-  return tree.nodes.filter((node) => !node.ignored && roleMatches(role, node.role));
+  if (tree.kind !== 'tree') {
+    return { unread: 'tree-unreadable' };
+  }
+  return { nodes: tree.nodes.filter((node) => !node.ignored && roleMatches(role, node.role)) };
 }
 
 export async function resolveTarget(
@@ -144,10 +151,10 @@ export async function resolveTarget(
     return { kind: 'out-of-reach', found: named.length, outOfReach: search.outOfReach };
   }
   const perceived = await perceivedWithRole(page, target.role, readTree);
-  if (perceived === null) {
-    return { kind: 'cannot-tell', reason: 'tree-over-limit', found: named.length, inTree: null };
+  if ('unread' in perceived) {
+    return { kind: 'cannot-tell', reason: perceived.unread, found: named.length, inTree: null };
   }
-  const inTree = perceived.filter((node) => sameName(node.name, target.name)).length;
+  const inTree = perceived.nodes.filter((node) => sameName(node.name, target.name)).length;
   // The tree sees every element with the role and name. When it has two, there are two elements,
   // whatever the document search read.
   if (inTree > 1) {

@@ -739,8 +739,12 @@ export type AxTreeRead =
   | { kind: 'over-budget'; limit: 'time' | 'nodes' };
 // What one read of the whole accessibility tree for the design checks returned. The read has no
 // time limit, so its result never depends on how fast the machine is. A tree with more nodes than
-// `limit` is not read, and a check that needs it cannot tell, and says so.
-export type DesignAxTreeRead = { kind: 'tree'; nodes: AxTreeNode[] } | { kind: 'over-limit'; limit: number };
+// `limit` is not read, and a check that needs it cannot tell, and says so. An answer that holds no
+// list of nodes is unreadable, never a tree with no nodes, and a check that needs it cannot tell.
+export type DesignAxTreeRead =
+  | { kind: 'tree'; nodes: AxTreeNode[] }
+  | { kind: 'over-limit'; limit: number }
+  | { kind: 'unreadable' };
 export interface ElementRef {
   selector: string;
 }
