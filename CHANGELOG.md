@@ -201,6 +201,54 @@
 
 ### Fixed
 
+- A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
+  end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
+  merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
+  `src/pages/Über.tsx` matched no `uiFileGlobs` and the run exited 0 with nothing to check. Every
+  git listing now uses `-z` and keeps names untrimmed. Gate effect: such a run now scans the file,
+  or reports it as not covered.
+
+- A change to a guarded file with such a name, for example `policy/Über.yaml`, now needs
+  approval in CI. Before, the guard at the trusted ref listed the quoted name, found no file
+  under it on either ref, and skipped the change. The policy hash now keys those
+  files by their true names, so a stored receipt for a repository with such guarded files does
+  not verify once after the upgrade, and the stop hook runs one full check. Gate effect: the
+  change is `approval_required` where it passed.
+
+- A changed path that starts and ends with a double quote, the shape git prints for a quoted
+  name, is now an unresolved gap, in CI and in local runs. usabl cannot tell which file it names.
+  Gate effect: such a run is not covered where it read as nothing to check.
+
+- Local runs and the stop hook now list a staged rename by its new name. Before, they listed the
+  old name. They also list new untracked files one by one, so a new folder is listed by its files
+  and `status.showUntrackedFiles=no` no longer hides them. CI runs read the same merge-base diff
+  as before. Gate effect, in local runs and the stop hook: a renamed file is checked under its new
+  name, and a new file in a new folder or hidden by that setting is checked where it read as
+  nothing to check. The old name of a rename is no longer listed, so a file moved out of the UI
+  globs is seen only through the other files the move changes. A listing longer than usabl reads
+  stops the run with an error that says so.
+
+- A trusted requirement file with a non-ASCII name, such as `requirements/Über.yaml`, is now
+  loaded under a trusted ref. Before, it was left out with nothing said. Gate effect: its
+  requirements are checked in CI.
+
+- A UI file in a folder named `test`, `tests`, or `__tests__` is now checked when a screen
+  imports it or a surface lists it, and is an unresolved gap when an import usabl could not
+  resolve may load it. Before, every file in such a folder was dropped, so a real screen kept
+  there read as nothing to check. A file there that no import reaches is listed in
+  `coverage.excludedFiles` and in the summary as not blocking, and is not a gap. Files named
+  `*.test.*` or `*.spec.*` stay excluded. Gate effect, in CI and in local runs: a reachable UI file
+  in such a folder is now scanned, and one an unresolved import may load is not covered.
+
+- Configured surfaces are now queued by screen id on a dependency change and on a change to a
+  file that matches `wideBlastGlobs`. Before, a surface whose url a route or another surface
+  already had was skipped, with its own readiness signal and requirements. Gate effect, in CI and
+  in local runs: more screens are checked on such a change.
+
+- The gate input now refuses a result whose `coverage.excludedFiles` field is malformed. Before,
+  the field was dropped. This changes only a library caller that hands `gate()` its own coverage;
+  a command run builds that field itself. Gate effect: such a call is refused where it went on.
+
 - A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
   surface no longer stops the run. The search for the app's `package.json` read a file such as
   `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
