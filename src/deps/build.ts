@@ -1,7 +1,9 @@
 /**
  * Real Deps builder for the live `usabl check` CLI path.
  * This unit wires adapters and providers only and must never decide verdicts.
- * Browser launch stays lazy so normal checks and type/test workflows do not open Chromium.
+ * Browser launch stays lazy: nothing opens a page until the first screen is scanned. Building the
+ * deps does run the headless shell once per process with --version, to read the Chromium version a
+ * receipt binds (see scanner-versions.ts).
  */
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";

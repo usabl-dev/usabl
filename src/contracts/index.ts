@@ -357,7 +357,7 @@ export interface Receipt {
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
   // The earliest expiry among the waivers the run applied, or null when it applied none. Once the
-  // clock reaches it the gate would count the waived barrier again, so the receipt stops
+  // clock reaches it the gate would count the waived accessibility barrier again, so the receipt stops
   // verifying then. Every receipt minted now carries it. A receipt minted before it existed has no
   // such field and verifies only when its activeWaivers is 0.
   waiverExpiresAt?: string | null;

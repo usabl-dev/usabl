@@ -147,6 +147,12 @@ passing bundle from another run.
   verified, and mints no receipt. An edit after the second read moves the tree away from the
   bound one, so the stored receipt does not stand for it. An idle run (no UI files changed) is
   left idle, since it scanned nothing.
+- Known limits of comparing two tree reads. It sees only the tree at the two moments it reads.
+  An edit made during the scan and undone before the second read leaves both reads equal, so
+  the run is verified and the receipt binds a tree the scan did not see as it was. And the tree
+  is not what the browser loads: a dev server that still serves an older build than the tree
+  gets scanned, and the receipt binds the newer tree. Both cases stay verified today. Neither
+  can be closed by comparing tree reads.
 - `verifyReceipt` re-derives `sourceTree` and `policyHash` from the current tree and HEAD
   and compares all five bindings. A bundle lifted from another run fails because its
   bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path

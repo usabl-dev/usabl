@@ -209,8 +209,9 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
         // A scanner version usabl cannot read cannot be bound, so no receipt could stand for this
         // run. The gap makes that not covered, never verified. An idle run binds nothing.
         ...(nothingToCheck ? [] : scannerVersionGaps(deps.scannerVersions)),
-        // First, so the surfaces that name one example per gap state name this one. It explains
-        // why no app screen appears on this run. Docs screens can still appear below it.
+        // After the tree and scanner version gaps, so the surfaces that name one example per gap
+        // state name this one when neither of those is present. It explains why no app screen
+        // appears on this run. Docs screens can still appear below it.
         ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),
         // Next, because it explains why no screen at all was scanned on this run.
         ...(intakeGap === null ? [] : [intakeGap]),
@@ -296,8 +297,8 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
-            // When the first waiver this verdict leaned on ends, the gate counts its barrier again,
-            // so the receipt must stop standing for this tree at that moment.
+            // When the first waiver this verdict leaned on ends, the gate counts its accessibility
+            // barrier again, so the receipt must stop standing for this tree at that moment.
             waiverExpiresAt: earliestAppliedWaiverExpiry(gated.findings, waivers, now),
             // The tree read before planning, which the read after the scan matched. A later edit
             // moves the tree, so this receipt does not stand for it.

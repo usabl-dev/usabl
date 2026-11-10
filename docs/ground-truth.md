@@ -2781,6 +2781,10 @@ Five bindings are compared on re-verification, plus the waiver end below:
   read, so an edit after the second read moves the tree away from it. An idle run is left idle.
   Every run reads the tree first, so a repository with no commits, where git has no HEAD to read
   the tree against, ends with no verdict and exit 4, and the summary says to make a first commit.
+  Known limits: two reads see the tree only at those two moments. An edit made during the scan
+  and undone before the second read leaves the reads equal, so the run is verified and the
+  receipt binds a tree the scan did not see as it was. A dev server that still serves an older
+  build than the tree is scanned, and the receipt binds the newer tree. Both stay verified today.
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
