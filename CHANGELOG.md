@@ -179,6 +179,43 @@
 
 ### Fixed
 
+- The pull request comment now stays under the size GitHub accepts. GitHub refuses a body over
+  65,536 characters, and the required check then failed with no comment. Every carried value is
+  cut to a fixed length, coverage gaps are named up to 20 per state with a count of the rest, and
+  when the body is still over 60,000 characters the lowest-priority items are left out first,
+  starting with the announcements (section 11.4 of the ground truth gives the order). The verdict line, the
+  approval line, the counts, and the first line of each gating finding stay. The comment says how
+  many items it left out and that the full Result is in the `usabl-result` artifact. Gate
+  effect: none.
+
+- `usabl docs` output now goes through the published scrub, so a URL query or fragment the page
+  repeats is dropped from the JSON and the HTML report, as on the other published surfaces.
+
+- A `usabl docs` report now records the git tree it was made from (`sourceTree`), and a report
+  made from another tree is marked `stale: true` with a `staleReason` that names both trees and
+  says to run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file
+  saved during the scan marks the report stale. On the HTML page a stale card reads "Out of
+  date" and never "Verified". `markStaleDocArtifacts` from `usabl/docs` checks a saved report
+  against the current tree.
+
+- `usabl enforce accessibility` no longer passes a Result with no accessibility verdict and
+  exit 0 unless the Result also says nothing was to check. Any other such Result exits 4, as the
+  pull request comment and the Stop hook already read it. Gate effect: the CI judge blocks such a
+  Result.
+
+- The Vite plugin adds the overlay loader only in `vite serve`, so a production build no longer
+  carries a request for a module only the dev server answers.
+
+- The overlay result endpoint frames a finding's why and fix as untrusted text, as the pull
+  request comment does, because for most axe rules both quote the page.
+
+- The pull request comment, the CLI summary, and the overlay say "accessibility barrier" where
+  they said "barrier", for example `### New accessibility barriers`.
+
+- The ground truth now says how a floored accessibility barrier is confirmed fixed: by the
+  neutralized path or the slugged name, or by a held readiness signal, and states the limit when
+  that signal matches only the app shell.
+
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
   merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
