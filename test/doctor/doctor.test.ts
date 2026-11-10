@@ -32,6 +32,7 @@ import {
   CURSOR_STOP_SCRIPT_PATH,
 } from '../../src/install/cursor.js';
 import { testConfig } from '../helpers.js';
+import { emptyUiFileGlobsRefusal } from '../../src/intake/ui-file-globs.js';
 import {
   collectDoctorReport,
   formatDoctorReport,
@@ -935,6 +936,20 @@ export default defineConfig({
       }),
     );
     expect(stateOf(reports, 'config')).toBe('drifted');
+  });
+
+  // usabl check refuses a config with an empty uiFileGlobs list, so doctor must not call it wired.
+  it('reports a config with an empty uiFileGlobs list as drifted, with the sentence check prints', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({ 'usabl.config.json': JSON.stringify(testConfig({ uiFileGlobs: [] })) }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    const report = reports.find((entry) => entry.id === 'config');
+    expect(report?.state).toBe('drifted');
+    expect(report?.nextStep).toBe(emptyUiFileGlobsRefusal('usabl.config.json'));
   });
 
   it('reports a malformed routes manifest as drifted', async () => {

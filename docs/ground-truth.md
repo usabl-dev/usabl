@@ -4136,14 +4136,26 @@ of the router: the new config would be checked against routes `init` did not der
 another app's after `--app` names a different folder. The refusal names the file to review, and
 says to delete it and run `init --force` again if it does not list this app's screens.
 
-The CLI's config loader refuses a config with empty `uiFileGlobs`, such as one written by
-hand or by an older `init`. `usabl check` and every other command that loads the config file
-through it, the dev-server overlay included, stop with exit 4 before they run, the same way
-they stop on any other config error. The refusal says why and names the fix. A
-documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
-exists in the folder usabl runs in: the docs manifest says what to check. The Stop hook,
-`usabl doctor`, and the Playwright helper parse the config themselves and do not apply this
-refusal.
+A config with empty `uiFileGlobs`, such as one written by hand or by an older `init`, is
+refused on every path that reads a config to decide what to check. One rule decides it, and
+each path prints the same sentence, which says why and names the fix:
+
+- The CLI's config loader. `usabl check` and every other command that loads the config file
+  through it, the dev-server overlay included, stop with exit 4 before they run, the same way
+  they stop on any other config error.
+- The CI judge, `check --ci --trusted-ref <ref> --isolated-browser`. It reads the config at the
+  trusted ref and never calls the loader, so it applies the rule itself, with exit 4.
+- The Stop hook. It never says idle for such a config. It blocks the stop as approval
+  required, as it does for a config that does not parse, and lets one continuation through.
+- `usabl doctor` reports the config as drifted, with the same sentence as its next step.
+
+A documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
+loads and names at least one page: the docs manifest says what to check. A manifest that is
+only there, with no pages or that does not load, does not count. Each path reads the manifest
+from where it reads policy: the folder usabl runs in for the loader and doctor, the trusted ref
+for the CI judge, and the repository root for the Stop hook. The Playwright helper reads the
+config only for its design requirements and checks the one page a test hands it, so a run of
+it never reads as idle and it does not apply this rule.
 
 ### Brownfield adoption (prove what you touch)
 

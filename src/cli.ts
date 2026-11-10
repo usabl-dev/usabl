@@ -815,7 +815,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     if (!prepared.ok) {
       process.stderr.write(`usabl: ${prepared.message}\n`);
-      return 2;
+      return prepared.exitCode;
     }
     judge = prepared;
   }

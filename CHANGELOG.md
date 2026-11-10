@@ -1159,10 +1159,14 @@
   the other commands that load it through the CLI's config loader with a config error, exit 4,
   where `usabl check` used to exit 0 as nothing to check.
   With no UI globs, no change was ever a UI change, so every run read as idle without looking at
-  anything. The message names the fix. A documentation-only repository still loads: when
-  `usabl.docs.json` exists in the folder usabl runs in, an empty list is accepted. Scripts that
-  read exit 0 from such a config now see 4. The Stop hook, `usabl doctor`, and the Playwright
-  helper parse the config themselves and do not apply this refusal.
+  anything. The message names the fix. The CI judge
+  (`check --ci --trusted-ref <ref> --isolated-browser`) applies the same rule to the config at
+  the trusted ref and exits 4, where it used to exit 0. The Stop hook blocks such a config once
+  as approval required, where it used to say idle and let the stop through. `usabl doctor`
+  reports it as drifted. A documentation-only repository still loads when its
+  `usabl.docs.json` loads and names at least one page, read from the same place as the config.
+  A manifest with no pages, or one that does not load, no longer counts. Scripts that read
+  exit 0 from such a config now see 4.
 
 - Flow requirements now read each step at its own time. A flow waits for the page to settle
   after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and

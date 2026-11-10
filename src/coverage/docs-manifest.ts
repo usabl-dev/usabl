@@ -187,6 +187,15 @@ export async function parseDocsManifest(fs: FsGlob): Promise<DocsManifest | null
   if (raw === null) {
     return null;
   }
+  return parseDocsManifestText(raw);
+}
+
+/**
+ * Parse usabl.docs.json text that was already read, with the same checks as parseDocsManifest.
+ * Throws on a manifest that does not load. A caller that reads the file at a trusted ref, or
+ * through a port of its own, uses this.
+ */
+export function parseDocsManifestText(raw: string): DocsManifest {
   const manifest = parseSidecar(raw);
   assertUniquePageIds(manifest.pages);
   return manifest;

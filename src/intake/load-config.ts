@@ -5,10 +5,11 @@
  * overlay host, does not load every command the CLI holds. The CLI re-exports it.
  * This unit reads config only. It must never decide a verdict.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import type { UsablConfig } from '../contracts/index.js';
 import { configUrlWarningsByUrl, parseUsablConfig } from './config.js';
 import { operatorText } from './config-error.js';
+import { uiFileGlobsRefusal } from './ui-file-globs.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -25,8 +26,8 @@ export async function loadConfig(
   warn: (line: string) => void = (line) => {
     process.stderr.write(`${line}\n`);
   },
-  // The docs manifest the run reads, from the folder usabl runs in. Its presence is what lets a
-  // config with no UI globs load. Tests pass a path of their own.
+  // The docs manifest the run reads, from the folder usabl runs in. A config with no UI globs loads
+  // only when this manifest loads and names a page. Tests pass a path of their own.
   docsManifestPath = 'usabl.docs.json',
 ): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
@@ -47,34 +48,21 @@ export async function loadConfig(
     throw error;
   }
   const config = parseConfigText(raw, warn);
-  if (config.uiFileGlobs.length === 0 && !(await fileExists(docsManifestPath))) {
-    throw new Error(emptyUiFileGlobsRefusal(path));
+  // The manifest is read only when the list is empty. See ui-file-globs.ts.
+  const refusal = config.uiFileGlobs.length === 0 ? uiFileGlobsRefusal(config, await readText(docsManifestPath), path) : null;
+  if (refusal !== null) {
+    throw new Error(refusal);
   }
   return config;
 }
 
-/**
- * Why a config with no UI globs is refused. With none, no changed file is a UI file, so every run
- * reads as nothing to check and exits 0, which reads like a pass on a run that looked at nothing.
- * A documentation-only repository has no UI files, and its usabl.docs.json says what to check, so
- * that shape still loads.
- */
-export function emptyUiFileGlobsRefusal(path: string): string {
-  return (
-    `${operatorText(path)} has an empty uiFileGlobs list, so usabl would read no change as a UI change, ` +
-    'and every run would say nothing to check without looking at anything. usabl did not run. ' +
-    'Set uiFileGlobs to the files that render your UI, such as src/**/*.tsx. ' +
-    'If this repository holds documentation only, add usabl.docs.json, which "usabl init --docs" drafts.'
-  );
-}
-
-// A manifest usabl cannot even look at is not proof of a documentation-only repository.
-async function fileExists(path: string): Promise<boolean> {
+// A manifest usabl cannot read is not proof of a documentation-only repository, so any read
+// error counts as no manifest.
+async function readText(path: string): Promise<string | null> {
   try {
-    await stat(path);
-    return true;
+    return await readFile(path, 'utf8');
   } catch {
-    return false;
+    return null;
   }
 }
 

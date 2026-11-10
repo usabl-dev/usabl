@@ -24,6 +24,7 @@ import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
+import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
 import { frameUntrustedBlock } from './scrub.js';
@@ -298,7 +299,7 @@ function driftMessage(drift: string[], continuation: boolean): string {
 const CONFIG_FILE = 'usabl.config.json';
 
 /** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
-type ConfigProblem = 'differs' | 'missing' | 'unreadable' | 'unparseable';
+type ConfigProblem = 'differs' | 'missing' | 'unreadable' | 'unparseable' | 'no-ui-globs';
 
 const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
   differs:
@@ -309,6 +310,8 @@ const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
     'usabl.config.json in the working tree cannot be read (the error is under "error" in the untrusted text below), so usabl checked nothing on this stop.',
   unparseable:
     'usabl.config.json does not parse (the error is under "error" in the untrusted text below), so usabl cannot read its policy and checked nothing on this stop.',
+  // The sentence usabl check, the CI judge, and usabl doctor print for the same config.
+  'no-ui-globs': `${emptyUiFileGlobsRefusal(CONFIG_FILE)} usabl checked nothing on this stop.`,
 };
 
 // A config that does not parse is not cleared by a revert when the last commit holds the same
@@ -319,6 +322,11 @@ const UNPARSEABLE_CLEARS =
   'This clears when usabl.config.json parses and matches the last commit. A committed config is fixed on a pull request that a code owner reviews. ' +
   'usabl init --force drafts a valid one, and it overwrites usabl.config.json and usabl.routes.json.';
 const CHANGED_NEXT = 'Next: tell the user that usabl.config.json changed and needs approval on the pull request.';
+// A config with no UI globs parses, so it has its own next step: the list needs filling in.
+const NO_UI_GLOBS_NEXT = 'Next: tell the user that uiFileGlobs in usabl.config.json is empty and needs the files that render the UI.';
+const NO_UI_GLOBS_CLEARS =
+  'This clears when uiFileGlobs names the files that render the UI, or usabl.docs.json names a page, and usabl.config.json matches the last commit. ' +
+  'A committed config is fixed on a pull request that a code owner reviews.';
 // A block and a continuation that went through need different words: only a block can be cleared.
 const DO_NOT_EDIT_BLOCK = 'Do not edit the file to clear this block.';
 const DO_NOT_EDIT_CONTINUATION = 'Do not edit the file to make a later stop pass.';
@@ -336,6 +344,8 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
   const doNotEdit = continuation ? DO_NOT_EDIT_CONTINUATION : DO_NOT_EDIT_BLOCK;
   if (problem === 'unparseable') {
     lines.push(`${UNPARSEABLE_NEXT} ${doNotEdit}`, UNPARSEABLE_CLEARS);
+  } else if (problem === 'no-ui-globs') {
+    lines.push(`${NO_UI_GLOBS_NEXT} ${doNotEdit}`, NO_UI_GLOBS_CLEARS);
   } else {
     lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
@@ -684,6 +694,15 @@ async function emitConfigBlock(
   await emitProtocolBlock(ports, configBlockMessage(problem, false, error), options);
 }
 
+// usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
+async function readDocsManifest(fs: StopHookRunnerFs): Promise<string | null> {
+  try {
+    return await fs.readFile('usabl.docs.json');
+  } catch {
+    return null;
+  }
+}
+
 export async function runStopHook(
   input: StopHookInput,
   ports: StopHookRunnerPorts,
@@ -736,6 +755,12 @@ export async function runStopHook(
       config = await ports.loadConfig(step.text);
     } catch (err) {
       await emitConfigBlock(ports, input, options, 'unparseable', errorMessage(err));
+      return 0;
+    }
+    // A config with no UI globs would read every stop as idle. The rule is the loader's, with the
+    // docs manifest read from the repository root through the hook's file port.
+    if (config.uiFileGlobs.length === 0 && uiFileGlobsRefusal(config, await readDocsManifest(ports.fs), CONFIG_FILE) !== null) {
+      await emitConfigBlock(ports, input, options, 'no-ui-globs', null);
       return 0;
     }
     deps = await ports.buildDeps(config);
