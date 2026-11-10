@@ -234,14 +234,14 @@ describe('a report made from another tree is marked stale wherever it is listed 
       expect(artifact.stale).toBe(true);
       expect(artifact.staleReason).toContain('tree-before');
       expect(artifact.staleReason).toContain('tree-after');
-      expect(artifact.staleReason).toContain('usabl docs');
+      expect(artifact.staleReason).toContain('usabl docs read tree tree-before before the run');
     }
     const html = renderDocsHtml(projected.artifacts);
     expect(html).not.toContain('<span class="status__label">Verified.</span>');
     expect(html).toContain('Out of date.');
 
-    // Read back later against the tree the receipt names, the report is still stale: the scan
-    // never saw one whole tree.
+    // Read back later against the tree the receipt names, the report is still stale: usabl docs
+    // read another tree before the run, so the report matches no one tree.
     const read = markStaleDocArtifacts(JSON.parse(projected.json).artifacts, 'tree-after');
     expect(read.every((artifact) => artifact.stale === true)).toBe(true);
   });

@@ -3051,9 +3051,10 @@ Five bindings are compared on re-verification, plus the waiver end below:
   applied none. A waiver applied when it was live at the run's clock and matched a finding the
   gate marked waived. Once the injected clock reaches this time the gate counts the waived
   accessibility barrier again, so `verifyReceipt` fails the receipt and the Stop hook's fast
-  path runs a full check from that moment, and not before. If a waived finding matches none of
-  the waivers by the gate's match rule, the earliest live waiver is bound instead, so a drift
-  between the two can only bind an earlier time. A receipt that counts a waived finding but
+  path runs a full check from that moment, and not before. The receipt finds the waivers it
+  binds with the gate's own match rule (`waiverMatchesFinding`), so there is one rule. If a
+  waived finding still matches no live waiver, the earliest live waiver is bound instead, which
+  can only bind an earlier time. A receipt that counts a waived finding but
   binds no time, or binds a value that is not an ISO-8601 UTC time, does not verify. A receipt
   minted before this field existed has none; it verifies only when it counted no waived finding.
   The schema version stays 2, because that absent value is read safely.
