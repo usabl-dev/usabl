@@ -945,8 +945,8 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   // view with the least scroll (nearest), which moves a box only when the control is not fully
   // inside that box's scrollport. If that scroll moved a box, or the window, on an axis where the
   // overflow is hidden, a person could not bring the control into view, and it counts as clipped.
-  // The centered scroll that follows is not judged this way: the control is already fully inside
-  // every scrollport, so centering cannot show anything those boxes hid. The overflow of each box
+  // The centered scroll that follows is not judged this way, and any axis it moves that a person
+  // cannot scroll is put back before the points are read (below). The overflow of each box
   // is read before any scroll, and a value that is not one usabl knows counts as hidden.
   const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
   const saved = [];
@@ -978,6 +978,22 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
       limits.add('overflow-clipped');
     }
     element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    // The centered scroll may also move a box, or the window, on an axis a person cannot scroll.
+    // Something that does not scroll with the control, such as a sticky footer or a fixed panel,
+    // could then no longer cover it. So each such axis goes back to where it was before any scroll,
+    // and the points are read only at a position a person can bring the control to.
+    for (const [node, left, top, scrollsX, scrollsY] of saved) {
+      const x = scrollsX ? node.scrollLeft : left;
+      const y = scrollsY ? node.scrollTop : top;
+      if (node.scrollLeft !== x || node.scrollTop !== y) {
+        node.scrollTo({ left: x, top: y, behavior: 'instant' });
+      }
+    }
+    const reachX = windowScrollsX ? window.scrollX : windowX;
+    const reachY = windowScrollsY ? window.scrollY : windowY;
+    if (window.scrollX !== reachX || window.scrollY !== reachY) {
+      window.scrollTo({ left: reachX, top: reachY, behavior: 'instant' });
+    }
     const seen = element.getBoundingClientRect();
     // The size is measured on the first box and the points are placed on this one. They must be
     // the same size, or the size compared is not the size that was hit.

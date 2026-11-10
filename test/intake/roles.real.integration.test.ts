@@ -97,6 +97,26 @@ const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 // wholly inside the visible part of a box that hides its overflow across and holds much wider
 // content: one near its left edge, and one right of its center, which a centered scroll would move
 // the box for. Neither needs a scroll to be in view, so both pass.
+// Two controls covered where they rest, each on a page of its own because the shape of each page
+// would change what the other cases see. In the first, a sticky footer covers the button inside a
+// box that hides its overflow. In the second, the body hides sideways overflow on a page wider
+// than the viewport, and a fixed panel covers the button. A centered scroll would move each button
+// out from under its cover, but a person cannot make that scroll, so neither may pass.
+const STICKY_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sticky</title></head><body><main>
+  <div style="height:200px;overflow:hidden">
+    <div style="height:150px"></div>
+    <button id="sticky-save" aria-label="Save" style="width:44px;height:44px;padding:0;border:0"></button>
+    <div style="height:340px"></div>
+    <div style="position:sticky;bottom:0;height:60px;background:#fff">Actions</div>
+  </div>
+</main></body></html>`;
+
+const SIDE_PANEL_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Panel</title></head><body style="margin:0;overflow-x:hidden"><main>
+  <div style="width:3000px;height:10px"></div>
+  <button id="under-panel" aria-label="Under panel" style="${BUTTON};position:absolute;top:100px;right:36px"></button>
+  <div style="position:fixed;top:0;right:0;width:200px;height:100%;background:#fff">Panel</div>
+</main></body></html>`;
+
 const HIT_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hit</title></head><body style="margin:0"><main>
   <div style="${ROW}"><button id="plain" aria-label="Plain" style="${BUTTON}"></button></div>
   <div style="${ROW}"><button id="round" aria-label="Round" style="${BUTTON};border-radius:50%"></button></div>
@@ -149,6 +169,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         '/shapes.html': SHAPES_PAGE,
         '/missed.html': MISSED_PAGE,
         '/hit.html': HIT_PAGE,
+        '/sticky.html': STICKY_PAGE,
+        '/side-panel.html': SIDE_PANEL_PAGE,
         '/shadow.html': SHADOW_PAGE,
         '/focus-blur.html': focusPage(true),
         '/focus.html': focusPage(false),
@@ -295,6 +317,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
       expect((await page.boundingBox('#scaled-above'))?.unmeasurable).toEqual(['hit-test-missed']);
     });
   });
+
+  for (const [path, selector, name] of [
+    ['/sticky.html', '#sticky-save', 'Save'],
+    ['/side-panel.html', '#under-panel', 'Under panel'],
+  ] as const) {
+    it(`asks for review, never a pass, of a control covered where a person can bring it (${path})`, async () => {
+      await withPage(path, async (page) => {
+        const box = await page.boundingBox(selector);
+        expect((box?.width ?? 0) >= 24 && (box?.height ?? 0) >= 24).toBe(true);
+        expect(box?.unmeasurable).toContain('hit-test-missed');
+        expect(await targetSizeConfidence(page, name, path)).toEqual(['unverified']);
+      });
+    });
+  }
 
   it('asks for review, never a pass, when only a scroll a person cannot make shows the control', async () => {
     await withPage('/missed.html', async (page) => {

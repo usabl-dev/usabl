@@ -49,6 +49,10 @@ interface Setup {
   // What happens after a centered scroll, such as an animation that resizes the control.
   onCenter?: (page: FakePage) => void;
   throwOnCenter?: boolean;
+  // Something laid over the page that does not scroll with the control, in viewport coordinates:
+  // a sticky footer inside the box, or a fixed panel. The window's scroll is passed in for a cover
+  // that moves with the page but not with the box.
+  cover?: (window: FakeWindow) => Rect;
 }
 
 type Scroll = 'nearest' | 'center';
@@ -140,6 +144,7 @@ interface FakePage {
   control: FakeElement;
   window: FakeWindow;
   controlSize: Size;
+  cover: FakeElement | null;
 }
 
 // html > body > box > control.
@@ -178,9 +183,12 @@ function fakePage(setup: Setup = {}): FakePage {
   // overflow limit reads is larger, as under a scale.
   page.box = new FakeElement(boxRect, () => boxSpec.layoutClient ?? { width: boxSpec.width, height: boxSpec.height }, boxSpec.style);
   page.control = new FakeElement(controlRect, () => page.controlSize, {}, scroll);
+  const coverRect = setup.cover;
+  page.cover = coverRect === undefined ? null : new FakeElement(() => coverRect(win), () => ({ width: 0, height: 0 }));
   page.body.parentElement = page.root;
   page.box.parentElement = page.body;
   page.control.parentElement = page.box;
+  if (page.cover !== null) page.cover.parentElement = page.body;
   return page;
 }
 
@@ -196,6 +204,7 @@ function readBox(page: FakePage): { width: number; height: number; fragments: nu
     querySelector: () => page.control,
     elementFromPoint: (x: number, y: number) => {
       if (!inside(x, y, { left: 0, top: 0, ...VIEWPORT })) return null;
+      if (page.cover !== null && inside(x, y, page.cover.getBoundingClientRect())) return page.cover;
       const onControl = inside(x, y, page.control.getBoundingClientRect());
       const shown = !clips || inside(x, y, page.box.getBoundingClientRect());
       return onControl && shown ? page.control : page.body;
@@ -233,7 +242,9 @@ describe('the box read for target size', () => {
 
   describe('a scroll a person cannot make', () => {
     // A box 100 pixels high whose content is 600 high. The overflow limit reads a layout size of
-    // 600, as under a scale, so it does not see the clip, and only the scroll rule can.
+    // 600, as under a scale, so it does not see the clip, and only the scroll rule can. The hit test
+    // then runs where a person meets the control, still hidden, so it misses too.
+    const BOTH = ['overflow-clipped', 'hit-test-missed'];
     const tall = (style: Record<string, string>) => ({
       left: 0,
       top: 0,
@@ -246,7 +257,7 @@ describe('the box read for target size', () => {
 
     it('reads a control that only a scroll of a box that hides its overflow can show as clipped', () => {
       const page = fakePage({ box: tall(HIDDEN), control: { left: 100, top: 300, width: 44, height: 44 } });
-      expect(readBox(page).unmeasurable).toEqual(['overflow-clipped']);
+      expect(readBox(page).unmeasurable).toEqual(BOTH);
       // The scroll is still put back.
       expect(page.box.scrollTop).toBe(0);
     });
@@ -256,7 +267,7 @@ describe('the box read for target size', () => {
         box: { left: 0, top: 0, width: 100, height: 400, content: { width: 600, height: 400 }, layoutClient: { width: 600, height: 400 }, style: { overflowX: 'clip' } },
         control: { left: 300, top: 100, width: 44, height: 44 },
       });
-      expect(readBox(page).unmeasurable).toEqual(['overflow-clipped']);
+      expect(readBox(page).unmeasurable).toEqual(BOTH);
     });
 
     it('reads only the axis that moved', () => {
@@ -267,7 +278,7 @@ describe('the box read for target size', () => {
 
     it('counts an overflow value it cannot read as hidden', () => {
       const page = fakePage({ box: tall({ overflowX: '', overflowY: '' }), control: { left: 100, top: 300, width: 44, height: 44 } });
-      expect(readBox(page).unmeasurable).toEqual(['overflow-clipped']);
+      expect(readBox(page).unmeasurable).toEqual(BOTH);
     });
 
     it('reads a window scroll as clipped when the root or the body hides overflow on that axis', () => {
@@ -278,7 +289,7 @@ describe('the box read for target size', () => {
           rootClient: { width: 1280, height: 3000 },
           box: { left: 0, top: 1000, width: 400, height: 400 },
         });
-        expect({ styles, limits: readBox(page).unmeasurable }).toEqual({ styles, limits: ['overflow-clipped'] });
+        expect({ styles, limits: readBox(page).unmeasurable }).toEqual({ styles, limits: BOTH });
         expect(page.window.scrollY).toBe(0);
       }
     });
@@ -311,6 +322,45 @@ describe('the box read for target size', () => {
         control: { left: 900, top: 100, width: 44, height: 44 },
       });
       expect(readBox(page).unmeasurable).toEqual([]);
+    });
+  });
+
+  describe('the hit test runs only where a person can bring the control', () => {
+    it('misses a control under a sticky footer in a box that hides its overflow', () => {
+      // At rest the button is at 150 to 194, inside the 200 pixel box and under the footer at 140 to
+      // 200. A centered scroll of the box would bring it out, but a person cannot make that scroll.
+      const page = fakePage({
+        box: { left: 0, top: 0, width: 400, height: 200, content: { width: 400, height: 594 }, style: HIDDEN },
+        control: { left: 100, top: 150, width: 44, height: 44 },
+        cover: (w) => ({ left: 0 - w.scrollX, top: 140 - w.scrollY, width: 400, height: 60 }),
+      });
+      expect(readBox(page).unmeasurable).toEqual(['hit-test-missed']);
+      expect([page.box.scrollLeft, page.box.scrollTop, page.window.scrollX, page.window.scrollY]).toEqual([0, 0, 0, 0]);
+    });
+
+    it('misses a control under a fixed panel on a page whose body hides sideways overflow', () => {
+      // The page is 3000 pixels wide. A centered scroll of the window would move the button at 1200
+      // out from under the panel over the right 200 pixels, but a person cannot scroll sideways.
+      const page = fakePage({
+        body: { overflowX: 'hidden', overflowY: 'visible' },
+        document: { width: 3000, height: 720 },
+        box: { left: 0, top: 0, width: 3000, height: 400 },
+        control: { left: 1200, top: 100, width: 44, height: 44 },
+        cover: () => ({ left: 1080, top: 0, width: 200, height: 720 }),
+      });
+      expect(readBox(page).unmeasurable).toEqual(['hit-test-missed']);
+      expect([page.window.scrollX, page.window.scrollY]).toEqual([0, 0]);
+    });
+
+    it('still centers a box a person can scroll, so a cover only at rest there does not count', () => {
+      // The same footer in a box that scrolls: a person can scroll the button out from under it.
+      const page = fakePage({
+        box: { left: 0, top: 0, width: 400, height: 200, content: { width: 400, height: 594 }, style: { overflowX: 'auto', overflowY: 'auto' } },
+        control: { left: 100, top: 150, width: 44, height: 44 },
+        cover: (w) => ({ left: 0 - w.scrollX, top: 140 - w.scrollY, width: 400, height: 60 }),
+      });
+      expect(readBox(page).unmeasurable).toEqual([]);
+      expect(page.box.scrollTop).toBe(0);
     });
   });
 

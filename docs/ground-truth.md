@@ -4665,8 +4665,10 @@ one list of limit names (`src/primitives/box-limits.ts`), and the check asks for
 the read names any limit, even one it has no words for.
 
 The list above cannot name every shape, so a pass also needs a hit test, read last in the same
-browser function. usabl scrolls the control into view (centered, with instant scrolling), reads
-its box again, and asks `document.elementFromPoint` what is at five points: the center, and the
+browser function. usabl scrolls the control into view (centered, with instant scrolling), then
+puts every box, and the window, back where it was on each axis a person cannot scroll (overflow
+hidden or clip, or a value usabl cannot read), so the points are read only at a position a person
+can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is at five points: the center, and the
 middle of each edge, 1 CSS pixel in. Edge middles are used, not corners, so a round or
 pill-shaped control is not flagged. A point is a hit only when the answer is the control or an
 element inside it; an answer of null, outside the viewport, is a miss. Any miss is needs review,

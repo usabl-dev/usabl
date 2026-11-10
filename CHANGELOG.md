@@ -47,9 +47,9 @@
   reaches past that element's edges; it is fixed or sticky and reaches past the viewport; the
   control can be brought fully into view only by a scroll of a box or page that hides its overflow,
   which a person cannot make; the control changes size when it is scrolled into view; or a hit
-  test misses. Target size passes only when the browser
-  confirms, with the control scrolled into view, that its center and the middle of each edge land
-  on the control, so a control covered at any of the five points, one that takes no pointer
+  test misses. Target size passes only when the browser confirms, with the control scrolled into
+  view as far as a person can scroll it, that its center and the middle of each edge land on the
+  control, so a control covered at any of the five points, one that takes no pointer
   events, one partly off the page, and one inside a scaled clipping element are needs review;
   every scroll position is put back. A pass proves only those five points: a cover or clip
   anywhere else, at a corner or between the points, is not seen. The check measures the control
