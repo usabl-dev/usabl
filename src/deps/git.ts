@@ -90,8 +90,11 @@ function parseStatus(output: string): Array<{ code: string; path: string }> {
 }
 
 // `git ls-tree -z` prints "MODE TYPE SHA\tNAME\0". The name is everything after the first tab.
+// The names are collected in a Map, and Object.fromEntries defines each one as its own key. An
+// assignment on a plain object would drop a file named __proto__ at the repository root, and that
+// file would fall out of the policy hash.
 function parseLsTree(output: string): Record<string, string> {
-  const blobs: Record<string, string> = {};
+  const blobs = new Map<string, string>();
   for (const entry of splitNul(output)) {
     const tab = entry.indexOf('\t');
     if (tab < 0) {
@@ -99,10 +102,10 @@ function parseLsTree(output: string): Record<string, string> {
     }
     const sha = entry.slice(0, tab).split(' ')[2];
     if (sha !== undefined) {
-      blobs[entry.slice(tab + 1)] = sha;
+      blobs.set(entry.slice(tab + 1), sha);
     }
   }
-  return blobs;
+  return Object.fromEntries(blobs);
 }
 
 function parseLsFiles(output: string): string[] {

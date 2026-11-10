@@ -926,9 +926,10 @@ export interface SurfaceConfig {
   // Declares that this surface is the same screen as the discovered route with the same id, and
   // exists to control that screen's scan URL. Surface ids and route screen ids are one namespace,
   // so without this the planner cannot tell an intended URL override from two different screens
-  // that happen to share a key, and sharing a key silently drops one of them from the scan. It is
-  // only needed when the surface URL differs from the route's own URL: an identical URL is the
-  // same screen on its face and needs no declaration. Absent means false.
+  // that happen to share a key. The planner refuses a surface whose id is also a discovered
+  // route's screen id unless this is set. It never compares the two URLs, so the declaration is
+  // needed even when they are the same, because a URL does not determine which screen renders.
+  // Absent means false.
   overridesDiscoveredRoute?: boolean;
 }
 export interface UsablConfig {

@@ -73,6 +73,17 @@ describe('makeGitReader', () => {
     expect(blobs).not.toHaveProperty('missing.tsx');
   });
 
+  // A plain object keyed by file name drops a key named __proto__, so a guarded file with that
+  // name at the repository root would fall out of the policy hash.
+  it('keeps a root file named __proto__ in the tree metadata', async () => {
+    await writeFile(join(repoPath, '__proto__'), 'policy\n', 'utf8');
+    await runGit(repoPath, ['add', '__proto__']);
+    await runGit(repoPath, ['commit', '-m', 'add a file named __proto__']);
+    const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', ['__proto__', 'screen.tsx']);
+    expect(Object.keys(blobs).sort()).toEqual(['__proto__', 'screen.tsx']);
+    expect(Object.entries(blobs).find(([name]) => name === '__proto__')?.[1]).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it('lists committed files by prefix and ignores working-tree-only files', async () => {
     const git = makeGitReader({ cwd: repoPath });
 
