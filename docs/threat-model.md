@@ -70,8 +70,14 @@ re-baseline to green.
   ledger's waiver parser (including ISO-8601 UTC dates), `guardDivergedPaths` as a list of
   strings, `now` as an ISO-8601 UTC timestamp, and `cleanlyScannedScreens` as a real `Set`,
   copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
-  every screen and surface id against the shared id grammar. A refusal is a typed
+  every screen and surface id against the shared id grammar. `mintReceipt()` also refuses a
+  receipt that counts a waived finding but binds no waiver end, a waiver end that is not an
+  ISO-8601 UTC timestamp, and a scanner version that could not be read. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
+- A waiver ends by the clock. A receipt minted while a waiver was live used to keep verifying
+  after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
+  would now block. The receipt binds the earliest end among the waivers the run applied
+  (`waiverExpiresAt`), and stops verifying at that moment (Threat 4).
 
 **Status:** [x] Documented in ground-truth.
 
@@ -125,12 +131,28 @@ passing bundle from another run.
 - A minted receipt binds five values re-checked on verify: `sourceTree` (the working-tree
   `git write-tree`), `policyHash` (HEAD blob shas over the guarded set), `runnerVersion`,
   `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the debt history
-  commit, see Threat 13). It also records `baseRevision`
+  commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among the waivers
+  the run applied, or null when it applied none. It records `baseRevision`
   and `mintedAt`. A receipt exists only for a `verified` run.
+- `sourceTree` is the tree the run read before it planned. The run reads the tree again after
+  the scan and every policy read, before the gate. If the two reads differ, a file changed
+  while the check ran, so the scan may have seen code that is neither the planned tree nor the
+  current one. The run then carries a not-covered gap (ref `working tree`), is never
+  verified, and mints no receipt. An edit after the second read moves the tree away from the
+  bound one, so the stored receipt does not stand for it. An idle run (no UI files changed) is
+  left idle, since it scanned nothing.
 - `verifyReceipt` re-derives `sourceTree` and `policyHash` from the current tree and HEAD
   and compares all five bindings. A bundle lifted from another run fails because its
   bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
   re-checks the stored receipt the same way before it trusts a green.
+- `verifyReceipt` also fails a receipt once the injected clock reaches `waiverExpiresAt`,
+  because the gate would then count the waived accessibility barrier again. The fast path keeps
+  skipping the scan until that one moment, and runs the full check from then on. A receipt
+  that counts a waived finding but binds no end, or binds a value that is not a time, does not
+  verify. A receipt from before this binding has no `waiverExpiresAt`; it verifies only if it
+  counted no waived finding, which is the same fact. The schema version stays 2.
+- A scanner version usabl cannot read never matches, on either side of the comparison. Before,
+  a version that read as `unknown` matched itself after the scanner changed (Threat 5).
 - A receipt minted under a weakened policy matches that policy. If the weakening was
   committed during a session, the only binding that sees it is the session pins, so the stop
   hook compares pins before it reads the stored receipt. Detected drift prevents a VERIFIED
@@ -159,6 +181,18 @@ awareness.
   4.13.0, Playwright 1.62.1).
 - Record `scannerVersions` (axe-core, Playwright, Chromium) in the receipt so a scanner
   swap moves the fingerprint and fails `verifyReceipt`.
+- The Chromium version is what the browser at Playwright's Chromium path prints for
+  `--version`. That is right for Playwright's download, a custom `PLAYWRIGHT_BROWSERS_PATH`,
+  and a system Chromium placed where Playwright looks. When the browser prints no version
+  (Chrome on Windows, or an install with only the headless shell), the revision in the name of
+  the folder closest to the executable is used, such as `chromium-1234`. Before, the version was
+  only a pattern match anywhere on the path, so a system Chromium read as `unknown` and a
+  browsers path whose own name looked like a browser folder read a fixed wrong revision.
+- A version usabl still cannot read is never bound. The run carries a not-covered gap (ref
+  `scanner versions`) that names the fix, mints no receipt, and `usabl doctor` reports the same
+  fix in its browser line. Limit: Playwright launches its headless shell from a sibling folder
+  with the same revision. Playwright's own builds of the two share a version, so the read
+  stands for both. A browser placed only in the headless shell folder is not seen.
 - Dependabot bumps require explicit maintainer review for policy impact.
 
 - When an optional commercial engine is on, its installed package version is recorded in
@@ -1147,7 +1181,8 @@ required where applicable.
 
 ## Open actions
 
-Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`), the
+Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`,
+`historyHead`, `waiverExpiresAt`), the
 `not_covered` gap path, and exit-4 fail-open already ship, so they are no longer open.
 Remaining items:
 

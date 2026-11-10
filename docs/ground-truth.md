@@ -453,17 +453,20 @@ export interface ExcludedFile {
 }
 
 export interface Receipt {
-  schemaVersion: 1;
-  sourceTree: string;
+  schemaVersion: 2;
+  sourceTree: string;             // the tree read before planning, unchanged after the scan
   baseRevision: string | null;
+  historyHead: string | null;     // the debt history commit the run read
   policyHash: string;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: { axeCore: string; playwright: string; chromium: string; engines?: Record<string, string> };
   surfaces: string[];
   coverage: { checked: string[]; notCovered: string[] };
+  applicability: { screenId: string; applied: number; abstained: number }[];
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
+  waiverExpiresAt?: string | null; // earliest end of the waivers applied; absent on older receipts
   signature?: string;             // reserved for later signed attestation; unused today
   mintedAt: string;
 }
@@ -2701,8 +2704,12 @@ What this does not cover:
 
 ### Receipt binding
 
-Five bindings are compared on re-verification:
-- `sourceTree`: hash of the working tree (git write-tree on a temporary index).
+Five bindings are compared on re-verification, plus the waiver end below:
+- `sourceTree`: hash of the working tree (git write-tree on a temporary index), read before the
+  run plans. The run reads it again after the scan and every policy read, before the gate. If
+  the two reads differ, a file changed during the check: the run carries a not-covered gap
+  (ref `working tree`), is never verified, and mints no receipt. The receipt binds the first
+  read, so an edit after the second read moves the tree away from it. An idle run is left idle.
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
@@ -2710,7 +2717,15 @@ Five bindings are compared on re-verification:
   one engine build cannot re-verify under a tampered or upgraded engine.
 - `scannerVersions`: the axe-core, Playwright, and Chromium versions that decided the
   verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
-  invalidates the receipt.
+  invalidates the receipt. The package versions come from each package's `package.json`.
+  The Chromium version is what the browser at Playwright's Chromium path prints for
+  `--version` (for example `151.0.7922.34`), so it holds for Playwright's download, a custom
+  `PLAYWRIGHT_BROWSERS_PATH`, and a system Chromium placed where Playwright looks. When the
+  browser prints none, it is the revision in the name of the folder closest to the
+  executable (`revision-1234` from `chromium-1234`). A version that still cannot be read is
+  `unknown`. Such a run carries a not-covered gap (ref `scanner versions`) that names the fix,
+  mints no receipt, and `usabl doctor` reports the browser as drifted with the same fix. An
+  unreadable version never matches on verify, on either side.
   When an optional commercial engine is on, `scannerVersions.engines` maps its id to the
   installed package version, and `verifyReceipt` compares that map too: a version change,
   or an engine turned on or off, invalidates the receipt. An absent map and an empty one
@@ -2720,9 +2735,19 @@ Five bindings are compared on re-verification:
   lower the debt a run accepts, so a receipt minted before the history moved stops matching,
   and the Stop hook's fast path falls back to a full run. Added in receipt schema version 2. A
   stored version 1 receipt is not read, which costs one full run.
+- `waiverExpiresAt`: the earliest expiry among the waivers the run applied, or null when it
+  applied none. A waiver applied when it was live at the run's clock and matched a finding the
+  gate marked waived. Once the injected clock reaches this time the gate counts the waived
+  accessibility barrier again, so `verifyReceipt` fails the receipt and the Stop hook's fast
+  path runs a full check from that moment, and not before. If a waived finding matches none of
+  the waivers by the gate's match rule, the earliest live waiver is bound instead, so a drift
+  between the two can only bind an earlier time. A receipt that counts a waived finding but
+  binds no time, or binds a value that is not an ISO-8601 UTC time, does not verify. A receipt
+  minted before this field existed has none; it verifies only when it counted no waived finding.
+  The schema version stays 2, because that absent value is read safely.
 
 A source-tree change or committed policy change invalidates the receipt, and so does an
-engine or scanner change or a move of the history branch.
+engine or scanner change, a move of the history branch, or the end of a waiver it applied.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
