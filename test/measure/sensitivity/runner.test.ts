@@ -153,9 +153,23 @@ describe('measureEntry', () => {
     expect(await measureEntry(both.deps, entry(), SCREEN)).toMatchObject({ outcome: 'caught', rules: ['button-name'] });
   });
 
-  it('counts a new unverified deterministic finding as caught, because it gates', async () => {
+  it('is unreadable, not caught, when the only new gating finding is unverified', async () => {
     const { deps } = setup([namesProvider('button-name', '#save', { confidence: 'unverified' })]);
-    expect((await measureEntry(deps, entry(), SCREEN)).outcome).toBe('caught');
+    expect(await measureEntry(deps, entry(), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: ['button-name'],
+      reason: 'the checks could not confirm the defect either way: button-name',
+    });
+  });
+
+  it('counts only the definite failure when a definite and an unverified finding are new', async () => {
+    const { deps } = setup([namesProvider('button-name', '#save'), namesProvider('color-contrast', '#save', { confidence: 'unverified' })]);
+    expect(await measureEntry(deps, entry({ expectedRules: ['color-contrast'] }), SCREEN)).toMatchObject({
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+    });
   });
 
   it('is caught by another rule when a different rule reports the mutated element', async () => {

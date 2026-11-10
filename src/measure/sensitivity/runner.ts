@@ -221,12 +221,20 @@ export async function measureEntry(
       return result(entry, screen, 'unreadable', [], `the gate did not verify the mutated scan, and no new finding explains it: ${mutatedGate.summary}`);
     }
 
-    if (newGating.length > 0) {
+    // An unverified finding is the checks saying they could not tell. The gate counts it as a gap,
+    // not a failure, so only a definite failure can count as a catch.
+    const definite = newGating.filter((finding) => finding.confidence === 'fail');
+    if (newGating.length > 0 && definite.length === 0) {
+      const rules = sortedUnique(newGating.map((finding) => finding.rule));
+      return result(entry, screen, 'unreadable', rules, `the checks could not confirm the defect either way: ${rules.join(', ')}`);
+    }
+
+    if (definite.length > 0) {
       // The gate collapses every draft at one identity into one finding, and its representative can
       // be another element than the mutated one. So each finding is located by every draft of the
       // mutated scan behind it.
       const pathsByIdentity = draftPathsByIdentity(mutated);
-      const pathsOf = newGating.map((finding) => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath]);
+      const pathsOf = definite.map((finding) => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath]);
       const places = await record.edit.locate(pathsOf.flat());
       const allowed = PLACES_FOR[entry.reportedOn];
       let next = 0;
@@ -235,7 +243,7 @@ export async function measureEntry(
         next += paths.length;
         return own.some((place) => allowed.includes(place));
       });
-      const onTarget = newGating.filter((_finding, index) => onTargetFlags[index] === true);
+      const onTarget = definite.filter((_finding, index) => onTargetFlags[index] === true);
       const expected = onTarget.filter((finding) => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule)));
       if (expected.length > 0) {
         return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
@@ -244,7 +252,7 @@ export async function measureEntry(
         const rules = sortedUnique(onTarget.map((finding) => finding.rule));
         return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
       }
-      const rules = sortedUnique(newGating.map((finding) => finding.rule));
+      const rules = sortedUnique(definite.map((finding) => finding.rule));
       return result(
         entry,
         screen,
