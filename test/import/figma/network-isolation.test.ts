@@ -8,7 +8,9 @@
  *   inside src/cli.ts.
  * - A dynamic import whose module the test cannot read from the source fails the test, except the
  *   two that load an optional package by name. The engine loader refuses at run time any name that
- *   is not a bare package name, so it cannot load a file.
+ *   is not a bare name, so it never loads a path or a URL. A bare name can still load a Node.js
+ *   built-in module, or this package's own entry, which is built from src/index.ts, an entry point
+ *   this test covers.
  * - No file in src/ uses eval (by its own name or as a property of globalThis, window, or self),
  *   Function, or new Worker, or imports the vm module, which run code the import graph cannot see.
  * - createRequire is followed under any name an import gives it.

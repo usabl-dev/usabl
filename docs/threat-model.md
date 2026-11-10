@@ -1110,8 +1110,10 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
   re-export, type import, dynamic `import()`, `require()`, and call made through a
   `createRequire` result. It fails on `eval`, `Function`, and `new Worker` anywhere under `src/`,
   because they run code an import graph cannot follow. The two loads whose module it cannot read
-  load an optional package by name, and the engine loader refuses at run time any name that is
-  not a bare package name, so neither can load a file in this repository. Only
+  load an optional package by name. The engine loader refuses at run time any name that is not a
+  bare name, so it never loads a path or a URL. It loads packages and Node.js built-in modules by
+  bare name, and it can resolve this package's own entry, which is built from `src/index.ts`, an
+  entry point the test covers. Only
   `src/import/figma/fetch.ts` calls `fetch`, and only the two commands read `FIGMA_TOKEN`.
 - Design text is data. A name goes into a requirement only after it is put on one line with
   control and direction characters removed, and only if it is 200 characters or fewer and the

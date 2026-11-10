@@ -273,17 +273,18 @@ export async function probeInstalledPackage(
   return { state: 'installed', version, missingDependencies };
 }
 
-// A bare npm package name, scoped or not. It cannot start with a dot or a slash, and the only
-// separator it can hold is the one slash after a scope, so it never names a file path, a URL, or a
-// Node.js module.
+// A bare name, scoped or not. It cannot start with a dot or a slash, and the only separator it can
+// hold is the one slash after a scope, so it never names a file path or a URL. A bare name can
+// still name a Node.js built-in module, such as fs, or this package's own name.
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i;
 
 /**
  * Imports a vendor package from this module, so the import and probeInstalledPackage start from the
  * same folder. The name is a variable on purpose: the bundler must leave the import to run time,
  * because the package is not a dependency and is absent when usabl is built. Any name that is not
- * a bare package name is refused before the import, so this can load packages only, never a file
- * in this repository.
+ * a bare name is refused before the import, so this never loads a path or a URL. It loads packages
+ * and Node.js built-in modules by bare name, and it can resolve this package's own entry, which is
+ * built from src/index.ts.
  */
 export function importPackage(packageName: string): Promise<unknown> {
   if (!PACKAGE_NAME.test(packageName)) {
