@@ -265,9 +265,15 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
-- Every git listing of changed or committed files runs with `-z` and keeps each name as git
-  stores it, so a non-ASCII name is not quoted into a path that matches no UI glob, and a changed
-  path that still looks quoted is a gap. See ground-truth section 8.
+- Every git listing of changed or committed files runs with `-z` and keeps each name as UTF-8
+  text, so a non-ASCII name is not quoted into a path that matches no UI glob, and a changed path
+  that starts and ends with a double quote is a gap. A name whose bytes are not valid UTF-8 loses
+  them in that decoding and no longer names the file. See ground-truth section 8.
+
+- The guard compares guarded files at the trusted ref by the same `-z` listing, so a change to a
+  guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
+  Before, the listing quoted that name, `git show` found no file under it on either ref, and the
+  change was skipped.
 
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
