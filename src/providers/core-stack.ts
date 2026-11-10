@@ -86,7 +86,7 @@ export const PROVIDER_PROVES: Readonly<Record<string, string>> = {
   'axe-core':
     'Runs the axe-core rules on the rendered page: names, roles, states, contrast, labels, and structure.',
   'pf-rulepack':
-    'Checks PatternFly components for barriers axe misses, such as icon buttons with no name, kebab menus with no expanded state, and table headers with no scope or id to tie cells to them.',
+    'Checks PatternFly components for accessibility barriers axe misses, such as icon buttons with no name, kebab menus with no expanded state, and table headers with no scope or id to tie cells to them.',
   'rhds-rulepack':
     'Checks Red Hat Design System elements are put together as their documentation requires, such as buttons with a label and tabs paired with panels.',
   'docs-rulepack': 'Checks heading order on the rendered documentation page.',

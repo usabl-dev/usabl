@@ -241,7 +241,7 @@ export function configUrlWarningsByUrl(config: UsablConfig): Array<{ url: string
     .filter(({ url }) => url.includes('?') || url.includes('#'))
     .map(({ label, url }) => ({
       url,
-      warning: `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, and pull request comments, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
+      warning: `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, pull request comments, and usabl docs reports, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
     }));
 }
 

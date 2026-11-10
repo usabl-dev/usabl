@@ -125,7 +125,7 @@ describe('formatSummary groups gradient contrast results per screen', () => {
       ),
     );
 
-    expect(out).toContain('barriers that block this run: 1 finding(s)');
+    expect(out).toContain('accessibility barriers that block this run: 1 finding(s)');
     expect(out).toContain('[new] clusters · axe/color-contrast (serious): Needs review: axe could not measure the color contrast of 1 element');
     expect(out).toContain('[carried] clusters · axe/color-contrast (serious): Needs review: axe could not measure the color contrast of 2 elements');
   });

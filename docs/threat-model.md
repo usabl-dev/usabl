@@ -555,6 +555,33 @@ its own, so a rule is whatever that runner wrote, and a pull request author choo
 any file they add under a guarded directory, so a guarded path is text that author wrote.
 Deciding by author does not survive either case, so these surfaces now decide by carrier too.
 
+The dev-server overlay's result endpoint frames each finding's text by carrier as well: the
+element path, name, role, and key, what a user experiences, why it matters, and the fix. Why and
+the fix used to be passed through unframed because a provider writes them, but for every axe rule
+without a curated note they are axe's failure summary, which quotes the page. The overlay client
+unwraps the frame before it shows a value and writes every value with `textContent`, so a person
+reads the plain text. Each coverage gap's reason and the gate's summary are framed the same way:
+a reason can quote an error the page threw during the scan, such as `scan failed: ...`, and the
+summary can carry a reason. The client shows both through the same unwrap.
+
+Every other field on the endpoint is unframed, and each is listed here with its reason:
+
+- Fields the client matches on, because a frame would break the match: a finding's rule, layer,
+  screen id, severity, and status; each coverage gap's ref, which the overlay compares with the
+  screen url exactly; and each affected screen's id and url, which the overlay compares with the
+  page address.
+- Values from a closed set, numbers, and values usabl makes, which no page chooses: a finding's
+  evidence class, confidence, and identity basis; a gap's state; the verdicts and exit codes;
+  `nothingToCheck`; the counts; and the receipt's tree, hashes, versions, screen ids, and time.
+- Text that is shown and not matched, and is not framed yet. A model that fetches the endpoint
+  directly reads these with no frame. Each is scrubbed, and the client writes it with
+  `textContent`. `floorUnconfirmed[].notice` is usabl's own sentence, but it names a screen id,
+  which can come from a route literal in the application, and rule names. `floorHeadroom` and
+  `floorUnconfirmed` carry the same screen ids and rule names. `dirtyGuardedPaths` holds file
+  names that a pull request author chooses. `unresolvedFiles`, each affected screen's
+  `importChain`, and a finding's `appSource` hold file paths from the repository, and
+  `workspaceRoot` is the folder the dev server runs in.
+
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
@@ -714,13 +741,18 @@ carry exactly one Host header that names a local host or the configured bind hos
 own port, and any Origin must be a browser's exact serialization matching that origin. Anything
 else gets 403. The Result is scrubbed before it is projected, and a failed run's reason stays in
 the dev server log. The webpack event stream carries only the event name, never a result, path,
-or page text. The webpack plugin does nothing outside development mode, so a production bundle
-has no overlay loader, no endpoints, and no source attributes.
+or page text. Neither plugin puts anything in a production build. The webpack plugin does nothing
+outside development mode. The Vite plugin adds the overlay loader and source attributes only when
+Vite resolves its config with the `serve` command: `vite build`, an SSR build, and
+`vite build --watch` run with `build`, and a tool that never resolves the config gets nothing. So
+a production bundle has no overlay loader, no endpoints, and no source attributes.
 
 **Tests:** `test/surfaces/vite-plugin.test.ts` (Host, Origin, duplicate Host, IPv6, live port),
-`test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and other port refused on
-the result, client, and event paths; production and no-mode builds carry nothing), and
-`test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
+`test/surfaces/vite-plugin-build.test.ts` (a real `vite build` carries no overlay loader, the dev
+server still serves it, and nothing is added before Vite resolves its config; this test does not
+check source attributes), `test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and
+other port refused on the result, client, and event paths; production and no-mode builds carry
+nothing), and `test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
 
 **Status:** [x] Shipped for Vite and webpack-dev-server 5.
 

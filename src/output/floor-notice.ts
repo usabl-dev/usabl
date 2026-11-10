@@ -13,7 +13,7 @@ import type { FloorUnconfirmed } from '../contracts/index.js';
 import { wholeNumberText } from './carried.js';
 
 /** The heading the terminal and the overlay print above the notices. */
-export const UNCONFIRMED_HEADING = 'recorded barriers not seen';
+export const UNCONFIRMED_HEADING = 'recorded accessibility barriers not seen';
 
 /**
  * The entry is carried by a Result, which a library caller can compose, so each field is read the
@@ -23,7 +23,7 @@ export const UNCONFIRMED_HEADING = 'recorded barriers not seen';
  */
 export function unconfirmedNotice(entry: FloorUnconfirmed): string {
   const one = entry.barriers === 1;
-  const noun = one ? 'barrier' : 'barriers';
+  const noun = one ? 'accessibility barrier' : 'accessibility barriers';
   const was = one ? 'was' : 'were';
   const it = one ? 'it is' : 'they are';
   const rules: unknown = entry.rules;

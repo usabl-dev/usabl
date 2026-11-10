@@ -52,6 +52,16 @@ export const TEXT_CAPS = {
   // A notice for floored barriers a run did not see is usabl's own sentence around a screen id and
   // the rule names on that screen. The start names the count and the screen.
   notice: 600,
+  // Why a finding fails. A curated note is one sentence; a scanner's failure summary can list
+  // several checks, and the first of them names the cause.
+  why: 600,
+  // What a screen reader announced at one stop: a name, a role, and any live text. The start
+  // names the control.
+  announcement: 400,
+  // A finding's severity or status is one word from the contract, and a layer is one word. The
+  // pull request comment also cuts carried values of these kinds to this length, which is twice
+  // the longest real one.
+  word: 80,
 } as const;
 
 export type TextCap = keyof typeof TEXT_CAPS;
@@ -175,7 +185,7 @@ export interface BoundedGroup {
 }
 
 function noteFor(omitted: number, droppedGroups = 0): string {
-  const barriers = droppedGroups > 0 ? ` (${droppedGroups} barrier(s) left out)` : '';
+  const barriers = droppedGroups > 0 ? ` (${droppedGroups} accessibility barrier(s) left out)` : '';
   return `[shortened to fit the message budget, ${omitted} line(s) omitted${barriers}; run usabl check --json for the full list]`;
 }
 

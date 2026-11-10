@@ -154,7 +154,7 @@ describe('projectPrComment', () => {
     // The number really is the number of items rendered, counted out of the markdown rather than
     // asserted from the fixture, so the headline and the list cannot drift apart again.
     const lines = markdown.split('\n');
-    const start = lines.indexOf('### New barriers');
+    const start = lines.indexOf('### New accessibility barriers');
     expect(start).toBeGreaterThan(-1);
     const rest = lines.slice(start + 1);
     const end = rest.findIndex((line) => line.startsWith('### '));
@@ -299,7 +299,7 @@ describe('projectPrComment', () => {
         baseResult({ verdict: 'verified', summary: 'verified: 0 gating finding(s)', findings: [], screens: [], coverage: { ...baseResult({}).coverage, gaps: [] } }),
       );
 
-      for (const heading of ['### Receipt', '### Conformance summary', '### New barriers', '### Known (recorded debt)', '### Advisory (non-gating)', '### Coverage gaps', '### Announcements (current run)']) {
+      for (const heading of ['### Receipt', '### Conformance summary', '### New accessibility barriers', '### Known (recorded debt)', '### Advisory (non-gating)', '### Coverage gaps', '### Announcements (current run)']) {
         expect(markdown).toContain(heading);
       }
       expect(markdown).toContain('- none');
@@ -309,7 +309,7 @@ describe('projectPrComment', () => {
   it('groups findings by gating and advisory lanes', () => {
     const markdown = projectPrComment(baseResult({}));
 
-    expect(markdown).toContain('### New barriers');
+    expect(markdown).toContain('### New accessibility barriers');
     expect(markdown).toContain('### Known (recorded debt)');
     expect(markdown).toContain('### Advisory (non-gating)');
   });
@@ -409,7 +409,7 @@ describe('projectPrComment', () => {
     const markdown = projectPrComment(baseResult({ verdict: 'regression', findings }));
 
     expect(markdown).toContain('### Findings (collapsed by rule)');
-    expect(markdown).not.toContain('### New barriers');
+    expect(markdown).not.toContain('### New accessibility barriers');
     expect(markdown).toContain('usabl check --json');
     expect(markdown).toContain('6 gating findings');
   });
@@ -1121,7 +1121,7 @@ describe('pr comment recorded debt', () => {
     expect(known).toContain('- &#91;`waived serious`&#93; `clusters` - `axe/link-name`');
     expect(known).toContain('- &#91;`carried serious`&#93; `clusters` - `axe/label`');
     expect(known.join('\n')).toContain('Waived link text');
-    expect(sectionLines(markdown, '### New barriers')).toEqual(['- none', '']);
+    expect(sectionLines(markdown, '### New accessibility barriers')).toEqual(['- none', '']);
   });
 
   it('keeps the waived finding text inside the untrusted frame', () => {
@@ -1197,7 +1197,7 @@ describe('pr comment collapse never mixes statuses', () => {
     expect(markdown).not.toContain('2 gating findings');
     expect(markdown).not.toContain('### Findings (collapsed by rule)');
     const lines = markdown.split('\n');
-    const newStart = lines.indexOf('### New barriers');
+    const newStart = lines.indexOf('### New accessibility barriers');
     const knownStart = lines.indexOf('### Known (recorded debt)');
     const items = (from: number) =>
       lines.slice(from + 1, lines.findIndex((line, index) => index > from && line.startsWith('### '))).filter((line) => line.startsWith('- '));

@@ -644,6 +644,18 @@ export interface DocArtifact {
   }>;
   generatedAt: string;
   boundToReceipt?: string;
+  // The git tree the report was made from: the receipt's tree when the run minted one, otherwise
+  // the tree read when the docs run started. Absent when usabl could not read a tree.
+  sourceTree?: string;
+  // The tree read when the docs run started, recorded only when it differs from the receipt's
+  // tree in sourceTree. Then a file changed while the run scanned, the scan saw no one whole tree,
+  // and the report is stale against every tree.
+  startTree?: string;
+  // Set when the report is listed or read against a tree other than sourceTree, it records no
+  // tree, or a file changed while it was made. The report needs to be made again, and nothing in
+  // it is proof for the code as it is now. staleReason says which trees differ and what to run.
+  stale?: true;
+  staleReason?: string;
 }
 
 // ---- injected dependencies (all I/O enters here; run() has none of its own) ----
