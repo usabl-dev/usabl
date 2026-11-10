@@ -4270,15 +4270,23 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 | `name` | No element has that role and name | More than one does, or a candidate is out of reach |
 | `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, or its level cannot be read |
 | `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once or a candidate is out of reach; with no name, none is found and a candidate is out of reach |
-| `focus-order` | A name is never reached, or two names are reached out of order | A name is on more than one stop, a stop cannot be read, or the walk hits its cap of 200 stops |
+| `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
 | `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, or its size cannot be read |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
 failure.
 
-The focus order check presses Tab from the top of the page until focus returns to the body or to a
-stop it already visited, and needs the page as it loaded: it is skipped as a gap if a check that
+The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
+from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it
+presses Tab once more. The walk is complete only when that Tab lands on a stop it already walked,
+matched by element when the browser gives a node id for both and by path otherwise, or stays on the
+body when no stop was walked. Then focus goes back to the body. A walk that ends any other way was
+cut short, and the check is unknown, never a failure: a handler that blurs a control or stops Tab
+(the extra Tab lands on a new control, or focus stays on the body), and focus that comes back to a
+stop it already walked without passing the body (a focus trap, or a list that rendered again with
+no node id to tell the elements apart). With node ids, a new element at a walked path is a new stop,
+and the walk goes on. The check needs the page as it loaded: it is skipped as a gap if a check that
 changes the page ran first, the same as the keyboard walk. The target size check reads the
 element's laid-out box with `getBoundingClientRect` in an isolated world, and compares the size
 as read; the message shows it to one decimal, rounded down, so 23.95 reads as 23.9 and never as 24.

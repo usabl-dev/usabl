@@ -24,6 +24,7 @@ import type {
   TargetSizeAssertion,
 } from '../contracts/index.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
+import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
 import { findByRole, resolveTarget, sameName, type TargetResolution } from './resolve-target.js';
 
 /** The layer of each design check, one per kind, as the content and flow checks have. */
@@ -269,8 +270,8 @@ async function checkLandmark(requirement: Requirement, assertion: LandmarkAssert
   return [missing('')];
 }
 
-// The most focus stops one walk reads. The walk ends sooner when focus returns to the body or to a
-// stop it already reached.
+// The most focus stops one walk reads. The walk ends sooner when focus reaches the body or comes
+// back to a stop it already reached.
 const FOCUS_STOP_CAP = 200;
 // How many stops a message lists. The evidence keeps all of them.
 const FOCUS_STOPS_SHOWN = 15;
@@ -280,39 +281,68 @@ type FocusWalk =
   | { kind: 'walked'; names: string[] }
   | { kind: 'cap' }
   | { kind: 'unreadable'; reason: FocusUnreadable | 'no-path' }
-  | { kind: 'node-unreadable'; stop: number };
+  | { kind: 'node-unreadable'; stop: number }
+  // The walk ended before the end of the focus order was confirmed. 'end-unconfirmed': focus fell to
+  // the body, and one more Tab did not go back to a walked control. 'cycle': focus came back to a
+  // control it already walked without passing the body. `names` is what the walk read before that.
+  | { kind: 'cut-short'; reason: 'end-unconfirmed' | 'cycle'; names: string[] };
 
-// One walk from the top of the page. It ends when focus reaches the body, or comes back to a stop it
-// already reached, which happens in a focus trap. Either way every stop Tab can reach was read.
+// Whether focus is on a control the walk already reached. The browser's key for the element decides
+// when both keys are known, so a list that renders again and puts a new element at a walked path is
+// a new stop. With no key, a walked path counts as the same control.
+function alreadyWalked(walked: readonly WalkStopIdentity[], path: string, key: string | null): boolean {
+  return walked.some((stop) => (key !== null && stop.key !== null ? stop.key === key : stop.path === path));
+}
+
+// One walk from the top of the page, with the end rule the keyboard walk uses. The walk is complete
+// only when focus reaches the body and one more Tab lands on a control it already walked. Any other
+// ending, such as a handler that blurs a control or stops Tab, a part of the page that rendered
+// again, a focus trap, or the cap, leaves the rest of the order unread, so it is never complete.
 async function walkFocus(page: Page): Promise<FocusWalk> {
   await page.focusBody();
   const names: string[] = [];
-  const seen = new Set<string>();
+  const walked: WalkStopIdentity[] = [];
   for (let index = 0; index < FOCUS_STOP_CAP; index += 1) {
     await page.tab();
     const unreadable = await page.activeFocusUnreadable();
     if (unreadable !== null) {
       return { kind: 'unreadable', reason: unreadable };
     }
+    if (await page.activeElementIs('body')) {
+      return (await walkEndConfirmed(page, walked))
+        ? { kind: 'walked', names }
+        : { kind: 'cut-short', reason: 'end-unconfirmed', names };
+    }
     const path = await page.activePath();
     if (path === '') {
       return { kind: 'unreadable', reason: 'no-path' };
     }
-    if (seen.has(path)) {
-      return { kind: 'walked', names };
-    }
-    seen.add(path);
-    if (await page.activeElementIs('body')) {
-      return { kind: 'walked', names };
+    const key = await page.activeElementKey();
+    if (alreadyWalked(walked, path, key)) {
+      return { kind: 'cut-short', reason: 'cycle', names };
     }
     const node = await page.activeNode();
     if (node === null) {
       return { kind: 'node-unreadable', stop: index + 1 };
     }
+    walked.push({ path, key });
     names.push((node.name ?? '').trim());
   }
   return { kind: 'cap' };
 }
+
+const CUT_SHORT_WHY: Readonly<Record<'end-unconfirmed' | 'cycle', (stops: number) => string>> = {
+  'end-unconfirmed': (stops) =>
+    `After ${stops} focus stop(s), focus moved to the document body, but one more Tab did not go back to a control the walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the rest of the order was not read.`,
+  cycle: (stops) =>
+    `After ${stops} focus stop(s), focus went back to a control the walk had already reached, without reaching the end of the page. Focus may be trapped, or part of the page may have rendered again, so the rest of the order was not read.`,
+};
+
+const CUT_SHORT_FIX: Readonly<Record<'end-unconfirmed' | 'cycle', string>> = {
+  'end-unconfirmed':
+    'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, then check the screen again, or check this order by hand.',
+  cycle: 'Check this order by hand. If focus is trapped, let Tab move out of the group to the rest of the page.',
+};
 
 function focusWent(names: readonly string[]): string {
   const shown = names.slice(0, FOCUS_STOPS_SHOWN).map((name) => (name === '' ? NO_NAME : name));
@@ -355,6 +385,9 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
       `The accessibility tree had no node for focus stop ${walk.stop}, so its name could be one of the names in the design.`,
       'Check this order by hand.',
     );
+  }
+  if (walk.kind === 'cut-short') {
+    return unconfirmed(CUT_SHORT_WHY[walk.reason](walk.names.length), CUT_SHORT_FIX[walk.reason], { heard: walk.names });
   }
 
   const names = walk.names;

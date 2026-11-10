@@ -172,9 +172,38 @@ describe('landmark requirement', () => {
   });
 });
 
-// A page whose Tab order visits the given names, then reaches the body.
+// A page whose Tab order visits the given names, then reaches the body, then goes back to the first
+// name, as Chromium does.
 function tabbingPage(names: Array<string | null>, overrides: Partial<Page> = {}): Page {
   let cursor = -1;
+  const onBody = (): boolean => cursor < 0 || cursor === names.length;
+  return makeFakePage({
+    focusBody: async () => {
+      cursor = -1;
+    },
+    tab: async () => {
+      cursor = (cursor + 1) % (names.length + 1);
+    },
+    activeElementIs: async (sel: string) => sel === 'body' && onBody(),
+    activeNode: async () => {
+      if (onBody()) return null;
+      const name = names[cursor];
+      return name === null ? null : { name: name ?? null, role: 'button', states: {} };
+    },
+    activePath: async () => (onBody() ? 'body' : `#stop-${cursor}`),
+    ...overrides,
+  });
+}
+
+// One place focus can be after a Tab: a control with a path, a node key, and a name, or the body.
+type Stop = { path: string; key: string | null; name: string } | 'body';
+
+// A page where each Tab moves focus to the next entry of a script, whatever the page holds. It
+// models pages whose scripts move focus: a handler that blurs a control, one that stops Tab, and a
+// list that renders again. After the script runs out, focus stays on the body.
+function scriptedPage(script: readonly Stop[]): Page {
+  let cursor = -1;
+  const at = (): Stop => (cursor < 0 ? 'body' : (script[cursor] ?? 'body'));
   return makeFakePage({
     focusBody: async () => {
       cursor = -1;
@@ -182,16 +211,23 @@ function tabbingPage(names: Array<string | null>, overrides: Partial<Page> = {})
     tab: async () => {
       cursor += 1;
     },
-    activeElementIs: async (sel: string) => sel === 'body' && cursor >= names.length,
+    activeElementIs: async (sel: string) => sel === 'body' && at() === 'body',
     activeNode: async () => {
-      if (cursor < 0 || cursor >= names.length) return null;
-      const name = names[cursor];
-      return name === null ? null : { name: name ?? null, role: 'button', states: {} };
+      const stop = at();
+      return stop === 'body' ? null : { name: stop.name, role: 'button', states: {} };
     },
-    activePath: async () => (cursor >= names.length ? 'body' : `#stop-${cursor}`),
-    ...overrides,
+    activePath: async () => {
+      const stop = at();
+      return stop === 'body' ? 'body' : stop.path;
+    },
+    activeElementKey: async () => {
+      const stop = at();
+      return stop === 'body' ? null : stop.key;
+    },
   });
 }
+
+const stop = (path: string, name: string, key: string | null = null): Stop => ({ path, key, name });
 
 // Focus never returns to the body: it cycles through the same stops, like a focus trap.
 function cyclingPage(names: string[]): Page {
@@ -249,12 +285,86 @@ describe('focus order requirement', () => {
     expect(drafts[0]?.why).toContain('"Submit" is on 2 focus stops');
   });
 
-  it('reads every stop of a focus trap, and judges the order it holds', async () => {
-    const dialog = req({ type: 'focus-order', sequence: ['Reject', 'Accept'] });
-    const wrong = await run(dialog, cyclingPage(['Accept', 'Reject']));
-    expect(wrong[0]?.whatUserExperiences).toContain('Focus reached "Accept" before "Reject"');
-    const right = await run(req({ type: 'focus-order', sequence: ['Accept', 'Reject'] }), cyclingPage(['Accept', 'Reject']));
-    expect(right).toEqual([]);
+  it('is unconfirmed, never a pass or a fail, when focus cycles without reaching the end of the page', async () => {
+    // A focus trap, or a part of the page that rendered again: the walk never reached the end, so
+    // the rest of the order is unknown.
+    for (const sequence of [['Reject', 'Accept'], ['Accept', 'Reject']]) {
+      const drafts = await run(req({ type: 'focus-order', sequence }), cyclingPage(['Accept', 'Reject']));
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('focus went back to a control the walk had already reached');
+    }
+  });
+
+  it('passes when one more Tab after the body goes back to a control it walked', async () => {
+    const page = scriptedPage([
+      stop('#s0', 'Create user', 'k0'),
+      stop('#s1', 'Refresh', 'k1'),
+      stop('#s2', 'Actions for alice', 'k2'),
+      'body',
+      stop('#s0', 'Create user', 'k0'),
+    ]);
+    expect(await run(r, page)).toEqual([]);
+  });
+
+  it('is unconfirmed, never a fail, when a control blurs itself and the next Tab lands on a new control', async () => {
+    // "Refresh" blurs itself when it gets focus, so focus falls to the body in the middle of the page.
+    const page = scriptedPage([stop('#s0', 'Create user', 'k0'), 'body', stop('#s2', 'Actions for alice', 'k2')]);
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('one more Tab did not go back to a control the walk had already reached');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ heard: ['Create user'] });
+  });
+
+  it('is unconfirmed, never a fail, when a script stops Tab and focus stays on the body', async () => {
+    const page = scriptedPage([stop('#s0', 'Create user', 'k0'), 'body', 'body']);
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('keeps walking when a list renders again and a new element takes a walked path', async () => {
+    // The browser gives each element its own key, so a new element at a walked path is a new stop.
+    const page = scriptedPage([
+      stop('#row-0', 'Create user', 'k0'),
+      stop('#row-1', 'Refresh', 'k1'),
+      stop('#row-0', 'Actions for alice', 'k2'),
+      'body',
+      stop('#row-0', 'Actions for alice', 'k2'),
+    ]);
+    expect(await run(r, page)).toEqual([]);
+  });
+
+  it('is unconfirmed, never a fail, when a walked path comes back and the browser gives no key', async () => {
+    const page = scriptedPage([
+      stop('#row-0', 'Create user'),
+      stop('#row-1', 'Refresh'),
+      stop('#row-0', 'Actions for alice'),
+      'body',
+    ]);
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('puts focus back on the body after it confirms the end', async () => {
+    const calls: string[] = [];
+    const base = tabbingPage(['Create user', 'Refresh', 'Actions for alice']);
+    const page: Page = {
+      ...base,
+      focusBody: async () => {
+        calls.push('focusBody');
+        await base.focusBody();
+      },
+      tab: async () => {
+        calls.push('tab');
+        await base.tab();
+      },
+    };
+    expect(await run(r, page)).toEqual([]);
+    // Four Tabs reach the three controls and the body, and one more confirms the end.
+    expect(calls).toEqual(['focusBody', 'tab', 'tab', 'tab', 'tab', 'tab', 'focusBody']);
   });
 
   it('is unconfirmed when a focus stop cannot be read', async () => {
@@ -292,9 +402,21 @@ describe('focus order requirement', () => {
   });
 
   it('starts from the top of the page', async () => {
-    const focusBody = vi.fn(async () => {});
-    await run(r, tabbingPage(['Create user', 'Refresh', 'Actions for alice'], { focusBody }));
-    expect(focusBody).toHaveBeenCalledTimes(1);
+    const calls: string[] = [];
+    const base = tabbingPage(['Create user', 'Refresh', 'Actions for alice']);
+    const page: Page = {
+      ...base,
+      focusBody: async () => {
+        calls.push('focusBody');
+        await base.focusBody();
+      },
+      tab: async () => {
+        calls.push('tab');
+        await base.tab();
+      },
+    };
+    await run(r, page);
+    expect(calls[0]).toBe('focusBody');
   });
 
   it('needs the page as it loaded and does not say it changes the page', () => {

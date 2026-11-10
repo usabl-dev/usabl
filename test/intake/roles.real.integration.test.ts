@@ -9,9 +9,11 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { BrowserDriver, Page, TargetRole } from '../../src/contracts/index.js';
+import type { BrowserDriver, Draft, Page, Requirement, TargetRole } from '../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { findByRole, resolveTarget, ROLE_CANDIDATES } from '../../src/intake/resolve-target.js';
+import { designCheckProvider } from '../../src/intake/structure-providers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const SHADOW_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shadow</title></head><body>
@@ -26,6 +28,25 @@ const SHADOW_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   </script>
 </body></html>`;
 
+// Three buttons in order. On the blur page, the second one drops focus when it gets it, so a Tab
+// walk falls to the body in the middle of the page.
+function focusPage(blurSecond: boolean): string {
+  const handler = blurSecond ? `<script>document.getElementById('second').addEventListener('focus', (event) => event.target.blur());</script>` : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Focus</title></head><body>
+  <main><button type="button">Create user</button><button type="button" id="second">Refresh</button><button type="button">Actions for alice</button></main>
+  ${handler}
+</body></html>`;
+}
+
+const FOCUS_ORDER: Requirement = {
+  id: 'users-focus',
+  kind: 'focus-order',
+  surface: 'users',
+  description: 'Focus order of the users toolbar',
+  assertion: { type: 'focus-order', sequence: ['Create user', 'Refresh', 'Actions for alice'] },
+  approved: true,
+};
+
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromium', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   let driver: BrowserDriver;
   let server: Server;
@@ -36,7 +57,16 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
     const roles = await readFile(fileURLToPath(new URL('../../fixtures/live/roles.html', import.meta.url)), 'utf8');
     server = createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(req.url?.startsWith('/shadow.html') ? SHADOW_PAGE : roles);
+      const url = req.url ?? '';
+      res.end(
+        url.startsWith('/shadow.html')
+          ? SHADOW_PAGE
+          : url.startsWith('/focus-blur.html')
+            ? focusPage(true)
+            : url.startsWith('/focus.html')
+              ? focusPage(false)
+              : roles,
+      );
     });
     await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
     const address = server.address();
@@ -120,6 +150,31 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
       });
       // A role with no candidate in the shadow root is still read in full.
       expect((await resolveTarget(page, { role: 'heading', name: 'Users' })).kind).toBe('one');
+    });
+  });
+
+  async function focusOrderDrafts(page: Page): Promise<Draft[]> {
+    const provider = designCheckProvider(FOCUS_ORDER);
+    if (provider === null) {
+      throw new Error('no focus order provider');
+    }
+    const output = await provider.run({ page, screen: { id: 'users', url: `${baseUrl}/focus.html` }, config: testConfig() });
+    return draftsOf(output);
+  }
+
+  it('confirms the end of a focus order walk and passes a page built to the design', async () => {
+    await withPage('/focus.html', async (page) => {
+      expect(await focusOrderDrafts(page)).toEqual([]);
+      // The walk leaves focus on the body, as it found it.
+      expect(await page.activeElementIs('body')).toBe(true);
+    });
+  });
+
+  it('reads a focus order walk cut short by a control that blurs itself as needs review, never a failure', async () => {
+    await withPage('/focus-blur.html', async (page) => {
+      const drafts = await focusOrderDrafts(page);
+      expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain('one more Tab did not go back to a control the walk had already reached');
     });
   });
 });
