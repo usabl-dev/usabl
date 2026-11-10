@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Draft, ScreenScan, UsablConfig } from '../src/contracts/index.js';
 import { makeFakeDeps } from '../src/deps/fakes.js';
 import { verifyReceipt } from '../src/evidence/receipt.js';
+import { parseResultDocument } from '../src/intake/result-document.js';
 import { run } from '../src/run.js';
 
 // Run level: the receipt run() mints binds the earliest expiry among the waivers the gate applied,
@@ -105,6 +106,20 @@ describe('run binds the end of the waivers it applied into the receipt', () => {
     // And the run at that moment no longer passes, which is why the receipt must not stand for it.
     const rerun = await run(after, config);
     expect(rerun.verdict).toBe('regression');
+  });
+
+  it('keeps a receipt that verifies through a JSON round trip of the Result', async () => {
+    const waivers = [waiver('color-contrast', FIRST_END)];
+    const drafts = [draft('color-contrast', 'Save')];
+    const result = await run(depsFor(NOW, waivers, drafts), config);
+    expect(result.receipt!.waiverExpiresAt).toBe(FIRST_END);
+
+    const read = parseResultDocument(JSON.parse(JSON.stringify(result)));
+    expect(read.receipt?.waiverExpiresAt).toBe(FIRST_END);
+    const later = depsFor('2026-04-01T00:00:00.000Z', waivers, drafts);
+    await expect(verifyReceipt(later, config, read.receipt!, read.receipt!.sourceTree)).resolves.toMatchObject({
+      valid: true,
+    });
   });
 
   it('binds nothing when no waiver applied, so the receipt does not age', async () => {
