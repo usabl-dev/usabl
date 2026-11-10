@@ -182,14 +182,14 @@ describe('the notice for a pay-down the run cannot confirm', () => {
     const out = gate(input(floor, chromeOnly));
     const notice = unconfirmedNotice(out.floorUnconfirmed[0]!);
     expect(notice).toBe(
-      '4 recorded barriers on screen orders (button-name, link-name) were not seen in this run, so they ' +
+      '4 recorded accessibility barriers on screen orders (button-name, link-name) were not seen in this run, so they ' +
         'are not claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl ' +
         'floor prune --unconfirmed.',
     );
     expect(notice).not.toContain('#orders');
     expect(notice).not.toContain('struct:');
     expect(unconfirmedNotice({ screenId: 'users', rules: ['button-name'], barriers: 1 })).toBe(
-      '1 recorded barrier on screen users (button-name) was not seen in this run, so it is not claimed ' +
+      '1 recorded accessibility barrier on screen users (button-name) was not seen in this run, so it is not claimed ' +
         'fixed. If it is fixed, add a reachedWhen signal for this screen or run usabl floor prune --unconfirmed.',
     );
   });

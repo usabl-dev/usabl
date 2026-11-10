@@ -1099,7 +1099,7 @@ describe('overlay states', { timeout: 30_000 }, () => {
     );
     const withDebtPanel = await openPanel(withDebt);
     expect(
-      await withDebtPanel.getByText(/4 floor entries recorded a barrier this run did not observe/i).isVisible(),
+      await withDebtPanel.getByText(/4 floor entries recorded an accessibility barrier this run did not observe/i).isVisible(),
     ).toBe(true);
     expect(await withDebtPanel.getByText(/If they were fixed, run usabl floor prune to re-arm/i).isVisible()).toBe(true);
     // The cause claim this branch removed from every other surface must not survive here.
@@ -3547,7 +3547,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
 
     // The same three sentences the terminal prints, word for word, and neither asserts a cause.
     for (const note of [
-      'This run observed fewer deterministic barriers at these identities than the floor records.',
+      'This run observed fewer deterministic accessibility barriers at these identities than the floor records.',
       'If they were fixed, run usabl floor prune to re-arm the floor.',
       'If the page shows less content today, nothing needs to change.',
     ]) {
@@ -3625,7 +3625,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     // The run is verified and the notice does not change that. It names the screen and the rules
     // and gives the fix, in the same sentence the terminal prints, and no element key.
     const notice =
-      '2 recorded barriers on screen overview (button-name) were not seen in this run, so they are not ' +
+      '2 recorded accessibility barriers on screen overview (button-name) were not seen in this run, so they are not ' +
       'claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor ' +
       'prune --unconfirmed.';
     const floorUnconfirmed = [{ screenId: 'overview', rules: ['button-name'], barriers: 2 }];
@@ -3644,11 +3644,11 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       );
       const panel = await openPanel(page);
 
-      expect(await panel.getByText('Recorded barriers not seen', { exact: true }).isVisible()).toBe(true);
+      expect(await panel.getByText('Recorded accessibility barriers not seen', { exact: true }).isVisible()).toBe(true);
       expect(await panel.getByText(notice, { exact: true }).isVisible()).toBe(true);
       expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
       if (findings.length > 0) {
-        expect(await groupHeadings(page)).toEqual(['Recorded, not blocking', 'Recorded barriers not seen']);
+        expect(await groupHeadings(page)).toEqual(['Recorded, not blocking', 'Recorded accessibility barriers not seen']);
       }
 
       const axe = await new AxeBuilder({ page }).analyze();
@@ -3665,7 +3665,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       { path: '/clusters' },
     );
     const panel = await openPanel(page);
-    expect(await panel.getByText('Recorded barriers not seen', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('Recorded accessibility barriers not seen', { exact: false }).count()).toBe(0);
     await page.context().close();
   });
 
@@ -3731,8 +3731,8 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     ).toBe(true);
 
     // Work above debt, never the other way round.
-    expect(await groupHeadings(page)).toEqual(['Barriers that block this run', 'Recorded, not blocking']);
-    expect(await rowTitlesUnder(page, 'Barriers that block this run')).toEqual(['New focus barrier.']);
+    expect(await groupHeadings(page)).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Accessibility barriers that block this run')).toEqual(['New focus barrier.']);
     expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual([
       'Carried contrast debt.',
       'Waived link name.',
@@ -3828,7 +3828,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       };
     });
 
-    expect(readable.headings).toEqual(['Barriers that block this run', 'Recorded, not blocking']);
+    expect(readable.headings).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
     expect(readable.severities).toEqual(['Serious', 'Serious']);
     expect(readable.note).toContain('do not block this run');
     // The coloured dot beside each severity word is hidden from assistive technology, so the word

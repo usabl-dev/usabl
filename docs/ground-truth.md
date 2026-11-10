@@ -2175,9 +2175,16 @@ Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
 attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
 orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
-Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
-and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
-those surfaces back to match a gap to a screen, so dropping them costs no match.
+Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the
+query, and the fragment from every URL in the Result outside its identity fields, the same way
+`checkPage` output does. Nothing reads those surfaces back to match a gap to a screen, so
+dropping them costs no match. The identity fields (`screenId`, `layer`, `rule`, `rules`,
+`elementKey`, `elementPath`, and `surfaces`) keep their URLs as written, because floor and waiver
+keys are matched against them byte for byte. The `usabl docs` report (JSON and `--html`) has no
+such exception: nothing matches keys against it, so after generation every string in every docs
+artifact, element paths included, loses the userinfo, the query, and the fragment of each URL in
+it, and so does a content requirement's `selector` and `expectedText`. A docs element path that
+held a URL is therefore not a working selector.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -2481,18 +2488,36 @@ absent. That run used to report the barriers paid down. So the gate marks an abs
 identity `fixed` only when one of these holds:
 
 - the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
-- the identity's own element was met this run: a keyboard stop or a draft on that screen at the
-  same element path, for a structural identity, or with the same accessible name, for a name
+- the identity's own element was met this run: a keyboard stop or a draft on that screen whose
+  neutralized path matches, for a structural identity, or whose slugged name matches, for a name
   identity. A counted identity names no element, so only the signal can confirm it. Neither
   does a row identity: its row and table are kept only as hashes, which no keyboard stop or
   element path carries, so an absent row is confirmed only by the signal.
+
+The match is on the same reduced forms the keys are written in (`elementSlots` and
+`identitySlot` in `src/primitives/identity.ts`), not on the identical element path. The
+neutralized path replaces generated ids with placeholders and drops every `:nth-of-type()` and
+`:nth-child()` position, so one button in a list confirms the floored path of another button in
+the same list. The slugged name is lowercased with every run of characters other than `a` to
+`z` and `0` to `9` folded to one hyphen, so names that differ only in case or punctuation match,
+and a name written only in other scripts slugs to nothing and matches any other such name.
+
+The limit to know: the readiness signal confirms every absent identity on its screen. When
+`reachedWhen` matches only the app shell, such as a header or navigation that mounts while the
+content fails to mount, the floored accessibility barriers in the missing content are marked `fixed`, and the
+run can be verified. The accessibility barrier is not lost. Once its floor entry is pruned, or the debt
+history confirms the fix and frees its slot, nothing carries it any more, so when the content
+renders again it comes back as a new finding. It blocks a later change only when that change's
+coverage reaches the screen, and that change may be one that did not touch the content. It never reads as a pass of that accessibility barrier for good. Point
+`reachedWhen` at an element of the content itself, not the shell, so a screen whose content did
+not mount never holds its signal.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
 receipt, it is not reported as headroom, and the floor keeps its full count as debt. The verdict
 does not change and no gap is raised. Instead the run shows a notice for each such screen. It names
 the screen, the rules, and the number of barriers, and gives the fix, for example: "3 recorded
-barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
+accessibility barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
 claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
 --unconfirmed." It never names an element key, because a key carries page text. The summary line
 gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
@@ -2535,7 +2560,7 @@ screen has, or runs `usabl floor prune --unconfirmed` and reviews the diff. Meas
 Chromium scan of an axe-sourced floor: axe names a structural element with a short unique selector,
 such as `tr>td>img` or `a[href$="#A-100"]`, which is not the path a keyboard stop records, so in
 practice a structural axe entry is confirmed by a held signal, not by the walk. Name identities are
-confirmed by a stop with the same accessible name.
+confirmed by a stop whose accessible name has the same slug.
 
 What this still cannot catch. A path or a name that something else on the screen also has: another
 element at the same path once the position numbers are removed, or a header button with the same
@@ -3322,7 +3347,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   `reason:`.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
-  "No new barrier blocks this change. It can proceed." and the stop hook allows with
+  "No new accessibility barrier blocks this change. It can proceed." and the stop hook allows with
   "VERIFIED (exit 0): the gate verified this change. You may stop.", followed by the
   receipt's `sourceTree` inside the untrusted frame when there is a receipt, with advisory
   findings shown adjacent when present. Not "no barriers": a verified run routinely
@@ -3351,11 +3376,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   counts and exit codes checked to be whole numbers, and a finding's status and severity
   checked to be one of the contract's words ("unknown" otherwise). A barrier's rule, layer,
   and screen id, the guarded file paths, and the receipt's `sourceTree` are inside the frame.
-  A barrier headline outside the frame reads `- barrier 1: [new serious] (×3)`, and its
-  pieces inside the frame carry the same number: `barrier 1: axe/color-contrast`,
-  `screen (1): ...`, `experience (1): ...`, `fix (1): ...`. One barrier reads
-  `Barrier: [new serious] (×3)` with `barrier: <layer>/<rule>` and `screen: <id>` inside, then
-  its experience and fix. When guarded files changed,
+  An accessibility barrier's headline outside the frame reads
+  `- accessibility barrier 1: [new serious] (×3)` under the heading `Accessibility barriers:`,
+  and its pieces inside the frame carry the same number:
+  `accessibility barrier 1: axe/color-contrast`, `screen (1): ...`, `experience (1): ...`,
+  `fix (1): ...`. One reads `Accessibility barrier: [new serious] (×3)` with
+  `accessibility barrier: <layer>/<rule>` and `screen: <id>` inside, then its experience and
+  fix. When guarded files changed,
   the scaffold line gives their count, for example `Guarded files changed: 2, named under
   "guarded files" in the untrusted text below`, and the piece `guarded files: <paths>`
   follows the gate's summary and is never dropped when the message is shortened. A field
@@ -3367,7 +3394,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   barrier's headline goes with its pieces in the frame, so no headline is left whose rule is
   nowhere in the message. Coverage gap lines go only after every barrier is gone. The note
   says how many lines and how many barriers were left out, in the form "[shortened to fit
-  the message budget, N line(s) omitted (K barrier(s) left out); run usabl check --json for
+  the message budget, N line(s) omitted (K accessibility barrier(s) left out); run usabl check --json for
   the full list]", and the show-all hint counts only the barriers still shown.
 - A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."
@@ -3380,6 +3407,11 @@ On save, the overlay client requests a scan from the same engine as the stop hoo
 client runs inside the tested page's own JavaScript realm, so the page can interfere with
 what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
+
+The Vite plugin adds the overlay loader to the page only in `vite serve`. In `vite build`, and
+before Vite has resolved its config, `transformIndexHtml` returns the HTML unchanged, so a
+production bundle never carries a loader for `/__usabl/client.js`, a module only the dev server
+answers.
 
 The overlay and the CLI start the scan browser through the same shared browser in
 `src/deps/real.ts`, so both ask for Chromium's sandbox, fall back the same way, and honor
@@ -3442,7 +3474,7 @@ receipt (`_No receipt: run was not verified._` when none), then `### Conformance
 then `### Accessibility debt` when the floor holds debt or the change fixed some, for example
 "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1 is
 intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
-then the finding sections `### New barriers`, `### Known (recorded debt)`, and
+then the finding sections `### New accessibility barriers`, `### Known (recorded debt)`, and
 `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps`, then
 `### Disclosed, does not block` when any screen carries a provider note, and
@@ -3454,6 +3486,26 @@ collapsed group holds findings of one status, and names its screen id and rule o
 headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
+
+**Size bound.** GitHub refuses a comment body over 65,536, and the required check then fails
+with no comment. The comment body, counted with the newline the CLI writes after it, is at most
+60,000 UTF-8 bytes (`COMMENT_BODY_LIMIT` in `src/surfaces/pr-comment.ts`). Whether GitHub counts
+characters, UTF-16 code units, or bytes has not been checked live. A text is never fewer bytes
+than code units, or fewer code units than characters, so the body is under 65,536 in each.
+Every carried value is cut to a fixed length, marked `[shortened, N characters omitted]`.
+Coverage gaps are named up to 20 per state, and one line counts the rest of each state, as the
+transcript names up to 20 stops per screen. When the body is still over the bound, whole items
+are cut, lowest priority first: announcements, disclosed notes, advisory findings, recorded
+debt, notices for floored accessibility barriers not seen, gaps after the first of each state, the framed
+detail under a gating finding, and last a gating finding's first line. The marker, the verdict
+line, the approval line, the judge line, the receipt, the conformance counts, the debt lines,
+and the first coverage gap of each state are never cut, so every gap state the run had stays
+named. Each section that lost items says how
+many, and one note under the verdict says how many in all and that the full Result is
+`usabl-result.json` in the `usabl-result` artifact. A gating finding's first line is cut only
+when those first lines alone pass the bound, which needs an operator to raise the noise budget
+until hundreds of gating findings are listed one by one; the comment then keeps as many as fit,
+in the gate's order. The bound changes what the comment shows, never the verdict.
 
 **Two shapes.** `usabl install --ci` and `usabl install --docs-ci` *generate* a six-job
 workflow in the consuming repo. `usabl-engine` checks out the public `usabl-dev/usabl` at the
@@ -4295,8 +4347,33 @@ AI can propose alt text or doc copy. usabl publishes only entries with
 
 ### Bound to evidence
 
-Each DocArtifact is bound to the code state via `boundToReceipt`. If the code changes
-and the receipt is invalidated, stale docs are marked as needing regeneration.
+Each DocArtifact is bound to the code state via `boundToReceipt`, and records the git tree
+it was made from in `sourceTree`: the receipt's tree when the run minted one, otherwise the
+tree `usabl docs` read before the run. A report is marked stale wherever it is listed or read
+against a tree other than its own, and also when it records no tree or the current tree cannot
+be read: the artifact gets `stale: true` and a `staleReason` that names both trees and says to
+run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file saved
+while the scan ran marks the report stale in its JSON and on its `--html` page, with or without
+a receipt. A run whose files changed during the scan is not covered and mints no receipt, so
+the report records the tree read before, and the tree read after differs from it. A receipt
+binds the tree the run read before it planned. If that differs from the tree `usabl docs` read
+before the run, the report also records the earlier tree in `startTree`, and a report whose two
+trees differ is stale against every tree, the receipt's tree included. On the page a stale
+card reads "Out of date", never "Verified", and the overview counts the stale cards. A report
+saved earlier and read again is checked with `markStaleDocArtifacts(artifacts, currentTree)`
+from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence-binding.ts`.
+No usabl command reads a saved report back; a static HTML page saved to disk cannot mark
+itself, so regenerate a page before publishing it.
+
+The tree is the working tree as git would commit it with everything added: usabl builds a
+temporary index from `git read-tree HEAD`, runs `git add -A` into it, and runs `git write-tree`
+(`writeTree` in `src/deps/git.ts`, the same function the receipt uses). So staged, unstaged, and
+untracked edits all change it. A caller of `markStaleDocArtifacts` must compute `currentTree`
+the same way, with `GIT_INDEX_FILE` set to a temporary file for all three commands. A plain
+`git write-tree` reads the real index, and `HEAD^{tree}` leaves out every edit not committed, so
+with a dirty work tree either gives another tree and every report reads as stale. That fails
+safe, but no report ever reads as current. `git add -A` skips files git ignores, so an edit to an ignored file, such
+as a generated asset the app serves, does not change the tree and does not mark a report stale.
 
 ### How to run it
 
@@ -4326,7 +4403,8 @@ and role from the accessibility tree. Gating runs never read them. Each entry is
 image's element path and the text it has now. An image with no name reads `Marked
 decorative on the page.` when its own `alt` is empty or its role is `none` or
 `presentation`, and `No text alternative on the page.` otherwise.
-That text is untrusted page text. It passes the surface scrubber, each string is cut to a
+That text is untrusted page text. It passes the published scrub, which also drops the query and
+the fragment of any URL the page repeats, element paths included, each string is cut to a
 fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
 screen, with one more entry that counts the rest. Every drafted entry has `origin:
 'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a

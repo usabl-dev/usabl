@@ -222,9 +222,9 @@ function gapFor(screen: { id: string; url: string }, group: UnkeyedGroup): Cover
     ref: screen.url,
     state: 'not-covered',
     reason:
-      `on screen ${screen.id}, rule ${group.rule}: ${group.count} ${group.count === 1 ? 'barrier sits' : 'barriers sit'} ` +
+      `on screen ${screen.id}, rule ${group.rule}: ${group.count} ${group.count === 1 ? 'accessibility barrier sits' : 'accessibility barriers sit'} ` +
       `in table rows usabl could not tell apart, or on elements it could not find again (${reasons}), so this run ` +
-      'cannot prove that a new barrier in one row is not hiding behind one accepted in another. To fix: give ' +
+      'cannot prove that a new accessibility barrier in one row is not hiding behind one accepted in another. To fix: give ' +
       'every body row of each table a key attribute such as data-row-key, or a row header, that no other row of that ' +
       'table holds, key the rows of any table another table sits in, and give each table an id, a caption, or an ' +
       'accessible name that no other table on the screen shares. If an element left the page during the scan, make ' +

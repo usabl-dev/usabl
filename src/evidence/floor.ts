@@ -133,7 +133,7 @@ export function parseEvidenceFloor(value: unknown, origin: FloorOrigin = FLOOR_F
       refuse(
         origin,
         entriesField,
-        'records more barriers in total than usabl can count exactly. ' +
+        'records more accessibility barriers in total than usabl can count exactly. ' +
           'Lower the counts, or regenerate the floor with usabl baseline.',
       );
     }

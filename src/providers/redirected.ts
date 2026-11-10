@@ -550,7 +550,7 @@ const SESSION_ADVICE =
 function notMeasured(screenId: string): string {
   return (
     `usabl did not measure ${screenId}: it reports no findings for it and confirms no accepted ` +
-    'barrier on it as resolved.'
+    'accessibility barrier on it as resolved.'
   );
 }
 

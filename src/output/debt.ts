@@ -48,8 +48,8 @@ const HOW_TO_TURN_ON =
   'and records what it saw on the usabl/history branch.';
 
 const OFF_SENTENCES: Record<DebtTrackingOff, string> = {
-  'no-reader': `Automatic debt tracking is off: this run was not given a history reader, so fixed barriers keep their slot in the accepted debt until someone runs usabl floor prune.`,
-  'no-history': `Automatic debt tracking is off: there is no usabl/history branch, so fixed barriers keep their slot in the accepted debt until someone runs usabl floor prune. ${HOW_TO_TURN_ON}`,
+  'no-reader': `Automatic debt tracking is off: this run was not given a history reader, so fixed accessibility barriers keep their slot in the accepted debt until someone runs usabl floor prune.`,
+  'no-history': `Automatic debt tracking is off: there is no usabl/history branch, so fixed accessibility barriers keep their slot in the accepted debt until someone runs usabl floor prune. ${HOW_TO_TURN_ON}`,
   unreadable:
     'Automatic debt tracking is off: the usabl/history branch could not be read, so this run used the evidence floor as ' +
     'committed. Fix or remove the record named in the detail, or delete the branch so the next scan of main starts a new history.',

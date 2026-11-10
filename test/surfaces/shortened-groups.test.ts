@@ -72,22 +72,22 @@ for (const surface of surfaces) {
   describe(`${surface.name} shortened at a noise budget of 40`, () => {
     it('keeps every barrier headline with its rule, screen, and fix, and says how many were left out', () => {
       const message = surface.render();
-      const headlines = [...message.matchAll(/^- barrier (\d+): \[new serious\]$/gm)].map((match) => match[1]!);
+      const headlines = [...message.matchAll(/^- accessibility barrier (\d+): \[new serious\]$/gm)].map((match) => match[1]!);
 
       expect(message.length).toBeLessThanOrEqual(surface.budget);
       expect(headlines.length).toBeGreaterThan(0);
       expect(headlines.length).toBeLessThan(40);
       for (const n of headlines) {
-        expect(message).toMatch(new RegExp(`^barrier ${n}: axe/rule-\\d+$`, 'm'));
+        expect(message).toMatch(new RegExp(`^accessibility barrier ${n}: axe/rule-\\d+$`, 'm'));
         expect(message).toMatch(new RegExp(`^screen \\(${n}\\): screen-\\d+$`, 'm'));
         expect(message).toMatch(new RegExp(`^fix \\(${n}\\): fix-\\d+ x+`, 'm'));
       }
       // No piece belongs to a barrier whose headline was left out.
-      const pieceNumbers = [...message.matchAll(/^barrier (\d+): /gm)].map((match) => match[1]!);
+      const pieceNumbers = [...message.matchAll(/^accessibility barrier (\d+): /gm)].map((match) => match[1]!);
       expect(pieceNumbers).toEqual(headlines);
 
       const left = 40 - headlines.length;
-      expect(message).toContain(`${left} barrier(s) left out`);
+      expect(message).toContain(`${left} accessibility barrier(s) left out`);
       expect(message).toContain(`(${headlines.length} of 40 rule groups shown)`);
       // The gap is still disclosed: barriers go before the coverage lines do.
       expect(message).toContain('denied capability: network');

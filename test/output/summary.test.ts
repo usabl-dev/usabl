@@ -217,7 +217,7 @@ describe('formatSummary', () => {
       }),
     );
     const lines = out.split('\n');
-    const barriers = lines.indexOf('  barriers that block this run: 1 finding(s)');
+    const barriers = lines.indexOf('  accessibility barriers that block this run: 1 finding(s)');
     expect(barriers).toBeGreaterThan(1);
     expect(lines[barriers + 1]).toBe('    [new] clusters · axe/button-name (serious): A button with no accessible name');
     expect(lines[barriers + 2]).toBe('        fix: Add aria-label');
@@ -241,7 +241,7 @@ describe('formatSummary', () => {
    * block; and the work is never below the debt.
    */
   describe('barriers and recorded debt are listed apart', () => {
-    const BLOCKING_HEADING = '  barriers that block this run:';
+    const BLOCKING_HEADING = '  accessibility barriers that block this run:';
     const RECORDED_HEADING = '  recorded, not blocking:';
     const RECORDED_NOTE = '    usabl already recorded these. They do not block this run.';
 
@@ -424,7 +424,7 @@ describe('formatSummary', () => {
       expect(lines).toContain('  floor ahead of this run: 1 entry');
       // The note states the observation and offers the action without asserting a cause: the same
       // two numbers are produced by twelve fixed barriers and by a table rendering nine fewer rows.
-      expect(lines).toContain('    This run observed fewer deterministic barriers at these identities than the floor records.');
+      expect(lines).toContain('    This run observed fewer deterministic accessibility barriers at these identities than the floor records.');
       expect(lines).toContain('    If they were fixed, run usabl floor prune to re-arm the floor.');
       expect(lines).toContain('    If the page shows less content today, nothing needs to change.');
       expect(out).not.toContain('Barriers were fixed here');
