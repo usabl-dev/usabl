@@ -19,6 +19,7 @@ import type {
   Step,
 } from '../contracts/index.js';
 import { AX_TREE_NODE_BUDGET, AX_TREE_TIME_BUDGET_MS } from '../deps/ax-tree.js';
+import { firstLine } from '../primitives/first-line.js';
 import { scrubOutboundData } from '../surfaces/scrub.js';
 import { compareAxTrees, isNoChange, type TreeChange } from './tree-change.js';
 
@@ -350,12 +351,6 @@ type Outcome = { index: number; step: Step; elementPath: string; role: string | 
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-// The first line of an error message. A browser error's later lines can be its call log, which can
-// quote the element's markup and the row data in it.
-function firstLine(text: string): string {
-  return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
 }
 
 const EMPTY_TREE: AxTreeRead = { kind: 'tree', documentNodeId: null, nodes: [] };

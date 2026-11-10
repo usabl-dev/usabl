@@ -3,6 +3,7 @@ import type { AxNode, ProviderContext, RequirementBundle } from '../../src/contr
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { FLOW_STEP_FIELDS, mapRequirementsToProviders, runFlowStep, toVoiceContract } from '../../src/intake/map-to-providers.js';
 import { parseBundle } from '../../src/intake/schema.js';
+import { runProviders } from '../../src/providers/index.js';
 import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = {
@@ -622,6 +623,23 @@ describe('mapRequirementsToProviders', () => {
       expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
       expect(drafts[0]?.why).toContain('could not be read before the flow ran');
     });
+  });
+
+  it('shows one line of the error when a flow step throws, never the call log', async () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click', selector: '#delete' }], expectedAnnouncement: 'Deleted' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        click: vi.fn(async () => {
+          throw new Error('click timed out on #delete after 5000ms\nCall log:\n  - locator resolved to <button aria-label="Delete alice@example.com">Delete</button>');
+        }),
+      }),
+    });
+
+    const result = await runProviders([provider!], context, ['live']);
+
+    expect(result.gaps.map((gap) => gap.reason)).toEqual(['provider intake:flow-save failed: click timed out on #delete after 5000ms']);
+    expect(JSON.stringify(result)).not.toContain('alice');
   });
 
   describe('before its first step, the flow waits for the page to go quiet', () => {
