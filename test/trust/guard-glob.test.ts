@@ -553,8 +553,10 @@ describe('a guardedPaths entry the guard cannot evaluate', REAL_GIT, () => {
 
 /**
  * Some entries can name a path outside the folder their first segments name. A `..` after a
- * wildcard can climb above it. The guard reads such an entry as the whole tree, so a change to the
- * path it can name needs a code owner's approval, locally and in CI.
+ * wildcard can climb above it, and the guard reads such an entry as the whole tree. A `.` or `..`
+ * inside a brace alternative names a path once the braces are expanded, so the guard expands the
+ * braces first and reads each expansion on its own. Either way a change to the path the entry can
+ * name needs a code owner's approval, locally and in CI.
  */
 describe('a guardedPaths entry that can name a path outside its folder', REAL_GIT, () => {
   let root = '';
@@ -567,11 +569,18 @@ describe('a guardedPaths entry that can name a path outside its folder', REAL_GI
     'policy/rule1.json': '{}\n',
     'policy/sub/rule2.json': '{}\n',
     'x.json': '{}\n',
+    'rules.json': '{}\n',
+    'y.json': '{}\n',
+    'b/keep.json': '{}\n',
     'src/App.tsx': 'export {}\n',
   };
 
   // [entry, a file at the root the entry can name]
-  const cases: Array<[string, string]> = [['policy/*/../../x.json', 'x.json']];
+  const cases: Array<[string, string]> = [
+    ['policy/*/../../x.json', 'x.json'],
+    ['{policy,b/..}/rules.json', 'rules.json'],
+    ['{.,b}/y.json', 'y.json'],
+  ];
 
   for (const [entry, changed] of cases) {
     const config = configWith([entry]);

@@ -104,7 +104,7 @@ function literalFolder(segments: string[]): string {
   return (first === -1 ? segments : segments.slice(0, first)).join('/');
 }
 
-/** How the guard reads one entry. */
+/** One reading of an entry. An entry with a brace group has one reading for each expansion. */
 export interface GuardedEntry {
   // The entry as written.
   text: string;
@@ -116,29 +116,47 @@ export interface GuardedEntry {
 }
 
 /**
- * How the guard reads an entry. It is read in canonical form, the form git prints a path in: no
- * leading `./`, no repeated or trailing `/`, and no `.` segment. A `..` segment takes away the
- * segment before it, as git does with a pathspec. `.` alone is the whole tree, written as the empty
- * string. Every step below reads this form and never the raw entry text, because git output never
- * holds `./` or `//`, and an entry compared as written would match nothing.
+ * How the guard reads an entry. A brace group is expanded first, as Node's glob does, and each
+ * expansion is read on its own, so a `.` or `..` inside a brace alternative is read as the path it
+ * names once the braces are gone. A literal entry, such as the requirements folder, is a path: no
+ * glob rule applies to it, and braces in it are part of its name.
+ *
+ * Each form is read in canonical form, the form git prints a path in: no leading `./`, no repeated
+ * or trailing `/`, and no `.` segment. A `..` segment takes away the segment before it, as git does
+ * with a pathspec. `.` alone is the whole tree, written as the empty string. Every step below reads
+ * this form and never the raw entry text, because git output never holds `./` or `//`, and an
+ * entry compared as written would match nothing.
  *
  * This never throws because of what an entry says, and never guards less because it cannot read
- * one. An entry in a form the matcher cannot evaluate (a brace range, `?`, `[ ]`, `( )`, `\`, or a
- * bad brace) is read wide: it guards the literal folder above the first segment the matcher cannot
- * evaluate. An entry with no such folder guards the whole tree: one that starts with `/`, one with a
- * `..` that leaves the root, and one with a `..` anywhere after a wildcard, which can climb above
- * any folder. Config load refuses these forms, but the guard
- * also reads a trusted ref's config, which config load never checked. A literal entry, such as the
- * requirements folder, is a path: no glob rule applies to it.
+ * one. A form the matcher cannot evaluate (a brace range, `?`, `[ ]`, `( )`, `\`, or a bad brace)
+ * is read wide: it guards the literal folder above the first segment the matcher cannot evaluate.
+ * A form with no such folder guards the whole tree: one that starts with `/`, one with a `..` that
+ * leaves the root, and one with a `..` anywhere after a wildcard, which can climb above any folder.
+ * Config load refuses these forms, but the guard also reads a trusted ref's config, which config
+ * load never checked.
  */
-export function readGuardedEntry(entry: string, literal = false): GuardedEntry {
+export function readGuardedEntry(entry: string, literal = false): GuardedEntry[] {
+  if (literal || !entry.includes('{')) {
+    return [readForm(entry, entry, literal, false)];
+  }
+  const expansions = expandBraces(entry);
+  if (expansions === null) {
+    // A bad brace has no expansion. The form check names it, and the entry is read wide.
+    return [readForm(entry, entry, false, true)];
+  }
+  return expansions.map((form) => readForm(entry, form, false, true));
+}
+
+// One form of an entry, in canonical form. A form that came from a brace group is a glob reading
+// even when the expansion holds no glob character, as it was before the braces were expanded.
+function readForm(entry: string, form: string, literal: boolean, braced: boolean): GuardedEntry {
   const wide = (path: string, reason: string): GuardedEntry => ({ text: entry, path, glob: false, readWide: reason });
-  if (entry.startsWith('/')) {
+  if (form.startsWith('/')) {
     return wide('', 'it starts with /, so it names no path from the repository root');
   }
   const segments: string[] = [];
   let afterPattern = false;
-  for (const segment of entry.split('/')) {
+  for (const segment of form.split('/')) {
     if (segment === '' || segment === '.') {
       continue;
     }
@@ -165,7 +183,7 @@ export function readGuardedEntry(entry: string, literal = false): GuardedEntry {
   if (problem !== null) {
     return wide(literalFolder(segments), problem);
   }
-  return { text: entry, path, glob: GLOB_CHARACTERS.test(path), readWide: null };
+  return { text: entry, path, glob: braced || GLOB_CHARACTERS.test(path), readWide: null };
 }
 
 /**
@@ -191,18 +209,16 @@ export function readGuardedEntries(config: GuardConfigSource): GuardedEntry[] {
   if (config.requirements !== undefined) {
     literal.add(config.requirements);
   }
-  return buildGuardedSet(config).map((entry) => readGuardedEntry(entry, literal.has(entry)));
+  return buildGuardedSet(config).flatMap((entry) => readGuardedEntry(entry, literal.has(entry)));
 }
 
 // The folder a git listing must cover to find every file an entry can match: the entry itself
-// when it is a literal path, or the literal segments before its first glob segment. An empty
-// result is the whole tree.
+// when it is a literal path, or the literal segments before its first glob segment. A brace
+// expansion with no glob segment left is listed as itself. An empty result is the whole tree.
 function listingPrefix(entry: GuardedEntry): string {
-  if (!entry.glob) {
-    return entry.path;
-  }
   const segments = entry.path.split('/');
-  return segments.slice(0, segments.findIndex((segment) => GLOB_CHARACTERS.test(segment))).join('/');
+  const first = entry.glob ? segments.findIndex((segment) => GLOB_CHARACTERS.test(segment)) : -1;
+  return first === -1 ? entry.path : segments.slice(0, first).join('/');
 }
 
 /**
@@ -278,7 +294,7 @@ export async function expandGuardedSet(
 ): Promise<string[]> {
   return expandEntries(
     deps,
-    guardedPaths.map((entry) => readGuardedEntry(entry)),
+    guardedPaths.flatMap((entry) => readGuardedEntry(entry)),
     trustedRef,
   );
 }
@@ -378,7 +394,7 @@ export async function guardScopeAtRefs(
   // Each ref is listed once, and the same matcher the local guard uses selects the guarded files,
   // so a glob entry lists its files at both refs and a file the head deleted is still compared.
   const entries = readGuardedEntries(scopeConfig ?? { guardedPaths: [] });
-  const readWide = entries.filter((entry) => entry.readWide !== null).map(readWideNotice);
+  const readWide = [...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice))];
   const prefixes = listingPrefixes(entries);
   const [trustedFiles, workingFiles] = await Promise.all([
     git.lsFilesUnder(trustedRef, prefixes),

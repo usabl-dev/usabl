@@ -1153,6 +1153,7 @@ async function guardedPathSamples(
 ): Promise<{ samples: string[]; globsWithNoFile: string[]; literalsWithNoFile: string[] }> {
   const samples: string[] = [];
   const globsWithNoFile: string[] = [];
+  const globsWithFile = new Set<string>();
   const literalsWithNoFile: string[] = [];
   for (const entry of entries) {
     const prefix = entry.path;
@@ -1167,9 +1168,16 @@ async function guardedPathSamples(
       }
     } else if (present.length === 0) {
       globsWithNoFile.push(entry.text);
+    } else {
+      globsWithFile.add(entry.text);
     }
   }
-  return { samples, globsWithNoFile, literalsWithNoFile };
+  // A brace entry has one reading per expansion. It matches no file only when no expansion does.
+  return {
+    samples,
+    globsWithNoFile: [...new Set(globsWithNoFile)].filter((text) => !globsWithFile.has(text)),
+    literalsWithNoFile,
+  };
 }
 
 // The files under a literal entry in the last commit, or on disk when git cannot say.
@@ -1232,7 +1240,7 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
   // Entries the guard reads wide, and literal entries that name nothing, are drift: the guard
   // guards more, or nothing, where the entry meant something else.
   const entryProblems = [
-    ...entries.filter((entry) => entry.readWide !== null).map(readWideNotice),
+    ...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice)),
     ...(literalsWithNoFile.length === 0
       ? []
       : [
