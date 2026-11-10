@@ -5,6 +5,7 @@
  * Documentation requirements emit no Provider because they define output artifacts, not checks.
  * Voice requirements become virtual screen reader providers, whose drafts are preview unless the
  * obligation class is promoted in config.
+ * A requirement that is not approved yet reports only preview drafts, whatever its kind.
  */
 import type {
   ActionSettle,
@@ -32,6 +33,7 @@ import { ProviderRunFailed } from '../providers/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { isActionStep, makeSilentChangeWatch, type SilentChangeWatch } from '../voicing/silent-change.js';
 import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
+import { shownUntilApproved } from './requirement-approval.js';
 import { designCheckProvider } from './structure-providers.js';
 
 function hasNonEmptyName(name: string | null): boolean {
@@ -675,19 +677,22 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
   const providers: Provider[] = [];
 
   for (const requirement of bundle.requirements) {
+    // Each provider reports only preview drafts until a person approves its requirement.
     if (requirement.assertion.type === 'content') {
-      providers.push(toContentProvider(requirement, requirement.assertion));
+      providers.push(shownUntilApproved(requirement, toContentProvider(requirement, requirement.assertion)));
       continue;
     }
 
     if (requirement.assertion.type === 'flow') {
-      providers.push(toFlowProvider(requirement, requirement.assertion));
+      providers.push(shownUntilApproved(requirement, toFlowProvider(requirement, requirement.assertion)));
     }
 
     // Name, heading, landmark, focus order, and target size checks, planned by the same rule.
     const design = designCheckProvider(requirement);
     if (design !== null) {
-      providers.push({ ...design, appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id) });
+      providers.push(
+        shownUntilApproved(requirement, { ...design, appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id) }),
+      );
     }
   }
 
@@ -699,7 +704,7 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
     if (requirement.assertion.type === 'voice') {
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
       const options = { id: `intake:${requirement.id}`, rulePrefix: `intake:${requirement.id}` };
-      providers.push({
+      providers.push(shownUntilApproved(requirement, {
         ...makeVirtualSrProvider([contract], makeStepRunner({ settleAfterEachStep: true }), options),
         appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
         // The contract clicks and presses keys, so it changes the page, the same as a flow.
@@ -719,7 +724,7 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
           const drafts = Array.isArray(output) ? output : output.drafts;
           return [...drafts, ...watch.drafts(ctx.screen.id)];
         },
-      });
+      }));
     }
   }
 
