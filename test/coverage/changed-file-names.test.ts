@@ -3,9 +3,9 @@
  *
  * Without -z, git quotes a name with a byte above 0x7f, so a pull request that edits
  * `src/pages/Über.tsx` listed `"src/pages/\303\234ber.tsx"`. That matched no UI glob, the CI run
- * was idle, and the gate passed. These tests list the change from a real git repository the way
- * the CI command does (the merge-base diff joined with the status paths), then plan and run it
- * with a trusted ref. The file system and git are real. Only the check runner is scripted.
+ * was idle, and the gate passed. These tests list the change from a real git repository with the
+ * CLI's own listing (the merge-base diff joined with the status paths), then plan and run it with
+ * a trusted ref. The file system and git are real. Only the check runner is scripted.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -19,7 +19,7 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
 import { run } from '../../src/run.js';
-import { mergeChangedPaths } from '../../src/surfaces/cli.js';
+import { listChangedFiles } from '../../src/cli.js';
 
 const execFileAsync = promisify(execFile);
 const UMLAUT = 'src/pages/Über.tsx';
@@ -89,9 +89,7 @@ function realDeps(root: string, scanned: string[]): Deps {
 }
 
 async function changedFilesAsCi(deps: Deps): Promise<string[]> {
-  const diffNames = await deps.git.diffNameOnly(TRUSTED_REF);
-  const statusPaths = (await deps.git.statusZ()).map((entry) => entry.path);
-  return mergeChangedPaths(diffNames, statusPaths);
+  return listChangedFiles(deps.git, TRUSTED_REF);
 }
 
 // Each test spawns a few dozen git processes, which takes more than the default five seconds on a
@@ -202,5 +200,18 @@ describe('a run whose changed-file listing fails', () => {
     expect(result.verdict).toBeNull();
     expect(result.exitCode).toBe(4);
     expect(result.summary).toContain('git status printed more than usabl reads');
+  });
+});
+
+describe('the CLI listing of changed files with a trusted ref', () => {
+  it('throws when git cannot list, so the check stops with an error', async () => {
+    const fake = makeFakeDeps({ files: {} });
+    const git = {
+      ...fake.git,
+      diffNameOnly: async () => {
+        throw new Error('git diff printed more than usabl reads');
+      },
+    };
+    await expect(listChangedFiles(git, TRUSTED_REF)).rejects.toThrow('git diff printed more than usabl reads');
   });
 });

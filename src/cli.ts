@@ -15,7 +15,7 @@ import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
-import type { Result, UsablConfig } from './contracts/index.js';
+import type { GitReader, Result, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
@@ -338,6 +338,20 @@ async function runHistory(opts: CliOptions): Promise<number> {
   } finally {
     await deps.browser.close();
   }
+}
+
+/**
+ * The changed files of a check with a trusted ref. The merge-base diff covers a CI checkout, and
+ * the status paths keep local changes in scope. A listing that fails throws, so the check stops
+ * with an error and never runs on a list it could not read.
+ */
+export async function listChangedFiles(
+  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
+  trustedRef: string,
+): Promise<string[]> {
+  const diffNames = await git.diffNameOnly(trustedRef);
+  const statusPaths = (await git.statusZ()).map((entry) => entry.path);
+  return mergeChangedPaths(diffNames, statusPaths);
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -783,10 +797,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     let changedFiles: string[] | undefined;
     if (opts.trustedRef !== null) {
-      // Merge-base diff covers CI checkouts; status paths keep local dirty files in scope.
-      const diffNames = await deps.git.diffNameOnly(opts.trustedRef);
-      const statusPaths = (await deps.git.statusZ()).map((entry) => entry.path);
-      changedFiles = mergeChangedPaths(diffNames, statusPaths);
+      changedFiles = await listChangedFiles(deps.git, opts.trustedRef);
     }
 
     const ran = await run(deps, config, {
