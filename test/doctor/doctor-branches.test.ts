@@ -105,3 +105,15 @@ describe('labels name the real branch', () => {
     expect(byId(await reports({}), 'branch-rule').label).toBe('branch protection (main, assumed, requires usabl-required)');
   });
 });
+
+describe('the workflow owners step names the branch the gate runs on', () => {
+  it('says to require code owner review on trunk when the gate runs on trunk', async () => {
+    const report = byId(await reports({ [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('trunk'), SHA) }), 'workflow-owners');
+    expect(report.nextStep).toContain('require review from code owners on trunk.');
+    expect(report.nextStep).not.toContain('on main');
+  });
+
+  it('says main when there is no gate workflow to read', async () => {
+    expect(byId(await reports({}), 'workflow-owners').nextStep).toContain('require review from code owners on main.');
+  });
+});

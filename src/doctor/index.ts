@@ -941,9 +941,10 @@ function ownerProblem(rule: CodeownersRule): string | null {
 // that matches each workflow file present must name valid owners, and so must the last rule for any
 // workflow file a pull request could add, because GitHub takes the last matching rule and a rule
 // with no owner takes ownership away.
-async function collectWorkflowOwners(deps: DoctorDeps): Promise<SurfaceReport> {
+// branch is the branch the gate workflow runs on, or main when no gate names one.
+async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<SurfaceReport> {
   const fix =
-    'Add "/.github/workflows/ @your-login" to .github/CODEOWNERS, after any rule that matches a workflow file, and require review from code owners on main. ' +
+    `Add "/.github/workflows/ @your-login" to .github/CODEOWNERS, after any rule that matches a workflow file, and require review from code owners on ${branch}. ` +
     'Any pull request can change the workflow that runs on it, so its own verdict is not evidence; an owner approval is what stops it merging.';
   const missing = (detail: string): SurfaceReport => ({
     id: 'workflow-owners',
@@ -1153,7 +1154,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('docs-ci', labels.docsCi, () => collectDocsCi(deps, labels.docsCi)),
     await guardRead('history-ci', labels.historyCi, () => collectHistoryCi(deps, labels.historyCi)),
     await guardRead('branch-rule', branchRuleLabel(labels.target), () => collectBranchRule(deps, labels.target)),
-    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps)),
+    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps, labels.target.name)),
     await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
   ];
 }
