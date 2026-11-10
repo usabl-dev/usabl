@@ -142,7 +142,7 @@ describe('measureEntry', () => {
     expect(seen).toEqual(['Save', '']);
   });
 
-  it('does not count a barrier the clean page already had', async () => {
+  it('does not count an accessibility barrier the clean page already had', async () => {
     const always: Provider = {
       id: 'always',
       layer: 'axe',
