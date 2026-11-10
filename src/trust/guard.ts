@@ -218,12 +218,11 @@ function workingTreeGlobs(entry: GuardedEntry): string[] {
 }
 
 /**
- * Guarded entries are expanded with one matcher from what git and the file system hold: the files
- * at the trusted ref and at HEAD (each listed once, with -z), the paths git status reports (new,
- * changed, deleted, renamed), and what fs.glob finds on the working tree. So a file deleted
- * locally under a glob entry is still listed, and a new file under a guarded folder cannot hide.
- * The fs.glob result is kept as found, so the guard never lists less than it did before one
- * matcher, for example a file only Node's brace ranges such as {1..3} select.
+ * Guarded entries are expanded from what git and the file system hold: the files the matcher
+ * selects from the listings at the trusted ref and at HEAD (each listed once, with -z), joined with
+ * what fs.glob finds for each entry on the working tree. The HEAD listing holds a file deleted
+ * locally, and fs.glob holds a new file no commit has, so neither can hide. The fs.glob result is
+ * kept as found, so the guard never lists less than it did before the matcher.
  */
 export async function expandGuardedSet(
   deps: Deps,
@@ -233,13 +232,11 @@ export async function expandGuardedSet(
   const entries = guardedPaths.map(readGuardedEntry);
   const prefixes = listingPrefixes(entries);
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
-  const [refListings, status, workingByEntry] = await Promise.all([
+  const [refListings, workingByEntry] = await Promise.all([
     Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
-    deps.git.statusZ(),
     Promise.all(entries.map((entry) => deps.fs.glob(workingTreeGlobs(entry)))),
   ]);
-  const listed = [...refListings.flat(), ...status.map((entry) => entry.path)];
-  return selectGuarded(entries, listed, workingByEntry);
+  return selectGuarded(entries, refListings.flat(), workingByEntry);
 }
 
 /**

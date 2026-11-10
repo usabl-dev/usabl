@@ -574,6 +574,34 @@ describe('the guard matcher and Node fs.glob agree on every accepted form', REAL
   });
 });
 
+describe('the guard listing without git status', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('still lists a file deleted locally and a new untracked file under a guarded glob', async () => {
+    // The HEAD listing holds the deleted file and fs.glob finds the new one, so git status adds
+    // nothing. A status call that throws shows the guard no longer makes it.
+    root = await repoWith(GLOB_CONFIG, { ...GLOB_FILES, 'policy/kept.json': '{}\n' });
+    await unlink(join(root, 'policy/rules.json'));
+    await write(root, 'policy/new.json', '{}\n');
+    const base = realDeps(root);
+    const deps: Deps = {
+      ...base,
+      git: {
+        ...base.git,
+        statusZ: async () => {
+          throw new Error('git status is not part of the guard listing');
+        },
+      },
+    };
+    const listed = await expandGuardedSet(deps, ['policy/*.json']);
+    expect(listed).toEqual(['policy/kept.json', 'policy/new.json', 'policy/rules.json']);
+  });
+});
+
 describe("this repository's own config", REAL_GIT, () => {
   it('lists every file the previous expansion listed, with the same policy hash', async () => {
     const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
