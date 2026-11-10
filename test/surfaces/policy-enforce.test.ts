@@ -313,6 +313,134 @@ describe('enforcePolicy', () => {
     );
   });
 
+  describe('code owners by the last matching rule', () => {
+    const aliceApproved = async (): Promise<PolicyReview[]> => [
+      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+    ];
+
+    it('passes when a team line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ @usabl-dev/docs\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
+    it('passes when a later user line replaces an earlier team line', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '* @usabl-dev/everyone\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('passes when an email line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ docs@example.com\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('passes when an owner-less line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\ndocs/generated/\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('still refuses when the last matching rule names a team', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n.usabl-evidence.json @usabl-dev/owners\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({
+        exitCode: 2,
+        message:
+          'the last CODEOWNERS rule that matches .usabl-evidence.json names a team or an email, and usabl enforce policy accepts approval only from a user login',
+      });
+    });
+
+    it('still refuses when the last matching rule names a user and a team', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice @usabl-dev/owners\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('still refuses when the last matching rule names an email', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n*.json owners@example.com\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('still refuses when the last matching rule names no owner', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n/.usabl-evidence.json\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({
+        exitCode: 2,
+        message: 'the last CODEOWNERS rule that matches .usabl-evidence.json names no owner',
+      });
+    });
+
+    it('still refuses the whole file on a pattern it cannot parse, even after a matching user line', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\ndocs/**/*.md @usabl-dev/docs\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('docs/**/*.md');
+    });
+
+    it('still refuses the whole file on an owner that is not a user, a team, or an email', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ alice\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('alice');
+      expect(out.message).toContain('not a @user login, an @org/team, or an email');
+    });
+  });
+
   it('fails closed and names a CODEOWNERS pattern it cannot interpret', async () => {
     const out = await enforcePolicy(
       policyResult,

@@ -37,6 +37,7 @@ import {
 } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
+import { readCodeownersLimits } from '../surfaces/policy-enforce.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 import { collectEngineReports, formatEngineReports } from './engines.js';
@@ -973,6 +974,22 @@ function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): bool
   });
 }
 
+// The paths a change under each guarded entry can touch: the files present and, for a literal
+// entry, the entry itself or a new file in its folder. The code owner limits are read for these.
+async function guardedPathSamples(deps: DoctorDeps, guardedSet: string[]): Promise<string[]> {
+  const samples: string[] = [];
+  for (const entry of guardedSet) {
+    const prefix = normalizePolicyPath(entry);
+    const present = await deps.fs.glob([prefix, `${prefix}/**`]);
+    samples.push(...present);
+    if (!/[*{]/.test(prefix)) {
+      const folder = entry.endsWith('/') || present.some((path) => path.startsWith(`${prefix}/`));
+      samples.push(folder ? `${prefix}/new-file` : prefix);
+    }
+  }
+  return samples;
+}
+
 // Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
 // always-guarded ledgers) does not, a change to that path reads as "no policy change" while GitHub
 // still requires an owner, so silence reads as green. Report it as drift so the disagreement is
@@ -1007,7 +1024,11 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
     (path) => !isPolicyPathCovered(path, guardedSet),
   );
   const unverifiable = [...new Set(unreconcilable)];
-  if (uncovered.length > 0 || unverifiable.length > 0) {
+  // The limits of `usabl enforce policy`, in its own words, so a scope doctor reads as wired is
+  // one the policy check can pass.
+  const ownerLimits = readCodeownersLimits(codeownersRaw, await guardedPathSamples(deps, guardedSet));
+  const limits = ownerLimits.ok ? ownerLimits.reasons : [ownerLimits.message];
+  if (uncovered.length > 0 || unverifiable.length > 0 || limits.length > 0) {
     const parts: string[] = [];
     if (uncovered.length > 0) {
       parts.push(
@@ -1017,6 +1038,11 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
     if (unverifiable.length > 0) {
       parts.push(
         `CODEOWNERS uses pattern(s) usabl cannot reconcile against a guarded prefix (${unverifiable.join(', ')}); confirm guardedPaths covers what they own, since usabl cannot prove it.`,
+      );
+    }
+    if (limits.length > 0) {
+      parts.push(
+        `usabl enforce policy cannot pass a change to a guarded path here: ${limits.join('; ')}. Make the last rule that matches each guarded path name @user logins.`,
       );
     }
     return {
