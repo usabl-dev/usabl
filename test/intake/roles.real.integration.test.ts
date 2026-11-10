@@ -93,12 +93,16 @@ const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 // it. The read scrolls the box that holds the inner button too, a scroll a person can make. The
 // page starts scrolled, and a key press writes every scroll position to the body, so the test can
 // show that the read puts each one back. The deep button sits past the bottom of a box that
-// scrolls; the overflow limit asks for review of it before any scroll.
+// scrolls; the overflow limit asks for review of it before any scroll. The two carousel buttons sit
+// wholly inside the visible part of a box that hides its overflow across and holds much wider
+// content: one near its left edge, and one right of its center, which a centered scroll would move
+// the box for. Neither needs a scroll to be in view, so both pass.
 const HIT_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hit</title></head><body style="margin:0"><main>
   <div style="${ROW}"><button id="plain" aria-label="Plain" style="${BUTTON}"></button></div>
   <div style="${ROW}"><button id="round" aria-label="Round" style="${BUTTON};border-radius:50%"></button></div>
   <div id="scroller" style="height:200px;overflow:auto"><div style="height:80px"></div><button id="inner" aria-label="Inner" style="${BUTTON}"></button><div style="height:600px"></div></div>
   <div style="height:200px;overflow:auto"><div style="height:600px"></div><button id="deep" aria-label="Deep" style="${BUTTON}"></button></div>
+  <div style="width:300px;overflow-x:hidden"><div style="width:3000px"><button id="carousel-left" aria-label="Carousel left" style="${BUTTON};margin-left:8px"></button><button id="carousel-right" aria-label="Carousel right" style="${BUTTON};margin-left:140px"></button></div></div>
   <div style="height:3000px"></div>
   <button id="far" aria-label="Far" style="${BUTTON}"></button>
   <div style="${ROW}"></div>
@@ -317,6 +321,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         ['#round', 'Round'],
         ['#inner', 'Inner'],
         ['#far', 'Far'],
+        ['#carousel-left', 'Carousel left'],
+        ['#carousel-right', 'Carousel right'],
       ] as const) {
         expect({ selector, box: await page.boundingBox(selector) }).toEqual({ selector, box: { width: 44, height: 44, fragments: 1, unmeasurable: [] } });
         expect({ selector, confidence: await targetSizeConfidence(page, name, '/hit.html') }).toEqual({ selector, confidence: [] });

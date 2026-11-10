@@ -941,9 +941,13 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   // returns, and nothing here waits.
   //
   // scrollIntoView also scrolls a box whose overflow is hidden or clip, which a person cannot
-  // scroll: it has no scroll bar and takes no wheel. A control such a scroll reveals is not one a
-  // pointer user meets there, so a scroll on an axis like that counts as clipped. The overflow of
-  // each box is read before the scroll, and a value that is not one usabl knows counts as hidden.
+  // scroll: it has no scroll bar and takes no wheel. So the control is first brought fully into
+  // view with the least scroll (nearest), which moves a box only when the control is not fully
+  // inside that box's scrollport. If that scroll moved a box, or the window, on an axis where the
+  // overflow is hidden, a person could not bring the control into view, and it counts as clipped.
+  // The centered scroll that follows is not judged this way: the control is already fully inside
+  // every scrollport, so centering cannot show anything those boxes hid. The overflow of each box
+  // is read before any scroll, and a value that is not one usabl knows counts as hidden.
   const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
   const saved = [];
   for (let node = parentOf(element); node !== null; node = parentOf(node)) {
@@ -958,9 +962,21 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   const windowScrollsY = scrollable(rootStyle.overflowY) && (bodyStyle === null || scrollable(bodyStyle.overflowY));
   const windowX = window.scrollX;
   const windowY = window.scrollY;
+  const movedHidden = () => {
+    for (const [node, left, top, scrollsX, scrollsY] of saved) {
+      if ((node.scrollLeft !== left && !scrollsX) || (node.scrollTop !== top && !scrollsY)) {
+        return true;
+      }
+    }
+    return (window.scrollX !== windowX && !windowScrollsX) || (window.scrollY !== windowY && !windowScrollsY);
+  };
   let missed = false;
   let resized = false;
   try {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    if (movedHidden()) {
+      limits.add('overflow-clipped');
+    }
     element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const seen = element.getBoundingClientRect();
     // The size is measured on the first box and the points are placed on this one. They must be
@@ -984,16 +1000,10 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   } catch {
     missed = true;
   } finally {
-    for (const [node, left, top, scrollsX, scrollsY] of saved) {
-      if ((node.scrollLeft !== left && !scrollsX) || (node.scrollTop !== top && !scrollsY)) {
-        limits.add('overflow-clipped');
-      }
+    for (const [node, left, top] of saved) {
       if (node.scrollLeft !== left || node.scrollTop !== top) {
         node.scrollTo({ left, top, behavior: 'instant' });
       }
-    }
-    if ((window.scrollX !== windowX && !windowScrollsX) || (window.scrollY !== windowY && !windowScrollsY)) {
-      limits.add('overflow-clipped');
     }
     if (window.scrollX !== windowX || window.scrollY !== windowY) {
       window.scrollTo({ left: windowX, top: windowY, behavior: 'instant' });
