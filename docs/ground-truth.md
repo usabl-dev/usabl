@@ -724,8 +724,9 @@ exactly. Only its words differ: it says axe could not measure the contrast becau
 background is a gradient, and that a person should check the text against the lightest
 and the darkest part of the gradient (4.5:1, or 3:1 for large text). PatternFly 6 buttons
 draw a gradient, so a screen can carry many of these. The terminal summary prints them as
-one entry per screen and status, with the count and every element path, after the other
-findings in the same list. The collapsed views (pull request comment, Stop hook, self
+one entry per screen and status, with the count and every element path, each followed by
+the source or candidate lines that element's finding carries, after the other findings in
+the same list. The collapsed views (pull request comment, Stop hook, self
 check) give them a group of their own, so they never merge with a contrast result axe did
 measure. Every other contrast result, including other needs-review reasons, is printed as
 before. None of this changes a finding, an identity, the floor, a verdict, an exit code,

@@ -280,6 +280,39 @@ function renderBrowserSandbox(result: Result): string[] {
 }
 
 /**
+ * The source mapping of one finding, at the indent given. A docs finding carries a source mapping
+ * and a syntax-aware fix; both are preferred so the author reads their own markup, not the DOM.
+ * App findings have no docsSource and print their app source instead. Shared by a finding printed
+ * on its own and by each element of a grouped entry, so grouping never drops the file to open.
+ */
+function renderSourceLines(finding: Finding, indent: string): string[] {
+  const lines: string[] = [];
+  const source = finding.docsSource;
+  const appSource = finding.appSource;
+  if (source && source.file) {
+    lines.push(`${indent}source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
+    if (source.candidates.length > 1) {
+      lines.push(
+        `${indent}candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+      );
+    }
+  } else if (appSource) {
+    if (appSource.file) {
+      lines.push(`${indent}source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
+    }
+    if (
+      appSource.candidates.length > 0 &&
+      (appSource.file === null || appSource.candidates.length > 1)
+    ) {
+      lines.push(
+        `${indent}candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+      );
+    }
+  }
+  return lines;
+}
+
+/**
  * One finding, with its source mapping and its fix.
  *
  * Every free-text field is neutralized, then bounded on its own, so a huge page string prints its
@@ -294,34 +327,12 @@ function renderFinding(finding: Finding, fixLabel: string): string[] {
     neutralizePrintedText(finding.whatUserExperiences),
     'experience',
   );
-  // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
-  // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
-  const source = finding.docsSource;
-  const appSource = finding.appSource;
+  // A docs finding carries a syntax-aware fix; app findings keep finding.fix.
   const fix = boundField(neutralizePrintedText(fixOrAbsence(finding)), 'fix');
   lines.push(
     `    [${finding.status}] ${screenId} · ${layer}/${rule} (${finding.severity}): ${whatUserExperiences}`,
   );
-  if (source && source.file) {
-    lines.push(`        source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
-    if (source.candidates.length > 1) {
-      lines.push(
-        `        candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
-      );
-    }
-  } else if (appSource) {
-    if (appSource.file) {
-      lines.push(`        source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
-    }
-    if (
-      appSource.candidates.length > 0 &&
-      (appSource.file === null || appSource.candidates.length > 1)
-    ) {
-      lines.push(
-        `        candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
-      );
-    }
-  }
+  lines.push(...renderSourceLines(finding, '        '));
   // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
   // real state, and a missing line reads as a rendering bug rather than as an absence.
   lines.push(`        ${fixLabel}: ${fix}`);
@@ -329,6 +340,11 @@ function renderFinding(finding: Finding, fixLabel: string): string[] {
 }
 
 const SEVERITY_ORDER: Finding['severity'][] = ['critical', 'serious', 'moderate', 'minor'];
+
+// Code-unit order, the same on every machine. localeCompare depends on the locale.
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 /**
  * One entry for every contrast result axe could not measure on one screen because of a gradient
@@ -348,7 +364,11 @@ function renderGradientGroup(findings: Finding[]): string[] {
   const severity =
     SEVERITY_ORDER.find((level) => findings.some((finding) => finding.severity === level)) ?? first.severity;
   const screenId = boundField(neutralizePrintedText(first.screenId), 'screenId');
-  const elements = findings.map((finding) => neutralizePrintedText(finding.elementPath)).sort();
+  // Each element keeps its own source lines under it, as a finding printed on its own does. Sorted
+  // by the printed path, with the source lines as a tie-break, so the order never depends on input.
+  const elements = findings
+    .map((finding) => ({ path: neutralizePrintedText(finding.elementPath), source: renderSourceLines(finding, '            ') }))
+    .sort((left, right) => compareText(left.path, right.path) || compareText(left.source.join('\n'), right.source.join('\n')));
   const subject = count === 1 ? '1 element, because it has' : `${String(count)} elements, because each has`;
   return [
     `    [${first.status}] ${screenId} · axe/color-contrast (${severity}): Needs review: axe could not ` +
@@ -356,7 +376,7 @@ function renderGradientGroup(findings: Finding[]): string[] {
     `        why: ${GRADIENT_CONTRAST_WHY}`,
     `        check: ${GRADIENT_CONTRAST_CHECK}`,
     `        elements (${String(count)}):`,
-    ...elements.map((element) => `          ${boundField(element, 'source')}`),
+    ...elements.flatMap((element) => [`          ${boundField(element.path, 'source')}`, ...element.source]),
     '        usabl check --json lists each one as its own finding.',
   ];
 }
