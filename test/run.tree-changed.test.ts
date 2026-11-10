@@ -1,7 +1,15 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { Deps, Draft, ScreenScan, UsablConfig } from '../src/contracts/index.js';
 import { makeFakeDeps } from '../src/deps/fakes.js';
+import { makeGitReader } from '../src/deps/git.js';
 import { run } from '../src/run.js';
+
+const execFileAsync = promisify(execFile);
 
 // Run level: the run reads the tree identity before it plans and again after it scans. A tree that
 // changed in between was not the tree the scan saw, so the run is not covered and mints no receipt.
@@ -126,6 +134,32 @@ describe('a tree that changed during the check', () => {
     expect(result.verdict).not.toBe('verified');
     expect(result.receipt).toBeNull();
     expect(result.coverage.gaps.some((g) => g.ref === 'working tree')).toBe(true);
+  });
+});
+
+describe('a repository with no commits', () => {
+  it('ends with no verdict and exit 4, and says to make a first commit', async () => {
+    // A real empty repository: git has no HEAD, so the working tree cannot be read against it.
+    const repo = await mkdtemp(join(tmpdir(), 'usabl-run-no-commits-'));
+    try {
+      await execFileAsync('git', ['init', '--initial-branch=main'], { cwd: repo });
+      const files = {
+        'usabl.config.json': JSON.stringify(config),
+        'usabl.routes.json': JSON.stringify({ routes: [] }),
+      };
+      const base = makeFakeDeps({ files, headContents: { ...files }, changed: [] });
+      const deps: Deps = { ...base, git: { ...base.git, writeTree: makeGitReader({ cwd: repo }).writeTree } };
+
+      const result = await run(deps, config);
+
+      expect(result.verdict).toBeNull();
+      expect(result.exitCode).toBe(4);
+      expect(result.receipt).toBeNull();
+      expect(result.summary).toMatch(/no commits yet.*make a first commit/is);
+      expect(result.summary).not.toMatch(/fatal|Command failed|read-tree/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
 

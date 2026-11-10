@@ -2779,6 +2779,8 @@ Five bindings are compared on re-verification, plus the waiver end below:
   the two reads differ, a file changed during the check: the run carries a not-covered gap
   (ref `working tree`), is never verified, and mints no receipt. The receipt binds the first
   read, so an edit after the second read moves the tree away from it. An idle run is left idle.
+  Every run reads the tree first, so a repository with no commits, where git has no HEAD to read
+  the tree against, ends with no verdict and exit 4, and the summary says to make a first commit.
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
