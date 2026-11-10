@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest';
+import type { Deps, Draft, ScreenScan, UsablConfig } from '../src/contracts/index.js';
+import { makeFakeDeps } from '../src/deps/fakes.js';
+import { run } from '../src/run.js';
+
+// Run level: the run reads the tree identity before it plans and again after it scans. A tree that
+// changed in between was not the tree the scan saw, so the run is not covered and mints no receipt.
+
+const config: UsablConfig = {
+  appBaseUrl: 'http://127.0.0.1:5173',
+  uiFileGlobs: ['fixtures/app/src/**'],
+  discovery: { routerFile: 'fixtures/app/src/App.tsx', wideBlastGlobs: [] },
+  surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] }],
+  guardedPaths: ['usabl.config.json'],
+};
+
+const cleanScan: ScreenScan = {
+  screenId: 'clusters',
+  url: config.surfaces[0]!.url,
+  stops: [],
+  drafts: [],
+  gaps: [],
+  applicability: [],
+  reachedSelectorPresent: null,
+};
+
+const failDraft: Draft = {
+  rule: 'color-contrast',
+  layer: 'axe',
+  severity: 'serious',
+  evidenceClass: 'deterministic',
+  screenId: 'clusters',
+  elementPath: 'button',
+  elementName: 'Save',
+  role: 'button',
+  whatUserExperiences: 'Save is hard to read',
+  why: 'contrast too low',
+  fix: 'Increase contrast',
+  evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
+  confidence: 'fail',
+};
+
+// A working tree that someone edits while the check runs. The edit lands during the scan of the
+// screen, the way an editor or a background agent writes a file while the browser is on the page.
+function editedDuringScan(drafts: Draft[] = []): { deps: Deps; treeReads: () => number } {
+  const files = {
+    'usabl.config.json': JSON.stringify(config),
+    'usabl.routes.json': JSON.stringify({ routes: [] }),
+    '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [] }),
+  };
+  const base = makeFakeDeps({
+    files,
+    headContents: { ...files },
+    changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+    scans: { clusters: { ...cleanScan, drafts } },
+  });
+  let edited = false;
+  let reads = 0;
+  const deps: Deps = {
+    ...base,
+    git: {
+      ...base.git,
+      writeTree: async () => {
+        reads += 1;
+        return edited ? 'tree-after-edit' : 'tree-before-edit';
+      },
+    },
+    checkRunner: {
+      ...base.checkRunner,
+      scan: async (target) => {
+        const scan = await base.checkRunner.scan(target);
+        edited = true;
+        return scan;
+      },
+    },
+  };
+  return { deps, treeReads: () => reads };
+}
+
+// A tree that changes only after the run's second read, so after everything the scan saw.
+function editedAfterTheCheck(): Deps {
+  const files = {
+    'usabl.config.json': JSON.stringify(config),
+    'usabl.routes.json': JSON.stringify({ routes: [] }),
+    '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [] }),
+  };
+  const base = makeFakeDeps({
+    files,
+    headContents: { ...files },
+    changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+    scans: { clusters: cleanScan },
+  });
+  let reads = 0;
+  return {
+    ...base,
+    git: {
+      ...base.git,
+      writeTree: async () => {
+        reads += 1;
+        return reads <= 2 ? 'tree-scanned' : 'tree-edited-later';
+      },
+    },
+  };
+}
+
+describe('a tree that changed during the check', () => {
+  it('is not covered, names the change, and mints no receipt', async () => {
+    const { deps } = editedDuringScan();
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.exitCode).toBe(3);
+    expect(result.receipt).toBeNull();
+    const gap = result.coverage.gaps.find((g) => g.ref === 'working tree');
+    expect(gap?.state).toBe('not-covered');
+    expect(gap?.reason).toContain('changed while usabl was checking');
+    expect(gap?.reason).toContain('run usabl again');
+  });
+
+  it('never reads as verified, even when it also found an accessibility barrier', async () => {
+    const { deps } = editedDuringScan([failDraft]);
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).not.toBe('verified');
+    expect(result.receipt).toBeNull();
+    expect(result.coverage.gaps.some((g) => g.ref === 'working tree')).toBe(true);
+  });
+});
+
+describe('a tree that did not change during the check', () => {
+  it('still mints a receipt', async () => {
+    const files = {
+      'usabl.config.json': JSON.stringify(config),
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [] }),
+    };
+    const deps = makeFakeDeps({
+      files,
+      headContents: { ...files },
+      writeTree: 'tree-steady',
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: { clusters: cleanScan },
+    });
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).toBe('verified');
+    expect(result.receipt?.sourceTree).toBe('tree-steady');
+    expect(result.coverage.gaps).toEqual([]);
+  });
+
+  it('binds the tree the scan saw, not one read after the check', async () => {
+    const result = await run(editedAfterTheCheck(), config);
+
+    expect(result.verdict).toBe('verified');
+    expect(result.receipt?.sourceTree).toBe('tree-scanned');
+  });
+});

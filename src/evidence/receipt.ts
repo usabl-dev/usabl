@@ -10,7 +10,16 @@
  * historyHead (the debt history commit, which can lower the debt a run accepts).
  * Lists are sorted so the same inputs hash the same way.
  */
-import type { Deps, Finding, Receipt, ScannerVersions, ScreenScan, UsablConfig, Waiver } from "../contracts/index.js";
+import type {
+  CoverageGap,
+  Deps,
+  Finding,
+  Receipt,
+  ScannerVersions,
+  ScreenScan,
+  UsablConfig,
+  Waiver,
+} from "../contracts/index.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
 import { assertIso8601Utc } from "../primitives/iso8601.js";
@@ -34,6 +43,10 @@ export interface ReceiptArgs {
   // The earliest expiry among the waivers the run applied, or null when it applied none. See
   // earliestAppliedWaiverExpiry. Required whenever activeWaivers is above 0.
   waiverExpiresAt?: string | null;
+  // The tree identity the run read before it planned, and read again unchanged after it scanned.
+  // run() always passes it, so the receipt binds the tree the scan saw. When absent, mint reads the
+  // tree itself, which is right only for a caller that knows nothing changed since its check.
+  sourceTree?: string;
   baseRevision?: string | null;
   // The debt history commit the run read, or null when it read none. See currentHistoryHead.
   historyHead?: string | null;
@@ -252,7 +265,7 @@ export async function mintReceipt(
     buildGuardedSet(config),
   );
   const [sourceTree, policy] = await Promise.all([
-    deps.git.writeTree(),
+    args.sourceTree ?? deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
   ]);
   return {
@@ -278,6 +291,23 @@ export async function mintReceipt(
     activeWaivers: args.activeWaivers,
     waiverExpiresAt: args.waiverExpiresAt ?? null,
     mintedAt: deps.clock(),
+  };
+}
+
+/**
+ * The gap owed when the tree identity read before planning differs from the one read after the
+ * scan. The scan then saw files that may not be the files the run planned from or the files there
+ * now, so nothing it measured can be bound to one tree. The gate ranks this gap as not_covered,
+ * and a run that is not verified mints no receipt.
+ */
+export function treeChangedDuringCheckGap(): CoverageGap {
+  return {
+    ref: "working tree",
+    state: "not-covered",
+    reason:
+      "The files in this repository changed while usabl was checking them, so the screens it scanned " +
+      "may not show the code as it is now. This run cannot verify accessibility and mints no receipt. " +
+      "Wait until no editor, build, or agent is writing files, then run usabl again.",
   };
 }
 
