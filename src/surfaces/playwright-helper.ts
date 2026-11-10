@@ -139,6 +139,12 @@ export interface CheckPageOptions {
   // that usabl.config.json lists is held to that surface's url, and any other page is not held to
   // an address, because it claims no screen.
   expectedUrl?: string;
+  // Says this test is signed in. A Playwright test usually signs in through its context's storage
+  // state, which usabl cannot see. Set, it turns on the two landing rules that read a refused data
+  // request or a password field as a session that did not work, exactly as the CLI's session
+  // assertion does. USABL_STORAGE_STATE turns them on too. Without either, a sign-in page served
+  // at the screen's own path is not caught.
+  signedIn?: boolean;
 }
 
 // A page a caller hands us has no config file behind it, so the providers run against a neutral
@@ -413,7 +419,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
           return finish([], [settled]);
         }
       }
-      const landed = await landingBeforeChecks(page, screenId, labeledScreenId !== null, expected, config, reachedWhen);
+      const landed = await landingBeforeChecks(page, screenId, labeledScreenId !== null, expected, config, reachedWhen, options.signedIn);
       if ('gap' in landed) {
         return finish([], [landed.gap]);
       }
@@ -529,11 +535,11 @@ function landingRef(screenId: string): string {
   return `landing:${screenId}`;
 }
 
-// The CLI's assertion that a run is signed in: a storage state named in USABL_STORAGE_STATE. Rules
-// A and B of the landing check are claims about a session that was asserted and did not work, so
-// without it they say nothing, as in the CLI.
-function sessionAsserted(): boolean {
-  return readStorageStateEnv(process.env) !== null;
+// Whether the run says it is signed in: the caller's signedIn option, or the CLI's assertion, a
+// storage state named in USABL_STORAGE_STATE. Rules A and B of the landing check are claims about a
+// session that was asserted and did not work, so without one they say nothing, as in the CLI.
+function sessionAsserted(signedIn: boolean | undefined): boolean {
+  return signedIn === true || readStorageStateEnv(process.env) !== null;
 }
 
 function landingGap(screenId: string, reason: string): CoverageGap {
@@ -553,6 +559,7 @@ async function landingBeforeChecks(
   expected: string,
   config: UsablConfig | null,
   reachedWhen: SurfaceConfig['reachedWhen'],
+  signedIn: boolean | undefined,
 ): Promise<{ observation: LandingObservation } | { gap: CoverageGap }> {
   const address = await addressGap(page, screenId, labeled, expected, null);
   if (address.gap !== null) {
@@ -564,7 +571,7 @@ async function landingBeforeChecks(
   const observation = await observeLanding(page, {
     requestedUrl,
     appBaseUrl: config?.appBaseUrl ?? '',
-    sessionConfigured: sessionAsserted(),
+    sessionConfigured: sessionAsserted(signedIn),
     reachedWhen,
   });
   const ruled = redirectedAwayGap(screenId, observation);

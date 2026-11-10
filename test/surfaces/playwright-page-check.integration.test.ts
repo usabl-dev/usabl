@@ -894,4 +894,19 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     const result = await checkAt(`http://127.0.0.1:${port}/account`, { screenId: 'account' });
     expect(result.gaps).toEqual([]);
   });
+
+  // A Playwright test signs in through its context's storage state, which usabl cannot see, so the
+  // test says so itself.
+  it('applies the session rules when the test says it is signed in', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/account`, { screenId: 'account', signedIn: true });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:account']);
+    expect(result.gaps[0]?.reason).toContain('asks for a password');
+  });
+
+  it('does not apply the session rules when the test says it is not signed in', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/account`, { screenId: 'account', signedIn: false });
+    expect(result.gaps).toEqual([]);
+  });
 });

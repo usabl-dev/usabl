@@ -3408,9 +3408,12 @@ keeps the whole route there. A page at another path or fragment is a `not-covere
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C
-compares only the path and the fragment. Rules A and B fire only when the run asserts a session
-the CLI's way, with `USABL_STORAGE_STATE` set, because they are claims about a session that was
-asserted and did not work. An adopted page records only the requests sent after `checkPage` was
+compares only the path and the fragment. Rules A and B fire only when the run asserts a session,
+because they are claims about a session that was asserted and did not work. A test asserts one
+with `options.signedIn: true`, or the CLI's way, with `USABL_STORAGE_STATE` set. A Playwright test
+usually signs in through its context's storage state, which usabl cannot see, so it says so with
+`signedIn`. Without `signedIn` or the variable, a sign-in page served at the screen's own path,
+as a sign-in proxy can serve it, is not caught: the path matches and Rules A and B are off. An adopted page records only the requests sent after `checkPage` was
 called, so Rule A sees a refusal only from those, and it is read again after the checks, as in the
 CLI. A rule that fires is the same `landing:<screenId>` gap. An unlabeled page, and a page whose id
 names no configured surface, claims no address, so it is not held to one unless the caller passes
