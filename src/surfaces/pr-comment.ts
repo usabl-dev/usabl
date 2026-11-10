@@ -405,7 +405,10 @@ function carriedWord(value: unknown, cap: TextCap): string {
 // the verdict line, the approval line, the judge line, the receipt, the conformance counts, and
 // the debt lines. Every value on them is a checked number, a fixed word, or a field cut to its
 // cap, so together they come to a few thousand characters whatever the Result holds. A section
-// holds items, and an item is one finding, gap, notice, note, or screen of announcements.
+// holds items, and an item is one finding, gap, notice, note, or screen of announcements. The
+// first coverage gap of each state is an item that is never cut either, so every state the run
+// had stays named. There are at most five such items (four states and one for a state usabl does
+// not recognize), each with its fields cut to their caps.
 //
 // When the whole body is over COMMENT_BODY_LIMIT, items are cut in CUT_ORDER, lowest priority
 // first, and from the end of the comment within each tier. A cut item is removed whole, so no
@@ -420,11 +423,9 @@ function carriedWord(value: unknown, cap: TextCap): string {
 //   5. notices for floored accessibility barriers this run did not see;
 //   6. coverage gaps after the first one of each state;
 //   7. the framed detail under a gating finding, which keeps its first line;
-//   8. the first coverage gap of each state, so every state stays named while anything else
-//      can go;
-//   9. a gating finding's first line.
+//   8. a gating finding's first line.
 //
-// Tier 9 is reached only when the first lines of the gating findings alone pass the bound. Each
+// Tier 8 is reached only when the first lines of the gating findings alone pass the bound. Each
 // first line is cut to a few hundred characters, so at the default noise budget it never is: the
 // noise budget collapses a long list into a handful of rule groups. It can be reached when an
 // operator raises the noise budget far enough that hundreds of gating findings are listed one by
@@ -439,18 +440,21 @@ const CUT_ORDER = [
   'floor-notice',
   'gap',
   'gating-detail',
-  'gap-first',
   'gating',
 ] as const;
 type CutTier = (typeof CUT_ORDER)[number];
 
+// The tier of an item that is never cut. It is not in CUT_ORDER, so the cutter never reaches it.
+const NEVER_CUT = 'never';
+type ItemTier = CutTier | typeof NEVER_CUT;
+
 // One entry in a section. `head` is the first line or lines and `detail` the rest. The whole item
-// is cut at `tier`. When `detailTier` is set, the detail alone is cut earlier, at that tier, and
-// the head stays.
+// is cut at `tier`, or never when `tier` is NEVER_CUT. When `detailTier` is set, the detail alone
+// is cut earlier, at that tier, and the head stays.
 interface CommentItem {
   head: string[];
   detail: string[];
-  tier: CutTier;
+  tier: ItemTier;
   detailTier?: CutTier;
   cut: boolean;
   detailCut: boolean;
@@ -471,7 +475,7 @@ interface CommentSection {
 
 type CommentPart = { kind: 'fixed'; lines: string[] } | { kind: 'cut-note' } | CommentSection;
 
-function item(head: string[], detail: string[], tier: CutTier, detailTier?: CutTier): CommentItem {
+function item(head: string[], detail: string[], tier: ItemTier, detailTier?: CutTier): CommentItem {
   return { head, detail, tier, ...(detailTier === undefined ? {} : { detailTier }), cut: false, detailCut: false };
 }
 
@@ -803,8 +807,8 @@ function renderCoverageGaps(result: Result): CommentSection {
     // caller can compose one outside the engine, so the label is any string at runtime. It
     // costs one code span to keep that out of the renderer's and the filters' reach.
     const lines = listItem('-', `(${inlineCode(carriedWord(gap.state, 'word'))})`, framed);
-    // The first gap of each state stays until late, so every state present stays named.
-    items.push(item(lines, [], shown === 0 ? 'gap-first' : 'gap'));
+    // The first gap of each state is never cut, so every state present stays named.
+    items.push(item(lines, [], shown === 0 ? NEVER_CUT : 'gap'));
   }
   const over = [...shownPerState.entries()]
     .filter(([, count]) => count > GAPS_PER_STATE_CAP)

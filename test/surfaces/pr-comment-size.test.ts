@@ -222,6 +222,39 @@ describe('pull request comment size', () => {
     }
   });
 
+  it('names every coverage gap state even when gating first lines are cut', () => {
+    // So many gating findings are listed one by one that their first lines alone pass the bound.
+    // The first gap of each state is never cut, so a reader still learns which kinds of gap the
+    // run had.
+    const long = 'y'.repeat(300);
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      finding({ screenId: `${long}-${index}`, rule: `${long}${index}`, layer: long, elementKey: `n-${index}` }),
+    );
+    const gaps: CoverageGap[] = [
+      { ref: 'src/x.tsx', state: 'not-covered', reason: 'readiness did not hold' },
+      { ref: 'src/y.tsx', state: 'unresolved', reason: 'no route reaches it' },
+      { ref: 'src/y2.tsx', state: 'unresolved', reason: 'no route reaches it either' },
+      { ref: 'cap', state: 'capability-denied', reason: 'no browser' },
+      { ref: 'skip', state: 'skipped', reason: 'skipped by the plan' },
+      { ref: 'odd', state: 'someday' as never, reason: 'a state usabl does not know' },
+    ];
+    const markdown = projectPrComment(
+      result({ findings, coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps, nothingToCheck: false } }),
+      { noiseBudget: { default: 1_000_000 } } as never,
+    );
+
+    expect(body(markdown).length).toBeLessThanOrEqual(COMMENT_BODY_LIMIT);
+    // Gating first lines were cut, so the last tier was reached.
+    expect(markdown).toMatch(/more (gating )?findings not shown here/);
+    const gapSection = markdown.slice(markdown.indexOf('### Coverage gaps'));
+    for (const state of ['not-covered', 'unresolved', 'capability-denied', 'skipped']) {
+      expect(gapSection).toContain(`(\`${state}\`)`);
+    }
+    expect(gapSection).toContain('ref: `odd`');
+    // The second unresolved gap is not the first of its state, so it goes before any gating line.
+    expect(gapSection).not.toContain('ref: `src/y2.tsx`');
+  });
+
   it('leaves an ordinary comment exactly as it was, with no note about cutting', () => {
     const small = result({
       findings: [finding({})],

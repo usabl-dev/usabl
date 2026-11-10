@@ -3236,9 +3236,10 @@ Coverage gaps are named up to 20 per state, and one line counts the rest of each
 transcript names up to 20 stops per screen. When the body is still over the bound, whole items
 are cut, lowest priority first: announcements, disclosed notes, advisory findings, recorded
 debt, notices for floored accessibility barriers not seen, gaps after the first of each state, the framed
-detail under a gating finding, the first gap of each state, and last a gating finding's first
-line. The marker, the verdict line, the approval line, the judge line, the receipt, the
-conformance counts, and the debt lines are never cut. Each section that lost items says how
+detail under a gating finding, and last a gating finding's first line. The marker, the verdict
+line, the approval line, the judge line, the receipt, the conformance counts, the debt lines,
+and the first coverage gap of each state are never cut, so every gap state the run had stays
+named. Each section that lost items says how
 many, and one note under the verdict says how many in all and that the full Result is
 `usabl-result.json` in the `usabl-result` artifact. A gating finding's first line is cut only
 when those first lines alone pass the bound, which needs an operator to raise the noise budget
