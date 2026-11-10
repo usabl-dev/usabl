@@ -6,7 +6,7 @@
  * touching the importer. Names and property values are untrusted design text: this unit only
  * compares them and hands them back, and the importer neutralizes them before any output.
  */
-import type { FigmaFile, FigmaNode } from './types.js';
+import type { FigmaComponentProperty, FigmaFile, FigmaNode } from './types.js';
 
 export type StampKind = 'heading-stamp' | 'landmark-stamp' | 'ordering-stamp' | 'button-stamp' | 'button-details';
 
@@ -71,13 +71,24 @@ export function stampKind(node: FigmaNode, file: Pick<FigmaFile, 'components' | 
  * match. Names compare without case. A slot property holds an id, not text, so it reads as null.
  */
 export function propertyValue(node: FigmaNode, name: string): string | null {
+  const property = findProperty(node, name);
+  return property === undefined || typeof property.value === 'object' ? null : String(property.value);
+}
+
+/** Whether the component property by this name is a slot, whose value is an id and not text. */
+export function propertyIsSlot(node: FigmaNode, name: string): boolean {
+  const property = findProperty(node, name);
+  return property !== undefined && typeof property.value === 'object';
+}
+
+function findProperty(node: FigmaNode, name: string): FigmaComponentProperty | undefined {
   const wanted = name.trim().toLowerCase();
   for (const [key, property] of Object.entries(node.componentProperties ?? {})) {
     const base = key.replace(/#[^#]*$/u, '').trim().toLowerCase();
     const plain = key.trim().toLowerCase();
     if (base === wanted || plain === wanted) {
-      return typeof property.value === 'object' ? null : String(property.value);
+      return property;
     }
   }
-  return null;
+  return undefined;
 }

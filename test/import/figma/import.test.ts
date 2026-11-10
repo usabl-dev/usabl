@@ -385,6 +385,38 @@ describe('importFigmaFile Button Details and Figma notes', () => {
     ]);
   });
 
+  it('lists a Button Details card whose Accessible Name is a slot, and never uses the layer text in its place', () => {
+    // The stamp covers a text layer, and its card's name is a slot, which holds a layer, not text.
+    // The layer text is not the name the designer gave, so it must not become one.
+    const label = text('t', 'Refresh icon', rect(0, 0, 20, 20));
+    const card = details('d1', { 'Note number#9:1': '1' }, 'Slotted card');
+    card.componentProperties = {
+      ...card.componentProperties,
+      'Accessible Name#9:2': { type: 'SLOT', value: { guid: { sessionID: 1, localID: 2 } } },
+    };
+    const ordering = kit('o1', 'ordering', rect(0, 0, 20, 20), { 'Order ##7:3': '1' });
+    const result = importFigmaFile(screen([label, stampOn('1'), card, ordering]), screenOptions);
+    expect(result.bundle.requirements).toEqual([]);
+    expect(result.notes).toEqual([
+      'Button Details in layer "Slotted card" was not turned into a check: its Accessible Name is a slot, which holds a layer and not text, so usabl cannot read the name.',
+      'Button stamp on "Refresh icon" was not turned into a check: its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place.',
+      'Ordering stamp 1 on "Refresh icon" was not turned into a check: its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place.',
+    ]);
+  });
+
+  it('lists the Button stamp of an empty Button Details card instead of using the layer text', () => {
+    const label = text('t', 'Refresh icon', rect(0, 0, 20, 20));
+    const result = importFigmaFile(
+      screen([label, stampOn('1'), details('d1', { 'Note number#9:1': '1', 'Accessible Name#9:2': ' ' }, 'Empty card')]),
+      screenOptions,
+    );
+    expect(result.bundle.requirements).toEqual([]);
+    expect(result.notes).toEqual([
+      'Button Details in layer "Empty card" was not turned into a check: it has no accessible name.',
+      'Button stamp on "Refresh icon" was not turned into a check: its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place.',
+    ]);
+  });
+
   it('uses the Button Details name even when the stamp covers no design element', () => {
     const result = importFigmaFile(
       screen([

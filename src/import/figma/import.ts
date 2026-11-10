@@ -24,7 +24,7 @@ import { describeRequirementIdProblem } from '../../intake/requirement-ids.js';
 import { boundText } from '../../output/bounded-text.js';
 import { neutralize } from '../../primitives/neutralize.js';
 import { scrubString } from '../../surfaces/scrub.js';
-import { kitNote, propertyValue, type StampKind } from './kit.js';
+import { kitNote, propertyIsSlot, propertyValue, type StampKind } from './kit.js';
 import type { FigmaFile, FigmaNode, FigmaRect } from './types.js';
 
 export interface FigmaImportOptions {
@@ -87,6 +87,9 @@ function quote(raw: string): string {
 }
 
 type NameRead = { ok: true; name: string } | { ok: false; reason: string };
+
+// Why a stamp linked to a Button Details card whose name usabl cannot read gives no name.
+const UNREAD_CARD = 'its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place';
 
 function readName(raw: string | undefined): NameRead {
   const name = oneLine(raw ?? '');
@@ -319,15 +322,23 @@ export function importFigmaFile(file: FigmaFile, options: FigmaImportOptions): F
       }
     }
     const detailNames = new Map<string, string>();
+    // The note numbers of cards whose name usabl cannot read. A stamp with one of them and no
+    // readable card is listed, because its layer text is not the name the designer gave.
+    const unreadNotes = new Set<string>();
     for (const stamp of usable) {
       if (stamp.kind !== 'button-details') {
         continue;
       }
       const note = propertyValue(stamp.node, 'Note number')?.trim() ?? '';
-      const read = readName(propertyValue(stamp.node, 'Accessible Name') ?? undefined);
+      const read: NameRead = propertyIsSlot(stamp.node, 'Accessible Name')
+        ? { ok: false, reason: 'its Accessible Name is a slot, which holds a layer and not text, so usabl cannot read the name' }
+        : readName(propertyValue(stamp.node, 'Accessible Name') ?? undefined);
       if (!read.ok) {
         const reason = read.reason === 'empty' ? 'it has no accessible name' : read.reason;
         notes.push(notConverted(`Button Details in layer ${quote(stamp.node.name)}`, reason));
+        if (note !== '') {
+          unreadNotes.add(note);
+        }
         continue;
       }
       const card = `Button Details for "${read.name}"`;
@@ -350,17 +361,22 @@ export function importFigmaFile(file: FigmaFile, options: FigmaImportOptions): F
     // The accessible name of each button-stamped design element, so an ordering stamp on the same
     // element uses the name a screen reader hears and not the layer's text.
     const stampNames = new Map<FigmaNode, NameRead>();
-    const buttonNames = new Map<string, string>();
+    const buttonNames = new Map<string, NameRead>();
     for (const stamp of usable) {
       if (stamp.kind !== 'button-stamp') {
         continue;
       }
       const note = propertyValue(stamp.node, 'Note number')?.trim();
       const detail = note === undefined ? undefined : detailNames.get(note);
-      const read: NameRead = detail !== undefined ? { ok: true, name: detail } : coveredName(stamp);
+      const read: NameRead =
+        detail !== undefined
+          ? { ok: true, name: detail }
+          : note !== undefined && unreadNotes.has(note)
+            ? { ok: false, reason: UNREAD_CARD }
+            : coveredName(stamp);
       stampNames.set(stamp.node, read);
-      if (read.ok && stamp.covers !== null) {
-        buttonNames.set(stamp.covers.id, read.name);
+      if (stamp.covers !== null && (read.ok || read.reason === UNREAD_CARD)) {
+        buttonNames.set(stamp.covers.id, read);
       }
     }
 
@@ -426,7 +442,7 @@ export function importFigmaFile(file: FigmaFile, options: FigmaImportOptions): F
           const raw = oneLine(propertyValue(stamp.node, 'Order #') ?? '');
           const order = /^\d{1,6}$/u.test(raw) ? Number.parseInt(raw, 10) : null;
           const button = stamp.covers === null ? undefined : buttonNames.get(stamp.covers.id);
-          const read: NameRead = button !== undefined ? { ok: true, name: button } : coveredName(stamp);
+          const read: NameRead = button ?? coveredName(stamp);
           if (order === null) {
             notes.push(notConverted(`Ordering stamp on ${target}`, `its order ${quote(raw)} is not a whole number`));
           } else if (!read.ok) {
