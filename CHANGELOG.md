@@ -179,6 +179,28 @@
 
 ### Fixed
 
+- A receipt now ends when a waiver it used ends. It binds `waiverExpiresAt`, the earliest
+  expiry among the waivers the run applied, and stops verifying once the clock reaches it.
+  Before, a receipt minted while a waiver was live kept verifying after the waiver ended, and
+  the stop hook said VERIFIED for an accessibility barrier the gate would block. The fast path
+  still skips the scan until that moment. A stored receipt from before this change verifies only
+  if it counted no waived finding; one that did runs one full check. Gate effect: the stop hook
+  runs a full check after a waiver ends, where it allowed on the stored receipt.
+
+- A run now reads the tree before it plans and again after it scans, and the receipt binds the
+  first read. Before, the receipt bound the tree read after the scan, so a file written during a
+  check was bound into a receipt that never saw it. Gate effect: a run whose files changed during
+  the check is not covered, with a gap on `working tree`, and mints no receipt.
+
+- A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. The
+  Chromium version now comes from the browser's own `--version` output, then from the folder
+  Playwright installed it in, so a system Chromium placed where Playwright looks and a custom
+  `PLAYWRIGHT_BROWSERS_PATH` read a real version. A stored receipt that holds a Chromium revision
+  may not verify once after the upgrade, and the stop hook runs one full check. `usabl doctor`
+  reports an unreadable version with the fix. Gate effect: a run with a version usabl still
+  cannot read is not covered, with a gap on `scanner versions` that names the fix, and mints no
+  receipt.
+
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
   merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
