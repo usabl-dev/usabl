@@ -123,12 +123,12 @@ describe('the ledger sources in a real repository', () => {
     expect(read.input.snapshots.map((snapshot) => snapshot.date)).toEqual([dayAt(0), dayAt(6), dayAt(20), dayAt(27)]);
     const ledger = buildLedger({ ...read.input, now: NOW });
 
-    expect(ledger.rows.map((row) => [row.rule, row.elementKey, row.state, row.daysOpen, row.lowerBound])).toEqual([
-      [A.rule, A.elementKey, 'fixed', 27, false],
-      [B.rule, B.elementKey, 'reopened', 25, false],
-      [N.rule, N.elementKey, 'open', 24, false],
-      [R_OLD.rule, R_OLD.elementKey, 'open', 20, true],
-      [R_NEW.rule, R_NEW.elementKey, 'open', 10, true],
+    expect(ledger.rows.map((row) => [row.rule, row.elementKey, row.state, row.daysOpen, row.mayBeMore, row.mayBeLess])).toEqual([
+      [A.rule, A.elementKey, 'fixed', 27, true, false],
+      [B.rule, B.elementKey, 'reopened', 25, true, true],
+      [N.rule, N.elementKey, 'open', 24, false, false],
+      [R_OLD.rule, R_OLD.elementKey, 'open', 20, true, true],
+      [R_NEW.rule, R_NEW.elementKey, 'open', 10, true, true],
     ]);
     const b = ledger.rows[1];
     expect(b?.spans.map((span) => [span.start.date, span.end?.date ?? null, span.end?.by ?? null])).toEqual([
@@ -136,13 +136,14 @@ describe('the ledger sources in a real repository', () => {
       [dayAt(15), null, null],
     ]);
     expect(ledger.rows.filter((row) => row.firstSeenAtFirstBaseline).map((row) => row.rule)).toEqual([A.rule, B.rule, R_OLD.rule]);
-    expect(ledger.rows[3]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten']);
-    expect(ledger.rows[4]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten']);
+    expect(ledger.rows[3]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
+    expect(ledger.rows[4]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
     expect(ledger.history).toMatchObject({ kind: 'on', records: 3, skipped: 0 });
+    // Only N is exact, so it is the only number in a median.
     expect(ledger.totals).toEqual({
-      open: { rows: 3, medianDays: 20, longestDays: 24 },
-      fixed: { rows: 1, medianDays: 27, longestDays: 27 },
-      reopened: { rows: 1, medianDays: 25, longestDays: 25 },
+      open: { rows: 3, exactRows: 1, medianDays: 24, longestDays: 24 },
+      fixed: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
+      reopened: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
     });
   });
 
@@ -168,8 +169,8 @@ describe('the ledger sources in a real repository', () => {
     expect(read.input.shallow).toBe(true);
     const ledger = buildLedger({ ...read.input, now: NOW });
     const n = ledger.rows.find((row) => row.rule === N.rule);
-    expect(n?.lowerBound).toBe(true);
-    expect(n?.incomplete.map((gap) => gap.cause)).toEqual(['record-off-line', 'shallow']);
+    expect(n?.mayBeMoreReasons).toEqual(['shallow']);
+    expect(n?.incomplete.map((gap) => gap.cause)).toEqual(['not-seen', 'record-off-line', 'shallow']);
     expect(ledger.rows.some((row) => row.firstSeenAtFirstBaseline)).toBe(false);
   });
 

@@ -72,13 +72,42 @@ describe('usabl debt ledger', () => {
     const header = lines.findIndex((line) => line.startsWith('Days open'));
     expect(lines[header]).toMatch(/^Days open +State +First seen +Last change +Screen +Rule +Notes +Element$/u);
     const body = lines.slice(header + 1, header + 4);
-    expect(body[0]).toMatch(/^at least 41 +open +2026-01-01 +2026-01-01 +clusters +pf-focus-into-dialog +first baseline +clusters\|/u);
-    expect(body[1]).toMatch(/^20 +fixed +2026-01-01 +2026-01-21 +clusters +button-name +first baseline +\(counted, no element\)$/u);
-    expect(body[2]).toMatch(/^5 +fixed +2026-01-01 +2026-01-06 +clusters +pf-dialog-label +first baseline +clusters\|/u);
-    expect(lines).toContain(
-      'Totals: 1 open, median at least 41 days, longest at least 41 days. 2 fixed, median 12.5 days, longest 20 days. 0 reopened.',
+    // Every row is in the first floor, so each may be older. The two fixed rows were never seen by a
+    // scan, so each may also have been fixed sooner: their days are not known either way.
+    expect(body[0]).toMatch(
+      /^at least 41 +open +2026-01-01 +2026-01-01 +clusters +pf-focus-into-dialog +first baseline, last seen 2026-01-06 +clusters\|/u,
     );
+    expect(body[1]).toMatch(
+      /^not known \(20 by the floor\) +fixed +2026-01-01 +2026-01-21 +clusters +button-name +first baseline, incomplete +\(counted, no element\)$/u,
+    );
+    expect(body[2]).toMatch(/^not known \(5 by the floor\) +fixed +2026-01-01 +2026-01-06 +clusters +pf-dialog-label +first baseline, incomplete +clusters\|/u);
+    expect(lines).toContain('Totals: 1 open, none exact, so no median. 2 fixed, none exact, so no median. 0 reopened.');
     expect(lines).toContain('"first baseline": seen at the first baseline; may be older.');
+  });
+
+  it('prints each label: exact days, at least, at most, and not known', async () => {
+    const late = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
+    const unseen = entryFor(dialogAt(1, { rule: 'aria-required-attr' }), 1);
+    const later = floorOf([OPEN, COUNTED, late, unseen]);
+    const scan = recordOf(later, [fullScreen('clusters', [[OPEN, 1], [late, 1]])], { commit: commitAt(12), sourceTree: 'tree-12' });
+    const history = makeFakeHistory({
+      refs: { 'origin/usabl/history': 'h1' },
+      commits: { h1: { '2026-01.jsonl': `${serializeRecord(scan)}\n` } },
+    }).writer;
+    const outcome = await runLedger(fakeGit({ 0: floorOf([OPEN, COUNTED]), 10: later }), history, 'main', NOW);
+
+    const lines = outcome.text.split('\n');
+    const header = lines.findIndex((line) => line.startsWith('Days open'));
+    const days = lines.slice(header + 1, header + 5).map((line) => line.split(/ {2,}/u)[0]);
+    // Ties sort by identity: button-name before pf-focus-into-dialog, aria-hidden-focus before aria-required-attr.
+    expect(days).toEqual(['not known (41 by the floor)', 'at least 41', '31 days', 'at most 31']);
+    expect(lines).toContain('Totals: 4 open, 1 exact, median 31 days, longest 31 days. 0 fixed. 0 reopened.');
+    expect(lines).toContain('"at least N": the true number may be larger. "at most N": it may be smaller.');
+    expect(lines).toContain('"not known (N by the floor)": it may be larger or smaller. N is what the floor alone shows.');
+
+    const json = JSON.parse(outcome.json);
+    const unseenRow = json.rows.find((row: { rule: string }) => row.rule === unseen.rule);
+    expect(unseenRow).toMatchObject({ mayBeMore: false, mayBeMoreReasons: [], mayBeLess: true, mayBeLessReasons: ['not-seen'], lastSeen: null });
   });
 
   it('puts every printed string through the scrub, in the table and in the JSON', async () => {
@@ -114,8 +143,15 @@ describe('usabl debt ledger', () => {
         'This row may already be fixed, or fixed sooner. This touches every row.',
     );
     expect(text).toMatch(/- The floor could not be read at 000000000011 \(the file is not JSON\)\. .*Rows: clusters, button-name\./u);
-    expect(text).toMatch(/^at least 10 +open until a gap /mu);
-    expect(text).toContain('"at least": a lower bound. The history is incomplete for that row, or it is still open.');
+    // Without a history, a row that ended at the unreadable floor may have been fixed before it, or
+    // stayed open after it, so its days are not known either way.
+    expect(text).toMatch(/^not known \(10 by the floor\) +open until a gap /mu);
+    expect(JSON.parse(outcome.json).rows.find((row: { rule: string }) => row.rule === 'button-name')).toMatchObject({
+      mayBeMore: true,
+      mayBeMoreReasons: ['ended-at-gap', 'first-floor-for-screen'],
+      mayBeLess: true,
+      mayBeLessReasons: ['no-usable-history'],
+    });
   });
 
   it('refuses plainly when no floor was ever committed or git cannot run there', async () => {

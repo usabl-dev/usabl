@@ -92,12 +92,36 @@ export type LedgerGapCause =
   | 'no-history'
   | 'history-unreadable'
   | 'record-off-line'
-  | 'hash-collision';
+  | 'hash-collision'
+  | 'first-floor-for-screen'
+  | 'not-seen';
 
 export interface LedgerGap {
   cause: LedgerGapCause;
   detail: string;
 }
+
+/** Why the true number of days could be larger than the one the ledger counts. */
+export type LedgerMoreReason =
+  // It was already in the floor the first time its screen was floored: the first baseline, a
+  // screen floored for the first time, or a partial floor that was widened. It may be older.
+  | 'first-floor-for-screen'
+  // It was in the oldest floor a shallow clone holds.
+  | 'shallow'
+  // It entered the floor where the floor history breaks, so it may be older under an earlier key.
+  | 'entered-at-gap'
+  // A span ended where the floor history breaks, and it may have stayed open after.
+  | 'ended-at-gap';
+
+/** Why the true number of days could be smaller than the one the ledger counts. */
+export type LedgerLessReason =
+  // No usable history for it: no history, an unreadable one, or a hash it shares with another
+  // identity. A fix the floor did not record would not show.
+  | 'no-usable-history'
+  // The history is on, but no full scan of main saw it during one of its spans.
+  | 'not-seen'
+  // A history record that touches it could not be placed in time.
+  | 'history-unplaced';
 
 export interface LedgerRow {
   screenId: string;
@@ -112,8 +136,14 @@ export interface LedgerRow {
   lastChange: LedgerPoint;
   spans: LedgerSpan[];
   daysOpen: number;
-  // True when the true number of days can only be higher than daysOpen.
-  lowerBound: boolean;
+  // Each number says which way it can be wrong. mayBeMore: the true number could be larger.
+  // mayBeLess: it could be smaller. Neither: daysOpen is what happened, to the day. Both: not known.
+  mayBeMore: boolean;
+  mayBeMoreReasons: LedgerMoreReason[];
+  mayBeLess: boolean;
+  mayBeLessReasons: LedgerLessReason[];
+  // The last full scan of main that saw it, in commit order, or null when no scan did.
+  lastSeen: LedgerPoint | null;
   // A fix the history confirmed came back on an unchanged source tree, so it was withdrawn.
   intermittent: boolean;
   incomplete: LedgerGap[];
@@ -121,6 +151,9 @@ export interface LedgerRow {
 
 export interface LedgerStateTotals {
   rows: number;
+  // The rows where neither mayBeMore nor mayBeLess holds. The median and the longest are over these
+  // only, and are null when there are none.
+  exactRows: number;
   medianDays: number | null;
   longestDays: number | null;
 }
@@ -145,6 +178,8 @@ type Placed = LedgerPoint & { position: number };
 interface OpenSpan {
   start: Placed;
   end: (LedgerSpanEnd & { position: number }) | null;
+  // A full scan of main saw it while this span was open.
+  seen?: boolean;
 }
 
 /** The ledger broke one of its own rules. That is a bug in usabl, never a number to print. */
@@ -162,7 +197,9 @@ interface RowState {
   inFloor: boolean;
   spans: OpenSpan[];
   firstSeenAtFirstBaseline: boolean;
-  lowerBound: boolean;
+  more: Set<LedgerMoreReason>;
+  less: Set<LedgerLessReason>;
+  lastSeen: LedgerPoint | null;
   intermittent: boolean;
   gaps: LedgerGap[];
   // The floor hash of a full scan that saw none here, waiting for a second one in a row.
@@ -194,9 +231,15 @@ function lastEnd(row: RowState): LedgerSpanEnd | null {
   return row.spans[row.spans.length - 1]?.end ?? null;
 }
 
-function addGap(row: RowState, gap: LedgerGap, lowerBound: boolean): void {
+function addGap(row: RowState, gap: LedgerGap, bound: { more?: LedgerMoreReason; less?: LedgerLessReason }): void {
   if (!row.gaps.some((known) => known.cause === gap.cause && known.detail === gap.detail)) row.gaps.push(gap);
-  if (lowerBound) row.lowerBound = true;
+  if (bound.more !== undefined) row.more.add(bound.more);
+  if (bound.less !== undefined) row.less.add(bound.less);
+}
+
+// Code-unit order, so the output never depends on the runtime's locale.
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function slotOf(screenId: string, id: string, rule: string, basis: string): string {
@@ -250,6 +293,10 @@ export function buildLedger(input: LedgerInput): Ledger {
   // screen and identity hash to the rows that hash to it. More than one is a collision.
   const byId = new Map<string, RowState[]>();
   let previous: { version: number } | null = null;
+  // The scope of the last readable floor, kept across a deletion so a widened floor is still seen.
+  let previousScope: 'partial' | 'whole' | null = null;
+  // Every screen some readable floor so far has held.
+  const flooredScreens = new Set<string>();
   let seenReadable = false;
   let pendingBreak: FloorBreak | null = null;
   // The identities that a record the ledger could not place in time observes.
@@ -269,7 +316,9 @@ export function buildLedger(input: LedgerInput): Ledger {
       inFloor: false,
       spans: [],
       firstSeenAtFirstBaseline: false,
-      lowerBound: false,
+      more: new Set(),
+      less: new Set(),
+      lastSeen: null,
       intermittent: false,
       gaps: [],
       pendingZero: null,
@@ -293,7 +342,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       return;
     }
     last.end = { ...cause.at, by: 'gap' };
-    addGap(row, { cause: cause.cause, detail: cause.leave }, true);
+    addGap(row, { cause: cause.cause, detail: cause.leave }, { more: 'ended-at-gap' });
   }
 
   function applySnapshot(snapshot: FloorSnapshot): void {
@@ -347,6 +396,8 @@ export function buildLedger(input: LedgerInput): Ledger {
       if (row.inFloor && !keys.has(row.key)) closeLeaving(row, at, cause);
     }
     const firstFloor = !seenReadable;
+    const scope = floor.scope === 'partial' ? 'partial' : 'whole';
+    const widened = previousScope === 'partial' && scope === 'whole';
     for (const entry of floor.entries) {
       const row = rowFor(entry);
       if (row.inFloor) continue;
@@ -354,26 +405,39 @@ export function buildLedger(input: LedgerInput): Ledger {
       row.pendingZero = null;
       row.spans.push({ start: at, end: null });
       if (cause !== null) {
-        addGap(row, { cause: cause.cause, detail: cause.enter }, true);
-      } else if (firstFloor && row.spans.length === 1) {
-        if (input.shallow) {
-          addGap(
-            row,
-            {
-              cause: 'shallow',
-              detail:
-                `This is a shallow clone, and ${short(snapshot.commit)} holds the oldest floor it has. ` +
-                'This identity may be older. Fetch the full history (git fetch --unshallow) for its first seen date.',
-            },
-            true,
-          );
-        } else {
-          row.firstSeenAtFirstBaseline = true;
-        }
+        addGap(row, { cause: cause.cause, detail: cause.enter }, { more: 'entered-at-gap' });
+      } else if (firstFloor && input.shallow) {
+        addGap(
+          row,
+          {
+            cause: 'shallow',
+            detail:
+              `This is a shallow clone, and ${short(snapshot.commit)} holds the oldest floor it has. ` +
+              'This identity may be older. Fetch the full history (git fetch --unshallow) for its first seen date.',
+          },
+          { more: 'shallow' },
+        );
+      } else if (firstFloor) {
+        // The first baseline has its own label, so it needs no note.
+        row.firstSeenAtFirstBaseline = true;
+        row.more.add('first-floor-for-screen');
+      } else if (!flooredScreens.has(entry.screenId) || widened) {
+        addGap(
+          row,
+          {
+            cause: 'first-floor-for-screen',
+            detail: widened
+              ? `A partial floor was widened at ${short(snapshot.commit)}, and this identity was in the wider floor, so it may be older.`
+              : `Its screen was floored for the first time at ${short(snapshot.commit)}, and this identity was already there, so it may be older.`,
+          },
+          { more: 'first-floor-for-screen' },
+        );
       }
     }
+    for (const entry of floor.entries) flooredScreens.add(entry.screenId);
     seenReadable = true;
     previous = { version: floor.version };
+    previousScope = scope;
     pendingBreak = null;
   }
 
@@ -382,6 +446,11 @@ export function buildLedger(input: LedgerInput): Ledger {
     const differs = [...seenOnTree].some((seen) => seen !== count);
     seenOnTree.add(count);
     row.countsByTree.set(record.sourceTree, seenOnTree);
+    if (count > 0) {
+      row.lastSeen = point(at);
+      const last = row.spans[row.spans.length - 1];
+      if (last !== undefined && last.end === null) last.seen = true;
+    }
     if (row.intermittent) return;
     const end = lastEnd(row);
     if (differs) {
@@ -406,7 +475,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       return;
     }
     if (end?.by === 'history' && count > 0) {
-      row.spans.push({ start: at, end: null });
+      row.spans.push({ start: at, end: null, seen: true });
       row.pendingZero = null;
     }
   }
@@ -424,7 +493,7 @@ export function buildLedger(input: LedgerInput): Ledger {
                 cause: 'hash-collision',
                 detail: 'Two floor identities on this screen share one history hash, so the history cannot tell them apart and is not used for them.',
               },
-              false,
+              { less: 'no-usable-history' },
             );
           }
           continue;
@@ -492,7 +561,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       `${commits.length} history record${commits.length === 1 ? '' : 's'} name${commits.length === 1 ? 's' : ''} ` +
       `commits that ${where} (${commits.join(', ')}), so the ledger could not place them in time. ` +
       'They are not used, so a fix or a return they show is not counted.';
-    addGap(row, { cause: 'record-off-line', detail }, false);
+    addGap(row, { cause: 'record-off-line', detail }, { less: 'history-unplaced' });
   }
   if (pendingBreak !== null) {
     // The floor at the head of the trusted branch could not be read.
@@ -515,7 +584,25 @@ export function buildLedger(input: LedgerInput): Ledger {
               `The debt history at ${input.history.ref} could not be read (${input.history.detail ?? 'no reason given'}), ` +
               'so a fix main confirmed would not show here. This row may already be fixed, or fixed sooner.',
           };
-    for (const row of rows.values()) addGap(row, gap, false);
+    for (const row of rows.values()) addGap(row, gap, { less: 'no-usable-history' });
+  } else {
+    // The history is on, but a span no full scan saw has no evidence that it stayed open: the
+    // floor is accepted debt, not proof that the accessibility barrier is still on the page.
+    for (const row of rows.values()) {
+      if (row.less.has('no-usable-history')) continue;
+      if (row.spans.some((span) => span.seen !== true)) {
+        addGap(
+          row,
+          {
+            cause: 'not-seen',
+            detail:
+              'No full scan of main saw this accessibility barrier during a span the floor holds it open, ' +
+              'so it may have been fixed sooner than the floor shows.',
+          },
+          { less: 'not-seen' },
+        );
+      }
+    }
   }
 
   const built = [...rows.values()]
@@ -543,17 +630,28 @@ export function buildLedger(input: LedgerInput): Ledger {
         lastChange: last.end === null ? last.start : { commit: last.end.commit, date: last.end.date },
         spans,
         daysOpen: spans.reduce((sum, span) => sum + span.days, 0),
-        lowerBound: row.lowerBound,
+        mayBeMore: row.more.size > 0,
+        mayBeMoreReasons: [...row.more].sort(compareText),
+        mayBeLess: row.less.size > 0,
+        mayBeLessReasons: [...row.less].sort(compareText),
+        lastSeen: row.lastSeen,
         intermittent: row.intermittent,
-        incomplete: [...row.gaps].sort((a, b) => (a.cause === b.cause ? a.detail.localeCompare(b.detail) : a.cause.localeCompare(b.cause))),
+        incomplete: [...row.gaps].sort((a, b) => (a.cause === b.cause ? compareText(a.detail, b.detail) : compareText(a.cause, b.cause))),
       };
     });
   const keyOf = (row: LedgerRow) => identityKey(row);
-  built.sort((a, b) => (a.daysOpen === b.daysOpen ? keyOf(a).localeCompare(keyOf(b)) : b.daysOpen - a.daysOpen));
+  built.sort((a, b) => (a.daysOpen === b.daysOpen ? compareText(keyOf(a), keyOf(b)) : b.daysOpen - a.daysOpen));
 
   const totalsFor = (state: LedgerState): LedgerStateTotals => {
-    const days = built.filter((row) => row.state === state).map((row) => row.daysOpen);
-    return { rows: days.length, medianDays: median(days), longestDays: days.length === 0 ? null : Math.max(...days) };
+    const inState = built.filter((row) => row.state === state);
+    // Only a number that cannot be wrong either way goes into the median or the longest.
+    const exact = inState.filter((row) => !row.mayBeMore && !row.mayBeLess).map((row) => row.daysOpen);
+    return {
+      rows: inState.length,
+      exactRows: exact.length,
+      medianDays: median(exact),
+      longestDays: exact.length === 0 ? null : Math.max(...exact),
+    };
   };
 
   const history = input.history;

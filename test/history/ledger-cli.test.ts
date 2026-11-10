@@ -74,7 +74,8 @@ describe('usabl debt ledger on the command line', () => {
     expect(await main(['debt', 'ledger'])).toBe(0);
     const out = stdout.join('');
     expect(out).toContain('usabl debt ledger: how long accessibility barriers stay open, as the floor history of HEAD');
-    expect(out).toMatch(/\nat least \d+ +open +2026-01-01 /u);
+    // No history in this repository: the row may be older and may be fixed already.
+    expect(out).toMatch(/\nnot known \(\d+ by the floor\) +open +2026-01-01 /u);
     expect((await readdir(workspace)).sort()).toEqual(before);
   });
 

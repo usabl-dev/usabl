@@ -28,8 +28,12 @@ function openNow(row: LedgerRow): boolean {
   return row.spans[row.spans.length - 1]?.end === null;
 }
 
-function daysCell(row: LedgerRow): string {
-  return openNow(row) || row.lowerBound ? `at least ${row.daysOpen}` : String(row.daysOpen);
+/** The days, said with the way they can be wrong. */
+export function daysCell(row: Pick<LedgerRow, 'daysOpen' | 'mayBeMore' | 'mayBeLess'>): string {
+  if (row.mayBeMore && row.mayBeLess) return `not known (${row.daysOpen} by the floor)`;
+  if (row.mayBeMore) return `at least ${row.daysOpen}`;
+  if (row.mayBeLess) return `at most ${row.daysOpen}`;
+  return plural(row.daysOpen, 'day', 'days');
 }
 
 function stateCell(row: LedgerRow): string {
@@ -43,16 +47,19 @@ function notesCell(row: LedgerRow): string {
   if (row.firstSeenAtFirstBaseline) notes.push('first baseline');
   if (row.intermittent) notes.push('intermittent');
   if (row.incomplete.length > 0) notes.push('incomplete');
+  if (openNow(row) && row.lastSeen !== null) notes.push(`last seen ${row.lastSeen.date.slice(0, 10)}`);
   return notes.join(', ');
 }
 
-function days(value: number, atLeast: boolean): string {
-  return `${atLeast ? 'at least ' : ''}${plural(value, 'day', 'days')}`;
-}
-
-function totalsPart(state: LedgerState, totals: LedgerStateTotals, atLeast: boolean): string {
-  if (totals.rows === 0 || totals.medianDays === null || totals.longestDays === null) return `${totals.rows} ${state}.`;
-  return `${totals.rows} ${state}, median ${days(totals.medianDays, atLeast)}, longest ${days(totals.longestDays, atLeast)}.`;
+function totalsPart(state: LedgerState, totals: LedgerStateTotals): string {
+  if (totals.rows === 0) return `0 ${state}.`;
+  if (totals.exactRows === 0 || totals.medianDays === null || totals.longestDays === null) {
+    return `${totals.rows} ${state}, none exact, so no median.`;
+  }
+  return (
+    `${totals.rows} ${state}, ${totals.exactRows} exact, median ${plural(totals.medianDays, 'day', 'days')}, ` +
+    `longest ${plural(totals.longestDays, 'day', 'days')}.`
+  );
 }
 
 function table(rows: readonly string[][]): string[] {
@@ -99,11 +106,14 @@ export function formatLedger(ledger: Ledger): string {
   }
   lines.push(
     '',
-    `Totals: ${totalsPart('open', ledger.totals.open, true)} ${totalsPart('fixed', ledger.totals.fixed, ledger.rows.some((row) => row.state === 'fixed' && row.lowerBound))} ` +
-      `${totalsPart('reopened', ledger.totals.reopened, ledger.rows.some((row) => row.state === 'reopened' && (row.lowerBound || openNow(row))))}`,
+    `Totals: ${totalsPart('open', ledger.totals.open)} ${totalsPart('fixed', ledger.totals.fixed)} ` +
+      `${totalsPart('reopened', ledger.totals.reopened)}`,
+    'The median and the longest are over exact rows only: rows whose days cannot be wrong either way.',
     '',
+    '"N days": what the floor and the history show, to the day.',
+    '"at least N": the true number may be larger. "at most N": it may be smaller.',
+    '"not known (N by the floor)": it may be larger or smaller. N is what the floor alone shows.',
     '"first baseline": seen at the first baseline; may be older.',
-    '"at least": a lower bound. The history is incomplete for that row, or it is still open.',
     'Days are whole days between committer dates, in UTC, and to the clock for a row still open.',
   );
 

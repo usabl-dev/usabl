@@ -64,15 +64,26 @@ describe('buildLedger', () => {
       firstSeenAtFirstBaseline: true,
       lastChange: { commit: commitAt(0), date: dayAt(0) },
       daysOpen: 41,
-      lowerBound: false,
-      incomplete: [],
+      // In the first floor, so it may be older. No scan of main saw it, so it may be fixed already.
+      mayBeMore: true,
+      mayBeMoreReasons: ['first-floor-for-screen'],
+      mayBeLess: true,
+      mayBeLessReasons: ['not-seen'],
+      lastSeen: null,
     });
+    expect(row.incomplete.map((gap) => gap.cause)).toEqual(['not-seen']);
     expect(row.spans).toEqual([{ start: { commit: commitAt(0), date: dayAt(0) }, end: null, days: 41 }]);
   });
 
   it('dates an accessibility barrier floored after the first baseline from its own commit, with no baseline label', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A])), snap(10, floorOf([A, B]))]));
-    expect(rowFor(ledger, B)).toMatchObject({ firstSeen: { commit: commitAt(10) }, firstSeenAtFirstBaseline: false, daysOpen: 31 });
+    expect(rowFor(ledger, B)).toMatchObject({
+      firstSeen: { commit: commitAt(10) },
+      firstSeenAtFirstBaseline: false,
+      daysOpen: 31,
+      mayBeMore: false,
+      mayBeMoreReasons: [],
+    });
     expect(rowFor(ledger, A).firstSeenAtFirstBaseline).toBe(true);
   });
 
@@ -203,11 +214,58 @@ describe('buildLedger', () => {
       [B.rule, 'fixed', 30],
       [A.rule, 'fixed', 20],
     ]);
+    // Every row is in the first floor, so none is exact, and there is no median.
     expect(ledger.totals).toEqual({
-      open: { rows: 1, medianDays: 41, longestDays: 41 },
-      fixed: { rows: 2, medianDays: 25, longestDays: 30 },
-      reopened: { rows: 0, medianDays: null, longestDays: null },
+      open: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
+      fixed: { rows: 2, exactRows: 0, medianDays: null, longestDays: null },
+      reopened: { rows: 0, exactRows: 0, medianDays: null, longestDays: null },
     });
+  });
+
+  it('takes the median and the longest over exact rows only', () => {
+    const D = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
+    const later = floorOf([A, B, C, D]);
+    // A is in the first floor. B, C, and D are floored at c10 and seen by scans of main.
+    const ledger = buildLedger(
+      input(
+        [snap(0, floorOf([A])), snap(10, later)],
+        historyOn([scanAt(12, later, [[A, 1], [B, 1], [C, 1], [D, 1]]), scanAt(14, later, [[A, 1], [B, 1], [C, 1]])]),
+      ),
+    );
+    expect(ledger.rows.map((row) => [row.rule, row.mayBeMore, row.mayBeLess])).toEqual([
+      [A.rule, true, false],
+      [D.rule, false, false],
+      [C.rule, false, false],
+      [B.rule, false, false],
+    ]);
+    expect(ledger.totals.open).toEqual({ rows: 4, exactRows: 3, medianDays: 31, longestDays: 31 });
+  });
+
+  it('says which way each number can be wrong, with the reasons', () => {
+    const J = entryFor(dialogAt(1, { screenId: 'jobs' }), 1);
+    const late = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
+    const floor = floorOf([A, B, J, late]);
+    const ledger = buildLedger(
+      input([snap(0, floorOf([A])), snap(10, floor)], historyOn([scanAt(12, floor, [[A, 1], [B, 1]])])),
+    );
+    // Seen by a scan and in the first floor: the true number may only be larger.
+    expect(rowFor(ledger, A)).toMatchObject({ mayBeMore: true, mayBeLess: false, lastSeen: { commit: commitAt(12), date: dayAt(12) } });
+    // Floored later on a screen already floored, and seen: exact.
+    expect(rowFor(ledger, B)).toMatchObject({ mayBeMore: false, mayBeLess: false, mayBeMoreReasons: [], mayBeLessReasons: [] });
+    // Its screen was floored for the first time at c10, so it may be older. Not seen either.
+    const j = rowFor(ledger, J);
+    expect(j).toMatchObject({ mayBeMoreReasons: ['first-floor-for-screen'], mayBeLessReasons: ['not-seen'] });
+    expect(j.incomplete.map((gap) => gap.detail).join('\n')).toMatch(/floored for the first time/u);
+    // Floored later on a floored screen, never seen: the true number may only be smaller.
+    expect(rowFor(ledger, late)).toMatchObject({ mayBeMore: false, mayBeLess: true, mayBeLessReasons: ['not-seen'] });
+  });
+
+  it('says a row may be older when a partial floor is widened', () => {
+    const late = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
+    const ledger = buildLedger(input([snap(0, { version: 3, scope: 'partial', entries: [A] }), snap(5, floorOf([A, late]))]));
+    const row = rowFor(ledger, late);
+    expect(row.mayBeMoreReasons).toEqual(['first-floor-for-screen']);
+    expect(row.incomplete.map((gap) => gap.detail).join('\n')).toMatch(/partial floor was widened/u);
   });
 
   it('replays history records in commit order, whatever order they were appended in', () => {
@@ -255,24 +313,24 @@ describe('buildLedger', () => {
 });
 
 describe('buildLedger with incomplete history', () => {
-  it('says a shallow clone may hide older evidence and marks those rows as a lower bound', () => {
+  it('says a shallow clone may hide older evidence and marks those rows as maybe more', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A])), snap(10, floorOf([A, B]))], historyOn([]), { shallow: true }));
     const old = rowFor(ledger, A);
-    expect(old).toMatchObject({ firstSeenAtFirstBaseline: false, lowerBound: true });
-    expect(old.incomplete.map((gap) => gap.cause)).toEqual(['shallow']);
-    expect(old.incomplete[0]?.detail).toMatch(/shallow clone/u);
-    expect(rowFor(ledger, B)).toMatchObject({ lowerBound: false, incomplete: [] });
+    expect(old).toMatchObject({ firstSeenAtFirstBaseline: false, mayBeMore: true, mayBeMoreReasons: ['shallow'] });
+    expect(old.incomplete.map((gap) => gap.cause)).toEqual(['not-seen', 'shallow']);
+    expect(old.incomplete.find((gap) => gap.cause === 'shallow')?.detail).toMatch(/shallow clone/u);
+    expect(rowFor(ledger, B)).toMatchObject({ mayBeMore: false, mayBeMoreReasons: [] });
     expect(ledger.shallow).toBe(true);
   });
 
-  it('says on every row that a missing history hides confirmed fixes, without calling the days a lower bound', () => {
+  it('says on every row that a missing history hides fixes, so each number may be smaller', () => {
     const ledger = buildLedger(
       input([snap(0, floorOf([A, B])), snap(9, floorOf([B]))], { kind: 'off', ref: 'origin/usabl/history', cause: 'no-history', detail: null }),
     );
     for (const row of ledger.rows) {
       expect(row.incomplete.map((gap) => gap.cause)).toEqual(['no-history']);
       expect(row.incomplete[0]?.detail).toMatch(/origin\/usabl\/history/u);
-      expect(row.lowerBound).toBe(false);
+      expect(row).toMatchObject({ mayBeLess: true, mayBeLessReasons: ['no-usable-history'] });
     }
     expect(ledger.history).toEqual({ kind: 'off', ref: 'origin/usabl/history', cause: 'no-history', detail: null });
   });
@@ -290,6 +348,7 @@ describe('buildLedger with incomplete history', () => {
     expect(row.incomplete.map((gap) => gap.cause)).toEqual(['history-unreadable']);
     expect(row.incomplete[0]?.detail).toContain('2026-01.jsonl line 2 is not JSON');
     expect(row.state).toBe('open');
+    expect(row.mayBeLessReasons).toEqual(['no-usable-history']);
   });
 
   it('ends a row that leaves at a floor version migration without calling it fixed, and labels the rows that enter there', () => {
@@ -298,31 +357,35 @@ describe('buildLedger with incomplete history', () => {
     const keyed = entryFor(rowButton('one'), 1);
     const ledger = buildLedger(input([snap(0, floorOf([named, collapsed], 2)), snap(6, floorOf([named, keyed], 3))]));
 
-    expect(rowFor(ledger, named)).toMatchObject({ state: 'open', daysOpen: 41, lowerBound: false, incomplete: [] });
+    const kept = rowFor(ledger, named);
+    expect(kept).toMatchObject({ state: 'open', daysOpen: 41, mayBeMoreReasons: ['first-floor-for-screen'] });
+    expect(kept.incomplete.map((gap) => gap.cause)).toEqual(['not-seen']);
 
     const left = rowFor(ledger, collapsed);
-    expect(left).toMatchObject({ state: 'open', daysOpen: 6, lowerBound: true });
+    expect(left).toMatchObject({ state: 'open', daysOpen: 6, mayBeMoreReasons: ['ended-at-gap', 'first-floor-for-screen'] });
     expect(left.spans[0]?.end).toEqual({ commit: commitAt(6), date: dayAt(6), by: 'gap' });
-    expect(left.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten']);
+    expect(left.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
     expect(left.incomplete[0]?.detail).toMatch(/version 2 to version 3/u);
 
     const entered = rowFor(ledger, keyed);
-    expect(entered).toMatchObject({ state: 'open', daysOpen: 35, lowerBound: true, firstSeenAtFirstBaseline: false });
-    expect(entered.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten']);
+    expect(entered).toMatchObject({ state: 'open', daysOpen: 35, mayBeMoreReasons: ['entered-at-gap'], firstSeenAtFirstBaseline: false });
+    expect(entered.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
   });
 
   it('treats a floor it cannot read at one commit as a gap, never as a fix', () => {
     const ledger = buildLedger(
       input([snap(0, floorOf([A, B])), snap(3, null, { unreadable: 'evidence floor entries must be an array' }), snap(5, floorOf([A, C]))]),
     );
-    expect(rowFor(ledger, A)).toMatchObject({ state: 'open', daysOpen: 41, incomplete: [] });
+    const kept = rowFor(ledger, A);
+    expect(kept).toMatchObject({ state: 'open', daysOpen: 41 });
+    expect(kept.incomplete.map((gap) => gap.cause)).toEqual(['not-seen']);
     const left = rowFor(ledger, B);
-    expect(left).toMatchObject({ state: 'open', daysOpen: 3, lowerBound: true });
-    expect(left.incomplete.map((gap) => gap.cause)).toEqual(['floor-unreadable']);
+    expect(left).toMatchObject({ state: 'open', daysOpen: 3, mayBeMoreReasons: ['ended-at-gap', 'first-floor-for-screen'] });
+    expect(left.incomplete.map((gap) => gap.cause)).toEqual(['floor-unreadable', 'not-seen']);
     expect(left.incomplete[0]?.detail).toContain('evidence floor entries must be an array');
     const entered = rowFor(ledger, C);
-    expect(entered).toMatchObject({ firstSeen: { commit: commitAt(5) }, lowerBound: true });
-    expect(entered.incomplete.map((gap) => gap.cause)).toEqual(['floor-unreadable']);
+    expect(entered).toMatchObject({ firstSeen: { commit: commitAt(5) }, mayBeMoreReasons: ['entered-at-gap'] });
+    expect(entered.incomplete.map((gap) => gap.cause)).toEqual(['floor-unreadable', 'not-seen']);
   });
 
   it('treats a deleted floor file as a gap, never as a fix', () => {
@@ -331,9 +394,9 @@ describe('buildLedger with incomplete history', () => {
     expect(row.state).toBe('open');
     expect(row.spans.map((span) => span.end?.by ?? null)).toEqual(['gap', null]);
     expect(row.daysOpen).toBe(35);
-    expect(row.lowerBound).toBe(true);
+    expect(row.mayBeMoreReasons).toEqual(['ended-at-gap', 'entered-at-gap', 'first-floor-for-screen']);
     // One note for leaving at the deletion, one for entering the floor written again.
-    expect(row.incomplete.map((gap) => gap.cause)).toEqual(['floor-deleted', 'floor-deleted']);
+    expect(row.incomplete.map((gap) => gap.cause)).toEqual(['floor-deleted', 'floor-deleted', 'not-seen']);
     expect(row.incomplete.map((gap) => gap.detail).join('\n')).toMatch(/That is not a fix/u);
     expect(row.incomplete.map((gap) => gap.detail).join('\n')).toMatch(/written again later/u);
   });
@@ -344,8 +407,8 @@ describe('buildLedger with incomplete history', () => {
     const ledger = buildLedger(input([snap(0, floor)], historyOn([scanAt(3, floor, [[A, 0]]), offLine, scanAt(5, floor, [[A, 0]])])));
     const row = rowFor(ledger, A);
     expect(row.state).toBe('open');
-    expect(row.incomplete.map((gap) => gap.cause)).toEqual(['record-off-line']);
-    expect(row.lowerBound).toBe(false);
-    expect(rowFor(ledger, B).incomplete).toEqual([]);
+    expect(row.incomplete.map((gap) => gap.cause)).toEqual(['not-seen', 'record-off-line']);
+    expect(row.mayBeLessReasons).toEqual(['history-unplaced', 'not-seen']);
+    expect(rowFor(ledger, B).incomplete.map((gap) => gap.cause)).toEqual(['not-seen']);
   });
 });
