@@ -32,12 +32,12 @@ const PINNED: Record<string, Pinned> = {
   'role-not-a-role': caught('aria-roles'),
   'pf-icon-button-name-removed': caught('button-name', 'keyboard-walk-unnamed-interactive', 'pf-icon-button-name'),
   // The edit removes aria-expanded, and pf-kebab-expanded-state reports it. Then the menu probe
-  // clicks the toggle, and the page's own click handler sets aria-expanded again. So the second read
-  // finds the change gone, and the entry is unreadable. It was caught before that read existed.
+  // clicks the toggle, and the page's own click handler sets aria-expanded again. The catch was
+  // measured while the defect was there, so it stands, and the row says the change was gone later.
   'menu-toggle-state-removed': {
-    outcome: 'unreadable',
-    rules: [],
-    reason: 'the change did not hold through the scan, so it proves nothing: the page put back an attribute the edit removed',
+    outcome: 'caught',
+    rules: ['pf-kebab-expanded-state'],
+    reason: 'the checks reported the defect, then the change did not hold to the end of the scan: the page put back an attribute the edit removed',
   },
   // No shipped check presses Enter on a menu toggle. The menu probe opens a menu with a click.
   'menu-does-not-open-on-enter': {

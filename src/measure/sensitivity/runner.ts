@@ -24,7 +24,7 @@ import { deterministicCountsByIdentity, findingKey, gate, renderEvidenceOf } fro
 import { computeIdentity, identityKey } from '../../primitives/identity.js';
 import type { CatalogEntry, ReportedOn } from './catalog.js';
 import type { MutatingBrowser } from './browser.js';
-import type { ElementPlace } from './edits.js';
+import type { AppliedEdit, ElementPlace } from './edits.js';
 import { ruleMatches } from './rules.js';
 
 export type SensitivityOutcome =
@@ -57,7 +57,8 @@ export interface EntryMeasurement {
   // The rules that reported the defect: the expected ones for caught, the others otherwise. Empty
   // when nothing new was reported.
   rules: string[];
-  // Why, for every outcome other than caught. Engine words, and rule ids and screen ids.
+  // Why, for every outcome other than caught. For a catch it is null, or a note when the change did
+  // not hold to the end of the scan. Engine words, and rule ids and screen ids.
   reason: string | null;
 }
 
@@ -242,89 +243,108 @@ export async function measureEntry(
       return result(entry, screen, 'not applicable', [], 'the defect was already on this element before the edit');
     }
     // Read the change back on the page the checks left, after the last provider. A change the page
-    // undid, or got around, means the checks may never have seen the defect.
+    // undid, or got around, means the checks may never have seen the defect, so a miss proves
+    // nothing. A catch stands: a definite failure on the changed element, new in the mutated scan,
+    // was measured while the defect was there.
     const check = await record.edit.check();
-    if (!check.held) {
-      return result(entry, screen, 'unreadable', [], `the change did not hold through the scan, so it proves nothing: ${check.reason}`);
+    const decided = await decide(deps, entry, screen, clean, mutated, record, check.held ? check.note : null);
+    if (check.held) {
+      return decided;
     }
-
-    const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
-    const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);
-
-    const gatedNew: Finding[] =
-      mutatedGate.accessibilityVerdict === 'verified'
-        ? []
-        : mutatedGate.findings.filter((finding) => finding.status === 'new' && finding.evidenceClass === 'deterministic');
-    if (mutatedGate.accessibilityVerdict !== 'verified' && gatedNew.length === 0) {
-      return result(entry, screen, 'unreadable', [], `the gate did not verify the mutated scan, and no new finding explains it: ${mutatedGate.summary}`);
+    if (decided.outcome === 'caught' || decided.outcome === 'caught by another rule') {
+      const note = `the checks reported the defect, then the change did not hold to the end of the scan: ${check.reason}`;
+      return { ...decided, reason: decided.reason === null ? note : `${decided.reason}; ${note}` };
     }
-
-    // The gate keys a finding by the element's name first. An edit that changes a name moves a
-    // finding the clean page already had to a new identity, so the floor cannot absorb it. A new
-    // finding whose every draft has a rule and element path the clean scan already reported is that
-    // old finding, and it is dropped.
-    const pathsByIdentity = draftPathsByIdentity(mutated);
-    const pathsBehind = (finding: Finding): string[] => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath];
-    const cleanPairs = rulePathPairs(clean);
-    const newGating = gatedNew.filter((finding) => !pathsBehind(finding).every((path) => cleanPairs.has(rulePathKey(finding.rule, path))));
-
-    // An unverified finding is the checks saying they could not tell. The gate counts it as a gap,
-    // not a failure, so only a definite failure can count as a catch.
-    const definite = newGating.filter((finding) => finding.confidence === 'fail');
-    if (newGating.length > 0 && definite.length === 0) {
-      const rules = sortedUnique(newGating.map((finding) => finding.rule));
-      return result(entry, screen, 'unreadable', rules, `the checks could not confirm the defect either way: ${rules.join(', ')}`);
-    }
-
-    if (definite.length > 0) {
-      // The gate collapses every draft at one identity into one finding, and its representative can
-      // be another element than the mutated one. So each finding is located by every draft of the
-      // mutated scan behind it.
-      const pathsOf = definite.map(pathsBehind);
-      const places = await record.edit.locate(pathsOf.flat());
-      const allowed = PLACES_FOR[entry.reportedOn];
-      let next = 0;
-      const onTargetFlags = pathsOf.map((paths) => {
-        const own = places.slice(next, next + paths.length);
-        next += paths.length;
-        return own.some((place) => allowed.includes(place));
-      });
-      const onTarget = definite.filter((_finding, index) => onTargetFlags[index] === true);
-      const expected = onTarget.filter((finding) => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule)));
-      if (expected.length > 0) {
-        return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
-      }
-      if (onTarget.length > 0) {
-        const rules = sortedUnique(onTarget.map((finding) => finding.rule));
-        return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
-      }
-      // The clean and mutated scans are two loads of the page. A finding that is new away from the
-      // change can come from the page itself differing between loads, so it says nothing about the
-      // defect either way.
-      const rules = sortedUnique(definite.map((finding) => finding.rule));
-      return result(
-        entry,
-        screen,
-        'unreadable',
-        rules,
-        `a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: ${rules.join(', ')}`,
-      );
-    }
-
-    const cleanPreview = new Set(cleanGate.findings.filter((finding) => finding.evidenceClass === 'preview').map(findingKey));
-    const newPreview = mutatedGate.findings.filter(
-      (finding) => finding.evidenceClass === 'preview' && !cleanPreview.has(findingKey(finding)),
-    );
-    if (newPreview.length > 0) {
-      const rules = sortedUnique(newPreview.map((finding) => finding.rule));
-      return result(entry, screen, 'preview only', rules, `only preview findings were new, and preview never gates: ${rules.join(', ')}`);
-    }
-
-    const note = check.note === null ? '' : `${check.note}; `;
-    return result(entry, screen, 'missed', [], `nothing new gated; ${note}${expectedText(entry)}`);
+    return result(entry, screen, 'unreadable', [], `the change did not hold through the scan, so it proves nothing: ${check.reason}`);
   } finally {
     await armed.release();
   }
+}
+
+/** The outcome read from the two scans and the gate, before the second read of the change. */
+async function decide(
+  deps: SensitivityRunnerDeps,
+  entry: CatalogEntry,
+  screen: SensitivityScreen,
+  clean: ScreenScan,
+  mutated: ScreenScan,
+  record: { edit: AppliedEdit },
+  missNote: string | null,
+): Promise<EntryMeasurement> {
+  const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
+  const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);
+
+  const gatedNew: Finding[] =
+    mutatedGate.accessibilityVerdict === 'verified'
+      ? []
+      : mutatedGate.findings.filter((finding) => finding.status === 'new' && finding.evidenceClass === 'deterministic');
+  if (mutatedGate.accessibilityVerdict !== 'verified' && gatedNew.length === 0) {
+    return result(entry, screen, 'unreadable', [], `the gate did not verify the mutated scan, and no new finding explains it: ${mutatedGate.summary}`);
+  }
+
+  // The gate keys a finding by the element's name first. An edit that changes a name moves a
+  // finding the clean page already had to a new identity, so the floor cannot absorb it. A new
+  // finding whose every draft has a rule and element path the clean scan already reported is that
+  // old finding, and it is dropped.
+  const pathsByIdentity = draftPathsByIdentity(mutated);
+  const pathsBehind = (finding: Finding): string[] => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath];
+  const cleanPairs = rulePathPairs(clean);
+  const newGating = gatedNew.filter((finding) => !pathsBehind(finding).every((path) => cleanPairs.has(rulePathKey(finding.rule, path))));
+
+  // An unverified finding is the checks saying they could not tell. The gate counts it as a gap,
+  // not a failure, so only a definite failure can count as a catch.
+  const definite = newGating.filter((finding) => finding.confidence === 'fail');
+  if (newGating.length > 0 && definite.length === 0) {
+    const rules = sortedUnique(newGating.map((finding) => finding.rule));
+    return result(entry, screen, 'unreadable', rules, `the checks could not confirm the defect either way: ${rules.join(', ')}`);
+  }
+
+  if (definite.length > 0) {
+    // The gate collapses every draft at one identity into one finding, and its representative can
+    // be another element than the mutated one. So each finding is located by every draft of the
+    // mutated scan behind it.
+    const pathsOf = definite.map(pathsBehind);
+    const places = await record.edit.locate(pathsOf.flat());
+    const allowed = PLACES_FOR[entry.reportedOn];
+    let next = 0;
+    const onTargetFlags = pathsOf.map((paths) => {
+      const own = places.slice(next, next + paths.length);
+      next += paths.length;
+      return own.some((place) => allowed.includes(place));
+    });
+    const onTarget = definite.filter((_finding, index) => onTargetFlags[index] === true);
+    const expected = onTarget.filter((finding) => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule)));
+    if (expected.length > 0) {
+      return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
+    }
+    if (onTarget.length > 0) {
+      const rules = sortedUnique(onTarget.map((finding) => finding.rule));
+      return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
+    }
+    // The clean and mutated scans are two loads of the page. A finding that is new away from the
+    // change can come from the page itself differing between loads, so it says nothing about the
+    // defect either way.
+    const rules = sortedUnique(definite.map((finding) => finding.rule));
+    return result(
+      entry,
+      screen,
+      'unreadable',
+      rules,
+      `a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: ${rules.join(', ')}`,
+    );
+  }
+
+  const cleanPreview = new Set(cleanGate.findings.filter((finding) => finding.evidenceClass === 'preview').map(findingKey));
+  const newPreview = mutatedGate.findings.filter(
+    (finding) => finding.evidenceClass === 'preview' && !cleanPreview.has(findingKey(finding)),
+  );
+  if (newPreview.length > 0) {
+    const rules = sortedUnique(newPreview.map((finding) => finding.rule));
+    return result(entry, screen, 'preview only', rules, `only preview findings were new, and preview never gates: ${rules.join(', ')}`);
+  }
+
+  const note = missNote === null ? '' : `${missNote}; `;
+  return result(entry, screen, 'missed', [], `nothing new gated; ${note}${expectedText(entry)}`);
 }
 
 /** Every entry on every screen it is measured on, in catalog order, then screen order. */

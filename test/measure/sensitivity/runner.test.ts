@@ -393,7 +393,7 @@ describe('measureEntry', () => {
     });
   });
 
-  it('is unreadable when the change did not hold through the scan, even if a rule fired', async () => {
+  it('is unreadable, not missed, when the change did not hold through the scan and nothing new gated', async () => {
     const reason = 'the page put back an attribute the edit removed';
     const quiet = setup([], { check: { held: false, reason } });
     expect(await measureEntry(quiet.deps, entry(), SCREEN)).toEqual({
@@ -403,8 +403,55 @@ describe('measureEntry', () => {
       rules: [],
       reason: `the change did not hold through the scan, so it proves nothing: ${reason}`,
     });
-    const loud = setup([namesProvider()], { check: { held: false, reason } });
-    expect((await measureEntry(loud.deps, entry(), SCREEN)).outcome).toBe('unreadable');
+  });
+
+  it('is unreadable, not preview only, when the change did not hold through the scan', async () => {
+    const reason = 'the page put back an attribute the edit removed';
+    const { deps } = setup([namesProvider('intake:save/missing-announcement', '#save', { evidenceClass: 'preview', confidence: 'unverified' })], {
+      check: { held: false, reason },
+    });
+    expect(await measureEntry(deps, entry({ expectedRules: ['intake:*'], expectedClass: 'preview' }), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: [],
+      reason: `the change did not hold through the scan, so it proves nothing: ${reason}`,
+    });
+  });
+
+  it('keeps a catch when the page put the change back after the scan saw it, and says so', async () => {
+    // A definite failure on the changed element, new in the mutated scan, was measured while the
+    // defect was there. The page undoing the change later cannot take that back.
+    const reason = 'the page put back an attribute the edit removed';
+    const { deps } = setup([namesProvider()], { check: { held: false, reason } });
+    expect(await measureEntry(deps, entry(), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'caught',
+      rules: ['button-name'],
+      reason: `the checks reported the defect, then the change did not hold to the end of the scan: ${reason}`,
+    });
+  });
+
+  it('keeps a catch by another rule when the page put the change back after the scan saw it, and says so', async () => {
+    const reason = 'the page put back an attribute the edit removed';
+    const { deps } = setup([namesProvider()], { check: { held: false, reason } });
+    expect(await measureEntry(deps, entry({ expectedRules: ['link-name'] }), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+      reason: `reported by button-name; expected link-name; the checks reported the defect, then the change did not hold to the end of the scan: ${reason}`,
+    });
+  });
+
+  it('stays unreadable, with the reason the change did not hold, for findings that prove nothing', async () => {
+    const reason = 'the page put back an attribute the edit removed';
+    const expected = `the change did not hold through the scan, so it proves nothing: ${reason}`;
+    const unverified = setup([namesProvider('button-name', '#save', { confidence: 'unverified' })], { check: { held: false, reason } });
+    expect(await measureEntry(unverified.deps, entry(), SCREEN)).toMatchObject({ outcome: 'unreadable', rules: [], reason: expected });
+    const away = setup([namesProvider('button-name', '#other')], { check: { held: false, reason } });
+    expect(await measureEntry(away.deps, entry(), SCREEN)).toMatchObject({ outcome: 'unreadable', rules: [], reason: expected });
   });
 
   it('says in a miss when the checks never pressed the key the edit cancels', async () => {
