@@ -73,9 +73,15 @@ const NOT_DOCUMENTED: Array<[pattern: string, path: string, expected: Codeowners
   // A ? wildcard is not in the documentation.
   ['/src/rule?.ts', 'src/rule1.ts', 'unknown'],
   ['/src/rule?.ts', 'src/ruleab.ts', 'none'],
-  // A wildcard in the last segment never matches through a parent folder, as with docs/*.
-  ['*.js', 'lib.js/x.ts', 'none'],
+  // A wildcard in the last segment of a pattern with a slash does not match through a parent
+  // folder, as with docs/*.
   ['/src/*', 'src/gate/index.ts', 'none'],
+  // A slash-free wildcard pattern is not shown for a folder whose name it matches: gitignore owns
+  // the folder, docs/* suggests it does not. Ordinary files agree under both readings.
+  ['*.js', 'lib.js/x.ts', 'unknown'],
+  ['*.js', 'src/lib.js/index.ts', 'unknown'],
+  ['*.js', 'src/lib/app.js', 'match'],
+  ['*', 'src/gate/index.ts', 'match'],
 ];
 
 describe('compileCodeownersPattern', () => {

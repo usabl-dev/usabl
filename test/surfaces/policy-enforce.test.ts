@@ -498,6 +498,29 @@ describe('enforcePolicy', () => {
       expect(out.message).toContain('cannot tell');
     });
 
+    it('refuses when a later slash-free wildcard rule may own a folder whose name it matches', async () => {
+      // GitHub's documentation does not say whether *.js owns src/lib.js/index.ts. gitignore says
+      // it does, and then the team owns the file, so alice's approval cannot clear it.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: {
+            codeowners: '/src/ @alice\n*.js @org/js\n',
+            trusted: { 'usabl.config.json': '{"guardedPaths":["src/"]}', 'src/lib.js/index.ts': 'one\n' },
+            head: {
+              'usabl.config.json': '{"guardedPaths":["src/"]}',
+              '.usabl-evidence.json': '{"version":1,"entries":[]}',
+              'src/lib.js/index.ts': 'changed\n',
+            },
+          },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/lib.js/index.ts');
+      expect(out.message).toContain('cannot tell');
+    });
+
     it('passes when the form GitHub does not document comes before the last match', async () => {
       const out = await enforcePolicy(
         policyResult,

@@ -91,9 +91,10 @@ interface Reading {
  *   shown only for root paths, so both are open.
  * - A trailing slash owns everything under the folder (`apps/`, `/docs/`). A literal last segment
  *   with an inner or leading slash owns what is under it (`/apps/github`). A wildcard in the last
- *   segment does not match through a parent folder (`docs/*` does not match
- *   `docs/build-app/troubleshooting.md`). A slash-free literal with no trailing slash is not shown
- *   for a folder, so both are open, and so is a trailing slash after a wildcard.
+ *   segment of a pattern with a slash does not match through a parent folder (`docs/*` does not
+ *   match `docs/build-app/troubleshooting.md`). A slash-free pattern with no trailing slash, a
+ *   literal such as `gate` or a wildcard such as `*.js`, is not shown for a folder whose name it
+ *   matches, so both are open there, and so is a trailing slash after a wildcard.
  * - `?` is not in the documentation, so both readings are open.
  */
 function readingsOf(pattern: string, core: string): Reading[] {
@@ -108,7 +109,9 @@ function readingsOf(pattern: string, core: string): Reading[] {
   if (trailingSlash) {
     throughParent = wildcardLast ? [true, false] : [true];
   } else if (wildcardLast) {
-    throughParent = [false];
+    // docs/* shows a pattern with a slash. A slash-free one such as *.js is not shown for a folder
+    // whose name it matches, so both readings are open there.
+    throughParent = leadingSlash || innerSlash ? [false] : [true, false];
   } else {
     throughParent = leadingSlash || innerSlash ? [true] : [true, false];
   }
