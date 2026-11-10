@@ -846,6 +846,13 @@ export async function runStopHook(
   }
 }
 
+// The note for hook input that is not JSON. The hook cannot tell what sent it, so it names both
+// hook files and the commands that check the wiring and the change.
+const INVALID_INPUT_MESSAGE =
+  'NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop. ' +
+  'Next: check the hook command in .claude/settings.json or .cursor/hooks.json, run usabl doctor, ' +
+  'and run usabl check before you call this change accessible.';
+
 export async function runStopHookFromStdin(
   stdinText: string,
   ports: StopHookRunnerPorts = makeStopHookRunnerPorts(),
@@ -857,7 +864,7 @@ export async function runStopHookFromStdin(
     const input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
     return runStopHook(input, ports, options);
   } catch {
-    await emitProtocolAllow(ports, { message: 'NOT verified - invalid stop hook input JSON.' }, options);
+    await emitProtocolAllow(ports, { message: INVALID_INPUT_MESSAGE }, options);
     return 0;
   }
 }
