@@ -187,6 +187,9 @@ interface OpenSpan {
   end: (LedgerSpanEnd & { position: number }) | null;
   // A full scan of main saw it while this span was open.
   seen?: boolean;
+  // Where it left the floor after the history had already fixed this span. Used only when that fix
+  // is withdrawn, so the span then ends where the floor alone says.
+  leftAfter?: { at: Placed; cause: FloorBreak | null } | undefined;
 }
 
 /** The ledger broke one of its own rules. That is a bug in usabl, never a number to print. */
@@ -343,7 +346,16 @@ export function buildLedger(input: LedgerInput): Ledger {
     row.inFloor = false;
     row.pendingZero = null;
     const last = row.spans[row.spans.length - 1];
-    if (last === undefined || last.end !== null) return;
+    if (last === undefined) return;
+    if (last.end !== null) {
+      // Already fixed by the history. Kept in case that fix is withdrawn later.
+      if (last.end.by === 'history') last.leftAfter = { at, cause };
+      return;
+    }
+    endSpan(row, last, at, cause);
+  }
+
+  function endSpan(row: RowState, last: OpenSpan, at: Placed, cause: FloorBreak | null): void {
     if (cause === null) {
       last.end = { ...at, by: 'floor' };
       addGap(
@@ -459,6 +471,28 @@ export function buildLedger(input: LedgerInput): Ledger {
     pendingBreak = null;
   }
 
+  // Undo every fix the history confirmed on this row, last first. A withdrawn span ends where the
+  // floor alone says it ends: where it left the floor, at the end of the span it reopened into, or
+  // not at all while it is still in the floor.
+  function withdrawFixes(row: RowState): void {
+    for (let index = row.spans.length - 1; index >= 0; index -= 1) {
+      const span = row.spans[index];
+      if (span === undefined || span.end?.by !== 'history') continue;
+      const after = span.leftAfter;
+      const following = row.spans[index + 1];
+      span.end = null;
+      span.leftAfter = undefined;
+      if (after !== undefined) {
+        endSpan(row, span, after.at, after.cause);
+      } else if (following !== undefined) {
+        span.end = following.end;
+        span.seen = span.seen === true || following.seen === true;
+        span.leftAfter = following.leftAfter;
+        row.spans.splice(index + 1, 1);
+      }
+    }
+  }
+
   function observe(row: RowState, record: HistoryRecord, count: number, at: Placed): void {
     const seenOnTree = row.countsByTree.get(record.sourceTree) ?? new Set<number>();
     const differs = [...seenOnTree].some((seen) => seen !== count);
@@ -472,12 +506,12 @@ export function buildLedger(input: LedgerInput): Ledger {
     if (row.intermittent) return;
     const end = lastEnd(row);
     if (differs) {
-      // The same code gave two readings, so it comes and goes with the page content. A fix
-      // the history confirmed was not a fix, only a scan that did not show it.
+      // The same code gave two readings, so it comes and goes with the page content. No fix the
+      // history confirmed was a fix, only scans that did not show it, whether or not the row
+      // reopened since. Debt tracking never releases such an identity again either.
       row.intermittent = true;
       row.pendingZero = null;
-      const last = row.spans[row.spans.length - 1];
-      if (last !== undefined && end?.by === 'history') last.end = null;
+      withdrawFixes(row);
       return;
     }
     if (isOpen(row)) {

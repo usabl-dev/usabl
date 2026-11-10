@@ -245,6 +245,59 @@ describe('buildLedger', () => {
     expect(row.spans).toEqual([{ start: { commit: commitAt(0), date: dayAt(0) }, end: null, days: 41 }]);
   });
 
+  it('withdraws a fix shown false on its source tree even after the row reopened', () => {
+    const floor = floorOf([A]);
+    // The fix at c5 was confirmed on tree-y. The row reopened at c8 on tree-z. Then tree-y showed it
+    // at c9, so the fix at c5 was never real: A has been open since c0.
+    const ledger = buildLedger(
+      input(
+        [snap(0, floor)],
+        historyOn([
+          scanAt(3, floor, [[A, 0]], 'tree-x'),
+          scanAt(5, floor, [[A, 0]], 'tree-y'),
+          scanAt(8, floor, [[A, 1]], 'tree-z'),
+          scanAt(9, floor, [[A, 1]], 'tree-y'),
+        ]),
+      ),
+    );
+    const row = rowFor(ledger, A);
+    expect(row).toMatchObject({ state: 'open', intermittent: true, daysOpen: 41 });
+    expect(row.spans).toEqual([{ start: { commit: commitAt(0), date: dayAt(0) }, end: null, days: 41 }]);
+  });
+
+  it('ends a withdrawn fix where the floor dropped the row, when it did', () => {
+    const floor = floorOf([A]);
+    const ledger = buildLedger(
+      input(
+        [snap(0, floor), snap(7, floorOf([])), snap(10, floor)],
+        historyOn([scanAt(3, floor, [[A, 0]], 'tree-x'), scanAt(5, floor, [[A, 0]], 'tree-y'), scanAt(12, floor, [[A, 1]], 'tree-y')]),
+      ),
+    );
+    const row = rowFor(ledger, A);
+    expect(row.spans.map((span) => [span.start.commit, span.end?.commit ?? null, span.end?.by ?? null])).toEqual([
+      [commitAt(0), commitAt(7), 'floor'],
+      [commitAt(10), null, null],
+    ]);
+    expect(row).toMatchObject({ intermittent: true, state: 'reopened' });
+    expect(row.mayBeLessReasons).toContain('left-the-floor');
+  });
+
+  it('withdraws a fix shown false by the first scan of its pair', () => {
+    const floor = floorOf([A]);
+    const ledger = buildLedger(
+      input(
+        [snap(0, floor)],
+        historyOn([
+          scanAt(3, floor, [[A, 0]], 'tree-x'),
+          scanAt(5, floor, [[A, 0]], 'tree-y'),
+          scanAt(8, floor, [[A, 1]], 'tree-x'),
+        ]),
+      ),
+    );
+    // tree-x read both 0 and 1, so the pair at c3 and c5 was not a fix.
+    expect(rowFor(ledger, A)).toMatchObject({ state: 'open', intermittent: true, daysOpen: 41 });
+  });
+
   it('sorts rows by days open, longest first, and counts totals per state', () => {
     const floor = floorOf([A, B, C]);
     const ledger = buildLedger(
