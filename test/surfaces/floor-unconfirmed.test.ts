@@ -20,11 +20,11 @@ const unconfirmed: FloorUnconfirmed[] = [
 ];
 
 const NOTICE_ORDERS =
-  '3 recorded barriers on screen orders (button-name, link-name) were not seen in this run, so they ' +
+  '3 recorded accessibility barriers on screen orders (button-name, link-name) were not seen in this run, so they ' +
   'are not claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl ' +
   'floor prune --unconfirmed.';
 const NOTICE_USERS =
-  '1 recorded barrier on screen users (image-alt) was not seen in this run, so it is not claimed ' +
+  '1 recorded accessibility barrier on screen users (image-alt) was not seen in this run, so it is not claimed ' +
   'fixed. If it is fixed, add a reachedWhen signal for this screen or run usabl floor prune --unconfirmed.';
 
 const result = (over: Partial<Result> = {}): Result => ({
@@ -72,14 +72,14 @@ describe('the terminal', () => {
   it('prints a heading and one notice per screen under a verified run', () => {
     const lines = formatSummary(result()).split('\n');
     expect(lines[0]).toContain('VERIFIED');
-    expect(lines).toContain('  recorded barriers not seen: 2 screens');
+    expect(lines).toContain('  recorded accessibility barriers not seen: 2 screens');
     expect(lines).toContain(`    ${NOTICE_ORDERS}`);
     expect(lines).toContain(`    ${NOTICE_USERS}`);
   });
 
   it('prints nothing when every absent barrier was confirmed', () => {
     const out = formatSummary(result({ floorUnconfirmed: [], summary: 'verified: nothing blocking' }));
-    expect(out).not.toContain('recorded barriers not seen');
+    expect(out).not.toContain('recorded accessibility barriers not seen');
     expect(out).not.toContain('--unconfirmed');
   });
 });
@@ -88,13 +88,13 @@ describe('the pull request comment', () => {
   it('prints a section with each notice framed, and keeps the verdict headline', () => {
     const out = projectPrComment(result());
     expect(out).toContain('## usabl report: VERIFIED');
-    expect(out).toContain('### Recorded barriers not seen');
+    expect(out).toContain('### Recorded accessibility barriers not seen');
     expect(out).toContain(`notice: \`${NOTICE_ORDERS}\``);
     expect(out).toContain(`notice: \`${NOTICE_USERS}\``);
   });
 
   it('prints no section when there is nothing to say', () => {
-    expect(projectPrComment(result({ floorUnconfirmed: [] }))).not.toContain('Recorded barriers not seen');
+    expect(projectPrComment(result({ floorUnconfirmed: [] }))).not.toContain('Recorded accessibility barriers not seen');
   });
 });
 

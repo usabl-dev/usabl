@@ -341,6 +341,54 @@
   start the entry with a folder name, not to edit `.gitignore`. The guard no longer runs
   `git status` to list guarded files, which added nothing to the listing. Gate effect: none.
 
+- The pull request comment now stays under 65,536 however GitHub counts it. GitHub refuses a
+  body over that, and the required check then failed with no comment. The body is bounded at
+  60,000 UTF-8 bytes, which are never fewer than characters or UTF-16 code units. Every carried
+  value is cut to a fixed length, coverage gaps are named up to 20 per state with a count of the
+  rest, and when the body is still over the bound the lowest-priority items are left out first,
+  starting with the announcements (section 11.4 of the ground truth gives the order). The verdict
+  line, the approval line, the counts, and the first coverage gap of each state are never cut. A
+  gating finding keeps its first line until every other item is cut; only when those first lines
+  alone pass the bound, which needs a noise budget raised until hundreds of gating findings are
+  listed one by one, are some of them cut too, from the end. The comment says it was shortened to
+  stay under the size usabl posts, how many items it left out, how many gating findings show
+  only their first line, and that the full Result is in the `usabl-result` artifact. Gate effect:
+  none.
+
+- `usabl docs` output now goes through the published scrub, so a URL query or fragment the page
+  repeats is dropped from the JSON and the HTML report, as on the other published surfaces. In a
+  docs report this also holds inside element paths and in a content requirement's selector and
+  expected text, because nothing matches keys against a docs report, so a docs element path that
+  held a URL is not a working selector.
+
+- A `usabl docs` report now records the git tree it was made from (`sourceTree`), and a report
+  made from another tree is marked `stale: true` with a `staleReason` that names both trees and
+  says to run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file
+  saved during the scan marks the report stale, with or without a receipt. With a receipt, whose
+  tree is read after the scan, the report also records the tree read before in `startTree`, and
+  a report whose two trees differ is stale against every tree. On the HTML page a stale card
+  reads "Out of date" and never "Verified", and says it may not match the current code.
+  `markStaleDocArtifacts` from `usabl/docs` checks a saved report against the current tree,
+  which the ground truth says how to compute. An edit to a file git ignores does not mark a
+  report stale.
+
+- The Vite plugin adds the overlay loader only in `vite serve`, so a production build no longer
+  carries a request for a module only the dev server answers.
+
+- The overlay result endpoint frames a finding's why and fix, each coverage gap's reason, and the
+  gate's summary as untrusted text, as the pull request comment does, because for most axe rules
+  why and fix quote the page, and a gap reason can quote an error the page threw. A gap's ref
+  stays as written, because the overlay matches it with the screen url.
+
+- The pull request comment, the CLI summary, and the overlay say "accessibility barrier" where
+  they said "barrier", for example `### New accessibility barriers`. So do the gap reasons from
+  the table row and sign-in redirect checks, the evidence floor's count refusal, and the stop
+  hook and self-check message lines, such as `Accessibility barrier: [new serious]`.
+
+- The ground truth now says how a floored accessibility barrier is confirmed fixed: by the
+  neutralized path or the slugged name, or by a held readiness signal, and states the limit when
+  that signal matches only the app shell.
+
 - The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
   the repository root first, so a stop in a subfolder reads the root config, the root receipt,
   and the root bypass file. A config that differs from HEAD, is missing from the working tree,
