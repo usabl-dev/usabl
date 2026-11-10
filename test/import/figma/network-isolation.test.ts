@@ -3,10 +3,13 @@
  * runs them. Nothing on the check, gate, or hook path can reach that code.
  *
  * - No module a verdict entry point can load, by a static import, a re-export, a type import, a
- *   dynamic import(), or require(), is in src/import/ or is src/drift/design.ts. The one path
- *   allowed is the dynamic import of each command's own module inside src/cli.ts.
+ *   dynamic import(), require(), or a call through a createRequire result, is in src/import/ or is
+ *   src/drift/design.ts. The one path allowed is the dynamic import of each command's own module
+ *   inside src/cli.ts.
  * - A dynamic import whose module the test cannot read from the source fails the test, except the
- *   two that load an optional package by name.
+ *   two that load an optional package by name. The engine loader refuses at run time any name that
+ *   is not a bare package name, so it cannot load a file.
+ * - No file in src/ uses eval, Function, or new Worker, which run code the import graph cannot see.
  * - The CLI names those modules only in dynamic imports, inside the two commands.
  * - fetch.ts is the one file in src/import/ and src/drift/ that calls fetch, and only the two
  *   commands import it.
@@ -73,9 +76,45 @@ function literalText(node: ts.Node | undefined): string | null {
   return node !== undefined && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null;
 }
 
-/** Every import a file makes, of any kind, read from its syntax tree. */
+// A call of createRequire, by its own name or as a property, such as module.createRequire(x).
+function isCreateRequireCall(node: ts.Node): node is ts.CallExpression {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression;
+  return (
+    (ts.isIdentifier(callee) && callee.text === 'createRequire') ||
+    (ts.isPropertyAccessExpression(callee) && callee.name.text === 'createRequire')
+  );
+}
+
+// The names a file binds to the result of a createRequire call. A call through one of them loads a
+// module the way require() does.
+function requireNames(tree: ts.SourceFile): Set<string> {
+  const names = new Set(['require']);
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isCreateRequireCall(node.initializer)) {
+      names.add(node.name.text);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left) &&
+      isCreateRequireCall(node.right)
+    ) {
+      names.add(node.left.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return names;
+}
+
+/**
+ * Every import a file makes, read from its syntax tree: a static import, a re-export, a type
+ * import, a dynamic import(), a require() call, and a call made through a createRequire result,
+ * whether it is bound to a name first or called at once.
+ */
 function importsOf(file: string, source: string): ImportEdge[] {
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const loaders = requireNames(tree);
   const edges: ImportEdge[] = [];
   const visit = (node: ts.Node): void => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined) {
@@ -87,7 +126,8 @@ function importsOf(file: string, source: string): ImportEdge[] {
     } else if (
       ts.isCallExpression(node) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+        (ts.isIdentifier(node.expression) && loaders.has(node.expression.text)) ||
+        isCreateRequireCall(node.expression))
     ) {
       edges.push({ kind: 'dynamic', specifier: literalText(node.arguments[0]), text: node.getText(tree).replace(/\/\*.*?\*\/\s*/gsu, '') });
     }
@@ -96,6 +136,42 @@ function importsOf(file: string, source: string): ImportEdge[] {
   visit(tree);
   return edges;
 }
+
+/**
+ * Every place a file runs code from a string or starts another thread, which an import graph
+ * cannot follow: a reference to eval (a direct or an indirect call), a call of Function with or
+ * without new, and new Worker, by its own name or as a property such as worker_threads.Worker.
+ */
+function codeRunnersOf(file: string, source: string): string[] {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const found: string[] = [];
+  const calleeName = (callee: ts.Expression): string | null =>
+    ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === 'eval') {
+      // A property name, such as page.eval, is not the global eval.
+      const parent = node.parent;
+      const isPropertyName =
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        (ts.isMethodDeclaration(parent) && parent.name === node) ||
+        (ts.isPropertyDeclaration(parent) && parent.name === node) ||
+        (ts.isPropertySignature(parent) && parent.name === node) ||
+        (ts.isMethodSignature(parent) && parent.name === node);
+      if (!isPropertyName) found.push(`${file}: eval`);
+    } else if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && calleeName(node.expression) === 'Function') {
+      found.push(`${file}: ${node.getText(tree)}`);
+    } else if (ts.isNewExpression(node) && calleeName(node.expression) === 'Worker') {
+      found.push(`${file}: ${node.getText(tree)}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return found;
+}
+
+// Places in src/ that run code from a string or start a thread, each with a reason. None today.
+const ALLOWED_CODE_RUNNERS = new Set<string>([]);
 
 function resolveSpecifier(from: string, specifier: string): string {
   return relative(ROOT, resolve(ROOT, dirname(from), specifier)).replace(/\.js$/u, '.ts');
@@ -189,6 +265,75 @@ describe('the Figma API is reachable only from the import and drift design comma
     expect(edges).toEqual([
       { kind: 'dynamic', specifier: './import/figma/cli.js', text: "require('./import/figma/cli.js')" },
       { kind: 'dynamic', specifier: null, text: 'import(name)' },
+    ]);
+  });
+
+  it('finds a load made through a createRequire result, bound to a name or called at once', () => {
+    const edges = importsOf(
+      'x.ts',
+      [
+        "import { createRequire } from 'node:module';",
+        'const load = createRequire(import.meta.url);',
+        "load('./import/figma/cli.js');",
+        'let later;',
+        'later = module.createRequire(here);',
+        'later(name);',
+        "createRequire(import.meta.url)('./import/figma/fetch.js');",
+        '',
+      ].join('\n'),
+    );
+    expect(edges.filter((edge) => edge.kind === 'dynamic')).toEqual([
+      { kind: 'dynamic', specifier: './import/figma/cli.js', text: "load('./import/figma/cli.js')" },
+      { kind: 'dynamic', specifier: null, text: 'later(name)' },
+      { kind: 'dynamic', specifier: './import/figma/fetch.js', text: "createRequire(import.meta.url)('./import/figma/fetch.js')" },
+    ]);
+  });
+
+  it('finds a createRequire load of the fetch added inside checkPage', async () => {
+    const helper = 'src/surfaces/playwright-helper.ts';
+    const source = await readRepoFile(helper);
+    const opened = 'export async function checkPage(';
+    expect(source).toContain(opened);
+    const changed = source.replace(
+      opened,
+      `import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nfunction probe() { load('../import/figma/fetch.js'); }\n${opened}`,
+    );
+    const found = await reach(helper, (file) => (file === helper ? Promise.resolve(changed) : readRepoFile(file)));
+    expect(found.networkEdges).toEqual([`${helper} -> src/import/figma/fetch.ts (dynamic)`]);
+  });
+
+  it('no file in src/ runs code from a string or starts a thread, which the import graph cannot follow', async () => {
+    const found: string[] = [];
+    for (const file of await sourceFiles('src')) {
+      found.push(...codeRunnersOf(file, await readRepoFile(file)).filter((site) => !ALLOWED_CODE_RUNNERS.has(site)));
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('finds eval, Function, and Worker, and not a string, a comment, or a property name', () => {
+    const found = codeRunnersOf(
+      'x.ts',
+      [
+        "eval('1');",
+        "(0, eval)('2');",
+        "new Function('return 3');",
+        "Function('return 4')();",
+        "new Worker('./w.js');",
+        "new worker_threads.Worker(file, { eval: true });",
+        "const text = \"eval('5')\";",
+        "// new Function('6')",
+        'page.eval(x);',
+        'const o = { eval: 1 };',
+        '',
+      ].join('\n'),
+    );
+    expect(found).toEqual([
+      'x.ts: eval',
+      'x.ts: eval',
+      "x.ts: new Function('return 3')",
+      "x.ts: Function('return 4')",
+      "x.ts: new Worker('./w.js')",
+      'x.ts: new worker_threads.Worker(file, { eval: true })',
     ]);
   });
 

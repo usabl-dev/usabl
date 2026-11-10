@@ -273,16 +273,24 @@ export async function probeInstalledPackage(
   return { state: 'installed', version, missingDependencies };
 }
 
+// A bare npm package name, scoped or not. It cannot start with a dot or a slash, and the only
+// separator it can hold is the one slash after a scope, so it never names a file path, a URL, or a
+// Node.js module.
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i;
+
 /**
  * Imports a vendor package from this module, so the import and probeInstalledPackage start from the
  * same folder. The name is a variable on purpose: the bundler must leave the import to run time,
- * because the package is not a dependency and is absent when usabl is built.
+ * because the package is not a dependency and is absent when usabl is built. Any name that is not
+ * a bare package name is refused before the import, so this can load packages only, never a file
+ * in this repository.
  */
 export function importPackage(packageName: string): Promise<unknown> {
+  if (!PACKAGE_NAME.test(packageName)) {
+    return Promise.reject(new Error('usabl loads only an optional package by its package name, and this name is not one.'));
+  }
   return import(/* @vite-ignore */ packageName);
 }
-
-const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i;
 
 // The package a not-found error names, when it names a bare package. "Cannot find package 'x'" is
 // what the ES module resolver says, and "Cannot find module 'x'" is what require() says inside a
