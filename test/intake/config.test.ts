@@ -594,6 +594,39 @@ describe('parseUsablConfig glob syntax', () => {
     }
   });
 
+  // The guard can read these forms only as a wider folder or the whole tree, so config load refuses
+  // them and says how to write the entry.
+  it('refuses a guardedPaths entry the guard can only read wide, and says how to write it', () => {
+    const refused: Array<[string, RegExp]> = [
+      ['/src/gate/', /starts with \/.*"src\/gate\/"/],
+      ['../outside', /leaves the repository root/],
+      ['src/../../outside', /leaves the repository root/],
+      ['policy/*/../x.json', /\.\. after a wildcard/],
+      ['policy/*/sub/../x.json', /\.\. after a wildcard/],
+      ['{policy,b/..}/rules.json', /inside a brace alternative/],
+      ['{.,b}/y.json', /inside a brace alternative/],
+      ['policy/{a,./b}/x.json', /inside a brace alternative/],
+      ['{,a}{.,b}/x.json', /inside a brace alternative/],
+      ['{/policy,b}/x.json', /brace alternative that starts the path with \//],
+    ];
+    for (const [entry, reason] of refused) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toMatch(reason);
+    }
+  });
+
+  it('loads the guardedPaths forms that loaded and worked before', () => {
+    for (const entry of ['./src/gate/', 'src/gate//', '.', 'a/../b', 'src/a/../gate/*.ts', 'policy/{a,b}.json', './{a,b}/x']) {
+      expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).not.toThrow();
+    }
+  });
+
   it('refuses a backslash, which Node reads as an escape and usabl reads as text', () => {
     expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/\\x.json'] }))).toThrow(/guardedPaths/);
     expect(() => parseUsablConfig(configJson({ uiFileGlobs: ['src/\\*.tsx'] }))).toThrow(/uiFileGlobs/);

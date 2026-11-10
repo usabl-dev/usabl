@@ -81,8 +81,82 @@ function expectGuardedPaths(value: unknown): string[] {
     if (entry.trim() !== entry) {
       throw configError`guardedPaths entry "${entry}" starts or ends with white space, so it names no file and would guard nothing. Remove the white space.`;
     }
+    checkGuardedPathForm(entry);
   }
   return entries;
+}
+
+// One expansion of an entry's brace groups, as segments. A segment is marked when a brace
+// alternative wrote any of its characters. The entry's braces are already known to be well formed.
+function bracedSegments(entry: string): Array<Array<{ text: string; braced: boolean }>> {
+  type Marked = Array<{ char: string; braced: boolean }>;
+  let expansions: Marked[] = [[]];
+  let i = 0;
+  while (i < entry.length) {
+    const char = entry.charAt(i);
+    const close = char === '{' ? entry.indexOf('}', i) : -1;
+    const body = close === -1 ? '' : entry.slice(i + 1, close);
+    if (body.includes(',')) {
+      const alternatives = body.split(',').map((alternative) => [...alternative].map((c) => ({ char: c, braced: true })));
+      expansions = expansions.flatMap((prefix) => alternatives.map((alternative) => [...prefix, ...alternative]));
+      i = close + 1;
+      continue;
+    }
+    expansions = expansions.map((prefix) => [...prefix, { char, braced: false }]);
+    i++;
+  }
+  return expansions.map((expansion) => {
+    let current = { text: '', braced: false };
+    const segments = [current];
+    for (const { char, braced } of expansion) {
+      if (char === '/') {
+        current = { text: '', braced: false };
+        segments.push(current);
+      } else {
+        current.text += char;
+        current.braced ||= braced;
+      }
+    }
+    return segments;
+  });
+}
+
+// The guard can read some entry forms only as a wider folder or as the whole tree, which guards
+// more than the entry means. Refuse them here so a new config never holds one, and say how to
+// write the entry. A `.` segment, a repeated `/`, and a `..` before any wildcard that stays in the
+// repository still load: the guard reads them in canonical form, as it always has.
+function checkGuardedPathForm(entry: string): void {
+  if (entry.startsWith('/')) {
+    const fixed = entry.replace(/^\/+/, '') || '.';
+    throw configError`guardedPaths entry "${entry}" starts with /, so it names no path from the repository root. Write it as a path from the repository root without the leading slash: "${fixed}".`;
+  }
+  for (const segments of bracedSegments(entry)) {
+    if (segments.length > 1 && segments[0]?.text === '' && entry.charAt(0) === '{') {
+      throw configError`guardedPaths entry "${entry}" has a brace alternative that starts the path with /, so it names no path from the repository root. Write each alternative as a path from the repository root.`;
+    }
+    let depth = 0;
+    let afterWildcard = false;
+    for (const segment of segments) {
+      if ((segment.text === '.' || segment.text === '..') && segment.braced) {
+        throw configError`guardedPaths entry "${entry}" has a . or .. segment inside a brace alternative, so it can name a path outside the folder it starts with. Write each alternative without . or .. segments, as a path from the repository root.`;
+      }
+      if (segment.text === '' || segment.text === '.') {
+        continue;
+      }
+      if (segment.text === '..') {
+        if (afterWildcard) {
+          throw configError`guardedPaths entry "${entry}" has a .. after a wildcard, so it can name a path anywhere in the repository. Write it without .. segments, as a path from the repository root.`;
+        }
+        if (depth === 0) {
+          throw configError`guardedPaths entry "${entry}" has a .. segment that leaves the repository root, so it names no path in the repository. Write it as a path from the repository root without .. segments.`;
+        }
+        depth--;
+        continue;
+      }
+      depth++;
+      afterWildcard ||= segment.braced || /[*{]/.test(segment.text);
+    }
+  }
 }
 
 // A budget of zero, a negative, a fraction, or a string would either fail every screen or fail
