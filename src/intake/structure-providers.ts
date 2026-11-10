@@ -27,6 +27,7 @@ import type {
   TargetSizeAssertion,
 } from '../contracts/index.js';
 import { DESIGN_AX_TREE_NODE_LIMIT } from '../deps/ax-tree.js';
+import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
 import {
@@ -421,7 +422,7 @@ async function walkFocus(page: Page): Promise<FocusWalk> {
       return { kind: 'node-unreadable', stop: index + 1 };
     }
     walked.push({ path, key });
-    names.push((node.name ?? '').trim());
+    names.push(collapseWhiteSpace(node.name ?? ''));
   }
   return { kind: 'cap' };
 }
@@ -450,7 +451,7 @@ function quotedSequence(sequence: readonly string[]): string {
 }
 
 async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAssertion, page: Page): Promise<Draft[]> {
-  const sequence = assertion.sequence.map((name) => name.trim());
+  const sequence = assertion.sequence.map((name) => collapseWhiteSpace(name));
   const question = `focus reaches ${quotedSequence(sequence)} in that order`;
   const unconfirmed = (why: string, fix: string, extra: Record<string, unknown> = {}): Draft[] => [
     draft(requirement, 'focus-order', 'unverified', {

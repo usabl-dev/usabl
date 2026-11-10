@@ -194,9 +194,9 @@ const LANDMARK_ROLES = [
   'form',
 ] as const satisfies readonly LandmarkRole[];
 
-// The browser reports an accessible name with each run of white space as one space, so a name is
-// stored that way, trimmed, and compared that way. A name that is empty then would match nothing a
-// person could have meant.
+// The browser reports an accessible name with each run of ASCII white space as one space, so a
+// name is stored that way, with none at either end, and compared that way (collapseWhiteSpace). A
+// name that is empty then would match nothing a person could have meant.
 const accessibleName = (field: string) =>
   z
     .string()

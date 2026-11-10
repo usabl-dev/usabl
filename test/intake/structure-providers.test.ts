@@ -376,6 +376,17 @@ describe('focus order requirement', () => {
     expect(await run(r, page)).toEqual([]);
   });
 
+  it('reads each name with the one white space rule the name check uses: ASCII white space only', async () => {
+    const one = req({ type: 'focus-order', sequence: ['Refresh'] });
+    expect(await run(one, tabbingPage([' Refresh\n']))).toEqual([]);
+    // A no-break space is not ASCII white space, so it is part of the name, for both checks.
+    const focus = await run(one, tabbingPage(['Refresh ']));
+    expect(focus[0]?.confidence).toBe('fail');
+    expect(focus[0]?.evidence.extra).toMatchObject({ heard: ['Refresh '] });
+    const name = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({ '#r': button('Refresh ') }));
+    expect(name[0]?.confidence).toBe('fail');
+  });
+
   it('fails and says which name focus never reached', async () => {
     const drafts = await run(r, tabbingPage(['Actions for alice', 'Create user', '']));
     expect(drafts).toHaveLength(1);
