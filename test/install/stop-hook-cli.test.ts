@@ -21,6 +21,12 @@ function withStdin(text: string): () => void {
   };
 }
 
+// What the hook says when its input is not JSON: what happened, what it means, and what to do.
+const INVALID_INPUT_LINE =
+  'NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop. ' +
+  'Next: check the hook command in .claude/settings.json or .cursor/hooks.json, run usabl doctor, ' +
+  'and run usabl check before you call this change accessible.';
+
 describe('usabl stop-hook command', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -28,12 +34,16 @@ describe('usabl stop-hook command', () => {
 
   it('reads stdin, delegates to the runner, and always exits 0', async () => {
     const restore = withStdin('{invalid-json}');
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       const code = await main(['stop-hook']);
       expect(code).toBe(0);
       const written = stderr.mock.calls.map((call) => String(call[0])).join('');
-      expect(written).toContain('NOT verified - invalid stop hook input JSON');
+      expect(written.trim()).toBe(INVALID_INPUT_LINE);
+      // Claude Code does not show that stderr on exit 0, so the same line goes out as a systemMessage.
+      const stdoutText = stdout.mock.calls.map((call) => String(call[0])).join('');
+      expect(JSON.parse(stdoutText.trim())).toEqual({ systemMessage: INVALID_INPUT_LINE });
     } finally {
       restore();
     }
@@ -52,7 +62,7 @@ describe('usabl stop-hook command', () => {
       const stdoutText = stdout.mock.calls.map((call) => String(call[0])).join('');
       expect(stdoutText.trim()).toBe('{}');
       const stderrText = stderr.mock.calls.map((call) => String(call[0])).join('');
-      expect(stderrText).toContain('NOT verified');
+      expect(stderrText.trim()).toBe(INVALID_INPUT_LINE);
     } finally {
       restore();
     }

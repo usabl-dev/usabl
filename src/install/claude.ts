@@ -1,27 +1,41 @@
 /**
  * Claude settings install generator for `usabl install --claude`.
- * It wires a Stop hook that runs the stable `usabl stop-hook` command. settings.json is
+ * It wires a Stop hook that runs `npm exec --no -- usabl stop-hook`. settings.json is
  * JSON, so this parses and merges: it adds the usabl Stop hook, preserves unrelated
  * hooks, and updates a usabl-owned hook still wired to the retired raw dist path. It
  * refuses when the file is unparseable or when a Stop hook it cannot recognize is
  * present, rather than risk a double-run or clobbering an operator's own hook.
  */
 import type { InstallFs, InstallResult } from './index.js';
+import { LEGACY_USABL_RUN, USABL_NOT_INSTALLED_LINE, USABL_RUN } from './usabl-command.js';
 
 export const CLAUDE_SETTINGS_PATH = '.claude/settings.json';
 
-// npx resolves the locally installed usabl bin (package.json bin: usabl -> dist/cli.js)
-// without assuming a global install, so this command works from any project that has
-// usabl as a dependency.
-export const STOP_HOOK_COMMAND = 'npx usabl stop-hook';
+// The command in the words a person reads in a message. The hook itself is STOP_HOOK_COMMAND.
+export const STOP_HOOK_DISPLAY = `${USABL_RUN} stop-hook`;
+
+// The Stop hook command. Claude Code runs it with sh -c. npm exec --no runs the usabl installed in
+// the project (package.json bin: usabl -> dist/cli.js), or a global one, and never downloads a
+// package. npm's own error output is silenced, so when usabl cannot run, the first and only line
+// on stderr is the plain one below, and the exit code is 1. Claude Code treats exit 1 as a hook
+// error that does not block: the stop goes on and the user sees that line. Exit 2 would block,
+// and a person could not clear it without installing usabl. usabl's own stop-hook command always
+// exits 0, so the fallback runs only when usabl did not run.
+export const STOP_HOOK_COMMAND = `npm_config_loglevel=silent ${STOP_HOOK_DISPLAY} || { echo "${USABL_NOT_INSTALLED_LINE}" >&2; exit 1; }`;
+
+// The command earlier releases wrote. It is usabl's own, so a reinstall rewrites it, and doctor
+// reports it as a security drift: npx downloads whatever holds the name usabl when it is missing.
+export const LEGACY_STOP_HOOK_COMMAND = `${LEGACY_USABL_RUN} stop-hook`;
 
 // Why an update is needed. A read-only caller (doctor) needs to tell two cases apart that
 // planClaude otherwise collapses into one "update": a settings file that simply lacks the
 // usabl Stop hook (add-missing, which for doctor is a missing surface) from one whose usabl
 // hook is present but not the stable command (normalize, which for doctor is a drifted
 // surface). writeClaude does not branch on this; it exists so recognition of the two cases
-// stays here, next to classifyStop, rather than being re-derived inside doctor.
-export type UpdateReason = 'add-missing' | 'normalize';
+// stays here, next to classifyStop, rather than being re-derived inside doctor. remove-download is
+// the normalize case where the usabl hook is the old npx form, which doctor reports as a security
+// drift.
+export type UpdateReason = 'add-missing' | 'normalize' | 'remove-download';
 
 export type ClaudePlan =
   | { action: 'write'; path: string; contents: string }
@@ -40,7 +54,7 @@ export function isUsablStopCommand(command: string): boolean {
   // args, or a foreign command that mentions it as data) is an operator customization we
   // must not silently rewrite, so it falls through to the refusal path instead.
   const trimmed = command.trim();
-  if (trimmed === STOP_HOOK_COMMAND || trimmed === 'usabl stop-hook') {
+  if (trimmed === STOP_HOOK_COMMAND || trimmed === LEGACY_STOP_HOOK_COMMAND || trimmed === 'usabl stop-hook') {
     return true;
   }
   // A plain node invocation of the retired dist runner and nothing else: no wrappers, env
@@ -81,8 +95,20 @@ function draftContents(): string {
 function manualStep(): string {
   return [
     'Add this Stop hook to the file by hand:',
-    '  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "npx usabl stop-hook" } ] } ] }',
+    `  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": ${JSON.stringify(STOP_HOOK_COMMAND)} } ] } ] }`,
   ].join('\n');
+}
+
+// True when a usabl-owned Stop command is the old npx form.
+function hasLegacyCommand(stop: unknown[]): boolean {
+  return stop.some(
+    (entry) =>
+      isRecord(entry) &&
+      Array.isArray(entry['hooks']) &&
+      entry['hooks'].some(
+        (hook) => isRecord(hook) && typeof hook['command'] === 'string' && hook['command'].trim() === LEGACY_STOP_HOOK_COMMAND,
+      ),
+  );
 }
 
 function refuse(reason: string): ClaudePlan {
@@ -189,7 +215,8 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
   // A usabl hook already present means the only change is to normalize its command. No usabl
   // hook present means we are adding the missing hook. Capture that here, before the mutation,
   // so an update carries an honest reason for read-only callers.
-  const reason: UpdateReason = counts.usabl > 0 ? 'normalize' : 'add-missing';
+  const reason: UpdateReason =
+    counts.usabl === 0 ? 'add-missing' : hasLegacyCommand(updatedStop) ? 'remove-download' : 'normalize';
   if (counts.usabl > 0) {
     rewriteUsablCommands(updatedStop);
   } else {
@@ -211,18 +238,22 @@ export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<Inst
       exitCode: 0,
       action: 'written',
       path: plan.path,
-      message: `Wrote ${plan.path} to run the usabl Stop hook (${STOP_HOOK_COMMAND}). Review this file before you commit it.`,
+      message: `Wrote ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}). Review this file before you commit it.`,
     };
   }
   if (plan.action === 'update') {
     // This lands directly on the live .claude/settings.json that Claude Code reads, so the
     // message says the live file changed and points at the diff rather than calling it a draft.
     await fs.writeFile(plan.path, plan.contents);
+    const why =
+      plan.reason === 'remove-download'
+        ? ` The old hook ran "${LEGACY_STOP_HOOK_COMMAND}", which downloads a package when usabl is not installed. The new one never downloads.`
+        : '';
     return {
       exitCode: 0,
       action: 'written',
       path: plan.path,
-      message: `Updated the live ${plan.path} to run the usabl Stop hook (${STOP_HOOK_COMMAND}). Review the diff before you commit it.`,
+      message: `Updated the live ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}).${why} Review the diff before you commit it.`,
     };
   }
   if (plan.action === 'already-wired') {
@@ -230,7 +261,7 @@ export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<Inst
       exitCode: 0,
       action: 'already-wired',
       path: plan.path,
-      message: `${plan.path} already runs the usabl Stop hook (${STOP_HOOK_COMMAND}). No change.`,
+      message: `${plan.path} already runs the usabl Stop hook (${STOP_HOOK_DISPLAY}). No change.`,
     };
   }
   return { exitCode: 2, action: 'refused', path: plan.path, message: plan.reason };

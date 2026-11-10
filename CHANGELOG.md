@@ -4,6 +4,29 @@
 
 ### Added
 
+- `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
+  catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
+  on pages one at a time in the scan browser, after the page is ready and before any check runs.
+  Each defect is scanned clean and mutated through the real checks and gated by the real gate. It
+  is caught only when a new, definite failure from an expected rule is on the changed element, or
+  anywhere on the screen for a defect reported there. It is unreadable whenever the scans cannot
+  say: a coverage gap, findings the checks could not confirm, a new finding away from the change,
+  or a change that did not hold through the scan with nothing caught. A catch stands when the page
+  puts the change back later in the scan, and its row says so. A defect already on the element is not
+  applicable, and a finding the page already had never counts. It runs on fixture pages that ship
+  with usabl, with no app and no config, and with `--app` on the surfaces in `usabl.config.json`
+  too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
+  screen's flow and voice steps, and the command prints the real page loads and step counts before
+  it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
+  hash, every outcome, and every rule of the checks that can block (axe, PatternFly, RHDS, keyboard
+  walk, docs) that the catalog does not exercise, and prints "caught N of
+  M" with every miss by name. On the fixture pages it catches 25 of the 28 it can make and read: a
+  visible control taken out of the Tab order and a menu that does not open on Enter are missed, and
+  a broken live region under a voice requirement is preview only. A menu toggle that loses
+  `aria-expanded` is caught, with a note that the page sets it again when the menu probe clicks the
+  toggle. It is measurement: it mints no verdict and no receipt, nothing on a verdict path reads its
+  file, and it exits 0 whenever it ran. `npm run test:sensitivity` runs its real-browser tests.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
@@ -215,6 +238,105 @@
 - The ground truth now says how a floored accessibility barrier is confirmed fixed: by the
   neutralized path or the slugged name, or by a held readiness signal, and states the limit when
   that signal matches only the app shell.
+
+- The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
+  the repository root first, so a stop in a subfolder reads the root config, the root receipt,
+  and the root bypass file. A config that differs from HEAD, is missing from the working tree,
+  cannot be read, or does not parse blocks as approval required, says what clears it, and lets
+  one continuation through. Before, a corrupt config ended in an allow with "stop hook error". A
+  repository with no config in the working tree or at HEAD allows with "usabl is not configured
+  here". A new, uncommitted config runs, and the guard holds it for approval as before, when HEAD
+  exists. A repository with no commits, or an orphan branch with none yet, has no HEAD: the stop
+  fails open with git's "make a first commit" step and does not block. Gate effect: the Stop hook
+  blocks where it allowed.
+
+- The Stop hook blocks when guarded policy diverged on a run with no verdict, whatever the exit
+  code, and lets one continuation through. A run where every screen was unseen ends with exit 4,
+  and the hook allowed every exit 4 run, so diverged policy lost its approval block. A verdict
+  usabl does not recognize now blocks on exit 4 too, as the threat model said. A crash with clean
+  policy still fails open. Gate effect: the Stop hook blocks where it allowed.
+
+- The Stop hook's fast path line now reads "VERIFIED (exit 0, stored receipt, not re-scanned)"
+  and says usabl did not scan the change again on that stop. The threat model now says a user
+  with a shell on the same machine can write a receipt that verifies, and that receipt signing
+  is not built.
+
+- The Stop hook treats a `usabl.config.json` removed and committed during a session as drift.
+  When the working tree and HEAD both lack the config, but the session already recorded pins for
+  the repository root, the stop goes through the drift block with one continuation. Before, it
+  allowed with "usabl is not configured here". A repository that never had a config still allows
+  with that note. Gate effect: the Stop hook blocks where it allowed.
+
+- A stop that starts outside any git work tree, such as inside `.git`, now says the hook could not
+  find the repository and checked nothing, names the folder inside the untrusted frame, and says
+  to run `usabl check` from the project root. Before, it said the repository had no config. The
+  hook also starts its search at `CLAUDE_PROJECT_DIR` when that names a folder, so a stop from
+  `.git` in Claude Code reads the project root. Gate effect: such a stop in Claude Code is checked,
+  and can block, where it allowed with a false note.
+
+- In Claude Code, a Stop hook allow now also writes its text as a `systemMessage` on stdout,
+  which Claude Code shows to the person. It is shown for every allow except a verified stop and
+  an idle stop that carry no notice. Claude Code does not show the stderr of a Stop hook that
+  exits 0, so every "NOT verified" allow, the pin notices, and the receipt notice were silent
+  there. A block and the Cursor answer are unchanged. Gate effect: none; the stop goes through as
+  before, and the person now sees why.
+
+- Stop hook input that is not JSON now prints a line that says the stop went through and nothing
+  was checked, and says to check the hook command in `.claude/settings.json` or
+  `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check`. Gate effect: none.
+
+- A receipt that cannot be saved for any reason, such as `EACCES` on `.usabl`, no longer changes
+  the result. Before, only a link was handled, and any other failure threw before the decision, so
+  a verified stop read "stop hook error" and `usabl check` stopped with an error. Now the verdict
+  stands and the "NOT saved" notice carries the first line of the reason inside the untrusted
+  frame. Gate effect: a verified stop reads VERIFIED where it read as a stop hook error.
+
+- Hook and assistant wording. The guidance for a missing usabl names both messages npm can print.
+  A config that differs from the last commit "did not parse"; the way out for a config that does
+  not parse names `usabl init --force` and the files it overwrites. A continuation that goes
+  through no longer says "to clear this block". The current Cursor rule says "machine-checkable
+  accessibility barriers". Gate effect: none.
+
+- A flow requirement that passed only on speech recorded before its first step no longer
+  passes. The capture runs for the life of the page, so the drain a flow took before its first
+  step held every announcement since the last drain, such as one an earlier check caused, and
+  the flow counted it. The flow is now judged only on what was announced after its first step
+  ran. When the expected text was in that earlier speech and the flow's own steps did not
+  announce it, the flow is an `unverified` gap, because an earlier check may have changed the
+  page. When that speech did not hold the text either, the flow fails. Gate effect: such a flow
+  is a gap or a fail where it passed. A flow whose own steps announce the expected text passes as
+  before.
+
+- A flow requirement that passed only on focus that was already there is now a gap. The flow
+  passed when the control that had focus after its last step was named with the expected text,
+  even when an earlier check had put focus there and the flow's steps did not move it. The flow
+  now records the focused node and its name before its first step, and the focused name counts
+  only when the steps changed one of them. Gate effect: such a flow is an `unverified` gap where it
+  passed.
+
+- A flow requirement that was not covered only because the drain before its first step could not
+  say what was heard is now judged on its own steps. That drain is no longer read for the verdict,
+  so its reason no longer decides it. Gate effect: such a flow can now pass or fail where it was a
+  gap.
+
+- A flow requirement that expects an announcement now waits for the page to go quiet before its
+  first step, with the same wait a `click` step uses, so speech an earlier check left in flight is
+  not counted as the flow's own. Speech that lands later than that wait is still read. Gate
+  effect: on a page that does not go quiet within the wait, such a flow is `not-covered` where it
+  was judged.
+
+- A flow requirement with an incomplete step or a step field its kind does not use is now not
+  covered. A `click` with no selector, a `press` with no key, and a step of an unknown kind used to
+  run as nothing. A field the kind does not use, such as a selector on `activate`, `times` on
+  `tab`, `shift` on `press`, or `expectedAnnouncement` inside a step, was ignored, so the step ran
+  as something other than what was written. The driver now checks every step before it runs any,
+  and the gap names each such step, counted from 0, and what it is missing or what field it should
+  not have. The requirement loader still accepts such a flow step. Gate effect: such a flow is
+  `not-covered` where it was judged.
+
+- The not-covered gap for a flow or contract provider whose step threw now keeps only the first
+  line of the error, and so does the silent change rule's `read failed` gap, as its `step threw`
+  gap does. A browser error's later lines can quote the element's markup. No gate effect.
 
 - A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
   end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
@@ -936,6 +1058,23 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
+  `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`
+  downloaded and ran whatever package held the npm name usabl, with no prompt. `npm exec --no`
+  runs a local or global install, or a copy already in npm's own cache, and never downloads. With
+  usabl not installed, each stop still makes one registry request. When usabl cannot run, the
+  Claude Code and Cursor hooks print one line that says so and how to install it, and exit 1,
+  which both treat as a failed hook that does not block. `usabl install --claude`,
+  `--claude-skill`, and `--cursor` rewrite a file the previous release wrote with `npx usabl`, and
+  still refuse any other differing file. `usabl doctor` reports such a file as a security drift and names the reinstall
+  command.
+
+- The receipt store never writes through a symbolic link. It refuses a link at `.usabl` or at
+  `.usabl/receipt.json`, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place. A committed link there could redirect the write to another file the user
+  can write. `usabl check --ci` no longer saves a receipt. A refused save is said plainly and
+  changes no verdict.
 
 - The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
   pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server

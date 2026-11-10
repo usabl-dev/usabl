@@ -4,6 +4,7 @@ import { makeFakeDeps } from '../src/deps/fakes.js';
 import { run } from '../src/run.js';
 import { evaluateStopDecision } from '../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin } from '../src/surfaces/stop-hook-runner.js';
+import { committedConfigBytes } from './support/config-bytes.js';
 import { memoryPinStore } from './support/memory-pin-store.js';
 
 const config: UsablConfig = {
@@ -174,6 +175,7 @@ describe('Stop hook blocks corrupt guarded policy', () => {
       stderrWrite: async (text) => {
         stderr.push(text);
       },
+      readConfigBytes: async () => committedConfigBytes(configBytes),
       loadConfig: async () => config,
       buildDeps: async () => deps,
       runEngine: async (engineDeps, engineConfig) => run(engineDeps, engineConfig),
