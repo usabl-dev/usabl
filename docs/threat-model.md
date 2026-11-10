@@ -36,8 +36,15 @@ re-baseline to green.
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
-  Org team entries fail closed. The PR comment stays loud after the policy
-  check is green.
+  Owners come from the last rule that matches each dirty guarded path. That path fails closed
+  when no rule matches it, when its last rule names no owner, or when its last rule names an org
+  team or an email, because usabl cannot resolve team membership or match an email to a login. A
+  pattern or an owner usabl cannot read, or a `#` inside a pattern, fails the whole file closed,
+  because the last match is then unknown. A pattern GitHub's documentation leaves open, where the
+  readings disagree for a dirty guarded path and the rule could be its last match, fails that
+  path closed for the same reason. A team or email line that is not the last match for a dirty
+  guarded path does not block. `usabl doctor` reports the same limits in the same words. The PR comment stays loud
+  after the policy check is green.
 - Stop hook session pins are private to the user. On a shared host another local
   user could precreate a pin file or a symlink at the pin path, to cause false
   drift blocks, poison the pins so a later tamper is not seen, or overwrite
@@ -369,6 +376,61 @@ the tool errored, not because the page is accessible.
   guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
   Before, the listing quoted that name, `git show` found no file under it on either ref, and the
   change was skipped.
+
+- The local guard and `usabl enforce policy` select guarded files from git listings with the same
+  matcher. Each ref is listed once, with `-z`. The local guard also adds what `fs.glob` finds on
+  the working tree, so a new file no commit holds is listed too. Every entry is read in one
+  canonical form (no leading `./`, no repeated or trailing `/`, `.` for the whole tree), so
+  `./src/gate/` and `src/gate//` guard what `src/gate/` guards. A literal entry matches itself and
+  every file under it. A glob entry matches the files it names and every file under a folder it
+  names, with Node's dot rule: a wildcard skips a name that starts with a dot, as `fs.glob` does.
+  Before, the CI check listed each entry with a literal git pathspec, so a glob entry listed
+  nothing at either ref and an edited guarded file printed "no policy change". The local guard
+  listed a glob entry from the working tree only, so a guarded file deleted under it was compared
+  as the pattern text. An entry written as `./src/gate/`, `src/gate//`, or `.` was compared as
+  written with git output, which never holds that form, so it matched nothing. Now an edited,
+  added, or deleted file under an entry in any form config load accepts needs approval in both
+  places, except a dot-named file under a glob entry (see the known limit below). Config load
+  refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
+  `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses a `guardedPaths` entry
+  with white space at either end, one that starts with `/`, one with a `..` that leaves the root
+  or comes after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and
+  says how to write it. The guard expands a brace group first and reads each expansion on its own,
+  so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what an entry says and
+  never guards less because it cannot read one. An expansion in a form the matcher cannot evaluate
+  guards the literal folder above the first segment it cannot evaluate; one that starts with `/`,
+  has a `..` that leaves the root, or has a `..` anywhere after a wildcard guards the whole tree.
+  This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
+  ref's config. A change there needs a code owner's approval, which a review can give, so the pull
+  request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each
+  entry read this way and say how to write it. The `requirements` folder is read as a literal
+  path; a `guardedPaths` entry with the same text is read both as that path and as a glob.
+
+- The Stop hook blocks once when the guard or the session pin computation fails, because it then
+  cannot tell whether guarded policy changed, and lets the continuation through marked NOT
+  verified. Before, the hook's catch allowed with "stop hook error", so a guard that threw let a
+  session stop with a waiver edit unchecked. A stored receipt that cannot be read or checked only
+  loses its fast allow: the hook runs the full check, and the decision is the run's. A folder
+  outside any work tree and a repository with no commits keep their honest allow.
+
+- `usabl enforce policy` matches a `CODEOWNERS` pattern the way GitHub's documentation says for
+  the forms it shows. A wildcard in the last segment of a pattern with a slash does not match
+  through a parent folder, so `src/* @alice` after `/src/gate/ @org/gate-team` does not make alice
+  the owner of `src/gate/index.ts`. Before, it did, and alice's approval passed a change GitHub
+  gives to the team. A form the documentation does not show, such as `*.js` against a folder
+  named `lib.js`, is read both ways; when the readings disagree for a changed guarded path and the
+  rule could be its last match, the match is unknown and the check refuses the path. A `#` inside a
+  pattern refuses the whole file: the check used to cut the line there, so
+  `/src/file#1.ts @org/team` read as an ownerless rule for `/src/file`.
+
+- Known limit: a dot-named file under a glob entry, such as `policy/.override.json` under
+  `policy/*.json`, is not guarded, locally or in CI, because the guard follows Node's dot rule. List
+  such a file as its own entry, or guard its folder with a literal entry, to guard it.
+
+- Known limit: a guarded entry that is a valid path but names nothing, such as a typo, a wrong
+  letter case, or a look-alike letter, guards nothing, locally and in CI. `usabl doctor` is where
+  it shows: it reports a literal entry that matches no file in the last commit as guarding nothing
+  today.
 
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the

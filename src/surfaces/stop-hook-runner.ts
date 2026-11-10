@@ -19,13 +19,14 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
-import { makeGitReader } from '../deps/git.js';
+import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
+import { firstLine } from '../primitives/first-line.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -341,6 +342,37 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
   }
   lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
   return framedMessage(lines, error === null ? [] : [`error: ${error}`]);
+}
+
+/**
+ * The message for a stop where the guard or the session pins failed. Those are what tell the hook
+ * whether guarded policy diverged, so the hook does not know, and it blocks
+ * once, as it does for diverged files. Only the error's first line is carried, inside the frame.
+ */
+function guardFailureMessage(error: string, continuation: boolean): string {
+  const lines = [
+    'NOT verified - approval required: usabl could not tell whether guarded policy files changed, because the ' +
+      'guard failed (the error is under "error" in the untrusted text below), so usabl checked nothing on this stop.',
+  ];
+  if (continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  lines.push(
+    'Next: tell the user that usabl could not check guarded policy on this stop. Run usabl check, and run usabl doctor if it fails the same way.',
+    APPROVAL_REQUIRED_HUMAN_LEVER,
+  );
+  return framedMessage(lines, [`error: ${firstLine(error)}`]);
+}
+
+/** Thrown inside the hook when the guard or the pins failed. */
+class GuardFailure extends Error {}
+
+async function guarded<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (err) {
+    throw new GuardFailure(errorMessage(err));
+  }
 }
 
 // The note for a repository that has no usabl config in the working tree or in the last commit.
@@ -756,7 +788,8 @@ export async function runStopHook(
       return 0;
     }
     deps = await ports.buildDeps(config);
-    const dirtyGuardedPaths = await checkGuard(deps, config);
+    const guardDeps = deps;
+    const dirtyGuardedPaths = await guarded(() => checkGuard(guardDeps, config));
 
     // Session pins are compared before the receipt fast path. A receipt binds the committed policy
     // as it is when the receipt was minted, so a policy weakened and committed during the session,
@@ -784,7 +817,7 @@ export async function runStopHook(
           [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
         );
       } else {
-        const nextPins = await computeSessionPins(deps, config);
+        const nextPins = await guarded(() => computeSessionPins(guardDeps, config));
         const serialized = JSON.stringify(nextPins, null, 2);
 
         if (previousPins === null) {
@@ -818,10 +851,12 @@ export async function runStopHook(
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
-      const receiptCheck = await verifyStoredReceipt(ports, deps, config, {
+      // The stored receipt only offers a fast allow. A receipt the hook cannot read or check is no
+      // guard failure: the hook drops the fast path and runs the full check below.
+      const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
-      });
+      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
         await emitProtocolAllow(
@@ -875,6 +910,17 @@ export async function runStopHook(
     return 0;
   } catch (err) {
     const message = errorMessage(err);
+    // A repository with no last commit has nothing to compare with, and keeps its own fail-open
+    // disclosure (see configStep). Any other guard failure means the hook cannot tell whether
+    // guarded policy diverged, so it blocks once, as for diverged files.
+    if (err instanceof GuardFailure && message !== NO_HEAD_MESSAGE) {
+      if (input.stopHookActive) {
+        await emitProtocolAllow(ports, { message: guardFailureMessage(message, true), notices: pinNotices(pinNotice) }, options);
+      } else {
+        await emitProtocolBlock(ports, guardFailureMessage(message, false), options);
+      }
+      return 0;
+    }
     // Hook errors fail open with disclosure because a wedged stop hook is worse than an honest unverified allow.
     // The error text can carry a path or a value from the repository, so it goes inside the frame.
     await emitProtocolAllow(

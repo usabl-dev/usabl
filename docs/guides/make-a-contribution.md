@@ -108,6 +108,8 @@ gate, so it gets extra care:
 - `src/trust/`: the guard that stops a pull request from changing the policy it is
   checked against.
 - `src/run.ts`: the sequencer that connects the guard, coverage, scan, and gate.
+- `src/coverage/completeness.ts` and `src/surfaces/policy-enforce.ts`: the verdict
+  precedence and exit codes, and the CI approval decision for guarded paths.
 - `.github/workflows/` and `.github/CODEOWNERS`: CI and the list of approvers.
 - `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`, `.usabl-evidence.json`,
   and `.usabl-waivers.json`: policy and accepted debt.

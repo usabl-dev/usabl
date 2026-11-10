@@ -1056,6 +1056,9 @@ export interface GitReader {
   diffNameOnly(ref: string): Promise<string[]>;
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
+  // Every file at a ref that is one of the prefixes or under one, in one listing. An empty prefix
+  // stands for the whole tree. No prefixes lists nothing.
+  lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
   headRef(): Promise<string>;
 }
 export interface FsGlob {

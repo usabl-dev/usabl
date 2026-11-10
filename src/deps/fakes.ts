@@ -159,6 +159,12 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           .filter((path) => path === normalized || path.startsWith(childrenPrefix))
           .sort();
       },
+      lsFilesUnder: async (ref, prefixes) => {
+        const bases = prefixes.map(normalizePrefix);
+        return Object.keys(spec.refContents?.[ref] ?? spec.headContents)
+          .filter((path) => bases.some((base) => base === '' || path === base || path.startsWith(base + '/')))
+          .sort();
+      },
       headRef: async () => spec.headRef,
     },
     fs: {

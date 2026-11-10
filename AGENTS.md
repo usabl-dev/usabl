@@ -109,8 +109,9 @@ in the pull request and change it in a separate commit.
 ## Guarded paths
 
 These paths are listed in `.github/CODEOWNERS`: `src/gate/`, `src/trust/`, `src/run.ts`,
-`.github/workflows/`, `.github/CODEOWNERS`, `usabl.config.json`, `usabl.routes.json`,
-`usabl.docs.json`, `.usabl-evidence.json`, and `.usabl-waivers.json`.
+`src/coverage/completeness.ts`, `src/surfaces/policy-enforce.ts`, `.github/workflows/`,
+`.github/CODEOWNERS`, `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`,
+`.usabl-evidence.json`, and `.usabl-waivers.json`.
 
 Never edit a guarded path without saying so in the pull request summary, with the reason
 and why the change is safe.

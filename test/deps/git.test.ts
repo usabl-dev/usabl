@@ -100,6 +100,16 @@ describe('makeGitReader', () => {
     await expect(git.lsFiles('HEAD', 'src/missing')).resolves.toEqual([]);
   });
 
+  it('lists committed files under several prefixes in one listing', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+
+    await expect(git.lsFilesUnder('HEAD', ['src/gate', 'src/missing'])).resolves.toEqual(['src/gate/index.ts']);
+    await expect(git.lsFilesUnder('HEAD', [])).resolves.toEqual([]);
+    const whole = await git.lsFilesUnder('HEAD', ['']);
+    expect(whole).toContain('src/gate/index.ts');
+    expect(whole).not.toContain('src/gate/local-only.ts');
+  });
+
   it('lists changed files from merge-base to head with diffNameOnly', async () => {
     const git = makeGitReader({ cwd: repoPath });
     const firstCommit = await runGit(repoPath, ['rev-list', '--max-parents=0', 'HEAD']);
@@ -227,6 +237,21 @@ describe('makeGitReader with new untracked files', { timeout: 30_000 }, () => {
     await runGit(repoPath, ['add', '-A']);
     await runGit(repoPath, ['commit', '-m', 'new files']);
     await expect(git.diffNameOnly(seed)).rejects.toThrow(/git diff printed more than usabl reads/);
+  });
+
+  // The guarded path listing is long when a guarded glob starts with a wildcard, which lists the
+  // whole tree. .gitignore does not shorten a listing of committed files, so the advice names the
+  // entry's form instead.
+  it('says to start a guarded glob with a folder name when the guarded listing is too long', async () => {
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'new files']);
+    const git = makeGitReader({ cwd: repoPath, maxBuffer: 16 });
+    const error = await git.lsFilesUnder('HEAD', ['']).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('guarded glob lists too many files');
+    expect(message).toMatch(/start the entry with a folder name/i);
+    expect(message).not.toContain('.gitignore');
   });
 });
 

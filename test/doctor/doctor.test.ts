@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { matchGlob } from '../../src/primitives/match-glob.js';
+import { readCodeownersLimits } from '../../src/surfaces/policy-enforce.js';
 import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
@@ -197,8 +198,9 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
   // CODEOWNERS gates only always-guarded ledgers here, so guardedPaths covers it and policy-scope
-  // reads wired.
-  '.github/CODEOWNERS': '/usabl.config.json @owner\n/.usabl-evidence.json @owner\n/.github/workflows/ @owner\n',
+  // reads wired. Every guarded path has a user owner, so usabl enforce policy can pass a change.
+  '.github/CODEOWNERS':
+    '/usabl.config.json @owner\n/.usabl-evidence.json @owner\n/.usabl-waivers.json @owner\n/usabl.docs.json @owner\n/usabl.routes.json @owner\n/.github/workflows/ @owner\n',
   // The storage state lives outside the repository on purpose: it holds live session tokens
   // and must never be committed. Doctor reads it through the same fs port, by absolute path.
   [SESSION_PATH]: VALID_SESSION_FILE,
@@ -316,6 +318,20 @@ describe('workflow owners (.github/workflows has a code owner)', () => {
   it('is unknown for a pattern usabl cannot evaluate', async () => {
     expect((await report('/.github/** @o\n')).state).toBe('unknown');
   });
+
+  it('reads CODEOWNERS with the policy check line parser: an inline comment, and a refused #', async () => {
+    expect((await report('/.github/workflows/ @o #the owners\n')).state).toBe('wired');
+    const refused = await report('/.github/workflows/ @o\n/.github/workflows/ci#1.yml @p\n');
+    expect(refused.state).toBe('unknown');
+    expect(refused.nextStep).toContain('#');
+  });
+
+  it('is unknown when the last rule that could match a workflow file is a form GitHub does not document for it', async () => {
+    // `workflows` with no slash may or may not own the files in a folder of that name.
+    const found = await report('/.github/workflows/ @o\nworkflows @p\n', { '.github/workflows/deploy.yml': 'name: deploy\n' });
+    expect(found.state).toBe('unknown');
+    expect(found.nextStep).toContain('workflows');
+  });
 });
 
 describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
@@ -345,7 +361,11 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
       doctorDeps({
         fs: readOnlyFs({
           'usabl.config.json': configWith(['src/gate/', '.github/workflows/']),
-          '.github/CODEOWNERS': '/src/gate/ @o\n/.github/workflows/ @o\n/usabl.config.json @o\n',
+          '.github/CODEOWNERS':
+            '/src/gate/ @o\n/.github/workflows/ @o\n/usabl.config.json @o\n/.usabl-evidence.json @o\n/.usabl-waivers.json @o\n/usabl.docs.json @o\n/usabl.routes.json @o\n',
+          // A guarded entry names files that exist; one that names nothing guards nothing.
+          'src/gate/index.ts': 'gate',
+          '.github/workflows/usabl-gate.yml': 'name: gate\n',
         }),
         gh: GH_VERIFIED,
         configPath: 'usabl.config.json',
@@ -385,6 +405,159 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
       }),
     );
     expect(stateOf(reports, 'policy-scope')).toBe('drifted');
+  });
+
+  describe('the code owner limits of usabl enforce policy', () => {
+    // Owners for every always-guarded ledger, so only the line under test decides the state.
+    const LEDGERS =
+      '/usabl.config.json @o\n/.usabl-evidence.json @o\n/.usabl-waivers.json @o\n/usabl.docs.json @o\n/usabl.routes.json @o\n';
+    const scope = async (codeowners: string, files: Record<string, string> = {}): Promise<SurfaceReport> =>
+      byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({
+              'usabl.config.json': configWith(['src/gate/']),
+              'src/gate/index.ts': 'gate',
+              '.github/CODEOWNERS': codeowners,
+              ...files,
+            }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+          }),
+        ),
+        'policy-scope',
+      );
+
+    it('reads wired when a later user line replaces a team line for every guarded path', async () => {
+      const report = await scope(`/src/gate/ @org/gate\n${LEDGERS}/src/gate/ @o\n`);
+      expect(report).toMatchObject({ state: 'wired', nextStep: '' });
+    });
+
+    it('reports a guarded path whose last matching rule names a team, in the policy check words', async () => {
+      const codeowners = `${LEDGERS}/src/gate/ @o\n/src/gate/index.ts @org/gate\n`;
+      const report = await scope(codeowners);
+      expect(report.state).toBe('drifted');
+      const check = readCodeownersLimits(codeowners, ['src/gate/index.ts']);
+      expect(check.ok && check.reasons).toEqual([
+        'the last CODEOWNERS rule that matches src/gate/index.ts names a team or an email, and usabl enforce policy accepts approval only from a user login',
+      ]);
+      expect(report.nextStep).toContain(check.ok ? check.reasons[0] : '');
+    });
+
+    it('reports a guarded path whose last matching rule names an email', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/ gate@example.com\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('names a team or an email');
+    });
+
+    it('reports a guarded path no rule covers, including a new file in a guarded folder', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/index.ts @o\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('no CODEOWNERS rule covers src/gate/');
+    });
+
+    it('reports a guarded path whose last matching rule names no owner', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/ @o\n/src/gate/index.ts\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('the last CODEOWNERS rule that matches src/gate/index.ts names no owner');
+    });
+
+    const policyScopeFor = async (guardedPaths: string[], codeowners: string, files: Record<string, string>) =>
+      byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({ 'usabl.config.json': configWith(guardedPaths), '.github/CODEOWNERS': codeowners, ...files }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+          }),
+        ),
+        'policy-scope',
+      );
+
+    it('reads a guarded entry in the canonical form the guard uses, so ./src/gate/ is not drift', async () => {
+      const report = await policyScopeFor(['./src/gate/'], `/src/gate/ @o\n${LEDGERS}`, { 'src/gate/index.ts': 'gate' });
+      expect(report).toMatchObject({ state: 'wired', nextStep: '' });
+    });
+
+    it('reports an entry the guard reads wide, with how to write it', async () => {
+      const report = await policyScopeFor(['policy/rule{1..3}.json'], `/policy/ @o\n${LEDGERS}`, { 'policy/rule1.json': '{}' });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('usabl read the guardedPaths entry "policy/rule{1..3}.json" as the folder policy/');
+      expect(report.nextStep).toContain('with commas');
+    });
+
+    it('reports a literal entry that matches no file as guarding nothing today', async () => {
+      // A typo, a wrong case, or a look-alike letter names a path that does not exist.
+      const report = await policyScopeFor(['src/gaet/'], `/src/ @o\n${LEDGERS}`, { 'src/gate/index.ts': 'gate' });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('src/gaet/');
+      expect(report.nextStep).toContain('guards nothing today');
+    });
+
+    it('reads the last commit for a literal entry when git is there', async () => {
+      const report = byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({
+              'usabl.config.json': configWith(['src/gate/']),
+              '.github/CODEOWNERS': `/src/gate/ @o\n${LEDGERS}`,
+              'src/gate/index.ts': 'gate',
+            }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+            // The file is on disk but in no commit.
+            headFiles: async () => [],
+          }),
+        ),
+        'policy-scope',
+      );
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('guards nothing today');
+    });
+
+    it('reads CODEOWNERS with the policy check line parser, so a # inside a pattern is refused', async () => {
+      const report = await policyScopeFor(['src/gate/'], `${LEDGERS}/src/gate/ @o #owner note\n/src/gate/a#1.ts @p\n`, {
+        'src/gate/index.ts': 'gate',
+      });
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('holds a # that does not follow a space');
+    });
+
+    it('reports a glob entry with no file yet as not checkable, never as wired', async () => {
+      // CODEOWNERS covers src/gate/ but not policy/. The first file a pull request adds under
+      // policy/*.json is guarded, and the policy check refuses it, so doctor must not read wired.
+      const report = byId(
+        await collectDoctorReport(
+          doctorDeps({
+            fs: readOnlyFs({
+              'usabl.config.json': configWith(['src/gate/', 'policy/*.json']),
+              'src/gate/index.ts': 'gate',
+              '.github/CODEOWNERS': `/src/gate/ @o\n${LEDGERS}`,
+            }),
+            gh: GH_VERIFIED,
+            configPath: 'usabl.config.json',
+          }),
+        ),
+        'policy-scope',
+      );
+      expect(report.state).toBe('unknown');
+      expect(report.nextStep).toContain('policy/*.json');
+      expect(report.nextStep).toContain('not checkable yet');
+      expect(report.nextStep).toContain('needs a CODEOWNERS rule');
+    });
+
+    it('reports a guarded path whose last match is unknown, in the policy check words', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/ @o\ngate @p\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('usabl cannot tell which CODEOWNERS rule matches');
+      expect(report.nextStep).toContain('src/gate/index.ts');
+    });
+
+    it('reports that the policy check refuses the whole file on an owner it cannot read', async () => {
+      const report = await scope(`${LEDGERS}/src/gate/ @o\n/docs/ docs-team\n`);
+      expect(report.state).toBe('drifted');
+      expect(report.nextStep).toContain('CODEOWNERS owner docs-team is not a @user login, an @org/team, or an email');
+    });
   });
 
   it('reports missing when there is no CODEOWNERS to reconcile against', async () => {

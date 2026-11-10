@@ -85,7 +85,7 @@ export interface Brief {
 
 export interface BriefInput {
   fs: FsGlob;
-  git: Pick<GitReader, 'show' | 'statusZ' | 'lsFiles'>;
+  git: Pick<GitReader, 'show' | 'statusZ' | 'lsFiles' | 'lsFilesUnder'>;
   config: UsablConfig;
   // The task's files. Absent means the changed files git reports, the same list a local
   // `usabl check` plans from.
