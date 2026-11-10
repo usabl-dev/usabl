@@ -389,6 +389,60 @@ describe('the silent change rule in a flow requirement', () => {
       expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-flow', 'unverified']]);
     });
 
+    it('keeps a finding on another step when the flow is a gap about an earlier step', async () => {
+      const start = { tree: [...savePage(), node(20, 2, 'row', 'Row two'), node(22, 20, 'button', 'Remove row')] };
+      const { page } = worldPage(
+        {
+          // Step 1's drain is undecidable. Step 2 deletes a row, says nothing, and drains clean.
+          '#save': (world) => (addSavedText(world), (world.undecidable = 'closed-shadow-modal')),
+          '#delete': (world) => {
+            world.undecidable = null;
+            world.tree = world.tree.filter((entry) => entry.nodeId !== 20 && entry.nodeId !== 22);
+            world.focus = 10;
+          },
+        },
+        start,
+        { '#save': 3, '#delete': 22 },
+      );
+      const steps = [{ do: 'click', selector: '#save' }, { do: 'click', selector: '#delete' }];
+      const drafts = await runOne(mapRequirementsToProviders(bundle(flowRequirement(steps, 'Saved')))[0], page);
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
+        ['intake:save-flow', 'unverified'],
+        ['voicing/silent-change', 'fail'],
+      ]);
+      expect(silent(drafts)[0]?.evidence.extra?.step).toEqual({ do: 'click', selector: '#delete' });
+    });
+
+    it('drops the rule gap only on the step whose drain the flow gap reports', async () => {
+      const { page } = worldPage(
+        {
+          '#save': (world) => (addSavedText(world), (world.undecidable = 'closed-shadow-modal')),
+          '#other': (world) => (world.tree = [...world.tree, node(8, 6, 'StaticText', 'Done')]),
+        },
+        {},
+        { '#save': 3, '#other': 5 },
+      );
+      const steps = [{ do: 'click', selector: '#save' }, { do: 'click', selector: '#other' }];
+      const drafts = await runOne(mapRequirementsToProviders(bundle(flowRequirement(steps, 'Saved')))[0], page);
+      // Step 2's drain is undecidable too, but the flow's gap names the first, so step 2's gap stays.
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
+        ['intake:save-flow', 'unverified'],
+        ['voicing/silent-change', 'unverified'],
+      ]);
+      expect(silent(drafts)[0]?.evidence.extra).toMatchObject({ step: { do: 'click', selector: '#other' }, reason: 'announcements undecidable' });
+    });
+
+    it('drops nothing when the flow gap comes from the drain taken before the first step', async () => {
+      const { page } = worldPage({ '#save': addSavedText }, { undecidable: 'closed-shadow-modal' });
+      const drafts = await runOne(mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#save' }], 'Saved')))[0], page);
+      // The world stays undecidable, so the step's own drain is undecidable too. The flow gap names the
+      // drain before the first step, which is no step, so the rule's gap on step 1 stays.
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
+        ['intake:save-flow', 'unverified'],
+        ['voicing/silent-change', 'unverified'],
+      ]);
+    });
+
     it('still reports an earlier silent step when the flow fails on its last step', async () => {
       const { page } = worldPage({ '#save': addSavedText }, {}, { '#save': 3, '#other': 5 });
       const steps = [{ do: 'click', selector: '#save' }, { do: 'click', selector: '#other' }];
@@ -554,6 +608,14 @@ describe('judgeActionStep', () => {
 
   it('reads a drain whose sources are unknown, with text in it, as undecidable', () => {
     expect(judgeActionStep(observation({ drain: { texts: ['Saved'], undecidable: null, sources: null } }), background)).toEqual({
+      kind: 'gap',
+      reason: 'announcements undecidable',
+    });
+  });
+
+  it('names an undecidable drain before an unreadable focus, so the flow gap for that drain covers the step', () => {
+    const drain = { texts: ['Saved'], undecidable: 'closed-shadow-modal' as const, sources: [{ region: 1, removalOnly: false }] };
+    expect(judgeActionStep(observation({ drain, focusAfter: null, focusUnreadableAfter: 'closed-shadow-root' }), background)).toEqual({
       kind: 'gap',
       reason: 'announcements undecidable',
     });

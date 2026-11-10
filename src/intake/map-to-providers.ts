@@ -333,11 +333,15 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   // A drain that fails is kept as an error: the verdict needs every one, and fails with the first
   // failure, the way the one drain did. A flow with no expected announcement never needed one.
   const drains: AnnouncementSourcesDrain[] = [];
+  // The step each kept drain was taken after, in the same order, or null for the drain before the
+  // first step.
+  const drainSteps: (number | null)[] = [];
   const drainFailures: unknown[] = [];
-  const takeDrain = async (): Promise<AnnouncementSourcesDrain | null> => {
+  const takeDrain = async (stepIndex: number | null): Promise<AnnouncementSourcesDrain | null> => {
     try {
       const drain = await page.drainAnnouncementSources();
       drains.push(drain);
+      drainSteps.push(stepIndex);
       return drain;
     } catch (error) {
       drainFailures.push(error);
@@ -345,7 +349,7 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
     }
   };
 
-  watch.start(await takeDrain());
+  watch.start(await takeDrain(null));
   for (const [index, step] of assertion.steps.entries()) {
     const action = isActionStep(step) && flowRuns(step);
     if (action) {
@@ -372,7 +376,7 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
         settle = null;
       }
     }
-    const drain = await takeDrain();
+    const drain = await takeDrain(index);
     if (action) {
       await watch.after(page, step, index, { settle, drain });
     }
@@ -389,10 +393,17 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   }
   const drain = unionOfDrains(drains);
   const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain);
-  // The flow's own draft already says whether its last step was heard. A second draft for that step
-  // would be a second finding for one accessibility barrier, so the rule emits nothing for it.
-  if (own.length > 0) {
+  // The rule stays quiet only where it would repeat the flow's own draft for the same step. A flow
+  // that fails says its last step was not heard, so the rule emits nothing for that step: a second
+  // draft would be a second finding for one accessibility barrier. A flow gap about an undecidable
+  // drain names the first such drain, so the rule drops its own undecidable gap on that step only.
+  if (own.some((draft) => draft.confidence === 'fail')) {
     watch.quiet(assertion.steps.length - 1);
+  } else if (own.length > 0 && drain.undecidable !== null) {
+    const undecidableStep = drainSteps[drains.findIndex((entry) => entry.undecidable !== null)] ?? null;
+    if (undecidableStep !== null) {
+      watch.dropGap(undecidableStep, 'announcements undecidable');
+    }
   }
   return own;
 }

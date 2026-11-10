@@ -164,6 +164,9 @@ export function judgeActionStep(observation: ActionStepObservation, background: 
   }
   if (heard) return { kind: 'quiet' };
 
+  // An undecidable drain is named first. When the flow requirement reports the same drain as its
+  // own gap, that gap already covers this step, and the rule's gap is dropped as a repeat.
+  if (drain.undecidable !== null) return gap('announcements undecidable');
   if (!focusKnown) return gap('focus unreadable');
   if (replaced) return gap('replaced focus');
   if (speechUnknown) return gap('announcements undecidable');
@@ -319,6 +322,8 @@ export interface SilentChangeWatch extends StepObserver {
   notRun(step: Step, index: number): void;
   // Emit nothing for this step: the requirement's own draft already says whether it was heard.
   quiet(index: number): void;
+  // Drop the rule's gap with this reason on this step: the requirement's own gap already says it.
+  dropGap(index: number, reason: SilentChangeGap): void;
   // The drafts for every step judged so far, in step order, scrubbed.
   drafts(screenId: string): Draft[];
 }
@@ -351,6 +356,7 @@ export function makeSilentChangeWatch(): SilentChangeWatch {
   const pending = new Map<number, Pending>();
   const outcomes: Outcome[] = [];
   const quieted = new Set<number>();
+  const droppedGaps = new Map<number, SilentChangeGap>();
 
   // Runs one read. A read that throws records the first failure and gives the fallback.
   async function read<T>(state: { readError: string | null }, fallback: T, reader: () => Promise<T>): Promise<T> {
@@ -470,10 +476,15 @@ export function makeSilentChangeWatch(): SilentChangeWatch {
       quieted.add(index);
     },
 
+    dropGap(index, reason) {
+      droppedGaps.set(index, reason);
+    },
+
     drafts(screenId) {
       const drafts: Draft[] = [];
       for (const outcome of outcomes) {
         if (quieted.has(outcome.index) || outcome.judgment.kind === 'quiet') continue;
+        if (outcome.judgment.kind === 'gap' && droppedGaps.get(outcome.index) === outcome.judgment.reason) continue;
         const place: DraftPlace = { screenId, index: outcome.index, step: outcome.step, elementPath: outcome.elementPath, role: outcome.role };
         const draft =
           outcome.judgment.kind === 'finding'
