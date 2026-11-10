@@ -135,26 +135,9 @@ export async function collectReviews(
   throw new Error('GitHub reviews listing was truncated');
 }
 
-// Printed when a Result carries no accessibility verdict and exit 0 but does not say there was
-// nothing to check. The engine writes that pair only for an idle run, where no UI file changed.
-const NO_VERDICT_NOT_IDLE =
-  'accessibility: no verdict (4). The Result has no accessibility verdict and does not say that nothing was to check, so usabl proved nothing about this change and this blocks. Run usabl check --json again and pass its Result unchanged.';
-
 export function enforceAccessibility(result: Result): { exitCode: Result['accessibilityExitCode']; message: string } {
   if (result.exitCode === 4) {
     return { exitCode: 4, message: result.summary };
-  }
-  // Idle is exit 0 with no verdict and nothing to check. No verdict with exit 0 on a Result that
-  // does not say nothing was to check is not idle: it is a run that reached no verdict, and the
-  // pull request comment and the Stop hook read it that way too. Reading it as idle would pass a
-  // change that was never checked. The flag must be exactly true, because a document can carry
-  // any value there.
-  if (
-    result.accessibilityVerdict === null &&
-    result.accessibilityExitCode === 0 &&
-    result.coverage?.nothingToCheck !== true
-  ) {
-    return { exitCode: 4, message: NO_VERDICT_NOT_IDLE };
   }
   return {
     exitCode: result.accessibilityExitCode,

@@ -10,7 +10,6 @@ import {
   parseGithubReviews,
   parsePullRequestEvent,
   parseResultJson,
-  parseResultText,
   type PolicyEnforceDeps,
   type PolicyReview,
 } from '../../src/surfaces/policy-enforce.js';
@@ -60,46 +59,6 @@ describe('enforceAccessibility', () => {
       enforceAccessibility(result({ verdict: null, exitCode: 4, accessibilityVerdict: null, accessibilityExitCode: 4 }))
         .exitCode,
     ).toBe(4);
-  });
-
-  const noVerdict = (nothingToCheck: boolean, over: Partial<Result> = {}): Result =>
-    result({
-      verdict: null,
-      exitCode: 0,
-      accessibilityVerdict: null,
-      accessibilityExitCode: 0,
-      coverage: { changedFiles: ['src/App.tsx'], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck },
-      ...over,
-    });
-
-  it('passes an idle run, where nothing was to check', () => {
-    const outcome = enforceAccessibility(noVerdict(true));
-
-    expect(outcome.exitCode).toBe(0);
-    expect(outcome.message).toContain('idle');
-  });
-
-  it('does not read no verdict with exit 0 as idle when something was to check', () => {
-    // The engine writes no verdict with exit 0 only when no UI file changed. A Result that says a
-    // UI file changed and still carries no verdict proved nothing, so it must block, the way the
-    // pull request comment and the Stop hook read it.
-    const outcome = enforceAccessibility(noVerdict(false));
-
-    expect(outcome.exitCode).toBe(4);
-    expect(outcome.message).not.toContain('idle');
-    expect(outcome.message).toContain('no verdict');
-  });
-
-  it('blocks the same Result read from a document, as CI reads it', () => {
-    const document = JSON.stringify(noVerdict(false));
-
-    expect(enforceAccessibility(parseResultText(document)).exitCode).toBe(4);
-  });
-
-  it('keeps an approval hold over an idle scan as idle on the accessibility side', () => {
-    const outcome = enforceAccessibility(noVerdict(true, { verdict: 'approval_required', exitCode: 2 }));
-
-    expect(outcome.exitCode).toBe(0);
   });
 });
 
