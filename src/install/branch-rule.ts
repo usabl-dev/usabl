@@ -82,6 +82,16 @@ function isPathSafeBranch(name: string): boolean {
   return name.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
+// Why a file system read failed, in words, or null when the error is not a file system error. A
+// programmer error has no string code and is not absorbed here.
+function unreadableReason(error: unknown): string | null {
+  const code = error instanceof Error ? Reflect.get(error, 'code') : undefined;
+  if (typeof code !== 'string') return null;
+  if (code === 'EISDIR') return 'it is a folder';
+  if (code === 'EACCES' || code === 'EPERM') return 'usabl has no permission to read it';
+  return /^E[A-Z]+$/.test(code) ? `the read failed with ${code}` : 'the read failed';
+}
+
 /**
  * The branch the gate workflow on disk runs on, read from its pull request trigger in the one form
  * usabl writes. The app gate decides when it is there. With no app gate, the docs gate decides. With
@@ -89,7 +99,22 @@ function isPathSafeBranch(name: string): boolean {
  */
 export async function gateBranchTarget(readFile: (path: string) => Promise<string | null>): Promise<BranchTarget> {
   for (const file of GATE_FILES) {
-    const raw = await readFile(file.path);
+    let raw: string | null;
+    try {
+      raw = await readFile(file.path);
+    } catch (error) {
+      // Something is at the path, but usabl cannot read it, so the branch is unknown. That is never
+      // a missing gate, and never a reason to move on to the next file.
+      const why = unreadableReason(error);
+      if (why === null) throw error;
+      return {
+        name: PROTECTED_BRANCH,
+        source: 'assumed',
+        reason: `${file.path} could not be read (${why})`,
+        gatePresent: true,
+        step: `Make ${file.path} a file usabl can read, then run "usabl install --branch-rule" again.`,
+      };
+    }
     if (raw === null) continue;
     const name = workflowTriggerBranch(raw, 'pull_request');
     if (name === null || !isPathSafeBranch(name)) {

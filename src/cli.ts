@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { run } from './run.js';
 import type { GitReader, Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
-import { makeFsGlob } from './deps/fs.js';
+import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
@@ -253,8 +253,9 @@ async function runInstall(opts: CliOptions): Promise<number> {
   // branch-rule is read-only. It writes nothing and only verifies through a read-only gh
   // GET, so it takes the gh reader rather than a filesystem port.
   if (opts.installTarget === 'branch-rule') {
-    // The branch to check is the one the gate workflow on disk runs on, read without writing.
-    const outcome = await verifyBranchRule(makeGhReader(), await gateBranchTarget(makeFsGlob().readFile));
+    // The branch to check is the one the gate workflow on disk runs on, read without writing. The
+    // reader tells a folder or an unreadable file apart from no file, so neither reads as missing.
+    const outcome = await verifyBranchRule(makeGhReader(), await gateBranchTarget(makeWorkflowReader()));
     const stream = outcome.exitCode === 0 ? process.stdout : process.stderr;
     stream.write(formatInstallReport(outcome));
     return outcome.exitCode;

@@ -786,8 +786,9 @@ async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
     ci: named(CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_GATE_WORKFLOW_PATH), 'pull_request')),
     docsCi: named(DOCS_CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_DOCS_GATE_WORKFLOW_PATH), 'pull_request')),
     historyCi: named(HISTORY_CI_LABEL, 'pushes to', workflowTriggerBranch(await read(USABL_HISTORY_WORKFLOW_PATH), 'push')),
-    // The app gate's branch, or the docs gate's when there is no app gate.
-    target: await gateBranchTarget(read),
+    // The app gate's branch, or the docs gate's when there is no app gate. gateBranchTarget reads the
+    // files itself, so a file it cannot read says so instead of reading as missing.
+    target: await gateBranchTarget((path) => deps.fs.readFile(path)),
   };
 }
 
