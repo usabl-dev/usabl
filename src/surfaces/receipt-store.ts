@@ -14,6 +14,9 @@ import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, unlink, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import type { Receipt, Result } from '../contracts/index.js';
+import { boundField } from '../output/bounded-text.js';
+import { neutralize } from '../primitives/neutralize.js';
+import { frameUntrustedBlock } from './scrub.js';
 
 export const RECEIPT_DIR = '.usabl';
 export const RECEIPT_PATH = '.usabl/receipt.json';
@@ -95,7 +98,10 @@ function isReceipt(value: unknown): value is Receipt {
   );
 }
 
-/** What a save did. A refusal says what happened, what it means, and what to do, in fixed text. */
+/**
+ * What a save did. A refusal says what happened, what it means, and what to do. Its words are fixed
+ * text, and any error text it carries is inside the untrusted frame.
+ */
 export type ReceiptSave = { status: 'saved' } | { status: 'refused'; message: string };
 
 /**
@@ -112,6 +118,15 @@ export class ReceiptWriteRefused extends Error {
   }
 }
 
+const NOT_SAVED_CONSEQUENCE =
+  'The verdict of this run stands, but the next stop runs the full check again instead of using a stored receipt.';
+
+/**
+ * Any failed save leaves the verdict as it was and says so. A refusal names the repository path in
+ * the way in fixed text. Any other failure, such as a folder usabl may not write to, prints only
+ * the first line of the error, neutralized and inside the untrusted frame, because error text can
+ * name a path from the environment.
+ */
 export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<ReceiptSave> {
   // Receipt files stay local and gitignored so fast-path trust cannot become a committed self-accept.
   try {
@@ -122,12 +137,20 @@ export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<Rece
       return {
         status: 'refused',
         message:
-          `NOT saved - usabl did not save the receipt for this run because ${err.message}. ` +
-          'The verdict of this run stands, but the next stop runs the full check again instead of using a stored receipt. ' +
+          `NOT saved - usabl did not save the receipt for this run because ${err.message}. ${NOT_SAVED_CONSEQUENCE} ` +
           `To fix: remove ${err.path}, then run usabl check or stop again.`,
       };
     }
-    throw err;
+    const reason = (err instanceof Error ? err.message : String(err)).split(/\r?\n/)[0] ?? '';
+    return {
+      status: 'refused',
+      message: [
+        'NOT saved - usabl did not save the receipt for this run because the write failed ' +
+          `(the reason is under "reason" in the untrusted text below). ${NOT_SAVED_CONSEQUENCE} ` +
+          `To fix: make sure usabl can write ${RECEIPT_PATH} in this repository, then run usabl check or stop again.`,
+        frameUntrustedBlock([`reason: ${boundField(neutralize(reason), 'gapReason')}`]),
+      ].join('\n'),
+    };
   }
   return { status: 'saved' };
 }

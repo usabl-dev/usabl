@@ -2963,9 +2963,11 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   hook reads and writes it under the repository root; `usabl check` writes it in the folder it
   runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
   or at the receipt file, writes a temp file opened with no-follow and exclusive create, and
-  renames it into place, as the session pin store does. A refused save changes no verdict: the
-  hook says "NOT saved - usabl did not save the receipt ..." after the decision line, and the
-  next stop runs the full check.
+  renames it into place, as the session pin store does. A save that fails for any reason, a
+  refused link or an error such as `EACCES`, changes no verdict: the hook says "NOT saved -
+  usabl did not save the receipt ..." after the decision line, and the next stop runs the full
+  check. For an error, the first line of the error follows inside the untrusted frame under
+  `reason:`.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with

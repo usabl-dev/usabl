@@ -183,3 +183,87 @@ describe('Stop hook with a symbolic link at the receipt path', () => {
     expect(text).not.toContain('stop hook error');
   });
 });
+
+// Any failed save, not only a link, leaves the verdict as it was. The reason comes from the file
+// system and can name a path, so only its first line is printed, inside the untrusted frame.
+describe('A receipt save that fails for another reason', () => {
+  function eacces(): Error {
+    return Object.assign(new Error("EACCES: permission denied, open '/repo/.usabl/.receipt.json.tmp'\nsecond line"), {
+      code: 'EACCES',
+    });
+  }
+
+  it('returns the not-saved notice with the first line of the reason inside the frame', async () => {
+    const saved = await saveReceipt(
+      {
+        readFile: async () => null,
+        mkdir: async () => {},
+        writeFile: async () => {
+          throw eacces();
+        },
+      },
+      receipt,
+    );
+    expect(saved.status).toBe('refused');
+    const message = saved.status === 'refused' ? saved.message : '';
+    expect(message.startsWith('NOT saved - usabl did not save the receipt for this run')).toBe(true);
+    expect(message).toContain('The verdict of this run stands');
+    const frameStart = message.indexOf('[BEGIN UNTRUSTED TEXT');
+    expect(frameStart).toBeGreaterThan(0);
+    expect(message.indexOf('EACCES: permission denied')).toBeGreaterThan(frameStart);
+    expect(message).not.toContain('second line');
+  });
+
+  it('still reads VERIFIED on the stop, with the not-saved notice after it', async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const ports: StopHookRunnerPorts = {
+      ...makeStopHookRunnerPorts({ startDir: root, env: {} }),
+      fs: {
+        readFile: async () => null,
+        mkdir: async () => {},
+        writeFile: async () => {
+          throw eacces();
+        },
+        unlink: async () => {},
+      },
+      pins: memoryPinStore(),
+      stdoutWrite: async (text) => {
+        stdout.push(text);
+      },
+      stderrWrite: async (text) => {
+        stderr.push(text);
+      },
+      readConfigBytes: async () => committedConfigBytes(),
+      loadConfig: async () => testConfig(),
+      buildDeps: async () =>
+        makeFakeDeps({ files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } }),
+      runEngine: async () =>
+        ({
+          schemaVersion: 'usabl.result.v1',
+          verdict: 'verified',
+          summary: 'verified: 0 gating finding(s)',
+          screens: [],
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+          findings: [],
+          receipt,
+          dirtyGuardedPaths: [],
+          exitCode: 0,
+          accessibilityVerdict: 'verified',
+          accessibilityExitCode: 0,
+          paidDownCount: 0,
+          floorHeadroom: [],
+          floorUnconfirmed: [],
+        }) as Result,
+    };
+
+    expect(await runStopHookFromStdin('{"session_id":"session-one"}', ports)).toBe(0);
+
+    const text = stderr.join('');
+    expect(text.startsWith('VERIFIED (exit 0)')).toBe(true);
+    expect(text).not.toContain('stop hook error');
+    expect(text.indexOf('NOT saved - usabl did not save the receipt')).toBeGreaterThan(0);
+    const payload = JSON.parse(stdout.join('').trim()) as { systemMessage?: string };
+    expect(payload.systemMessage).toBe(text.trimEnd());
+  });
+});
