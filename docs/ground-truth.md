@@ -2664,7 +2664,42 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- The repository root, then the config, before anything is parsed. The hook finds the
+  repository root with `git rev-parse --show-toplevel` from the folder it starts in, because
+  that folder follows the assistant when it changes directory. The config, the receipt, the
+  bypass file, the scan, and the session pin key all use the root. A folder in no repository is
+  its own root and has no last commit. The hook then compares the raw bytes of
+  `usabl.config.json` in the working tree with HEAD:
+  - HEAD has the config and the working copy is the same bytes: the hook parses it and goes on.
+  - HEAD has the config and the working copy differs, is missing, or cannot be read, or the
+    config does not parse: block as approval required, before anything parses the working
+    copy. The reason opens "NOT verified - approval required:", says what happened and that
+    nothing was checked, tells the model not to edit the file to clear it, says what clears it,
+    and names `usabl bypass`. Read and parse errors go inside the untrusted frame.
+  - Neither HEAD nor the working tree has the config: allow with "NOT verified - usabl is not
+    configured here: ..." and the step to run `usabl init`. Nothing runs.
+  - The working tree has the config and HEAD does not (a new, uncommitted setup): the guard
+    reports `usabl.config.json` as a changed guarded file, as it does for any new guarded file,
+    so the run goes on and ends `approval_required`, which blocks. A new config that does not
+    parse blocks as approval required before the run.
+  - A repository with no commits yet has no HEAD, so it counts as HEAD without a config.
+  Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
+  `loop_count` above 0), marked NOT verified, as every other block does.
+- Unreadable input or an internal error: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- Diverged guarded policy on a run with no verdict: block, whatever the exit code. `run()`
+  ends a run where every screen was unseen with no verdict and exit 4, and the guard still
+  reported the diverged files on it. The hook counts those and the ones its own guard found
+  before the run, so a crash that carries none still blocks. The line opens with the run's
+  own verdict word, for example "NO VERDICT: RUN FAILED (exit 4): NOT verified. Guarded policy
+  files changed, so this change needs approval whatever the run found.", then the approval
+  step and the guarded file lines, with the paths inside the untrusted frame. During an active
+  continuation it allows once, marked NOT verified.
+- usabl not installed: the generated hooks run `npm exec --no -- usabl stop-hook`, which never
+  downloads a package. When usabl cannot run, the hook prints one line, "NOT verified - the
+  usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
+  it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
+  block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets
+  the agent finish. Neither reads it as a pass, and neither is a block a person must clear.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
@@ -2686,6 +2721,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
+- Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
+  hook reads and writes it under the repository root; `usabl check` writes it in the folder it
+  runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
+  or at the receipt file, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place, as the session pin store does. A refused save changes no verdict: the
+  hook says "NOT saved - usabl did not save the receipt ..." after the decision line, and the
+  next stop runs the full check.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with
@@ -2695,8 +2737,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
-- A verdict that is not one of the contract's words, or a null verdict on a run that was neither
-  idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
+- A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
+  null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
   reported, so the run proved nothing about this change." or "NO VERDICT (exit 0): NOT verified.
   usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
@@ -2988,10 +3030,10 @@ not because the loop requires it.
 The gate stays at Stop. Neither path lets the agent grade its own work.
 
 **Task brief (`usabl brief`).** Before it starts a task, the agent runs
-`npx usabl brief --json --files <paths>` with the files the task will edit. At that point the
+`npm exec --no -- usabl brief --json --files <paths>` with the files the task will edit. At that point the
 tree is usually clean, so a brief of the changed files would have nothing to check. The
 installed `/usabl-check` skill and the Cursor rule open with that step, and the skill's
-`allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
+`allowed-tools` lists `Bash(npm exec --no -- usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
 when that is not plain, why: an intake requirement (content, flow, or voice) applies only to
@@ -3270,7 +3312,7 @@ optional. There is no "partial" mode and no per-surface strictness.
 Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
-exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
+exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npm exec --no -- usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch requires the `usabl-required`
 status check and review from code owners, which prints the setting and the `CODEOWNERS` lines
