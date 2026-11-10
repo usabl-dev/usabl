@@ -2015,9 +2015,10 @@ Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
 attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
 orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
-Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
-and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
-those surfaces back to match a gap to a screen, so dropping them costs no match.
+Result that `usabl check --json` writes, the pull request comment, and the `usabl docs` report
+(JSON and `--html`) drop the userinfo, the query, and the fragment from every URL in the Result,
+the same way `checkPage` output does. Nothing reads those surfaces back to match a gap to a
+screen, so dropping them costs no match.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -3848,7 +3849,8 @@ and role from the accessibility tree. Gating runs never read them. Each entry is
 image's element path and the text it has now. An image with no name reads `Marked
 decorative on the page.` when its own `alt` is empty or its role is `none` or
 `presentation`, and `No text alternative on the page.` otherwise.
-That text is untrusted page text. It passes the surface scrubber, each string is cut to a
+That text is untrusted page text. It passes the published scrub, which also drops the query and
+the fragment of any URL the page repeats, each string is cut to a
 fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
 screen, with one more entry that counts the rest. Every drafted entry has `origin:
 'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a

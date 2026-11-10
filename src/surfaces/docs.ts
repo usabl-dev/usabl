@@ -2,7 +2,8 @@
  * Docs-output projection for a gated Result plus the design-intake requirement bundle.
  * This unit assembles read-only doc artifacts; it never recomputes findings or mints a verdict.
  * generateDocs runs the engine to get that Result, and only chooses which files it plans from.
- * It scrubs page-derived transcript text before egress because artifacts leave the trust boundary.
+ * It scrubs page-derived transcript text with the published scrub before egress, because artifacts
+ * leave the trust boundary and are written to be published.
  */
 import type { Deps, DocArtifact, FsGlob, RequirementBundle, Result, UsablConfig } from '../contracts/index.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
@@ -10,7 +11,7 @@ import { generateAltTextManifest, generatePageAltTextManifest } from '../docs/al
 import { generateAnnouncementSnippets } from '../docs/announcement-snippets.js';
 import { generateKeyboardPaths } from '../docs/keyboard-paths.js';
 import { run } from '../run.js';
-import { scrubResult } from './scrub.js';
+import { scrubPublishedResult } from './scrub.js';
 
 /**
  * Builds the full set of doc artifacts for a run.
@@ -21,8 +22,10 @@ import { scrubResult } from './scrub.js';
  */
 export function collectDocArtifacts(result: Result, bundle: RequirementBundle): DocArtifact[] {
   // Scrub first: the transcript generators strip control bytes but not credential-shaped values,
-  // and this surface is egress for page-derived text.
-  const safe = scrubResult(result);
+  // and this surface is egress for page-derived text. A docs report is written to be published,
+  // so it takes the published scrub, which also drops the query and the fragment of every URL the
+  // page repeats, as the CLI, the JSON Result, and the pull request comment do.
+  const safe = scrubPublishedResult(result);
 
   const artifacts: DocArtifact[] = [
     ...generateAnnouncementSnippets(safe),

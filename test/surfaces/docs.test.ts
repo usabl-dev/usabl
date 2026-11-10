@@ -295,3 +295,37 @@ describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
     expect(collectDocArtifacts(withImages(), noRequirements)).toEqual(collectDocArtifacts(withImages(), noRequirements));
   });
 });
+
+describe('docs output uses the published scrub', () => {
+  // A docs report is written to be published. A screen url can carry a preview token or a session
+  // value in its query or fragment, and the page can repeat that url in its own text: a link named
+  // by its address, a live region, or an image's accessible name. The published surfaces drop the
+  // query and the fragment, and so must this one.
+  const url = 'http://127.0.0.1:5173/clusters?preview=SECRETPOISON#state=SECRETPOISON';
+  const withQuery = (): Result =>
+    resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', [
+            {
+              index: 0,
+              elementPath: '#share',
+              announcement: [
+                { kind: 'name', text: `Share ${url}`, fromTree: true, source: 'ax-tree' },
+                { kind: 'live', text: `Copied ${url}`, fromTree: true, source: 'ax-tree' },
+              ],
+            },
+          ]),
+          url,
+          images: [{ elementPath: '#qr', name: `QR code for ${url}`, role: 'img', decorative: false }],
+        },
+      ],
+    });
+
+  it('drops the query and the fragment of a screen url from every artifact', () => {
+    const { json } = projectDocs(withQuery(), { version: 1, requirements: [] });
+
+    expect(json).not.toContain('SECRETPOISON');
+    expect(json).toContain('http://127.0.0.1:5173/clusters');
+  });
+});
