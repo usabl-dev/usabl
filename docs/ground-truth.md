@@ -3228,9 +3228,11 @@ headline. Its hint calls the findings gating only when every one of them gates. 
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
-**Size bound.** GitHub refuses a comment body over 65,536 characters, and the required check
-then fails with no comment. The comment body, counted with the newline the CLI writes after
-it, is at most 60,000 UTF-16 code units (`COMMENT_BODY_LIMIT` in `src/surfaces/pr-comment.ts`).
+**Size bound.** GitHub refuses a comment body over 65,536, and the required check then fails
+with no comment. The comment body, counted with the newline the CLI writes after it, is at most
+60,000 UTF-8 bytes (`COMMENT_BODY_LIMIT` in `src/surfaces/pr-comment.ts`). Whether GitHub counts
+characters, UTF-16 code units, or bytes has not been checked live. A text is never fewer bytes
+than code units, or fewer code units than characters, so the body is under 65,536 in each.
 Every carried value is cut to a fixed length, marked `[shortened, N characters omitted]`.
 Coverage gaps are named up to 20 per state, and one line counts the rest of each state, as the
 transcript names up to 20 stops per screen. When the body is still over the bound, whole items

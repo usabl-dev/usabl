@@ -42,16 +42,42 @@ const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
 
 /**
- * The longest body this surface prints, in UTF-16 code units, counted on the final text with the
+ * The longest body this surface prints, in UTF-8 bytes, counted on the final text with the
  * newline the CLI adds after it.
  *
- * GitHub refuses a comment body over 65,536 characters. A refused body fails the comment job,
- * and the required check then fails with no comment to say why. GitHub counts characters, and a
- * character is never more than two UTF-16 code units, so a body under this bound in code units
- * is under GitHub's limit in characters. The margin under 65,536 is room for the workflow to
- * change how it posts the body without the bound having to move.
+ * GitHub refuses a comment body over 65,536. A refused body fails the comment job, and the
+ * required check then fails with no comment to say why. Whether GitHub counts characters, UTF-16
+ * code units, or UTF-8 bytes is not settled here. A text is never fewer UTF-8 bytes than UTF-16
+ * code units, and never fewer code units than characters, so a body under this bound in bytes is
+ * under 65,536 in all three. The margin under 65,536 is room for the workflow to change how it
+ * posts the body without the bound having to move.
  */
 export const COMMENT_BODY_LIMIT = 60_000;
+
+// The length of a text in UTF-8 bytes. A lone surrogate counts three bytes, as the replacement
+// character it is encoded as.
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
 
 /**
  * How many coverage gaps of one state the comment names. The rest of that state are counted on
@@ -571,7 +597,7 @@ function renderParts(parts: CommentPart[]): string {
 }
 
 // The cut steps in order: for each tier in CUT_ORDER, from the end of the comment back, an item
-// loses its detail or goes whole. Each call makes the next step and returns the characters it
+// loses its detail or goes whole. Each call makes the next step and returns the UTF-8 bytes it
 // removed, or null when nothing is left to cut. The order is worked out once, so cutting a long
 // comment is linear in its items.
 function cutter(parts: CommentPart[]): () => number | null {
@@ -588,7 +614,7 @@ function cutter(parts: CommentPart[]): () => number | null {
       }
     }
   }
-  const size = (lines: string[]): number => lines.reduce((total, line) => total + line.length + 1, 0);
+  const size = (lines: string[]): number => lines.reduce((total, line) => total + utf8Length(line) + 1, 0);
   let next = 0;
   return () => {
     while (next < steps.length) {
@@ -622,14 +648,14 @@ const CUT_LINE_RESERVE = 140;
  * real body, and cuts further while it is over.
  */
 function renderWithinLimit(parts: CommentPart[], limit: number): string {
-  const fits = (text: string): boolean => text.length + 1 <= limit;
+  const fits = (text: string): boolean => utf8Length(text) + 1 <= limit;
   const whole = renderParts(parts);
   if (fits(whole)) {
     return whole;
   }
   const cutOne = cutter(parts);
   const sections = parts.filter((part) => part.kind === 'section').length;
-  let estimate = whole.length + 1 + CUT_LINES_RESERVE + sections * CUT_LINE_RESERVE;
+  let estimate = utf8Length(whole) + 1 + CUT_LINES_RESERVE + sections * CUT_LINE_RESERVE;
   while (estimate > limit) {
     const removed = cutOne();
     if (removed === null) {

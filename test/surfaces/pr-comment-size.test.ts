@@ -452,6 +452,28 @@ describe('pull request comment size', () => {
     expect(markdown).toContain('- deterministic: new 400 (400 failing, 0 unconfirmed)');
   });
 
+  it('stays under 65,536 UTF-8 bytes when the text is not ASCII', () => {
+    // An emoji is two UTF-16 code units and four UTF-8 bytes, and a CJK character is one code unit
+    // and three bytes. If GitHub counts bytes, a bound on code units alone lets such a body over.
+    const emoji = '\u{1F600}'.repeat(300);
+    const cjk = '中文'.repeat(300);
+    for (const text of [emoji, cjk]) {
+      const findings = Array.from({ length: 400 }, (_, index) =>
+        finding({ rule: `r${index}`, elementKey: `n-${index}`, whatUserExperiences: text, why: text, fix: text }),
+      );
+      const screens = Array.from({ length: 10 }, (_, index) => screen(`s-${index}`, Array.from({ length: 20 }, (__, stopIndex) => stop(stopIndex, text))));
+      const markdown = projectPrComment(result({ findings, screens }), { noiseBudget: { default: 1_000_000 } } as never);
+
+      expect(Buffer.byteLength(body(markdown), 'utf8')).toBeLessThanOrEqual(COMMENT_BODY_LIMIT);
+      expect(Buffer.byteLength(body(markdown), 'utf8')).toBeLessThan(GITHUB_LIMIT);
+      expect(markdown.split('\n')[1]).toBe('## usabl report: REGRESSION');
+      expect(markdown).toContain('- deterministic: new 400 (400 failing, 0 unconfirmed)');
+      expect(markdown.split(UNTRUSTED_FRAME_START).length).toBe(markdown.split(UNTRUSTED_FRAME_END).length);
+      // No cut splits a character: a lone surrogate would be a broken character on the page.
+      expect(markdown).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
+  });
+
   it('leaves an ordinary comment exactly as it was, with no note about cutting', () => {
     const small = result({
       findings: [finding({})],
