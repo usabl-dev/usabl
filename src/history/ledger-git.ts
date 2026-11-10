@@ -51,9 +51,16 @@ export function makeLedgerGit(options: { cwd?: string } = {}): LedgerGit {
   const cwd = options.cwd ?? process.cwd();
 
   async function git(args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER });
+    // Replace refs are local and can show another history in place of the real one, so they are off.
+    const { stdout } = await execFileAsync('git', ['--no-replace-objects', ...args], { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER });
     return stdout;
   }
+
+  // git log honours the person's config even with a format string: log.showSignature prints a
+  // signature check ahead of each signed entry, and color, decorate, and follow change what it
+  // prints or which commits it lists. These pin all of them. The format names only %H and %ct, so
+  // date formats and mailmap never apply.
+  const LOG = ['-c', 'log.follow=false', 'log', '--no-show-signature', '--no-color', '--no-decorate', '-z', '--first-parent', '--reverse'];
 
   return {
     async isRepository() {
@@ -78,14 +85,16 @@ export function makeLedgerGit(options: { cwd?: string } = {}): LedgerGit {
     },
     async firstParentLine(head) {
       // One commit per NUL-terminated entry: the commit id and its committer time in seconds.
-      const out = await git(['log', '-z', '--first-parent', '--reverse', '--format=%H %ct', head]);
+      const out = await git([...LOG, '--format=%H %ct', '--end-of-options', head]);
       return splitZ(out).map((entry) => {
-        const [commit = '', seconds = ''] = entry.split(' ');
-        return { commit, date: new Date(Number(seconds) * 1000).toISOString() };
+        const match = /^([0-9a-f]{40}|[0-9a-f]{64}) (\d+)$/u.exec(entry);
+        // Anything else means git printed more than the format asked for. Never guess a date from it.
+        if (match === null) throw new Error('git log printed an entry the ledger cannot read');
+        return { commit: match[1] as string, date: new Date(Number(match[2]) * 1000).toISOString() };
       });
     },
     async commitsChanging(head, path) {
-      const out = await git(['log', '-z', '--first-parent', '--reverse', '--format=%H', head, '--', path]);
+      const out = await git([...LOG, '--format=%H', '--end-of-options', head, '--', path]);
       return splitZ(out);
     },
     async readFile(commit, path) {

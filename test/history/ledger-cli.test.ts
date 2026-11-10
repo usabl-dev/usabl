@@ -15,9 +15,13 @@ import { dialogAt, entryFor, floorOf } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
 
+// The machine's own git config, time zone, and locale never reach these repositories. The command
+// under test inherits process.env, so it is set for each test, not only for this helper.
+const HERMETIC = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', TZ: 'UTC', LC_ALL: 'C' };
+
 async function git(cwd: string, args: string[]): Promise<void> {
   const date = '2026-01-01T00:00:00Z';
-  await execFileAsync('git', args, { cwd, env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
+  await execFileAsync('git', args, { cwd, env: { ...process.env, ...HERMETIC, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
 }
 
 describe('usabl debt ledger on the command line', () => {
@@ -27,6 +31,7 @@ describe('usabl debt ledger on the command line', () => {
   let stderr: string[] = [];
 
   beforeEach(async () => {
+    for (const [name, value] of Object.entries(HERMETIC)) vi.stubEnv(name, value);
     originalCwd = process.cwd();
     workspace = await mkdtemp(join(tmpdir(), 'usabl-ledger-cli-'));
     process.chdir(workspace);
@@ -44,6 +49,7 @@ describe('usabl debt ledger on the command line', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     process.chdir(originalCwd);
     await rm(workspace, { recursive: true, force: true });
   });

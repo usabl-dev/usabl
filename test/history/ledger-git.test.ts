@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { EvidenceFloor, FloorEntry } from '../../src/contracts/index.js';
 import { appendRecord } from '../../src/history/append.js';
 import { makeHistoryGit } from '../../src/history/git.js';
@@ -25,9 +25,13 @@ function dayAt(day: number): string {
   return new Date(START + day * DAY).toISOString();
 }
 
+// The machine's own git config, time zone, and locale never reach these repositories. The readers
+// under test inherit process.env, so it is set for the whole file, not only for this helper.
+const HERMETIC = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', TZ: 'UTC', LC_ALL: 'C' };
+
 async function git(cwd: string, args: string[], day?: number): Promise<string> {
-  const env = day === undefined ? process.env : { ...process.env, GIT_AUTHOR_DATE: dayAt(day), GIT_COMMITTER_DATE: dayAt(day) };
-  const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', env });
+  const dates = day === undefined ? {} : { GIT_AUTHOR_DATE: dayAt(day), GIT_COMMITTER_DATE: dayAt(day) };
+  const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...HERMETIC, ...dates } });
   return stdout.trim();
 }
 
@@ -92,6 +96,7 @@ describe('the ledger sources in a real repository', () => {
   }
 
   beforeAll(async () => {
+    for (const [name, value] of Object.entries(HERMETIC)) vi.stubEnv(name, value);
     root = await mkdtemp(join(tmpdir(), 'usabl-ledger-git-'));
     repo = join(root, 'repo');
     await git(root, ['init', '--quiet', '--initial-branch=main', repo]);
@@ -113,6 +118,7 @@ describe('the ledger sources in a real repository', () => {
   }, 60_000);
 
   afterAll(async () => {
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -181,6 +187,40 @@ describe('the ledger sources in a real repository', () => {
     expect(n?.mayBeMoreReasons).toEqual(['shallow']);
     expect(n?.incomplete.map((gap) => gap.cause)).toEqual(['not-seen', 'record-off-line', 'shallow']);
     expect(ledger.rows.some((row) => row.firstSeenAtFirstBaseline)).toBe(false);
+  });
+
+  it('reads the line the same way when the git config shows signatures', async () => {
+    const signed = join(root, 'signed');
+    await git(root, ['init', '--quiet', '--initial-branch=main', signed]);
+    await git(signed, ['config', 'user.name', 'Test User']);
+    await git(signed, ['config', 'user.email', 'test@example.com']);
+    await writeFile(join(signed, '.usabl-evidence.json'), `${JSON.stringify(BASELINE)}\n`, 'utf8');
+    await git(signed, ['add', '.usabl-evidence.json']);
+    await git(signed, ['commit', '--quiet', '-m', 'baseline'], 0);
+    // A commit with a signature header, written as a raw object so no signing tool is needed. With
+    // log.showSignature set, git log prints a check of it ahead of the entry on stdout.
+    const tree = await git(signed, ['rev-parse', 'HEAD^{tree}']);
+    const parent = await git(signed, ['rev-parse', 'HEAD']);
+    const seconds = String((START + 5 * DAY) / 1000);
+    const object =
+      `tree ${tree}\nparent ${parent}\nauthor Test User <test@example.com> ${seconds} +0000\n` +
+      `committer Test User <test@example.com> ${seconds} +0000\n` +
+      'gpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lH\n -----END SSH SIGNATURE-----\n\nsigned\n';
+    await writeFile(join(root, 'signed-commit.txt'), object, 'utf8');
+    const commit = await git(signed, ['hash-object', '-t', 'commit', '-w', join(root, 'signed-commit.txt')]);
+    await git(signed, ['update-ref', 'refs/heads/main', commit]);
+    await git(signed, ['config', 'gpg.format', 'ssh']);
+    await git(signed, ['config', 'log.showSignature', 'true']);
+    await git(signed, ['config', 'log.follow', 'true']);
+    await git(signed, ['config', 'log.decorate', 'full']);
+    await git(signed, ['config', 'color.ui', 'always']);
+
+    const read = await readLedgerSources(makeLedgerGit({ cwd: signed }), makeHistoryGit({ cwd: signed, ref: 'usabl/history' }), 'main');
+    if (read.kind !== 'read') throw new Error(read.message);
+    expect(read.input.head).toBe(commit);
+    expect(read.input.headDate).toBe(dayAt(5));
+    expect(read.input.snapshots.map((snapshot) => snapshot.date)).toEqual([dayAt(0)]);
+    expect(buildLedger(read.input).rows.map((row) => row.daysOpen)).toEqual([5, 5, 5]);
   });
 
   it('refuses a folder that is not a git repository, and a branch that never committed a floor', async () => {
