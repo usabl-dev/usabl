@@ -4,8 +4,9 @@
 
 ### Added
 
-- Design input from Figma. `usabl import figma <file key> --frame <Frame name>=<surface id> --out
-  <file>` reads the accessibility stamps in a Figma file and writes draft requirements, each with
+- Design input from Figma.
+  `usabl import figma <file key> --frame <Frame name>=<surface id> --out <file>`
+  reads the accessibility stamps in a Figma file and writes draft requirements, each with
   `approved: false` and the Figma file, node, and version it came from. Every note it cannot turn
   into a check, such as a speech note, is listed with the reason, never dropped. It never
   overwrites a file. `usabl drift design` lists the approved requirements whose design file
