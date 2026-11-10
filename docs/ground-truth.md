@@ -4765,7 +4765,9 @@ before the idle return, because a docs page can be scanned in a run where no app
 The router fallback joins the segments of a path with `-`, so two paths can give one id: `/a-b`
 and `/a/b` both give `a-b`. Neither route is named. Both are set aside like a route whose derived
 id fails the grammar, so a wide-blast change records each as a `skipped` gap, and every other
-route still runs. `usabl init` refuses the whole draft in that case, names the file and line of
+route still runs. `usabl drift routes` still counts every route set aside as a route the router
+declares: a sidecar that names it reports no removal, and a sidecar that omits it reports it as
+added, so drift never says "No drift detected" for a route check never scans. `usabl init` refuses the whole draft in that case, names the file and line of
 each route that shares an id, and says to change a path or write the sidecar by hand.
 
 **A surface and a discovered route may share an id, but the config has to say so.** Set

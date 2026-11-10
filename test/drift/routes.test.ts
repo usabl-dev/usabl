@@ -134,6 +134,49 @@ describe('computeRoutesDrift', () => {
 });
 
 describe('runRoutesDrift', () => {
+  // /a-b and /a/b both give the screen id a-b, so check sets both aside and names neither. Drift
+  // still counts them as routes the router declares: dropping them read a sidecar that names them
+  // as removals, and one that omits them as "No drift detected" for routes that are never scanned.
+  const collidingRouter = `
+    export const App = () => (
+      <Routes>
+        <Route path="/home" element={<Home />} />
+        <Route path="/a-b" element={<Dash />} />
+        <Route path="/a/b" element={<Nested />} />
+      </Routes>
+    );
+  `;
+
+  it('reports no removal when the sidecar names both colliding routes with ids of their own', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'a-dash', url: '/a-b', entryFile: 'src/Dash.tsx' },
+          { screenId: 'a-nested', url: '/a/b', entryFile: 'src/Nested.tsx' },
+        ],
+      }),
+      'src/router.tsx': collidingRouter,
+    });
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.stdout).toContain('No drift detected');
+    expect(outcome.stdout).not.toContain('Removed routes');
+  });
+
+  it('reports both colliding routes as added when the sidecar omits them', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }] }),
+      'src/router.tsx': collidingRouter,
+    });
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).not.toContain('No drift detected');
+    expect(outcome.stdout).toContain('Added routes');
+    expect(outcome.stdout).toContain('  /a-b');
+    expect(outcome.stdout).toContain('  /a/b');
+  });
+
   it('returns exit 0 and no drift message when routes match', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
