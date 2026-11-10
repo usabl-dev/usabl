@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { propertyValue } from '../../../src/import/figma/kit.js';
 import { readFigmaFile } from '../../../src/import/figma/types.js';
 import { usersScreen } from './users-screen.fixture.js';
 
@@ -15,6 +16,27 @@ describe('readFigmaFile', () => {
     expect(users).not.toHaveProperty('blendMode');
     expect(read).not.toHaveProperty('role');
     expect(read?.components['10:1']).toEqual({ key: 'k-heading-h1', name: 'Level=h1', componentSetId: '10:0' });
+  });
+
+  it('reads a file whose instance has a slot property, and never reads the slot as text', () => {
+    // Figma's published types allow a slot property, whose value is an id object, not text.
+    const slotted = structuredClone(usersScreen);
+    const users = slotted.document.children[0]?.children[0];
+    if (users === undefined || users.type !== 'FRAME') throw new Error('fixture has no Users frame');
+    users.children.push({
+      ...users,
+      id: '6:1',
+      name: 'Card',
+      type: 'INSTANCE',
+      children: [],
+      componentId: '13:1',
+      overrides: [],
+      componentProperties: { 'Content#9:9': { type: 'SLOT', value: { guid: { sessionID: 1, localID: 2 } } } },
+    });
+    const read = readFigmaFile(JSON.parse(JSON.stringify(slotted)));
+    expect(read).not.toBeNull();
+    const card = read?.document.children?.[0]?.children?.[0]?.children?.find((node) => node.id === '6:1');
+    expect(card === undefined ? 'missing' : propertyValue(card, 'Content')).toBeNull();
   });
 
   it.each([

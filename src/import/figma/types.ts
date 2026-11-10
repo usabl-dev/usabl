@@ -3,7 +3,8 @@
  * that shape before anything reads it.
  *
  * The types are kept local so usabl's published types never depend on Figma's package. They are a
- * subset of Figma's GetFileResponse: every field here is one Figma's published types also have.
+ * subset of Figma's GetFileResponse: every field here is one Figma's published types also have, and
+ * a type test holds that every GetFileResponse fits them.
  * Dev Mode annotations are typed as a bare object in Figma's REST types, so their shape follows the
  * Plugin API (label, labelMarkdown) and is to be confirmed on a real design file.
  *
@@ -19,9 +20,13 @@ export interface FigmaRect {
   width: number;
   height: number;
 }
+// The value of a slot property: an id for the slot's content, never text.
+export interface FigmaSlotContentId {
+  guid: { sessionID: number; localID: number };
+}
 export interface FigmaComponentProperty {
   type: string;
-  value: boolean | string;
+  value: boolean | string | FigmaSlotContentId;
 }
 export interface FigmaAnnotation {
   label?: string;
@@ -64,9 +69,15 @@ const annotationSchema = z.object({
   labelMarkdown: z.string().optional(),
 });
 
+// Figma's published types allow a slot id as a value, so a file whose components use slots is
+// still a file usabl can read. Only the id fields are kept.
+const slotContentIdSchema = z
+  .object({ guid: z.object({ sessionID: z.number(), localID: z.number() }) })
+  .transform(({ guid }) => ({ guid: { sessionID: guid.sessionID, localID: guid.localID } }));
+
 const propertySchema = z.object({
   type: z.string(),
-  value: z.union([z.boolean(), z.string()]),
+  value: z.union([z.boolean(), z.string(), slotContentIdSchema]),
 });
 
 // Unknown fields are dropped, so nothing usabl does not read is ever carried along.

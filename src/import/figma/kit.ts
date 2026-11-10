@@ -68,7 +68,7 @@ export function stampKind(node: FigmaNode, file: Pick<FigmaFile, 'components' | 
 /**
  * The value of a component property by its name, or null. Text and boolean properties carry a
  * "#id" suffix in Figma's API, as in "Order ##7:3", and variant properties do not, so both forms
- * match. Names compare without case.
+ * match. Names compare without case. A slot property holds an id, not text, so it reads as null.
  */
 export function propertyValue(node: FigmaNode, name: string): string | null {
   const wanted = name.trim().toLowerCase();
@@ -76,7 +76,7 @@ export function propertyValue(node: FigmaNode, name: string): string | null {
     const base = key.replace(/#[^#]*$/u, '').trim().toLowerCase();
     const plain = key.trim().toLowerCase();
     if (base === wanted || plain === wanted) {
-      return String(property.value);
+      return typeof property.value === 'object' ? null : String(property.value);
     }
   }
   return null;
