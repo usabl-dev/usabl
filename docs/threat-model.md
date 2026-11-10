@@ -614,6 +614,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
 
+- Voicing lane: the silent change rule drives no step of its own, reads the accessibility tree the
+  browser computes over CDP and resolves a click step's control in an isolated world, and shows no
+  values and no removed node's name, so page script cannot answer for it and a deleted row's data
+  does not reach output.
+
 **Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
 not run the closed shadow root check, so a change outside a modal there can still count as heard.
 One page operation still runs in the page's own world: the element count that
@@ -937,9 +942,14 @@ What runs where, and what each job holds:
 
 `actions: read` is for the artifact fetch only: it lists the run's artifacts and downloads one.
 
-- **`usabl-engine`** checks out `usabl-dev/usabl` at the pinned commit. The draft ships the
-  sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`, which the operator replaces with a full commit SHA,
-  so the engine that judges a pull request is code the operator chose, never the pull request's.
+- **`usabl-engine`** checks out `usabl-dev/usabl` at the pinned commit. The installer writes
+  the commit its own build came from, read from `dist/build-info.json`, only when that is a full
+  commit SHA from a clean tree. Otherwise it writes the sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`,
+  which the operator replaces with a full commit SHA. Either way the engine that judges a pull
+  request is code the operator installed or chose, never the pull request's. The pin can only
+  fail closed: the sentinel, or a commit that cannot be fetched from `usabl-dev/usabl`, fails the checkout and
+  blocks the gate. The installer reads no network to find a commit, and it never moves a pin the
+  operator already set.
   The engine repository is public, so the checkout needs no token. The job builds the engine,
   packs `package.json`, `dist`, and the production `node_modules` into one archive, and
   publishes its sha256 as the job output `engine_digest`, and the digest of the tree that

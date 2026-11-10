@@ -13,6 +13,7 @@ import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { USABL_HISTORY_WORKFLOW, USABL_HISTORY_WORKFLOW_PATH } from '../../src/install/history-ci.js';
 import {
   CLAUDE_SKILL_CONTENTS,
   CLAUDE_SKILL_PATH,
@@ -401,7 +402,11 @@ describe('collectDoctorReport', () => {
   it('reports every surface wired for a fully wired repo', async () => {
     const reports = await collectDoctorReport(
       doctorDeps({
-        fs: readOnlyFs(FULLY_WIRED_FILES),
+        // A fully wired repo also has the history workflow, pinned to the same commit as the gate.
+        fs: readOnlyFs({
+          ...FULLY_WIRED_FILES,
+          [USABL_HISTORY_WORKFLOW_PATH]: USABL_HISTORY_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA),
+        }),
         gh: GH_VERIFIED,
         configPath: 'usabl.config.json',
         env: WIRED_SESSION,

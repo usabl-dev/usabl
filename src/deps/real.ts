@@ -5,7 +5,8 @@
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import { readFullAxTree } from './ax-tree.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -388,10 +389,23 @@ const LIVE_CAPTURE_IMPL = `
   // contract step reads it without draining, so a live region whose text changes late, with no
   // element added and no request sent, still holds the wait open.
   let lastRecordedAt = null;
-  const push = (value, start) => {
+  // Each live region gets a number the first time it is recorded, the same on every drain of this
+  // document, so a check can tell which region wrote a text.
+  const regionIds = new WeakMap();
+  let nextRegion = 1;
+  const regionOf = (host) => {
+    let id = regionIds.get(host);
+    if (id === undefined) {
+      id = nextRegion;
+      nextRegion += 1;
+      regionIds.set(host, id);
+    }
+    return id;
+  };
+  const push = (value, start, host, removalOnly) => {
     const text = toText(value);
     if (text !== null) {
-      buffer.push({ text, start });
+      buffer.push({ text, start, region: regionOf(host), removalOnly });
       lastRecordedAt = performance.now();
     }
   };
@@ -405,24 +419,29 @@ const LIVE_CAPTURE_IMPL = `
   window.__usablDrain = () => {
     const entries = buffer.splice(0, buffer.length);
     const texts = [];
+    const sources = [];
     let undecidable = null;
     if (entries.length === 0) {
-      return { texts, undecidable };
+      return { texts, undecidable, sources };
     }
     const modals = findOpenModals();
+    const keep = (entry) => {
+      texts.push(entry.text);
+      sources.push({ region: entry.region, removalOnly: entry.removalOnly });
+    };
     for (const entry of entries) {
       if (liveResolver.hiddenInChain(flatChain(entry.start).map(hiddenFacts))) {
         continue;
       }
       if (modals.size === 0) {
-        texts.push(entry.text);
+        keep(entry);
       } else if (!entry.start.isConnected) {
         undecidable = 'changed-element-removed';
       } else if (!outsideModals(flatChain(entry.start), modals)) {
-        texts.push(entry.text);
+        keep(entry);
       }
     }
-    return { texts, undecidable };
+    return { texts, undecidable, sources };
   };
   const observer = new MutationObserver((mutations) => {
     // Text the parser is still writing is the page being built, not an announcement, and the
@@ -454,7 +473,11 @@ const LIVE_CAPTURE_IMPL = `
       // reader says nothing for text under aria-hidden, inert, hidden, display none, or visibility
       // hidden, so recording it would let a flow requirement pass on words no one heard.
       if (host && host.getRootNode() === target.getRootNode() && changeExposed(mutation, host)) {
-        push(exposedText(host), target);
+        // A change that only removed nodes leaves the region holding what is left, which no one
+        // announced. It is recorded, and marked, so the flow keeps reading it as before and a check
+        // that asks what an action said can leave it out.
+        const removalOnly = mutation.type === 'childList' && mutation.addedNodes.length === 0 && mutation.removedNodes.length > 0;
+        push(exposedText(host), target, host, removalOnly);
       }
     }
   });
@@ -495,9 +518,11 @@ const DRAIN_FUNCTION = `function () {
   }
   const drained = drain();
   const texts = drained !== null && typeof drained === 'object' && Array.isArray(drained.texts) ? drained.texts : [];
+  const sources = drained !== null && typeof drained === 'object' && Array.isArray(drained.sources) ? drained.sources : null;
   return {
     texts: texts.filter((entry) => typeof entry === 'string'),
     undecidable: drained !== null && typeof drained === 'object' ? drained.undecidable : null,
+    sources: sources !== null && sources.length === texts.length && texts.every((entry) => typeof entry === 'string') ? sources : null,
   };
 }`;
 
@@ -517,16 +542,36 @@ async function liveRecordQuiet(cdp: CDPSession): Promise<boolean> {
 
 const UNDECIDABLE_REASONS: ReadonlySet<string> = new Set<AnnouncementUndecidable>(['closed-shadow-modal', 'changed-element-removed']);
 
-async function drainCapture(cdp: CDPSession): Promise<AnnouncementDrain> {
+// The sources the capture returned, or null when any entry is not well formed, so a malformed
+// record reads as unknown rather than as a region.
+function readSources(value: unknown, count: number): AnnouncementSource[] | null {
+  if (!Array.isArray(value) || value.length !== count) {
+    return null;
+  }
+  const sources: AnnouncementSource[] = [];
+  for (const entry of value) {
+    const region = readNumber(getProp(entry, 'region'));
+    const removalOnly = getProp(entry, 'removalOnly');
+    if (region === null || typeof removalOnly !== 'boolean') {
+      return null;
+    }
+    sources.push({ region, removalOnly });
+  }
+  return sources;
+}
+
+async function drainCapture(cdp: CDPSession): Promise<AnnouncementSourcesDrain> {
   const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
   const texts = getProp(drained, 'texts');
   const undecidable = getProp(drained, 'undecidable');
   if (undecidable !== null && (typeof undecidable !== 'string' || !UNDECIDABLE_REASONS.has(undecidable))) {
     throw new Error('the browser could not read announcements: the capture returned an unknown reason');
   }
+  const kept = Array.isArray(texts) ? texts.filter((entry): entry is string => typeof entry === 'string') : [];
   return {
-    texts: Array.isArray(texts) ? texts.filter((entry): entry is string => typeof entry === 'string') : [],
+    texts: kept,
     undecidable: undecidable as AnnouncementUndecidable | null,
+    sources: readSources(getProp(drained, 'sources'), kept.length),
   };
 }
 
@@ -968,6 +1013,91 @@ export async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: s
     return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
   } finally {
     await cdp.send('Runtime.releaseObjectGroup', { objectGroup: SHADOW_NODE_GROUP }).catch(() => undefined);
+  }
+}
+
+/**
+ * Whether a CSS selector holds a combinator: a space, `>`, `+`, or `~` between two compound
+ * selectors. Text inside quotes, attribute brackets, and an nth formula such as `2n + 1` is not
+ * one. A combinator in any other place counts, inside `:is()` too, so the answer leans to true.
+ * Exported for its tests.
+ */
+export function selectorHasCombinator(selector: string): boolean {
+  const bare = selector
+    // An escaped character is part of a name.
+    .replace(/\\[\s\S]/gu, 'a')
+    .replace(/"[^"]*"|'[^']*'/gu, 'a')
+    .replace(/\[[^\]]*\]/gu, '[a]')
+    .replace(/:nth-[a-z-]+\(\s*(?:even|odd|[-+0-9n\s]*)\s*\)/giu, ':nth()')
+    // Space next to a comma, a parenthesis, or a combinator sign is not a combinator itself.
+    .replace(/\s*([,()>+~])\s*/gu, '$1')
+    .trim();
+  return /[\s>+~]/u.test(bare);
+}
+
+// The element a click step's selector names, looked up in the document and in every open shadow
+// root, or null. The click pierces open shadow roots, and document.querySelector does not, so a
+// lookup in the document alone would miss a control the click reaches. A selector the browser
+// cannot parse is null, never a guess. Matches in the document and in a shadow root together are
+// null too, because the click's order across them is its own. A selector with a combinator on a
+// page with any open shadow root is null as well: the click engine can match it across a shadow
+// boundary, such as a button inside a shadow root under a row, and the browser's own query
+// cannot, so the element found may not be the one the click takes. Returned as an object, not a
+// value, so its node can be described.
+const CONTROL_ELEMENT_FUNCTION = `function (query, hasCombinator) {
+  const scopes = [document];
+  let first = null;
+  let count = 0;
+  let inShadow = false;
+  for (let index = 0; index < scopes.length; index += 1) {
+    const scope = scopes[index];
+    let matches;
+    try {
+      matches = scope.querySelectorAll(query);
+    } catch (_error) {
+      return null;
+    }
+    if (matches.length > 0) {
+      if (first === null) first = matches[0];
+      count += matches.length;
+      if (scope !== document) inShadow = true;
+    }
+    for (const element of scope.querySelectorAll('*')) {
+      if (element.shadowRoot) scopes.push(element.shadowRoot);
+    }
+  }
+  if (hasCombinator && scopes.length > 1) return null;
+  return count === 0 || (inShadow && count > 1) ? null : first;
+}`;
+
+const CONTROL_NODE_GROUP = 'usabl-control-node';
+
+/**
+ * The backend node of the element a click step's selector names, found in the read world so page
+ * script cannot answer for it. Null when the selector names no one element; see Page.controlNodeId.
+ */
+async function backendNodeIdForControl(cdp: CDPSession, selector: string): Promise<number | null> {
+  const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the control a step acts on');
+  try {
+    const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `(${CONTROL_ELEMENT_FUNCTION})(${JSON.stringify(selector)}, ${String(selectorHasCombinator(selector))})`,
+      contextId,
+      objectGroup: CONTROL_NODE_GROUP,
+      includeCommandLineAPI: false,
+    });
+    const exception = getProp(evaluated, 'exceptionDetails');
+    if (exception !== undefined) {
+      const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+      throw new Error(`the browser could not read the control a step acts on: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+    }
+    const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
+    if (objectId === null) {
+      return null;
+    }
+    const described: unknown = await cdp.send('DOM.describeNode', { objectId });
+    return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: CONTROL_NODE_GROUP }).catch(() => undefined);
   }
 }
 
@@ -2233,6 +2363,14 @@ function wrapPage(
     networkQuietFor: (windowMs) => network.networkQuietFor(windowMs) && (workers === null || workers.quietFor(windowMs)),
     networkBusyDetail: () => workers?.busyDetail() ?? null,
   };
+  // The drain both drain methods read. A modal dialog in a closed shadow root makes it undecidable.
+  const drainSources = async (): Promise<AnnouncementSourcesDrain> => {
+    const drained = await drainCapture(cdp);
+    if (drained.undecidable === null && (await closedShadowModalOpen(cdp))) {
+      return { ...drained, undecidable: 'closed-shadow-modal' };
+    }
+    return drained;
+  };
   const page: Page = {
     async gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> {
       return waitForRendered(readiness, readyTimeoutMs, readyWhen);
@@ -2297,11 +2435,11 @@ function wrapPage(
       return (await drainCapture(cdp)).texts;
     },
     async drainAnnouncementRecord(): Promise<AnnouncementDrain> {
-      const drained = await drainCapture(cdp);
-      if (drained.undecidable === null && (await closedShadowModalOpen(cdp))) {
-        return { ...drained, undecidable: 'closed-shadow-modal' };
-      }
-      return drained;
+      const { texts, undecidable } = await drainSources();
+      return { texts, undecidable };
+    },
+    async drainAnnouncementSources(): Promise<AnnouncementSourcesDrain> {
+      return drainSources();
     },
     async activeNode(): Promise<AxNode | null> {
       const focus = await readFocus(cdp);
@@ -2322,6 +2460,16 @@ function wrapPage(
     async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'unreadable' ? focus.reason : null;
+    },
+    async focusedNodeId(): Promise<number | null> {
+      const focus = await readFocus(cdp);
+      return focus.kind === 'element' ? focus.backendNodeId : null;
+    },
+    async controlNodeId(selector: string): Promise<number | null> {
+      return backendNodeIdForControl(cdp, selector);
+    },
+    async fullAxTree(): Promise<AxTreeRead> {
+      return readFullAxTree((method, params) => cdp.send(method as never, params as never));
     },
     async activeModalDialogs(): Promise<string[]> {
       const paths = await callInWorld(cdp, READ_WORLD, 'read the modal dialogs that hold focus', ACTIVE_MODAL_DIALOGS_FUNCTION);

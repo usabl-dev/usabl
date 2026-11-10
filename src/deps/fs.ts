@@ -15,7 +15,10 @@ function isMissingFile(err: unknown): boolean {
   // ENOENT is a missing path. EISDIR is a directory read: a guarded-path prefix can
   // resolve to a directory, and reading it has no file bytes to disclose. Both fail
   // closed to null so the guard treats them as absent content, never a hard crash.
-  return code === 'ENOENT' || code === 'EISDIR';
+  // ENOTDIR is a read below a file, such as src/App.tsx/package.json. A file holds no files, so
+  // that path cannot exist: it is a missing file, the same as ENOENT. git show reads such a path
+  // at a ref as missing too, so the tree and the trusted side agree.
+  return code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR';
 }
 
 export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {

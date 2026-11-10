@@ -34,6 +34,20 @@ describe('makeFsGlob', () => {
     await expect(fsGlob.readFile('src')).resolves.toBeNull();
   });
 
+  it('returns null for a path under a file instead of throwing ENOTDIR', async () => {
+    // src/App.tsx is a file, so nothing can sit below it. The disk refuses the read with ENOTDIR.
+    // That is a missing file, the same as ENOENT, never a crash that stops the run.
+    const fsGlob = makeFsGlob({ cwd: workspacePath });
+
+    await expect(fsGlob.readFile('src/App.tsx/package.json')).resolves.toBeNull();
+  });
+
+  it('matches nothing for a glob under a file', async () => {
+    const fsGlob = makeFsGlob({ cwd: workspacePath });
+
+    await expect(fsGlob.glob(['src/App.tsx/package.json', 'src/App.tsx/*.json'])).resolves.toEqual([]);
+  });
+
   it('matches configured globs relative to the adapter cwd', async () => {
     const fsGlob = makeFsGlob({ cwd: workspacePath });
     const matches = await fsGlob.glob(['src/**/*.tsx']);

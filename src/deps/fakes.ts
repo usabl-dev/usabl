@@ -78,6 +78,11 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     async drainAnnouncementRecord(this: Page) {
       return { texts: await this.drainAnnouncements(), undecidable: null };
     },
+    // A fake page cannot say which region wrote a text, so the sources are unknown. It drains
+    // through the page's own drainAnnouncementRecord, so a test that scripts that one scripts this.
+    async drainAnnouncementSources(this: Page) {
+      return { ...(await this.drainAnnouncementRecord()), sources: null };
+    },
     activeNode: async () => null,
     activePath: async () => 'body',
     // A fake page has no DOM nodes, so it has no key for one.
@@ -86,6 +91,13 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeFocusUnreadable: async () => null,
     // Nor any modal dialog, so no dialog holds focus.
     activeModalDialogs: async () => [],
+    // A fake page has no DOM, so no element has a backend node id to report.
+    focusedNodeId: async () => null,
+    // Nor one for the control a click step names.
+    controlNodeId: async () => null,
+    // Nor an accessibility tree. The empty tree never changes on its own, so two reads around an
+    // action compare equal unless a test scripts a change.
+    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),
     axAt: async () => null,
     // A fake page has no shadow roots and no markup, so neither read finds an element.
     axInShadowRoot: async () => null,

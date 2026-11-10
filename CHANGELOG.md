@@ -4,6 +4,41 @@
 
 ### Added
 
+- The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
+  watches each `click` and `activate` step that a flow requirement or a voice requirement already
+  drives, reads the whole accessibility tree before the step and after its settle window, and
+  reports a preview finding, severity serious, when the page changed, nothing was announced, and
+  focus did not move to a named control. A disclosure, a tab, and a sort header speak for
+  themselves. A step it cannot judge, such as one that navigates, never settles, or names no one
+  control, is an `unverified` preview gap that names the reason. It drives no step of its own,
+  makes no network call, never shows a value or a removed node's name, and never changes a
+  verdict. With no flow or voice requirement it does not run. Under a failing flow it adds
+  nothing for the step the flow judged. The flow driver now reports a step kind it does not run
+  instead of skipping it. `usabl brief` names the rule with flow and voice requirements.
+
+- `usabl install --ci` writes workflows that run as written. The build records the commit it
+  came from in `dist/build-info.json`, which the package carries, and `install --ci` and
+  `install --docs-ci` pin the engine to that commit when it is a full SHA from a clean tree. A
+  build outside git or from a tree with changes keeps the `PIN_TO_A_TRUSTED_USABL_COMMIT`
+  placeholder, and the report says why and names the line to edit in each file. A placeholder
+  or a commit that cannot be fetched from `usabl-dev/usabl` fails the engine checkout, so the
+  gate blocks. `prepublishOnly` refuses to publish a build whose record lacks a full commit SHA
+  and `clean: true`. Running the install again fills the pin into this version's unedited
+  placeholder draft and never moves a pin someone set. The history workflow runs on the app's
+  default branch, which the installer reads from the clone's `origin/HEAD` and names in its
+  report; when git cannot name a plain branch it writes main and prints a step to change it.
+  The history workflow starts the app on the host and port of `appBaseUrl` in the default
+  branch's `usabl.config.json` instead of port 5173, and fails closed when that is not an http
+  loopback origin with a port. The install report reads the same origin, or before
+  `usabl init` the port from the dev script, the Vite config, or the webpack dev config, and
+  never guesses one. It ends with only the steps still needed: merge `usabl.config.json` (and
+  `usabl.routes.json`) to the default branch first, because the judge reads them at the base
+  commit, unless git shows they are already there; then commit, add the branch rule, and open
+  a pull request, with a pin, init, dev script, or branch name step in front when one is
+  needed. `usabl doctor` reports a history workflow that still holds the placeholder. No
+  workflow needs a secret, and every action stays pinned to a full commit SHA. The written
+  workflows have not yet run on a GitHub runner with no edits.
+
 - `usabl brief` prints what an agent reads before it starts a task: the screens the task's
   files reach and how each is reached, the checks that apply to each screen, the ones that do
   not and why, and what counts as done. `--files <path> ...` names the task's files; with no
@@ -143,6 +178,12 @@
   `checkPage` does not run the engines.
 
 ### Fixed
+
+- A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
+  surface no longer stops the run. The search for the app's `package.json` read a file such as
+  `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
+  with ENOTDIR, and the run ended with no verdict. The search now starts from the file's folder,
+  and a read of a path below a file returns nothing, the same as a missing file.
 
 - A keyboard walk cut short by a page script is now a truncation. A focus handler that blurs a
   control, or a keydown handler that stops Tab and drops focus to the body, ended the walk as
@@ -793,6 +834,16 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- Flow requirements now read each step at its own time. A flow waits for the page to settle
+  after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and
+  drains after every step. Each step's text is judged against the page as it was after that step,
+  where before the flow drained once after its last step. This can change a flow verdict, in both
+  directions. Text written inside a dialog that a later step closes is now heard, where it was
+  dropped. Text written outside an open modal that a later step closes is now dropped, where it
+  was heard. An announcement that lands shortly after the click is now heard, where it was
+  missed. A step that loads a new document, or whose target is gone after the settle wait, makes
+  the flow a `not-covered` gap.
 
 - `usabl install --overlay` now detects whether the app uses Vite or webpack, from config
   files and `package.json` scripts. In a webpack app it prints the two lines to add to the

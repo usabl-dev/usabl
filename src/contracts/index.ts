@@ -579,11 +579,52 @@ export interface AnnouncementDrain {
   undecidable: AnnouncementUndecidable | null;
 }
 
+// Where one drained text came from. region names the live region that wrote it, the same number
+// for the same region on every drain of one document. removalOnly is true when the change was only
+// a removal inside the region, which is how a toast that dismisses itself shows up: the record
+// then holds the text the region has left, which no one announced.
+export interface AnnouncementSource {
+  region: number;
+  removalOnly: boolean;
+}
+
+// A drain with the source of each text, in the same order as texts. sources is null when the page
+// cannot say, so a check that needs the sources reads that as unknown, never as heard.
+export interface AnnouncementSourcesDrain extends AnnouncementDrain {
+  sources: AnnouncementSource[] | null;
+}
+
 export interface AxNode {
   name: string | null;
   role: string | null;
   states: Record<string, unknown>;
 }
+// One node of the whole accessibility tree, as Page.fullAxTree reads it. The browser computes the
+// tree, so no page script world takes part. Values are never read: a field's value, and the text
+// inside an editable field, are left out, so they cannot reach evidence.
+export interface AxTreeNode {
+  // The DOM backend node id, which names the same node across two reads of one document.
+  nodeId: number;
+  // The nearest ancestor that has a DOM node, or null at the top.
+  parentId: number | null;
+  role: string | null;
+  // Null for an ignored node, which assistive technology does not perceive.
+  name: string | null;
+  // Ignored nodes are kept so the parent chain stays whole. Comparisons skip them.
+  ignored: boolean;
+  // Only the states a change is judged on: checked, expanded, pressed, selected, invalid, and sort,
+  // each as text. A state the node does not have is absent.
+  states: Record<string, string>;
+  // aria-busy is true on this node.
+  busy: boolean;
+  // The nodes its aria-controls names that the browser exposes, by backend node id.
+  controls: number[];
+}
+// What one read of the whole accessibility tree returned. A read that needs more than the budget
+// in time or in nodes is not a tree: a check that compares trees cannot use it, and says so.
+export type AxTreeRead =
+  | { kind: 'tree'; documentNodeId: number | null; nodes: AxTreeNode[] }
+  | { kind: 'over-budget'; limit: 'time' | 'nodes' };
 export interface ElementRef {
   selector: string;
 }
@@ -753,6 +794,8 @@ export interface Page {
   // The same drain, with the reason the texts cannot be trusted to be what a screen reader heard,
   // or null when they can. See AnnouncementDrain.
   drainAnnouncementRecord(): Promise<AnnouncementDrain>;
+  // The same drain, with where each text came from. See AnnouncementSourcesDrain.
+  drainAnnouncementSources(): Promise<AnnouncementSourcesDrain>;
   // The accessibility node of the element that has focus, followed into open shadow roots and
   // same-origin frames. Null when the node is missing or ignored, and null when activeFocusUnreadable
   // reports a reason, because the node read then would be the host or the frame, not the control.
@@ -776,6 +819,23 @@ export interface Page {
   // holds the content slotted into it, and it climbs out of same-origin frames. Empty when no such
   // dialog holds focus, and when nothing has focus.
   activeModalDialogs(): Promise<string[]>;
+  // The DOM backend node id of the element that has focus, followed into open shadow roots and
+  // same-origin frames. Null when nothing has focus, and null when activeFocusUnreadable reports a
+  // reason, because the element read then would be the host or the frame, not the control.
+  focusedNodeId(): Promise<number | null>;
+  // The DOM backend node id of the element a click step's CSS selector names, read in an isolated
+  // world, so page script cannot answer for it. The query looks in the document and in every open
+  // shadow root, as the click does. Null when nothing matches, when the selector is not CSS the
+  // browser parses, and when matches sit both in the document and in a shadow root, because the
+  // click's own order across those cannot be read. Null too when the selector holds a combinator
+  // and the page has any open shadow root, because the click can match a combinator across a
+  // shadow boundary and the browser's own query cannot. Several matches in the document alone
+  // resolve to the first, which is the one the click takes.
+  controlNodeId(selector: string): Promise<number | null>;
+  // The whole accessibility tree of the main frame, read from the browser over
+  // Accessibility.getFullAXTree. It covers open shadow roots, because the browser builds the tree
+  // from the flat tree, and it does not cover child frames. See AxTreeRead for the budget.
+  fullAxTree(): Promise<AxTreeRead>;
   axAt(selector: string): Promise<AxNode | null>;
   // The accessibility node of the first element innerSelector matches inside the open shadow root
   // of the first element hostSelector matches in the document. A web component's inner control,

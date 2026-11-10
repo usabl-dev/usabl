@@ -52,6 +52,15 @@ describe('makeGitReader', () => {
     await expect(git.show('HEAD', 'missing.tsx')).resolves.toBeNull();
   });
 
+  it('returns null for a path under a file at the ref', async () => {
+    // screen.tsx is a file at HEAD, so nothing can sit below it. git reports that path as missing,
+    // the same as any other missing path, so the trusted side reads it as absent.
+    const git = makeGitReader({ cwd: repoPath });
+
+    await expect(git.show('HEAD', 'screen.tsx/package.json')).resolves.toBeNull();
+    await expect(git.show('HEAD', 'src/gate/index.ts/package.json')).resolves.toBeNull();
+  });
+
   it('returns stable tree metadata for tracked and untracked working files without changing the real index', async () => {
     const git = makeGitReader({ cwd: repoPath });
     const indexBefore = await runGit(repoPath, ['diff', '--cached', '--name-only']);

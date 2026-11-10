@@ -98,6 +98,16 @@ new UsablWebpackPlugin({ cwd: __dirname }),
 
 The plugin does nothing unless webpack runs in development mode.
 
+`install --ci` writes the workflows with the engine pinned to the commit your usabl copy
+was built from, so a clean build of a release tag needs no hand edit. The build records
+that commit in `dist/build-info.json`. A dirty tree is one with an uncommitted change or
+any untracked file that git does not ignore. If the copy was built from a dirty tree, or
+outside git, the record has `clean: false` or no commit, the pin stays a placeholder, and
+the command names the line to edit. A publish from such a build stops: `prepublishOnly`
+fails unless the record holds a full commit SHA and `clean: true`. The workflows need no secret, and they take the app's host and port from
+`appBaseUrl` in `usabl.config.json`. The command ends with only the steps still needed. See
+the [CI gate guide](docs/guides/ci-gate.md).
+
 To try usabl on an app with known barriers first, use the
 [usabl-app](https://github.com/usabl-dev/usabl-app) sample.
 
@@ -134,9 +144,11 @@ Known limits:
   and save one (it needs `.usabl/` in `.gitignore`), or set `USABL_STORAGE_STATE`. usabl
   detects many sign-in pages and reports them as gaps, but not every kind.
 - The CI workflow that `usabl install --ci` writes builds the engine from a commit of
-  this repository that you pin. It builds the pull request in a job with no secrets and
-  judges the built app in a separate job. So the app must build to static files, and
-  `appBaseUrl` must be a loopback address with a port, such as `http://127.0.0.1:5173`.
+  this repository, pinned to the commit your copy was built from. It builds the pull
+  request in a job with no secrets and judges the built app in a separate job. So the app
+  must build to static files, and `appBaseUrl` must be a loopback http address with a
+  port, such as `http://127.0.0.1:5173`. The workflow as this version writes it has not
+  yet run on a GitHub runner with no edits.
 
 ## Documentation
 

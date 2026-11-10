@@ -4,12 +4,15 @@
  * This keeps interaction evidence honest while the gate remains the only verdict authority.
  */
 import type {
+  AnnouncementDrain,
+  AnnouncementSourcesDrain,
   AnnouncementToken,
   Page,
   Step,
   StepRunner,
   TranscriptStop,
 } from '../../contracts/index.js';
+import type { StepObserver } from '../../voicing/silent-change.js';
 
 function tokenFromName(name: string): AnnouncementToken {
   return { kind: 'name', text: name, fromTree: true, source: 'ax-tree' };
@@ -74,10 +77,25 @@ export interface StepRunnerOptions {
   // application, and a settle wait of at least 1.5 seconds on each of up to 200 stops would spend
   // the walk's whole budget.
   settleAfterEachStep?: boolean;
+  // Reads around each step the runner drives, for a check that needs no contract of its own, such
+  // as the silent change rule. It is told about every step, reads only, and never throws. With an
+  // observer, each drain also says where each text came from, and the transcript reads only its
+  // texts and its undecidable reason, the same as without one.
+  observer?: StepObserver;
 }
 
 export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRunner {
   const settle = options.settleAfterEachStep === true;
+  const observer = options.observer;
+  // The drain an observer reads carries the source of each text. Without one, the drain is the
+  // one the runner has always taken.
+  const drainRecord = async (page: Page): Promise<{ drain: AnnouncementDrain; sourced: AnnouncementSourcesDrain | null }> => {
+    if (observer === undefined) {
+      return { drain: await page.drainAnnouncementRecord(), sourced: null };
+    }
+    const sourced = await page.drainAnnouncementSources();
+    return { drain: sourced, sourced };
+  };
   return {
     async run(page: Page, steps: Step[]): Promise<TranscriptStop[]> {
       await page.armAnnouncementCapture();
@@ -85,47 +103,19 @@ export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRun
         // The capture runs for the life of the page, so it still holds what earlier checks caused,
         // such as a flow requirement that clicked and never drained. Left in, it would land in the
         // first window and could satisfy an obligation this contract's steps never caused.
-        await page.drainAnnouncementRecord();
+        const earlier = await drainRecord(page);
+        observer?.start(earlier.sourced);
       }
       const stops: TranscriptStop[] = [];
 
       for (const [index, step] of steps.entries()) {
-        await executeStep(page, step);
-        const settled = settle ? await page.settleAfterAction() : null;
-        const elementPath = await page.activePath();
-        const node = await page.activeNode();
-        const focusUnreadable = await page.activeFocusUnreadable();
-        const onBody = await page.activeElementIs('body');
-        const drain = settle ? await page.drainAnnouncementRecord() : { texts: await page.drainAnnouncements(), undecidable: null };
-        const liveText = drain.texts;
-        const announcement: AnnouncementToken[] = [];
-
-        if (node !== null) {
-          if (node.name !== null) {
-            announcement.push(tokenFromName(node.name));
-          }
-          if (node.role !== null) {
-            announcement.push(tokenFromRole(node.role));
-          }
-          announcement.push(...stateTokens(node.states));
-        }
-
-        for (const text of liveText) {
-          announcement.push(tokenFromLive(text));
-        }
-
-        const stop: TranscriptStop = { index, elementPath, announcement };
-        if (focusUnreadable !== null) {
-          stop.focusUnreadable = focusUnreadable;
-        }
-        if (onBody) {
-          stop.onBody = true;
-        }
-        if (settled !== null && !settled.settled) {
-          stop.unsettled = { waitedMs: settled.waitedMs };
-        }
-        if (drain.undecidable !== null) {
-          stop.drainUndecidable = drain.undecidable;
+        await observer?.before(page, step, index);
+        let stop: TranscriptStop;
+        try {
+          stop = await runOneStep(page, step, index);
+        } catch (error) {
+          observer?.threw(step, index, error);
+          throw error;
         }
         stops.push(stop);
       }
@@ -133,6 +123,48 @@ export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRun
       return stops;
     },
   };
+
+  async function runOneStep(page: Page, step: Step, index: number): Promise<TranscriptStop> {
+    await executeStep(page, step);
+    const settled = settle ? await page.settleAfterAction() : null;
+    const elementPath = await page.activePath();
+    const node = await page.activeNode();
+    const focusUnreadable = await page.activeFocusUnreadable();
+    const onBody = await page.activeElementIs('body');
+    const { drain, sourced } = settle ? await drainRecord(page) : { drain: { texts: await page.drainAnnouncements(), undecidable: null }, sourced: null };
+    const liveText = drain.texts;
+    const announcement: AnnouncementToken[] = [];
+
+    if (node !== null) {
+      if (node.name !== null) {
+        announcement.push(tokenFromName(node.name));
+      }
+      if (node.role !== null) {
+        announcement.push(tokenFromRole(node.role));
+      }
+      announcement.push(...stateTokens(node.states));
+    }
+
+    for (const text of liveText) {
+      announcement.push(tokenFromLive(text));
+    }
+
+    const stop: TranscriptStop = { index, elementPath, announcement };
+    if (focusUnreadable !== null) {
+      stop.focusUnreadable = focusUnreadable;
+    }
+    if (onBody) {
+      stop.onBody = true;
+    }
+    if (settled !== null && !settled.settled) {
+      stop.unsettled = { waitedMs: settled.waitedMs };
+    }
+    if (drain.undecidable !== null) {
+      stop.drainUndecidable = drain.undecidable;
+    }
+    await observer?.after(page, step, index, { settle: settled, drain: sourced });
+    return stop;
+  }
 }
 
 export function makeStepRunner(options: StepRunnerOptions = {}): StepRunner {
