@@ -326,6 +326,50 @@ const LIVE_CAPTURE_IMPL = `
     }
     return found;
   };
+  // Whether an element takes itself and all it holds out of the accessibility tree: aria-hidden,
+  // inert, the hidden attribute, a closed dialog, or display none. Text hidden only on screen, by
+  // PatternFly's screen-reader class, a clip rectangle, a box of zero size, or opacity, stays in
+  // the tree and every screen reader speaks it, so none of those counts.
+  const hidesSubtree = (element) =>
+    liveResolver.hiddenInChain([hiddenFacts(element)]) || getComputedStyle(element).display === 'none';
+  // Whether a node is in the accessibility tree: nothing on its flat-tree walk hides it, and a text
+  // node's element is not visibility hidden. Visibility is inherited and a child can set it back
+  // to visible, so it is read on the text's own element rather than on the walk.
+  const nodeExposed = (node) => {
+    const element = node instanceof Element ? node : node.parentElement;
+    if (!element || flatChain(element).some(hidesSubtree)) {
+      return false;
+    }
+    return node instanceof Element || getComputedStyle(element).visibility === 'visible';
+  };
+  // The text of a subtree that is in the accessibility tree. The caller has checked the node
+  // itself; this leaves out every part below it that is hidden.
+  const exposedText = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const element = node.parentElement;
+      return element && getComputedStyle(element).visibility === 'visible' ? node.data : '';
+    }
+    if (!(node instanceof Element) || hidesSubtree(node)) {
+      return '';
+    }
+    let text = '';
+    for (const child of node.childNodes) {
+      text += exposedText(child);
+    }
+    return text;
+  };
+  // Whether a change put text a screen reader can reach into the region. Added nodes that are all
+  // out of the accessibility tree say nothing, and a changed text node out of it says nothing. A
+  // change that only removed nodes is read as before, by the region's text after it.
+  const changeExposed = (mutation, host) => {
+    if (mutation.type === 'characterData') {
+      return nodeExposed(mutation.target);
+    }
+    if (mutation.addedNodes.length === 0) {
+      return !flatChain(host).some(hidesSubtree);
+    }
+    return [...mutation.addedNodes].some((node) => nodeExposed(node) && exposedText(node).trim().length > 0);
+  };
   const buffer = [];
   const toText = (value) => {
     const normalized = (value ?? '').trim();
@@ -396,8 +440,13 @@ const LIVE_CAPTURE_IMPL = `
       // requirement matches the text exactly, so recording it could pass on words no screen
       // reader spoke for this change. The change is dropped instead: hearing less can only fail a
       // requirement, never pass one.
-      if (host && host.getRootNode() === target.getRootNode()) {
-        push(host.textContent, target);
+      //
+      // Only text in the accessibility tree is recorded: a change whose added text is all hidden
+      // from it is dropped, and the region's text leaves out every part hidden from it. A screen
+      // reader says nothing for text under aria-hidden, inert, hidden, display none, or visibility
+      // hidden, so recording it would let a flow requirement pass on words no one heard.
+      if (host && host.getRootNode() === target.getRootNode() && changeExposed(mutation, host)) {
+        push(exposedText(host), target);
       }
     }
   });

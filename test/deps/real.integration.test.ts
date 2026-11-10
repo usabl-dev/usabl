@@ -635,6 +635,111 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  describe('which added text the capture hears', () => {
+    // PatternFly's screen-reader class: hidden on screen, read by every screen reader.
+    const PF_SCREEN_READER_CSS =
+      '.pf-v6-screen-reader { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; ' +
+      'clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }';
+    // The click writes the given markup into a polite region, and "Heard" into another, so an
+    // empty list cannot pass by the capture not running.
+    function addedTextPage(added: string, regionStart = ''): string {
+      return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title>
+        <style>${PF_SCREEN_READER_CSS}</style></head><body>
+        <main><button type="button" id="save">Save</button>
+        <div aria-live="polite" id="control"></div>
+        <div aria-live="polite" id="region">${regionStart}</div>
+        </main>
+        <script>
+          document.getElementById('save').addEventListener('click', () => {
+            document.getElementById('region').insertAdjacentHTML('beforeend', ${JSON.stringify(added)});
+            document.getElementById('control').textContent = 'Heard';
+          });
+        </script>
+      </body></html>`;
+    }
+
+    async function heardAfterSave(html: string): Promise<string[]> {
+      const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      try {
+        await page.click('#save');
+        return [...(await page.drainAnnouncements())].sort();
+      } finally {
+        await page.close();
+      }
+    }
+
+    // Out of the accessibility tree, so no screen reader speaks it.
+    const unheard: Array<[string, string]> = [
+      ['under display: none', '<span style="display: none">Saved</span>'],
+      ['under visibility: hidden', '<span style="visibility: hidden">Saved</span>'],
+      ['under the hidden attribute', '<span hidden>Saved</span>'],
+      ['under aria-hidden="true"', '<span aria-hidden="true">Saved</span>'],
+      ['under inert', '<span inert>Saved</span>'],
+      ['under display: none on a wrapper inside the region', '<div style="display: none"><span>Saved</span></div>'],
+    ];
+    for (const [name, added] of unheard) {
+      it(`does not hear text added to a live region ${name}`, async () => {
+        expect(await heardAfterSave(addedTextPage(added))).toEqual(['Heard']);
+      });
+    }
+
+    // Hidden only on screen. Screen readers still speak it.
+    const heardText: Array<[string, string]> = [
+      ["in PatternFly's screen-reader class", '<span class="pf-v6-screen-reader">Saved</span>'],
+      ['inside a clip rectangle', '<span style="position: absolute; clip: rect(0 0 0 0); clip-path: inset(50%)">Saved</span>'],
+      ['in a box of zero size', '<span style="display: inline-block; width: 0; height: 0; overflow: hidden">Saved</span>'],
+      ['at opacity 0', '<span style="opacity: 0">Saved</span>'],
+      ['in a display: contents wrapper', '<span style="display: contents">Saved</span>'],
+      ['made visible inside a visibility: hidden wrapper', '<span style="visibility: hidden"><span style="visibility: visible">Saved</span></span>'],
+    ];
+    for (const [name, added] of heardText) {
+      it(`hears text added to a live region ${name}`, async () => {
+        expect(await heardAfterSave(addedTextPage(added))).toEqual(['Heard', 'Saved']);
+      });
+    }
+
+    it('leaves text out of the tree out of what it records for the region', async () => {
+      expect(await heardAfterSave(addedTextPage('<span>Saved</span>', '<span aria-hidden="true">Icon</span>'))).toEqual(['Heard', 'Saved']);
+    });
+
+    // The flow level: a flow requirement that expects "Saved" fails when the text is written only
+    // under an aria-hidden child, and passes on PatternFly screen-reader text.
+    async function flowDrafts(added: string): Promise<Array<[string, string]>> {
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: mapRequirementsToProviders({
+          version: 1,
+          requirements: [
+            {
+              id: 'save-announces',
+              kind: 'flow',
+              surface: 'clusters',
+              description: 'Saving announces that the change was saved.',
+              assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+              approved: true,
+            },
+          ],
+        }),
+        config: testConfig(),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 3,
+      });
+      const url = `data:text/html;charset=utf-8,${encodeURIComponent(addedTextPage(added))}`;
+      const scan = await runner.scan({ id: 'clusters', url });
+      expect(scan.gaps).toEqual([]);
+      return scan.drafts.map((draft) => [draft.rule, draft.confidence]);
+    }
+
+    it('fails a flow whose expected announcement is written only under an aria-hidden child', async () => {
+      expect(await flowDrafts('<span aria-hidden="true">Saved</span>')).toEqual([['intake:save-announces', 'fail']]);
+    });
+
+    it('passes a flow whose expected announcement is PatternFly screen-reader text', async () => {
+      expect(await flowDrafts('<span class="pf-v6-screen-reader">Saved</span>')).toEqual([]);
+    });
+  });
+
   describe('a document without the announcement capture', () => {
     // Silence from a document where the capture is not running would read as a page that
     // announced nothing, and a flow requirement would fail or pass on no evidence. The drain throws
