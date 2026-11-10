@@ -52,15 +52,17 @@ const PINNED: Record<string, Pinned> = {
   'row-actions-share-a-name': caught('pf-row-action-name-unique'),
   'repeated-toolbar-label-removed': caught('pf-toolbar-labeled-when-repeated'),
   'flow-live-region-broken': caught('intake:sensitivity-profile-saved'),
-  // Voice findings are preview until a person promotes the obligation class.
+  // Voice findings are preview until a person promotes the obligation class. The silent change
+  // rule is preview too, and it also reports the click that changed the page with nothing heard.
   'voice-live-region-broken': {
     outcome: 'preview only',
     rules: [
       'intake:sensitivity-profile-saved-voice/missing-announcement',
       'intake:sensitivity-profile-saved-voice/missing-live-announcement',
+      'voicing/silent-change',
     ],
     reason:
-      'only preview findings were new, and preview never gates: intake:sensitivity-profile-saved-voice/missing-announcement, intake:sensitivity-profile-saved-voice/missing-live-announcement',
+      'only preview findings were new, and preview never gates: intake:sensitivity-profile-saved-voice/missing-announcement, intake:sensitivity-profile-saved-voice/missing-live-announcement, voicing/silent-change',
   },
   'rhds-button-label-removed': caught('rhds-button-accessible-label'),
   'rhds-cta-link-removed': caught('rhds-cta-link'),
