@@ -2109,8 +2109,9 @@ Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
 attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
 orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
-Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
-and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
+Result that `usabl check --json` writes, the pull request comment, and the artifacts `usabl docs`
+writes drop the userinfo, the query, and the fragment from every URL in the Result, page text
+included, the same way `checkPage` output does. Nothing reads
 those surfaces back to match a gap to a screen, so dropping them costs no match.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an

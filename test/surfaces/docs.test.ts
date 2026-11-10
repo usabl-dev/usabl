@@ -249,6 +249,29 @@ describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
     expect(manifest?.origin).toBe('page');
   });
 
+  // Doc artifacts are published like the CLI JSON and the pull request comment, so a URL in page
+  // text loses its query and fragment there too, where a preview token or session value can sit.
+  it('strips the query and fragment from a URL in page text, as published output does', () => {
+    const result = resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', [
+            {
+              index: 0,
+              elementPath: '#share',
+              announcement: [{ kind: 'name', text: 'Open https://example.test/doc?session=PREVIEWSECRET#part', fromTree: true, source: 'ax-tree' }],
+            },
+          ]),
+          images: [{ elementPath: '#qr', name: 'https://example.test/qr?token=PREVIEWSECRET', role: 'img', decorative: false }],
+        },
+      ],
+    });
+    const json = JSON.stringify(collectDocArtifacts(result, noRequirements));
+    expect(json).toContain('https://example.test/doc');
+    expect(json).not.toContain('PREVIEWSECRET');
+    expect(json).not.toContain('#part');
+  });
+
   it('says how many images were not listed', () => {
     const result = resultFixture({
       screens: [{ ...screenFixture('clusters', []), images: [], imagesNotListed: 7 }],

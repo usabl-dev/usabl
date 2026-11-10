@@ -10,7 +10,7 @@ import { generateAltTextManifest, generatePageAltTextManifest } from '../docs/al
 import { generateAnnouncementSnippets } from '../docs/announcement-snippets.js';
 import { generateKeyboardPaths } from '../docs/keyboard-paths.js';
 import { run } from '../run.js';
-import { scrubResult } from './scrub.js';
+import { scrubPublishedResult } from './scrub.js';
 
 /**
  * Builds the full set of doc artifacts for a run.
@@ -21,8 +21,10 @@ import { scrubResult } from './scrub.js';
  */
 export function collectDocArtifacts(result: Result, bundle: RequirementBundle): DocArtifact[] {
   // Scrub first: the transcript generators strip control bytes but not credential-shaped values,
-  // and this surface is egress for page-derived text.
-  const safe = scrubResult(result);
+  // and this surface is egress for page-derived text. Doc artifacts are published like the CLI
+  // JSON and the pull request comment, so every URL in them also loses its query and fragment,
+  // where a preview token or a session value can sit.
+  const safe = scrubPublishedResult(result);
 
   const artifacts: DocArtifact[] = [
     ...generateAnnouncementSnippets(safe),
