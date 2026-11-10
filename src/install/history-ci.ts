@@ -1,12 +1,13 @@
 /**
  * The default-branch workflow `usabl install --ci` writes beside the pull request gate. It scans
- * main and records what it saw on the usabl/history branch, which is what lets a fixed barrier close
- * its slot in the accepted debt without anyone running `usabl floor prune`.
+ * the default branch and records what it saw on the usabl/history branch, which is what lets a
+ * fixed accessibility barrier close its slot in the accepted debt without anyone running
+ * `usabl floor prune`.
  *
  * Three jobs, so the job that runs the application never holds write access:
  * - usabl-engine builds the pinned engine, with the same job the pull request gate uses.
- * - history-scan checks out main, starts the application on the origin of appBaseUrl in main's
- *   usabl.config.json, runs `usabl history record`, and uploads the record. It runs application
+ * - history-scan checks out the default branch, starts the application on the origin of appBaseUrl
+ *   in that branch's usabl.config.json, runs `usabl history record`, and uploads the record. It runs application
  *   code, so it reads only.
  * - history-append downloads the record, adds it to the history branch with `usabl history append`,
  *   and pushes without force. It runs only the engine archive it checked against the engine job's
@@ -42,6 +43,7 @@ import {
   composeCiReport,
   ENGINE_JOB,
   engineRefFor,
+  PLACE_ENGINE_BESIDE_APP,
   planWorkflow,
   TRUSTED_ENGINE_STEP,
   trustedEngineSteps,
@@ -64,11 +66,7 @@ export const USABL_HISTORY_WORKFLOW_PATH = '.github/workflows/usabl-history.yml'
 
 // The scan job also places the engine at ../usabl, for an app whose lockfile installs it from there.
 const HISTORY_SCAN_ENGINE_UNPACK = `${UNPACK_ENGINE_IN_TEMP}
-          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
-          # An app that does not use that path never reads the folder, so for that app this step does
-          # not change what npm ci installs or what the build makes.
-          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
-          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
+${PLACE_ENGINE_BESIDE_APP}`;
 
 /**
  * The history workflow for an app whose default branch is `branch`. The name goes into the trigger
@@ -85,7 +83,7 @@ on:
   push:
     branches: ["${branch}"]
   schedule:
-    # A second scan of an unchanged main confirms a fix without waiting for the next merge.
+    # A second scan of an unchanged default branch confirms a fix without waiting for the next merge.
     - cron: "17 6 * * *"
   workflow_dispatch:
 
@@ -107,8 +105,8 @@ jobs:
 ${ENGINE_JOB}
 
   history-scan:
-    # Starts the application from main and scans every screen. It runs application code, so it
-    # never gets write access. It writes the record to a file and nothing to git.
+    # Starts the application from the default branch and scans every screen. It runs application
+    # code, so it never gets write access. It writes the record to a file and nothing to git.
     if: github.ref == 'refs/heads/${branch}'
     needs: usabl-engine
     runs-on: ubuntu-latest
@@ -119,7 +117,7 @@ ${ENGINE_JOB}
     env:
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
-      - name: Checkout main
+      - name: Checkout the default branch
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
@@ -154,9 +152,9 @@ ${ENGINE_CHECK}
 
       - name: Read the app origin from usabl.config.json
         run: |
-          # The scan reads appBaseUrl from this checkout of main, so the app starts on that origin,
-          # never on a port this file assumes. Only an http origin on loopback with an explicit port
-          # is taken, the same shape the judge needs. Anything else stops here.
+          # The scan reads appBaseUrl from this checkout of the default branch, so the app starts on
+          # that origin, never on a port this file assumes. Only an http origin on loopback with an
+          # explicit port is taken, the same shape the judge needs. Anything else stops here.
           node <<'NODE'
           const fs = require('node:fs');
           const fail = (why) => {
@@ -204,7 +202,7 @@ ${ENGINE_CHECK}
           cat "\${RUNNER_TEMP}/usabl-vite.log"
           exit 1
 
-      - name: Scan main and write the history record
+      - name: Scan the default branch and write the history record
         run: |
 ${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history record --out usabl-history-record.json
@@ -239,7 +237,7 @@ ${ENGINE_CHECK}
     env:
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
-      - name: Checkout main without running it
+      - name: Checkout the default branch without running it
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0

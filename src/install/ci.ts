@@ -352,13 +352,22 @@ interface GateVariant {
   serveStep: string;
 }
 
-const APP_BUILD_STEPS = `${buildEngineSteps(
-  `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
+// Place the engine at ../usabl, beside the app checkout. build-app and the history scan both run
+// these bytes. Actions checks a repository out into <name>/<name>, so in a repository named usabl
+// ../usabl is the checkout itself, and the engine must never be unpacked over it.
+export const PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
           # An app that does not use that path never reads the folder, so for that app this step does
           # not change what npm ci installs or what the build makes.
-          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
-          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`,
-)}
+          # When this repository is itself named usabl, ../usabl is this checkout, so the step
+          # unpacks nothing and leaves the checkout as it is.
+          if [ "$(realpath -m "\${GITHUB_WORKSPACE}/../usabl")" = "$(realpath -m "\${GITHUB_WORKSPACE}")" ]; then
+            echo "usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is."
+          else
+            mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
+            tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"
+          fi`;
+
+const APP_BUILD_STEPS = `${buildEngineSteps(PLACE_ENGINE_BESIDE_APP)}
 
       - name: Install app dependencies
         run: npm ci --ignore-scripts
@@ -490,7 +499,7 @@ run-name: ${gateRunName(variant.name)}
 on:
   pull_request:
     branches: ["${branch}"]
-    # Retargeting onto main must re-run trusted-ref policy checks.
+    # Retargeting onto the default branch must re-run trusted-ref policy checks.
     types: [opened, synchronize, reopened, edited]
   pull_request_review:
     # Use the event payload so a review still knows the base branch and head SHA.
@@ -756,7 +765,7 @@ ${VALIDATE_RESULT_SCRIPT}
         run: |
           # Never exit 2 here. Guarded-file approval lives on usabl-policy.
           if [ "\${VERDICT}" != "pass" ]; then
-            echo "accessibility verdict is \${VERDICT:-missing}; see the usabl comment for the barriers"
+            echo "accessibility verdict is \${VERDICT:-missing}; see the usabl comment for the accessibility barriers"
             exit 1
           fi
 
