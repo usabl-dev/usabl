@@ -31,4 +31,10 @@ describe('a transcript stop in the Result document', () => {
   it('refuses a reason outside the closed set', () => {
     expect(() => parseResultDocument(resultWith([{ ...READABLE, focusUnreadable: 'fine' }]))).toThrow(/focusUnreadable/);
   });
+
+  it('keeps the fact that the body had focus, and refuses any value but true', () => {
+    const onBody: TranscriptStop = { index: 2, elementPath: '#app', announcement: [], onBody: true };
+    expect(parseResultDocument(resultWith([onBody, READABLE])).screens[0]?.stops).toEqual([onBody, READABLE]);
+    expect(() => parseResultDocument(resultWith([{ ...READABLE, onBody: false }]))).toThrow(/onBody/);
+  });
 });

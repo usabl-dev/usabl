@@ -243,11 +243,28 @@ describe('block selectors match blocks, not their BEM children', () => {
     // on findings, so one real barrier wrote six floor entries. The block selector reduces that to
     // the two alert blocks, and the corrected contained query excludes the alert in the live
     // region, so exactly one finding remains for the loose alert.
-    const page = await openFixture();
+    // The fixture was rendered with a PatternFly modal open, and PatternFly hides the app root from
+    // assistive technology while a modal is open, so the contained alert is silent then too. This
+    // test counts the alert blocks the selector matches, so it reads the page with the modal closed.
+    const page = await openFixture(markup.replace('<div id="root" aria-hidden="true">', '<div id="root">'));
     try {
       const drafts = await toastDrafts(liveContext(page));
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('pf-toast-live-region judges the alerts in the app root by their live region while the open modal hides the root', async () => {
+    // PatternFly hides the app root on purpose while its modal is open, and the live region works
+    // again when the modal closes. So the contained alert passes and only the loose one fails, for
+    // the reason it fails with the modal closed.
+    const page = await openFixture();
+    try {
+      const drafts = await toastDrafts(liveContext(page));
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ confidence: 'fail', why: 'No polite or assertive live region reaches the alert.' });
     } finally {
       await page.close();
     }

@@ -13,7 +13,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page as PwPage } from 'playwright';
-import type { CoverageGap, Page, ProviderContext } from '../../src/contracts/index.js';
+import type { CoverageGap, Draft, Page, ProviderContext } from '../../src/contracts/index.js';
 import { adoptPage } from '../../src/deps/real.js';
 import { checkPfToastLiveRegion } from '../../src/providers/rulepack/pf-toast-live-region.js';
 import { testConfig } from '../helpers.js';
@@ -129,6 +129,109 @@ describe('pf-toast-live-region: residual false greens', () => {
 
   it('flags an alert under role="status" with an unknown aria-live value, which the check reads as off', async () => {
     expect(await draftsFor(`<div role="status" aria-live="loud">${ALERT}</div>`)).toBe(1);
+  });
+});
+
+describe('pf-toast-live-region: alerts hidden from assistive technology', () => {
+  // A live region inside content hidden from assistive technology announces nothing, so an alert
+  // there is as silent as one outside any live region. The rule read only the live values.
+  it('flags an alert in a polite region inside an aria-hidden="true" wrapper', async () => {
+    expect(await draftsFor(`<div aria-hidden="true"><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert in a polite region inside an inert wrapper', async () => {
+    expect(await draftsFor(`<div inert><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert in a polite region inside a hidden wrapper', async () => {
+    expect(await draftsFor(`<div hidden><div aria-live="polite">${ALERT}</div></div>`)).toBe(1);
+  });
+
+  it('flags an alert that is itself aria-hidden="true" inside a polite region', async () => {
+    expect(
+      await draftsFor(
+        `<div aria-live="polite"><div class="pf-v6-c-alert" aria-hidden="true"><h4 class="pf-v6-c-alert__title">Saved</h4></div></div>`,
+      ),
+    ).toBe(1);
+  });
+
+  it('passes an alert in a polite region inside an aria-hidden="false" wrapper', async () => {
+    expect(await draftsFor(`<div aria-hidden="false"><div aria-live="polite">${ALERT}</div></div>`)).toBe(0);
+  });
+});
+
+// The drafts the check returns for a document whose body is given whole, with no wrapper.
+async function toastDraftsForBody(body: string): Promise<Draft[]> {
+  const pw = await browser.newPage({ viewport: { width: 800, height: 900 } });
+  try {
+    await pw.setContent(`<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>${body}</body></html>`, {
+      waitUntil: 'domcontentloaded',
+    });
+    const ctx: ProviderContext = {
+      config: testConfig(),
+      screen: { id: 'toast', url: 'http://127.0.0.1:5173/toast' },
+      page: await adoptPage(pw),
+    };
+    const { drafts, gaps } = await checkPfToastLiveRegion(ctx);
+    expect(gaps).toEqual([]);
+    return drafts;
+  } finally {
+    await pw.close();
+  }
+}
+
+// A PatternFly modal open at load: it sits outside the app root, which PatternFly hides from
+// assistive technology while the modal is open.
+const OPEN_MODAL = '<div class="pf-v6-c-backdrop"><div role="dialog" aria-modal="true" aria-label="Edit cluster"><button type="button">Close</button></div></div>';
+
+describe('pf-toast-live-region: alerts behind an open modal dialog', () => {
+  it('judges an alert in the app root by its live region while an open modal hides the root', async () => {
+    // The modal hides the page behind it on purpose. When it closes, the live region works again.
+    expect(await toastDraftsForBody(`<div id="root" aria-hidden="true"><div aria-live="polite">${ALERT}</div></div>${OPEN_MODAL}`)).toEqual([]);
+  });
+
+  it('still flags an alert in the app root with no live region while an open modal hides the root, as before', async () => {
+    const drafts = await toastDraftsForBody(`<div id="root" aria-hidden="true"><main>${ALERT}</main></div>${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'fail', why: 'No polite or assertive live region reaches the alert.' });
+  });
+
+  it('flags an alert whose own container is aria-hidden, with an open modal and without one', async () => {
+    const hiddenContainer = `<div id="root"><div aria-hidden="true"><div aria-live="polite">${ALERT}</div></div></div>`;
+    for (const body of [hiddenContainer, `${hiddenContainer}${OPEN_MODAL}`, hiddenContainer.replace('<div id="root">', '<div id="root" aria-hidden="true">') + OPEN_MODAL]) {
+      const drafts = await toastDraftsForBody(body);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('fail');
+      expect(drafts[0]?.why).toContain('hidden from assistive technology');
+      expect(drafts[0]?.fix).toBe('Remove aria-hidden, inert, or hidden from the alert and the elements above it.');
+    }
+  });
+
+  it('flags an alert in a hidden app root when no modal dialog is open', async () => {
+    const drafts = await toastDraftsForBody(`<div id="root" aria-hidden="true"><div aria-live="polite">${ALERT}</div></div>`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('fail');
+  });
+
+  it('does not count a modal dialog that is itself hidden as open', async () => {
+    const drafts = await toastDraftsForBody(
+      `<div id="root" aria-hidden="true"><div aria-live="polite">${ALERT}</div>${OPEN_MODAL}</div>`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('fail');
+  });
+
+  it('reports unverified, naming the open modal, when it cannot tell which element is the child of the body', async () => {
+    // An element put straight under the html element, beside the body, so the top of the chain is
+    // not the body the rule expects.
+    const drafts = await toastDraftsForBody(
+      `${OPEN_MODAL}<script>const stray = document.createElement('div'); stray.setAttribute('aria-hidden', 'true');` +
+        ` stray.innerHTML = '<div aria-live="polite"><div class="pf-v6-c-alert"><h4 class="pf-v6-c-alert__title">Saved</h4></div></div>';` +
+        ` document.documentElement.appendChild(stray);</script>`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('open modal dialog');
   });
 });
 

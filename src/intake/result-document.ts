@@ -330,6 +330,10 @@ function stop(value: unknown, field: string): TranscriptStop {
       'focus-too-deep',
     ] as const);
   }
+  if (has(source, 'onBody')) {
+    if (source['onBody'] !== true) refuse(at(field, 'onBody'), 'must be true when present');
+    out.onBody = true;
+  }
   return out;
 }
 
