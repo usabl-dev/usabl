@@ -202,14 +202,32 @@ export function readWideNotice(entry: GuardedEntry): string {
 /**
  * How the guard reads every entry of a config: the always-guarded ledgers and the requirements
  * folder as literal paths, and each guardedPaths entry as written. The requirements value names a
- * folder, and the requirements loader accepts any folder name, so no glob rule applies to it.
+ * folder, and the requirements loader accepts any folder name, so no glob rule applies to it. A
+ * text that is both a literal path and a guardedPaths entry is read both ways, and the guard
+ * guards what either reading matches.
  */
 export function readGuardedEntries(config: GuardConfigSource): GuardedEntry[] {
   const literal = new Set<string>(ALWAYS_GUARDED);
   if (config.requirements !== undefined) {
     literal.add(config.requirements);
   }
-  return buildGuardedSet(config).flatMap((entry) => readGuardedEntry(entry, literal.has(entry)));
+  const listed = new Set(config.guardedPaths);
+  return buildGuardedSet(config).flatMap((entry) => {
+    const readings = [
+      ...(literal.has(entry) ? readGuardedEntry(entry, true) : []),
+      ...(listed.has(entry) ? readGuardedEntry(entry) : []),
+    ];
+    // A plain path reads the same both ways. Keep each reading once.
+    const seen = new Set<string>();
+    return readings.filter((reading) => {
+      const key = JSON.stringify([reading.path, reading.glob, reading.readWide]);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  });
 }
 
 // The folder a git listing must cover to find every file an entry can match: the entry itself

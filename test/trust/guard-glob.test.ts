@@ -645,6 +645,23 @@ describe('the requirements folder', REAL_GIT, () => {
     const before = await previousExpansion(deps, buildGuardedSet(config));
     expect(await expandConfigGuardedSet(deps, config)).toEqual(before);
   });
+
+  // The same text in requirements and in guardedPaths is read both ways: as the requirements path
+  // and as the guardedPaths glob, so neither reading hides the other.
+  it('guards an entry with the same text as requirements as a path and as a glob, locally and in CI', async () => {
+    const both: UsablConfig = { ...configWith(['policy/*']), requirements: 'policy/*' };
+    const policyFiles = { 'policy/rule1.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+    root = await repoWith(both, policyFiles);
+    await write(root, 'policy/rule1.json', '{"changed":true}\n');
+    const local = await run(realDeps(root), both);
+    expect(local.dirtyGuardedPaths).toContain('policy/rule1.json');
+
+    await git(root, ['checkout', '-b', 'feature']);
+    await git(root, ['commit', '-am', 'change a rule']);
+    const out = await policyCheckAt(root);
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toContain('policy/rule1.json');
+  });
 });
 
 /**
