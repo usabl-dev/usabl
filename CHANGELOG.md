@@ -9,7 +9,7 @@
   it was first seen, whether it is open, fixed, or reopened, and its days open, from the floor
   file's first-parent history and the `usabl/history` records, read as committed objects. A fix
   is a commit that removes the identity from the floor, or two full scans of main in a row that
-  see none there. First seen is the earliest evidence: a barrier in the first floor is labelled
+  see none there. First seen is the earliest evidence: one in the first floor is labelled
   "seen at the first baseline; may be older". A shallow clone, a floor version migration, a
   floor that was deleted or could not be read, a missing or unreadable history, and a record it
   cannot place each name the rows they touch, and the floor-side gaps mark days as a lower bound.
