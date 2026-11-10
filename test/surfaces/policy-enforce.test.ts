@@ -87,15 +87,15 @@ describe('enforcePolicy', () => {
     const table = (ref: string): Record<string, string | null> => (ref === 'origin/main' ? trusted : head);
     return {
       show: async (ref, path) => table(ref)[path] ?? null,
-      lsFiles: async (ref, prefix) => {
-        const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+      lsFilesUnder: async (ref, prefixes) => {
+        const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));
         return Object.keys(table(ref))
           .filter((path) => {
             const value = table(ref)[path];
             if (value === null) {
               return false;
             }
-            return path === normalized || path.startsWith(`${normalized}/`);
+            return bases.some((base) => base === '' || path === base || path.startsWith(`${base}/`));
           })
           .sort();
       },
@@ -252,7 +252,7 @@ describe('enforcePolicy', () => {
             shown.push(`${ref}:${path}`);
             return git.show(ref, path);
           },
-          lsFiles: (ref, prefix) => git.lsFiles(ref, prefix),
+          lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
         },
       }),
     );
@@ -357,10 +357,10 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       pr: { authorLogin: over.author ?? 'eparenti', headSha: head },
       git: {
         show: async (ref, path) => table(ref)[path] ?? null,
-        lsFiles: async (ref, prefix) => {
-          const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+        lsFilesUnder: async (ref, prefixes) => {
+          const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));
           return Object.keys(table(ref))
-            .filter((path) => path === normalized || path.startsWith(`${normalized}/`))
+            .filter((path) => bases.some((base) => base === '' || path === base || path.startsWith(`${base}/`)))
             .sort();
         },
       },

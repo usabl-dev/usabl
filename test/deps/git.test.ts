@@ -100,6 +100,16 @@ describe('makeGitReader', () => {
     await expect(git.lsFiles('HEAD', 'src/missing')).resolves.toEqual([]);
   });
 
+  it('lists committed files under several prefixes in one listing', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+
+    await expect(git.lsFilesUnder('HEAD', ['src/gate', 'src/missing'])).resolves.toEqual(['src/gate/index.ts']);
+    await expect(git.lsFilesUnder('HEAD', [])).resolves.toEqual([]);
+    const whole = await git.lsFilesUnder('HEAD', ['']);
+    expect(whole).toContain('src/gate/index.ts');
+    expect(whole).not.toContain('src/gate/local-only.ts');
+  });
+
   it('lists changed files from merge-base to head with diffNameOnly', async () => {
     const git = makeGitReader({ cwd: repoPath });
     const firstCommit = await runGit(repoPath, ['rev-list', '--max-parents=0', 'HEAD']);

@@ -146,7 +146,10 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     const outcome = await enforcePolicy(result, {
       trustedRef: opts.trustedRef,
       pr,
-      git: { show: (ref, path) => git.show(ref, path), lsFiles: (ref, prefix) => git.lsFiles(ref, prefix) },
+      git: {
+        show: (ref, path) => git.show(ref, path),
+        lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
+      },
       listReviews: () => listPullReviews(pr.number),
     });
     process.stdout.write(`${outcome.message}\n`);

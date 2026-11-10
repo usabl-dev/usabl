@@ -193,6 +193,19 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       const output = await runListing(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix], maxBuffer);
       return parseLsFiles(output);
     },
+    async lsFilesUnder(ref, prefixes) {
+      // One listing for every prefix, so a ref is read once however many guarded entries share it.
+      // ls-tree matches each prefix as a path or a folder, never as a pattern.
+      if (prefixes.length === 0) {
+        return [];
+      }
+      const unique = [...new Set(prefixes)].sort();
+      const args = ['ls-tree', '-r', '--name-only', '-z', ref];
+      if (!unique.includes('')) {
+        args.push('--', ...unique);
+      }
+      return parseLsFiles(await runListing(cwd, args, maxBuffer));
+    },
     async writeTree() {
       const tempDir = await mkdtemp(join(tmpdir(), 'usabl-index-'));
       const env = { GIT_INDEX_FILE: join(tempDir, 'index') };

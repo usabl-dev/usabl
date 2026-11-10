@@ -5,6 +5,7 @@
  */
 import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
+import { globMatcher } from '../primitives/match-glob.js';
 
 const CONFIG_PATH = 'usabl.config.json';
 const ALWAYS_GUARDED = [
@@ -77,41 +78,104 @@ export function buildGuardedSet(config: GuardConfigSource): string[] {
   return [...guarded].sort();
 }
 
+// A guardedPaths entry with a glob character. Config load accepts only `*`, `**`, and brace
+// groups, so these two characters are the only ones that make an entry a pattern.
+const GLOB_CHARACTERS = /[*{]/;
+
+function isGlobEntry(entry: string): boolean {
+  return GLOB_CHARACTERS.test(normalizePrefix(entry));
+}
+
+// The folder a git listing must cover to find every file an entry can match: the entry itself
+// when it is a literal path, or the literal segments before its first glob segment. An empty
+// result is the whole tree.
+function listingPrefix(entry: string): string {
+  const prefix = normalizePrefix(entry);
+  if (!GLOB_CHARACTERS.test(prefix)) {
+    return prefix;
+  }
+  const segments = prefix.split('/');
+  return segments.slice(0, segments.findIndex((segment) => GLOB_CHARACTERS.test(segment))).join('/');
+}
+
 /**
- * Directory entries are expanded from committed files and working-tree files.
- * This catches new files under a guarded prefix so a self-edit cannot hide.
+ * The one matcher for a guardedPaths entry, used on the working tree and on every ref, by the
+ * local guard and by the CI policy check. A literal entry matches itself and every file under it,
+ * as a folder. A glob entry matches the files the glob matches and every file under a folder it
+ * matches, with Node's dot rule, so a ref listing selects what fs.glob selects on the working tree.
+ */
+function guardedEntryMatcher(entry: string): (path: string) => boolean {
+  const prefix = normalizePrefix(entry);
+  const under = prefix + '/';
+  if (!GLOB_CHARACTERS.test(prefix)) {
+    return (path) => path === prefix || path.startsWith(under);
+  }
+  const matchesFile = globMatcher(prefix, { dot: false });
+  const matchesBeneath = globMatcher(prefix + '/**', { dot: false });
+  return (path) => path === prefix || path.startsWith(under) || matchesFile(path) || matchesBeneath(path);
+}
+
+/**
+ * The files the entries match among the listed paths. A literal entry that matches nothing is
+ * kept as its own path, so a guarded file absent everywhere is still compared. A glob entry is
+ * never kept as a path: no file has that name, and git show reads such a name as empty text.
+ */
+function selectGuarded(entries: string[], listed: Iterable<string>, alsoByEntry: string[][] = []): string[] {
+  const paths = [...new Set(listed)];
+  const selected = new Set<string>();
+  entries.forEach((entry, index) => {
+    const matches = guardedEntryMatcher(entry);
+    let found = false;
+    for (const path of paths) {
+      if (matches(path)) {
+        selected.add(path);
+        found = true;
+      }
+    }
+    for (const path of alsoByEntry[index] ?? []) {
+      selected.add(path);
+      found = true;
+    }
+    if (!found && !isGlobEntry(entry)) {
+      selected.add(entry);
+    }
+  });
+  return [...selected].sort();
+}
+
+function listingPrefixes(entries: string[]): string[] {
+  return [...new Set(entries.map(listingPrefix))].sort();
+}
+
+/**
+ * Guarded entries are expanded with one matcher from what git and the file system hold: the files
+ * at the trusted ref and at HEAD (each listed once, with -z), the paths git status reports (new,
+ * changed, deleted, renamed), and what fs.glob finds on the working tree. So a file deleted
+ * locally under a glob entry is still listed, and a new file under a guarded folder cannot hide.
+ * The fs.glob result is kept as found, so the guard never lists less than it did before one
+ * matcher, for example a file only Node's brace ranges such as {1..3} select.
  */
 export async function expandGuardedSet(
   deps: Deps,
   guardedPaths: string[],
   trustedRef = 'HEAD',
 ): Promise<string[]> {
-  const expanded = new Set<string>();
-
-  for (const entry of guardedPaths) {
-    const prefix = normalizePrefix(entry);
-    // fs.glob returns files only, so a directory entry expands to the files beneath
-    // it and a file entry matches itself. lsFiles adds committed files the working
-    // tree may have deleted.
-    const [trustedFiles, workingFiles] = await Promise.all([
-      deps.git.lsFiles(trustedRef, prefix),
-      deps.fs.glob([prefix, prefix + '/**']),
-    ]);
-
-    if (trustedFiles.length === 0 && workingFiles.length === 0) {
-      expanded.add(entry);
-      continue;
-    }
-
-    for (const path of trustedFiles) {
-      expanded.add(path);
-    }
-    for (const path of workingFiles) {
-      expanded.add(path);
-    }
-  }
-
-  return [...expanded].sort();
+  const prefixes = listingPrefixes(guardedPaths);
+  const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
+  const [refListings, status, workingByEntry] = await Promise.all([
+    Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
+    deps.git.statusZ(),
+    Promise.all(
+      guardedPaths.map((entry) => {
+        const prefix = normalizePrefix(entry);
+        // fs.glob returns files only, so a folder entry expands to the files beneath it and a
+        // file entry matches itself.
+        return deps.fs.glob([prefix, prefix + '/**']);
+      }),
+    ),
+  ]);
+  const listed = [...refListings.flat(), ...status.map((entry) => entry.path)];
+  return selectGuarded(guardedPaths, listed, workingByEntry);
 }
 
 /**
@@ -161,7 +225,7 @@ export async function checkGuard(deps: Deps, config: UsablConfig, trustedRef = '
  * so a forged Result cannot hide a guarded-file diff.
  */
 export async function listDivergedGuardedPathsAtRefs(
-  git: Pick<GitReader, 'show' | 'lsFiles'>,
+  git: Pick<GitReader, 'show' | 'lsFilesUnder'>,
   trustedRef: string,
   workingRef: string,
 ): Promise<string[]> {
@@ -176,24 +240,15 @@ export async function listDivergedGuardedPathsAtRefs(
     return [CONFIG_PATH];
   }
 
-  const expanded = new Set<string>();
-  for (const entry of buildGuardedSet(scopeConfig ?? { guardedPaths: [] })) {
-    const prefix = normalizePrefix(entry);
-    const [trustedFiles, workingFiles] = await Promise.all([
-      git.lsFiles(trustedRef, prefix),
-      git.lsFiles(workingRef, prefix),
-    ]);
-    if (trustedFiles.length === 0 && workingFiles.length === 0) {
-      expanded.add(entry);
-      continue;
-    }
-    for (const path of trustedFiles) {
-      expanded.add(path);
-    }
-    for (const path of workingFiles) {
-      expanded.add(path);
-    }
-  }
+  // Each ref is listed once, and the same matcher the local guard uses selects the guarded files,
+  // so a glob entry lists its files at both refs and a file the head deleted is still compared.
+  const entries = buildGuardedSet(scopeConfig ?? { guardedPaths: [] });
+  const prefixes = listingPrefixes(entries);
+  const [trustedFiles, workingFiles] = await Promise.all([
+    git.lsFilesUnder(trustedRef, prefixes),
+    git.lsFilesUnder(workingRef, prefixes),
+  ]);
+  const expanded = selectGuarded(entries, [...trustedFiles, ...workingFiles]);
 
   const diverged: string[] = [];
   for (const path of expanded) {

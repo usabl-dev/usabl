@@ -23,7 +23,7 @@ export interface PolicyPr {
 
 export interface PolicyGit {
   show(ref: string, path: string): Promise<string | null>;
-  lsFiles(ref: string, prefix: string): Promise<string[]>;
+  lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
 }
 
 export interface PolicyEnforceDeps {
