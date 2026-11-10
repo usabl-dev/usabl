@@ -90,6 +90,17 @@ describe('providerProves', () => {
     expect(proves[2]).toMatch(/^voice requirement: /u);
   });
 
+  it('says the flow and voice providers also run the silent change rule, as preview', () => {
+    const proves = everyProvider()
+      .filter((provider) => provider.id.startsWith('intake:'))
+      .map((provider) => providerProves(provider));
+    const RULE =
+      'It also runs the silent change rule on each click and activate step: a step that changes the page, is not announced, and does not move focus to a named control is a preview finding.';
+    expect(proves[0]).not.toContain('silent change');
+    expect(proves[1]).toContain(RULE);
+    expect(proves[2]).toContain(RULE);
+  });
+
   it('claims only what each rulepack checks', () => {
     expect(PROVIDER_PROVES['pf-rulepack']).toContain('table headers with no scope or id to tie cells to them');
     expect(PROVIDER_PROVES['pf-rulepack']).not.toContain('header link');

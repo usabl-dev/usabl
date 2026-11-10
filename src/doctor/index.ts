@@ -16,6 +16,7 @@ import { planClaude } from '../install/claude.js';
 import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
+import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
 import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
@@ -74,6 +75,7 @@ function claudeSkillLabel(skill: ClaudeSkillDescriptor): string {
 }
 const CURSOR_LABEL = 'cursor stop hook + assistant (.cursor/hooks + commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
+const HISTORY_CI_LABEL = `ci history workflow (${USABL_HISTORY_WORKFLOW_PATH})`;
 // The label names the check the operator must require. It reads that name from branch-rule
 // rather than spelling it out, so doctor can never tell someone to require a stale job name.
 const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
@@ -653,10 +655,10 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'ci',
       label: CI_LABEL,
       state: 'drifted',
-      // Do not tell the operator to run "usabl install --ci" here. On an existing unpinned
-      // draft that command hits its already-wired path and prints "No change" without
-      // reprinting the pin step, so it would not do what this instruction implies. The edit is
-      // self-contained: replace the placeholder in place.
+      // Do not tell the operator to run "usabl install --ci" here. That command fills the pin
+      // only when this usabl has a clean build commit; without one it changes nothing and
+      // reprints this same edit. The edit is self-contained and always works: replace the
+      // placeholder in place.
       nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with a full 40-character commit SHA you trust.`,
     };
   }
@@ -665,6 +667,39 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
     label: CI_LABEL,
     state: 'drifted',
     nextStep: 'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+  };
+}
+
+async function collectHistoryCi(deps: DoctorDeps): Promise<SurfaceReport> {
+  // The same recognizer rules as the gate, from the draft install writes, for whichever branch the
+  // file names. The history workflow is optional, so missing is information, not a fault.
+  const state = classifyHistoryWorkflow(await deps.fs.readFile(USABL_HISTORY_WORKFLOW_PATH));
+  if (state === 'wired') {
+    return { id: 'history-ci', label: HISTORY_CI_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (state === 'missing') {
+    return {
+      id: 'history-ci',
+      label: HISTORY_CI_LABEL,
+      state: 'missing',
+      nextStep: 'No usabl history workflow. It is optional: it scans the default branch so a fixed accessibility barrier closes its slot in the accepted debt. Run "usabl install --ci" to write it.',
+    };
+  }
+  if (state === 'unpinned') {
+    return {
+      id: 'history-ci',
+      label: HISTORY_CI_LABEL,
+      state: 'drifted',
+      // As for the gate: the edit always works, and a re-run of install --ci without a clean build
+      // commit would change nothing.
+      nextStep: `The history workflow is present but the engine ref is still the placeholder. Edit ${USABL_HISTORY_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with the same full 40-character commit SHA you pin in the gate.`,
+    };
+  }
+  return {
+    id: 'history-ci',
+    label: HISTORY_CI_LABEL,
+    state: 'drifted',
+    nextStep: 'A history workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
   };
 }
 
@@ -1025,6 +1060,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     ...skillReports,
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
+    await guardRead('history-ci', HISTORY_CI_LABEL, () => collectHistoryCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
     await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps)),
     await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
