@@ -3677,7 +3677,7 @@ scaffold policy.
 folder (below), and takes the first that holds route code. It reads routes from it as described
 in [Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
 `wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
-`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config, and
+`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config (any of `vite.config.ts`, `.js`, `.mts`, `.mjs`, `.cts`, or `.cjs`), and
 the CSS files under `src/` exist in the app folder, because a change to any of them can reach
 every screen. Path aliases come from the `tsconfig.json`, `tsconfig.app.json`, and Vite config in
 the app folder, the configs that app's compiler and bundler read.

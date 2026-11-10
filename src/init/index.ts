@@ -619,7 +619,8 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       'src/App.jsx',
     ].map(appFile),
     ...(routerFile.length > 0 ? [routerFile] : []),
-    ...['index.html', 'src/index.html', 'vite.config.ts', 'vite.config.js'].map(appFile),
+    // Every name Vite loads its config from, so a .mts or .cts config is wide blast too.
+    ...['index.html', 'src/index.html', ...VITE_CONFIG_CANDIDATES].map(appFile),
     ...(await fs.glob([appFile('src/**/*.css')])),
   ];
   const wideBlastGlobs: string[] = [];

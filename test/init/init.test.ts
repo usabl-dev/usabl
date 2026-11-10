@@ -59,6 +59,19 @@ describe('parseCliArgs init', () => {
 });
 
 describe('inferInit', () => {
+  // Vite loads vite.config.mts and .cts too, and a change to the config can reach every screen.
+  // Leaving them out of wide blast let a config change read as nothing to check.
+  it.each(['vite.config.mts', 'vite.config.cts', 'vite.config.mjs', 'vite.config.cjs'])(
+    'drafts %s as a wide-blast file',
+    async (name) => {
+      const files = fixtureFiles();
+      const vite = files['vite.config.ts'] ?? '';
+      delete files['vite.config.ts'];
+      const draft = await inferInit(memoryFs({ ...files, [name]: vite }));
+      expect(draft.config.discovery.wideBlastGlobs).toContain(name);
+    },
+  );
+
   it('infers vite origin, proven React Router entry files, and skips catch-all routes', async () => {
     const fs = memoryFs(fixtureFiles());
     const draft = await inferInit(fs);
