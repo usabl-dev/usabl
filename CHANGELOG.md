@@ -167,6 +167,26 @@
 
 ### Fixed
 
+- The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
+  the repository root first, so a stop in a subfolder reads the root config, the root receipt,
+  and the root bypass file. A config that differs from HEAD, is missing from the working tree,
+  cannot be read, or does not parse blocks as approval required, says what clears it, and lets
+  one continuation through. Before, a corrupt config ended in an allow with "stop hook error". A
+  repository with no config in the working tree or at HEAD allows with "usabl is not configured
+  here". A new, uncommitted config runs, and the guard holds it for approval as before. Gate
+  effect: the Stop hook blocks where it allowed.
+
+- The Stop hook blocks when guarded policy diverged on a run with no verdict, whatever the exit
+  code, and lets one continuation through. A run where every screen was unseen ends with exit 4,
+  and the hook allowed every exit 4 run, so diverged policy lost its approval block. A verdict
+  usabl does not recognize now blocks on exit 4 too, as the threat model said. A crash with clean
+  policy still fails open. Gate effect: the Stop hook blocks where it allowed.
+
+- The Stop hook's fast path line now reads "VERIFIED (exit 0, stored receipt, not re-scanned)"
+  and says usabl did not scan the change again on that stop. The threat model now says a user
+  with a shell on the same machine can write a receipt that verifies, and that receipt signing
+  is not built.
+
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
   flow had already changed it and could miss a barrier the flow had removed from view.
@@ -823,6 +843,22 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
+  `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`
+  downloaded and ran whatever package held the npm name usabl, with no prompt. `npm exec --no`
+  runs a local or global install and never downloads. When usabl cannot run, the Claude Code and
+  Cursor hooks print one line that says so and how to install it, and exit 1, which both treat as
+  a failed hook that does not block. `usabl install --claude`, `--claude-skill`, and `--cursor`
+  rewrite a file the previous release wrote with `npx usabl`, and still refuse any other
+  differing file. `usabl doctor` reports such a file as a security drift and names the reinstall
+  command.
+
+- The receipt store never writes through a symbolic link. It refuses a link at `.usabl` or at
+  `.usabl/receipt.json`, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place. A committed link there could redirect the write to another file the user
+  can write. `usabl check --ci` no longer saves a receipt. A refused save is said plainly and
+  changes no verdict.
 
 - The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
   pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server
