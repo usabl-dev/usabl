@@ -124,7 +124,7 @@ describe('usabl import figma', () => {
 
   it.each([
     [['figma'], 'give the Figma file key'],
-    [['sketch', 'K', '--frame', 'A=a', '--out', 'x'], 'the only source is figma'],
+    [['other', 'K', '--frame', 'A=a', '--out', 'x'], 'the only source is figma'],
     [['figma', '../K', '--frame', 'A=a', '--out', 'x'], 'file key must be a Figma file key'],
     [['figma', 'K', '--out', 'x'], 'give at least one --frame'],
     [['figma', 'K', '--frame', 'A=a'], 'give --out'],

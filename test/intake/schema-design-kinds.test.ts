@@ -104,7 +104,7 @@ describe('design source', () => {
   });
 
   it.each([
-    [{ ...source, tool: 'sketch' }, 'source.tool'],
+    [{ ...source, tool: 'other' }, 'source.tool'],
     [{ ...source, file: '' }, 'source.file'],
     [{ ...source, file: 'ABC/../x' }, 'source.file'],
     [{ ...source, node: '12:34​' }, 'source.node'],
