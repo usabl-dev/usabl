@@ -131,6 +131,33 @@ describe('the box read for target size', () => {
     expect(readBox(fakePage())).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: [] });
   });
 
+  describe('a control whose size changes when it is scrolled into view', () => {
+    it('is limited, and reports the size of the first read', () => {
+      // Such as a scroll-driven animation that shrinks the control as it nears the center.
+      const page = fakePage();
+      page.control.onScrollIntoView = () => {
+        page.control.box = { left: 114, top: 114, width: 16, height: 16 };
+      };
+      expect(readBox(page)).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: ['size-changed-on-scroll'] });
+    });
+
+    it('is limited when only one side changes', () => {
+      const page = fakePage();
+      page.control.onScrollIntoView = () => {
+        page.control.box = { left: 100, top: 100, width: 44, height: 50 };
+      };
+      expect(readBox(page).unmeasurable).toEqual(['size-changed-on-scroll']);
+    });
+
+    it('is not limited by a change smaller than a hundredth of a pixel', () => {
+      const page = fakePage();
+      page.control.onScrollIntoView = () => {
+        page.control.box = { left: 100, top: 300, width: 44.005, height: 43.995 };
+      };
+      expect(readBox(page).unmeasurable).toEqual([]);
+    });
+  });
+
   describe('a scroll a person cannot make', () => {
     it('reads a scroll of a container that hides its overflow as clipped', () => {
       const page = fakePage({ container: { overflowX: 'hidden', overflowY: 'hidden' } });

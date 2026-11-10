@@ -959,9 +959,13 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   const windowX = window.scrollX;
   const windowY = window.scrollY;
   let missed = false;
+  let resized = false;
   try {
     element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const seen = element.getBoundingClientRect();
+    // The size is measured on the first box and the points are placed on this one. They must be
+    // the same size, or the size compared is not the size that was hit.
+    resized = Math.abs(seen.width - box.width) > epsilon || Math.abs(seen.height - box.height) > epsilon;
     const middleX = seen.left + seen.width / 2;
     const middleY = seen.top + seen.height / 2;
     const points = [
@@ -997,6 +1001,9 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   }
   if (missed) {
     limits.add('hit-test-missed');
+  }
+  if (resized) {
+    limits.add('size-changed-on-scroll');
   }
   const order = ${JSON.stringify(BOX_LIMITS)};
   return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };

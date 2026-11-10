@@ -765,7 +765,16 @@ export interface ElementRef {
 // one answer was not the element or an element inside it. Something clips it or covers it, it does
 // not take pointer events, or it is partly off the page. This one is a positive check: it also
 // covers shapes the other limits do not name.
-export type BoxLimit = 'rotated-or-skewed' | 'clip-path' | 'mask' | 'overflow-clipped' | 'outside-viewport' | 'hit-test-missed';
+// 'size-changed-on-scroll': the box read again after the scroll into view differs in width or
+// height from the first read, so the size that was measured may not be the size a person meets.
+export type BoxLimit =
+  | 'rotated-or-skewed'
+  | 'clip-path'
+  | 'mask'
+  | 'overflow-clipped'
+  | 'outside-viewport'
+  | 'hit-test-missed'
+  | 'size-changed-on-scroll';
 // What Page.boundingBox read about one element. `width` and `height` are the CSS pixel size of its
 // border box as the browser lays it out, transforms included. `fragments` is how many boxes the
 // element is laid out in: an inline element that wraps onto two lines has two, and its size is the

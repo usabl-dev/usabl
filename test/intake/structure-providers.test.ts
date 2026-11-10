@@ -623,6 +623,7 @@ describe('target size requirement', () => {
     ['overflow-clipped', 'hides or scrolls its overflow'],
     ['outside-viewport', 'past the edge of the viewport'],
     ['hit-test-missed', "part of the control's box cannot be hit"],
+    ['size-changed-on-scroll', 'the control changed size when it was scrolled into view'],
   ] as const)('is unconfirmed, never a pass, when the box read says %s', async (limit, reason) => {
     // A box large enough to pass, so only the limit can keep it from passing.
     const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: [limit] }));

@@ -645,6 +645,8 @@ const BOX_LIMIT_REASON: Readonly<Record<BoxLimit, string>> = {
     'the control is fixed or sticky and reaches past the edge of the viewport, where scrolling cannot bring it into view',
   'hit-test-missed':
     "part of the control's box cannot be hit, because something clips it or covers it, it does not take pointer events, or it is partly off the page",
+  'size-changed-on-scroll':
+    'the control changed size when it was scrolled into view, so the measured size may not be the size a person meets',
 };
 
 // Every name the box read gave, known ones in the order of BOX_LIMITS and then any other, sorted,

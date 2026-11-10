@@ -13,6 +13,7 @@ const RANK: Readonly<Record<BoxLimit, number>> = {
   'overflow-clipped': 3,
   'outside-viewport': 4,
   'hit-test-missed': 5,
+  'size-changed-on-scroll': 6,
 };
 
 export const BOX_LIMITS: readonly BoxLimit[] = (Object.keys(RANK) as BoxLimit[]).sort((a, b) => RANK[a] - RANK[b]);
