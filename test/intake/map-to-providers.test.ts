@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AxNode, ProviderContext, RequirementBundle } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { mapRequirementsToProviders, toVoiceContract } from '../../src/intake/map-to-providers.js';
+import { FLOW_STEP_FIELDS, mapRequirementsToProviders, runFlowStep, toVoiceContract } from '../../src/intake/map-to-providers.js';
+import { parseBundle } from '../../src/intake/schema.js';
 import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = {
@@ -738,6 +739,95 @@ describe('mapRequirementsToProviders', () => {
         expect(drainAnnouncements).not.toHaveBeenCalled();
       });
     }
+
+    // Each step that carries a field its kind does not use, with what the gap must say about it.
+    const unused: Array<[string, Record<string, unknown>, string]> = [
+      ['a selector on activate', { do: 'activate', selector: '#delete' }, 'step 1 (activate): selector is not a field of an activate step, which takes only do'],
+      ['a key on click', { do: 'click', selector: '#save', key: 'Enter' }, 'step 1 (click): key is not a field of a click step, which takes only do and selector'],
+      ['times on tab', { do: 'tab', times: 3 }, 'step 1 (tab): times is not a field of a tab step, which takes only do'],
+      ['shift on press', { do: 'press', key: 'Tab', shift: true }, 'step 1 (press): shift is not a field of a press step, which takes only do and key'],
+      ['a selector on press', { do: 'press', key: 'Escape', selector: '#menu' }, 'step 1 (press): selector is not a field of a press step'],
+      ['text on click', { do: 'click', selector: '#name', text: 'Ada' }, 'step 1 (click): text is not a field of a click step'],
+      ['a note on tab', { do: 'tab', note: 'to Save' }, 'step 1 (tab): note is not a field of a tab step'],
+      ['two fields on tab', { do: 'tab', times: 3, count: 3 }, 'step 1 (tab): count and times are not fields of a tab step, which takes only do'],
+      [
+        'expectedAnnouncement inside a step',
+        { do: 'click', selector: '#save', expectedAnnouncement: 'Saved' },
+        'step 1 (click): expectedAnnouncement is not a field of a click step, which takes only do and selector (write expectedAnnouncement on the flow assertion, beside steps)',
+      ],
+      [
+        'a missing selector and a key on click',
+        { do: 'click', key: 'Enter' },
+        "step 1 (click): a click step needs a selector, such as selector: '#delete', and key is not a field of a click step",
+      ],
+    ];
+
+    for (const [name, step, said] of unused) {
+      it(`makes the flow a gap for ${name}, and runs no step`, async () => {
+        const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }, step as { do: string }], expectedAnnouncement: 'Saved' });
+        const provider = mapRequirementsToProviders(bundle)[0];
+        const tab = vi.fn(async () => {});
+        const press = vi.fn(async () => {});
+        const click = vi.fn(async () => {});
+        const drainAnnouncements = vi.fn(async () => ['Saved']);
+        const context = await makeContext({
+          page: makeFakePage({ tab, press, click, drainAnnouncements, activeNode: vi.fn(async () => axNode('Saved')) }),
+        });
+
+        const run = provider!.run(context);
+
+        await expect(run).rejects.toThrow(said);
+        expect(tab).not.toHaveBeenCalled();
+        expect(press).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
+        expect(drainAnnouncements).not.toHaveBeenCalled();
+      });
+    }
+
+    it('reports an expectation written on a step, which the loader accepts', async () => {
+      // The flow assertion has no expectedAnnouncement of its own, so it would check nothing.
+      const parsed = parseBundle({
+        version: 1,
+        requirements: [
+          {
+            id: 'flow-save',
+            kind: 'flow',
+            surface: SCREEN.id,
+            description: 'Save action announces completion',
+            approved: true,
+            assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save', expectedAnnouncement: 'Saved' }] },
+          },
+        ],
+      });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const provider = mapRequirementsToProviders(parsed.bundle)[0];
+
+      await expect(provider!.run(await makeContext())).rejects.toThrow('step 0 (click): expectedAnnouncement is not a field of a click step');
+    });
+
+    it('reads exactly the fields its table lists for each step kind', async () => {
+      // A step that records every field the driver reads, run through the driver with a fake page.
+      const values: Record<string, string> = { selector: '#save', key: 'Escape' };
+      for (const [kind, fields] of FLOW_STEP_FIELDS) {
+        const read = new Set<string>();
+        const target: Record<string, unknown> = { do: kind };
+        for (const field of fields) if (field !== 'do') target[field] = values[field];
+        const step = new Proxy(target, {
+          get(object, property, receiver) {
+            if (typeof property === 'string') read.add(property);
+            return Reflect.get(object, property, receiver);
+          },
+        }) as { do: string };
+        await runFlowStep(makeFakePage(), step);
+        expect([...read].sort(), kind).toEqual([...fields].sort());
+      }
+      expect([...FLOW_STEP_FIELDS.keys()].sort()).toEqual(['activate', 'click', 'press', 'tab']);
+    });
+
+    it('runs no step kind its table does not list', async () => {
+      await expect(runFlowStep(makeFakePage(), { do: 'hover', selector: '#save' })).rejects.toThrow('cannot run step kind hover');
+      await expect(runFlowStep(makeFakePage(), { do: 'constructor' })).rejects.toThrow('cannot run step kind constructor');
+    });
 
     it('names every step it cannot run, in step order', async () => {
       const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press' }, { do: 'tab' }, { do: 'click' }] });

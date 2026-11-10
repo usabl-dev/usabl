@@ -256,24 +256,60 @@ function hasText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-// What a step lacks for the flow driver to run it, or null when it can run. A click needs a
-// selector and a press needs a key; a missing, empty, or blank value is no value. An activate step
-// presses Enter on the focused control and needs nothing more. Any other kind is not run.
-function missingForFlow(step: Step): string | null {
-  if (step.do === 'tab' || step.do === 'activate') {
-    return null;
-  }
-  if (step.do === 'click') {
-    return hasText(step.selector) ? null : "a click step needs a selector, such as selector: '#delete'";
-  }
-  if (step.do === 'press') {
-    return hasText(step.key) ? null : 'a press step needs a key, such as key: Escape';
-  }
-  return 'the flow does not run this kind of step; write do as tab, activate, press with a key, or click with a selector';
+/**
+ * The fields each step kind uses, exactly what runFlowStep reads for it. A test runs the driver on
+ * each kind and checks that it reads these fields and no others, so the two cannot drift apart.
+ * Exported for tests.
+ */
+export const FLOW_STEP_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['tab', ['do']],
+  ['activate', ['do']],
+  ['press', ['do', 'key']],
+  ['click', ['do', 'selector']],
+]);
+
+function listOf(names: readonly string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
 }
 
-// Runs one flow step the driver can run. The caller checked every step with missingForFlow first.
-async function runFlowStep(page: Page, step: Step): Promise<void> {
+function withArticle(kind: string): string {
+  return /^[aeiou]/u.test(kind) ? `an ${kind}` : `a ${kind}`;
+}
+
+// What stops the flow driver from running a step as written, or an empty list when it can run it.
+// A click needs a selector and a press needs a key; a missing, empty, or blank value is no value.
+// An activate step presses Enter on the focused control and needs nothing more. A field the kind
+// does not use would be ignored, so the step would run as something other than what was written.
+// Any other kind is not run.
+function problemsForFlow(step: Step): string[] {
+  const fields = FLOW_STEP_FIELDS.get(step.do);
+  if (fields === undefined) {
+    return ['the flow does not run this kind of step; write do as tab, activate, press with a key, or click with a selector'];
+  }
+  const problems: string[] = [];
+  if (step.do === 'click' && !hasText(step.selector)) {
+    problems.push("a click step needs a selector, such as selector: '#delete'");
+  }
+  if (step.do === 'press' && !hasText(step.key)) {
+    problems.push('a press step needs a key, such as key: Escape');
+  }
+  const extra = Object.keys(step)
+    .filter((field) => !fields.includes(field))
+    .sort();
+  if (extra.length > 0) {
+    const what = extra.length === 1 ? 'is not a field' : 'are not fields';
+    const hint = extra.includes('expectedAnnouncement') ? ' (write expectedAnnouncement on the flow assertion, beside steps)' : '';
+    problems.push(`${listOf(extra)} ${what} of ${withArticle(step.do)} step, which takes only ${listOf(fields)}${hint}`);
+  }
+  return problems;
+}
+
+/**
+ * Runs one flow step the driver can run. The caller checked every step with problemsForFlow first.
+ * It reads only the fields FLOW_STEP_FIELDS lists for the step's kind. Exported for tests.
+ */
+export async function runFlowStep(page: Page, step: Step): Promise<void> {
   if (step.do === 'tab') {
     await page.tab();
   } else if (step.do === 'activate') {
@@ -417,14 +453,16 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 }
 
 async function runFlow(page: Page, requirement: Requirement, assertion: FlowAssertion, watch: SilentChangeWatch): Promise<Draft[]> {
-  // A step the driver cannot run would run as nothing, and the flow would judge a page its steps
-  // never touched. So every step is checked before any runs. One that cannot run makes the flow a
-  // not-covered gap that names it, and the silent change rule reports it as a step not run.
+  // A step the driver cannot run would run as nothing, and one with a field its kind does not use
+  // would run as something other than what was written. Either way the flow would judge a page its
+  // steps did not touch as written. So every step is checked before any runs. One that cannot run
+  // as written makes the flow a not-covered gap that names it, and the silent change rule reports
+  // it as a step not run.
   const missing: string[] = [];
   for (const [index, step] of assertion.steps.entries()) {
-    const lack = missingForFlow(step);
-    if (lack !== null) {
-      missing.push(`step ${index} (${step.do}): ${lack}`);
+    const problems = problemsForFlow(step);
+    if (problems.length > 0) {
+      missing.push(`step ${index} (${step.do}): ${problems.join(', and ')}`);
       watch.notRun(step, index);
     }
   }
