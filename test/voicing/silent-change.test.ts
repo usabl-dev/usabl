@@ -384,6 +384,36 @@ describe('the silent change rule in a flow requirement', () => {
       expect(shown).not.toContain('<button');
     });
 
+    it('read failed: the draft keeps only the first line of the error, never the call log', async () => {
+      const message = [
+        'Accessibility.getFullAXTree failed',
+        'Call log:',
+        '  - reading node <button id="delete" aria-label="Delete alice@example.com">Delete</button>',
+      ].join('\n');
+      const { page } = worldPage({ '#save': addSavedText });
+      let reads = 0;
+      const failing = new Proxy(page, {
+        get(target, property, receiver) {
+          if (property === 'fullAxTree') {
+            return async () => {
+              reads += 1;
+              // The read before the step works, and the read after it fails.
+              if (reads > 1) throw new Error(message);
+              return target.fullAxTree();
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const drafts = silent(await runOne(mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#save' }])))[0], failing));
+      expect(reasons(drafts)).toEqual(['read failed']);
+      expect(drafts[0]?.why).toContain('(Accessibility.getFullAXTree failed)');
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('Call log');
+      expect(shown).not.toContain('alice');
+      expect(shown).not.toContain('<button');
+    });
+
     it('every gap is preview and unverified, with the step in its evidence', async () => {
       const drafts = await flowDrafts({ '#save': (world) => (addSavedText(world), (world.settled = false)) });
       expect(drafts[0]).toMatchObject({

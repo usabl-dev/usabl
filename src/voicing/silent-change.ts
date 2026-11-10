@@ -452,7 +452,10 @@ export function makeSilentChangeWatch(): SilentChangeWatch {
         background,
       );
       if (judgment.kind === 'gap' && judgment.reason === 'read failed') {
-        outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment, detail: state.readError ?? 'the drain failed' });
+        // Only the first line of the error, as for a step that threw: its later lines can quote the
+        // element's markup.
+        const detail = state.readError === null ? 'the drain failed' : firstLine(state.readError) || null;
+        outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment, detail });
         return;
       }
       outcomes.push({ index, step, elementPath: state.elementPath, role: state.role, judgment });
