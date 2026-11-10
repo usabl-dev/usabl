@@ -36,8 +36,13 @@ re-baseline to green.
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
-  Org team entries fail closed. The PR comment stays loud after the policy
-  check is green.
+  Owners come from the last rule that matches each dirty guarded path. That path fails closed
+  when no rule matches it, when its last rule names no owner, or when its last rule names an org
+  team or an email, because usabl cannot resolve team membership or match an email to a login. A
+  pattern or an owner usabl cannot read fails the whole file closed, because the last match is
+  then unknown. A team or email line that is not the last match for a dirty guarded path does
+  not block. `usabl doctor` reports the same limits in the same words. The PR comment stays loud
+  after the policy check is green.
 - Stop hook session pins are private to the user. On a shared host another local
   user could precreate a pin file or a symlink at the pin path, to cause false
   drift blocks, poison the pins so a later tamper is not seen, or overwrite
@@ -274,6 +279,16 @@ the tool errored, not because the page is accessible.
   guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
   Before, the listing quoted that name, `git show` found no file under it on either ref, and the
   change was skipped.
+
+- A `guardedPaths` entry is matched by one matcher on the working tree and at every ref, by the
+  local guard and by `usabl enforce policy`. Each ref is listed once, with `-z`. A literal entry
+  matches itself and every file under it. A glob entry matches the files it names and every file
+  under a folder it names, with Node's dot rule: a wildcard skips a name that starts with a dot,
+  as `fs.glob` does. Before, the CI check listed each entry with a literal git pathspec, so a glob
+  entry listed nothing at either ref and an edited guarded file printed "no policy change". The
+  local guard listed a glob entry from the working tree only, so a guarded file deleted under it
+  was compared as the pattern text. Now an edited, added, or deleted file under a glob entry needs
+  approval in both places.
 
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the

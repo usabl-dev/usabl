@@ -2280,6 +2280,10 @@ deterministic evidence, then the PatternFly why/fix when both axe and the rulepa
 the same control. Evidence class outranks layer because only deterministic evidence gates,
 so a preview Draft must never be the survivor that represents a deterministic barrier.
 Ranking by class first also makes the choice independent of the order Drafts arrived in.
+The later tie-breaks (element path, layer name, and the rest of the Draft) compare UTF-16 code
+units, never the machine's locale. A locale compare sorts "a" before "B", where code units put
+"B" first, and it reads two spellings of one accented letter as equal, which would leave the
+choice to arrival order. The tracked identities of the debt history are ordered the same way.
 
 Only deterministic Drafts are counted against the floor, because only deterministic Drafts
 are what `usabl baseline` counted when it wrote the floor.
@@ -2327,6 +2331,9 @@ identity `fixed` only when one of these holds:
   identity. A counted identity names no element, so only the signal can confirm it. Neither
   does a row identity: its row and table are kept only as hashes, which no keyboard stop or
   element path carries, so an absent row is confirmed only by the signal.
+
+A floor entry with count 0 accepts no barrier, so its absence pays nothing down: it is never
+claimed `fixed`, and a barrier seen there is `new`.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -2624,6 +2631,30 @@ CI requires `--trusted-ref` (a forge-supplied base revision). Config, evidence,
 waivers, and rules are read via `git show <ref>:<path>` from the trusted base, never
 from the PR working tree. Combined with CODEOWNERS + branch protection (when the host allows it), a PR author
 cannot influence what policy they are judged against.
+
+`usabl enforce policy` lists the PR head and the trusted ref once each, with `-z`, and selects
+the guarded files with the same matcher the local guard uses (see "Guarded path matching"). For
+each guarded file that differs, the owners come from the last `CODEOWNERS` rule that matches it.
+The check refuses a path no rule matches, a path whose last rule names no owner, and a path whose
+last rule names an org team or an email, because usabl cannot resolve team membership or match
+an email to a login. It refuses the whole file on a pattern it cannot parse or an owner that is not
+a `@user`, an `@org/team`, or an email, because GitHub may skip such a line, so the last match is
+unknown. A team or email line that is not the last match for a changed guarded path does not
+block. Every other path needs an approval of the current head from one of its users who is not the
+author. `usabl doctor` reports the same limits in the same words under policy scope.
+
+### Guarded path matching
+
+The local guard and the CI check expand `guardedPaths` the same way. A literal entry matches itself
+and every file under it, as a folder. A glob entry (one that holds `*` or a brace group) matches
+the files it names and every file under a folder it names, with Node's dot rule: a wildcard does not
+match a name that starts with a dot, as `fs.glob` does. A dot written in the pattern still
+matches. The local guard selects from the files at the trusted ref and at HEAD, the paths git status
+reports, and what `fs.glob` finds on the working tree, so a guarded file deleted under a glob entry
+is still compared. A literal entry that matches nothing is compared as its own path, so a guarded
+file absent everywhere is still checked. A glob entry is never compared as a path. For a clean tree
+in a repository whose names are plain ASCII, the policy hash in a receipt is the same as before
+this matcher.
 
 ### Config-guards-itself
 
