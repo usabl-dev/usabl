@@ -280,17 +280,34 @@
   entry was compared as written with git output, which never holds that form, so it matched
   nothing: a change under `.` or `src/gate//` printed "no policy change" in CI, a file deleted
   locally under any of them was not named, and `./src/gate/` refused every pull request with no
-  CODEOWNERS rule that could clear it. Gate effect: such a change is `approval_required` where it
-  passed, and an unrelated pull request passes the policy check where it was refused.
+  CODEOWNERS rule that could clear it. An empty entry is the whole tree; before, it crashed every
+  run. Gate effect: such a change is `approval_required` where it passed, and an unrelated pull
+  request passes the policy check where it was refused.
 
 - Config load refuses a brace range such as `{1..3}` or `{a..c}`, and a `\`, in every glob list,
   and names the entry. For a range it says to list the alternatives with commas. Node's glob
   expands a range and reads `\` as an escape, while usabl's matcher reads both as text, so a
-  guarded file that only a range named passed in CI with "no policy change". The guard also refuses
-  an entry it cannot match when it reads one in a trusted ref's config (a range, `?`, `[ ]`, `( )`,
-  `\`, a nested or unbalanced brace, a leading `/`, or a `..` that leaves the root), and names the
-  entry. Gate effect: a config with such a glob no longer loads; a trusted config with such an
-  entry gives no verdict (exit 4) where the policy check passed.
+  guarded file that only a range named passed in CI with "no policy change". Config load also
+  refuses a `guardedPaths` entry with white space at either end, which named no file and guarded
+  nothing, and shows it in quotes. Gate effect: a config with such an entry no longer loads.
+
+- The guard reads a `guardedPaths` entry it cannot evaluate wide, where an older config or a
+  trusted ref's config holds one. A range, `?`, `[ ]`, `( )`, `\`, a nested or unbalanced brace, or
+  a `..` after a wildcard guards the literal folder above the first segment the matcher cannot
+  evaluate, so `policy/rule{1..3}.json` guards `policy/`. An entry that starts with `/`, or has a
+  `..` that leaves the root, guards the whole tree. The same reading holds at the trusted ref, at
+  HEAD, and on the working tree. `usabl enforce policy` names each such entry in its output and says
+  how to write it, and `usabl doctor` does too. The `requirements` folder and the always-guarded
+  ledgers are read as literal paths. Gate effect: a change under that folder is
+  `approval_required` where it could pass, a code owner's approval clears it, and the pull request
+  that repairs the entry can merge with one.
+
+- The Stop hook blocks once when the guard, the session pin computation, or the stored receipt
+  check fails, with the reason and the first line of the error, and lets the continuation through
+  marked NOT verified. Before, such a failure, for example a guarded listing past the read limit,
+  allowed with "NOT verified - stop hook error". A folder outside any work tree and a repository
+  with no commits still allow with their own notes. Gate effect: the Stop hook blocks where it
+  allowed.
 
 - `usabl enforce policy` now reads code owners from the last `CODEOWNERS` rule that matches each
   changed guarded path. Before, any team, email, or owner-less line anywhere in the file refused
@@ -300,15 +317,18 @@
   the same words, so a repository whose guarded paths lack a user owner now reads as drifted
   there. Gate effect: the policy check can pass where an unrelated team line made it refuse.
 
-- A `CODEOWNERS` pattern whose last segment holds a wildcard no longer matches through a parent
-  folder, as GitHub documents: `docs/*` matches `docs/a.md` and not `docs/b/c.md`. Before, `src/*
-  @alice` after `/src/gate/ @org/gate-team` made alice the owner of `src/gate/index.ts`, and her
-  approval passed a change GitHub gives to the team. Where GitHub's documentation leaves a reading
-  open (an inner slash with no leading slash, a slash-free name with no trailing slash, or `?`)
-  and the readings disagree for a changed guarded path, the last match is unknown and the check
-  refuses that path. A wildcard before the last segment now refuses the whole file. `usabl doctor`
-  reports the same limits, and reads a workflow file whose last match is unknown as unknown. Gate
-  effect: the policy check refuses where it passed on the wrong owner's approval.
+- A `CODEOWNERS` pattern with a slash whose last segment holds a wildcard no longer matches
+  through a parent folder, as GitHub documents for `docs/*`: it matches `docs/a.md` and not
+  `docs/b/c.md`. Before, `src/* @alice` after `/src/gate/ @org/gate-team` made alice the owner of
+  `src/gate/index.ts`, and her approval passed a change GitHub gives to the team. A form the
+  documentation does not show is read both ways: an inner slash with no leading slash, a slash-free
+  pattern with no trailing slash (a name such as `gate`, or a wildcard such as `*.js` against a
+  folder named `lib.js`), and `?`. When the readings disagree for a changed guarded path and the
+  rule could be its last match, the match is unknown and the check refuses that path. A wildcard
+  before the last segment now refuses the whole file. `usabl doctor` reports the same limits, and
+  reads a workflow file whose last match is unknown as unknown. Gate effect: the policy check
+  refuses where it passed on the wrong owner's approval, and a repository with a wildcard before
+  the last segment of a rule is refused until that rule is rewritten.
 
 - A `#` inside a `CODEOWNERS` pattern or owner, one that does not follow whitespace, now refuses
   the whole file. Before, the line was cut at that `#`, so `/src/file#1.ts @org/team` read as an
@@ -336,7 +356,12 @@
 
 - `usabl doctor` reports a `guardedPaths` glob that matches no file yet as not checkable yet, and
   says the first file added under it needs a `CODEOWNERS` rule. Before, policy scope read as wired,
-  while the policy check refused the pull request that added that file. When the guarded path
+  while the policy check refused the pull request that added that file. Doctor now reads each
+  entry the way the guard does, so `./src/gate/` is no longer reported as drift, and it reports a
+  literal entry that matches no file in the last commit as guarding nothing today, which is where
+  a typo, a wrong letter case, or a look-alike letter shows. That remains a limit: such an entry
+  guards nothing in the checks. Doctor reads `CODEOWNERS` with the policy check's line reader,
+  including the `#` refusal. When the guarded path
   listing passes the read limit, the message now says the guarded glob lists too many files and to
   start the entry with a folder name, not to edit `.gitignore`. The guard no longer runs
   `git status` to list guarded files, which added nothing to the listing. Gate effect: none.

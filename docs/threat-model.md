@@ -337,23 +337,41 @@ the tool errored, not because the page is accessible.
   written with git output, which never holds that form, so it matched nothing. Now an edited,
   added, or deleted file under an entry in any form config load accepts needs approval in both
   places, except a dot-named file under a glob entry (see the known limit below). Config load
-  refuses the forms Node's glob reads another way:
-  a brace range such as `{1..3}`, `?`, `[ ]`, `( )`, a `\` escape, and a nested or unbalanced
-  brace. The guard refuses the same forms, an entry that starts with `/`, and a `..` that leaves
-  the root, when it reads them in a trusted ref's config, and names the entry; the run then has no
-  verdict.
+  refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
+  `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses an entry with white space
+  at either end. The guard never throws on what an entry says and never guards less because it
+  cannot read one. An entry in one of those forms, or with a `..` after a wildcard, guards the
+  literal folder above the first segment the matcher cannot evaluate; one that starts with `/` or
+  has a `..` that leaves the root guards the whole tree. This holds wherever the guard reads it: a
+  loaded config, an older config, or a trusted ref's config. A change there needs a code owner's
+  approval, which a review can give, so the pull request that repairs the entry can merge. `usabl
+  enforce policy` and `usabl doctor` name each entry read this way and say how to write it. The
+  `requirements` folder is read as a literal path.
 
-- `usabl enforce policy` matches a `CODEOWNERS` pattern the way GitHub's documentation shows. A
-  wildcard in the last segment does not match through a parent folder, so `src/* @alice` after
-  `/src/gate/ @org/gate-team` does not make alice the owner of `src/gate/index.ts`. Before, it
-  did, and alice's approval passed a change GitHub gives to the team. A form the documentation
-  leaves open that could be the last match for a changed guarded path makes that match unknown,
-  and the check refuses the path. A `#` inside a pattern refuses the whole file: the check used to
-  cut the line there, so `/src/file#1.ts @org/team` read as an ownerless rule for `/src/file`.
+- The Stop hook blocks once when the guard, the session pin computation, or the stored receipt
+  check fails, because it then cannot tell whether guarded policy changed, and lets the
+  continuation through marked NOT verified. Before, the hook's catch allowed with "stop hook
+  error", so a guard that threw let a session stop with a waiver edit unchecked. A folder outside
+  any work tree and a repository with no commits keep their honest allow.
+
+- `usabl enforce policy` matches a `CODEOWNERS` pattern the way GitHub's documentation says for
+  the forms it shows. A wildcard in the last segment of a pattern with a slash does not match
+  through a parent folder, so `src/* @alice` after `/src/gate/ @org/gate-team` does not make alice
+  the owner of `src/gate/index.ts`. Before, it did, and alice's approval passed a change GitHub
+  gives to the team. A form the documentation does not show, such as `*.js` against a folder
+  named `lib.js`, is read both ways; when the readings disagree for a changed guarded path and the
+  rule could be its last match, the match is unknown and the check refuses the path. A `#` inside a
+  pattern refuses the whole file: the check used to cut the line there, so
+  `/src/file#1.ts @org/team` read as an ownerless rule for `/src/file`.
 
 - Known limit: a dot-named file under a glob entry, such as `policy/.override.json` under
   `policy/*.json`, is not guarded, locally or in CI, because the guard follows Node's dot rule. List
   such a file as its own entry, or guard its folder with a literal entry, to guard it.
+
+- Known limit: a guarded entry that is a valid path but names nothing, such as a typo, a wrong
+  letter case, or a look-alike letter, guards nothing, locally and in CI. `usabl doctor` is where
+  it shows: it reports a literal entry that matches no file in the last commit as guarding nothing
+  today.
 
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the

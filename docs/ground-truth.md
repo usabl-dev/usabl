@@ -2946,16 +2946,18 @@ changed guarded path does not block. Every other path needs an approval of the c
 one of its users who is not the author. `usabl doctor` reports the same limits in the same words
 under policy scope.
 
-A pattern matches the way GitHub's CODEOWNERS documentation shows, and a test holds every
-documented example usabl supports. A leading slash anchors at the root, a slash-free pattern
-matches at any depth, and a trailing slash owns everything under the folder. A wildcard in the
-last segment does not match through a parent folder: `docs/*` matches `docs/a.md` and not
-`docs/b/c.md`. Where the documentation leaves a reading open, the matcher tries each reading: a
-pattern with an inner slash and no leading slash (`src/gate/`) may anchor at the root or not, a
-slash-free name with no trailing slash (`gate`) may or may not own a folder of that name, and `?`
-may be a wildcard or a literal. When the readings disagree for a path and that rule could be its
-last match, the last match is unknown, and the check refuses that path with a reason that names
-the pattern. Doctor reads a present workflow file whose last match is unknown as unknown.
+For the forms GitHub's CODEOWNERS documentation shows, a pattern matches the way the
+documentation says, and a test holds every documented example usabl supports. A leading slash
+anchors at the root, a slash-free pattern matches at any depth, and a trailing slash owns
+everything under the folder. A wildcard in the last segment of a pattern with a slash does not
+match through a parent folder: `docs/*` matches `docs/a.md` and not `docs/b/c.md`. A form the
+documentation does not show is read every way it could be read, and the check refuses a path when
+those readings disagree for it and that rule could be its last match. The open readings are: a
+pattern with an inner slash and no leading slash (`src/gate/`) may anchor at the root or not; a
+slash-free pattern with no trailing slash, a name (`gate`) or a wildcard (`*.js`), may or may not
+own a folder whose name it matches, such as `src/lib.js/`; and `?` may be a wildcard or a literal.
+The refusal names the pattern. Doctor reads a present workflow file whose last match is unknown as
+unknown. The policy check and doctor read each line with one line reader.
 
 ### Guarded path matching
 
@@ -2965,13 +2967,29 @@ dropped, a `..` segment takes away the segment before it, and `.` alone is the w
 `./src/gate/`, `src/gate//`, and `src/gate` guard the same files. Every later step reads that
 form. Nothing compares the raw entry text with git output.
 
-The guard refuses an entry it cannot evaluate the way Node's glob does, and names the entry: a
+The guard never throws because of what an entry says, and never guards less because it cannot
+read one. An entry in a form the matcher cannot evaluate the way Node's glob does is read wide: a
 brace range such as `{1..3}` or `{a..c}`, `?`, `[ ]`, `( )`, a `\` escape, a nested or unbalanced
-brace, an entry that starts with `/`, and a `..` segment that leaves the root or follows a
-wildcard. Config load refuses the same glob forms in every glob list, and says to list the
-alternatives of a range with commas. The guard meets them only in a trusted ref's config, which
-config load never read. The refusal is an error, so the run or `usabl enforce policy` stops with no
-verdict and exit 4. Such an entry is never read as matching nothing.
+brace, or a `..` after a wildcard guards the literal folder above the first segment the matcher
+cannot evaluate, so `policy/rule{1..3}.json` guards `policy/`. An entry with no such folder, one
+that starts with `/` or has a `..` that leaves the root, guards the whole tree. The same reading is
+used at the trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's
+approval, and the pull request that repairs the entry can merge with one. `usabl enforce policy`
+names each entry read this way, in every outcome, and says how to write it; `usabl doctor` does
+too. A local run has no field for that sentence, so its Result names only the changed files.
+Config load refuses these glob forms in every glob list and says to list the alternatives of a
+range with commas, so a new config never holds one. An older config, or a trusted ref's config,
+can. An empty entry is the whole tree.
+
+The `requirements` value names a folder, and the requirements loader accepts any folder name, such
+as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
+glob rule applies to them.
+
+Config load refuses a `guardedPaths` entry with white space at the start or end, and shows the
+entry in quotes. The limit that remains: an entry that is a valid path but names nothing, such as
+a typo, a wrong letter case, or a look-alike letter, guards nothing, in CI and locally. `usabl
+doctor` is where it shows: it reports a literal entry that matches no file in the last commit as
+guarding nothing today.
 
 One matcher selects the guarded files from a list of paths. A literal entry matches itself and
 every file under it, as a folder; the whole tree matches every file. A glob entry (one that holds
@@ -3309,6 +3327,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
     fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
     commit" step inside the untrusted frame. It does not block.
+  - The guard, the session pin computation, or the stored receipt check fails for any other
+    reason, such as a git listing past the read limit: the hook cannot tell whether guarded policy
+    changed, so it blocks with "NOT verified - approval required: usabl could not tell whether
+    guarded policy files changed, because the guard failed ..." and the error's first line inside
+    the untrusted frame, as it blocks for diverged guarded files. Before, such a failure fell to the
+    internal error allow below.
   - Neither HEAD nor the working tree has the config, but this session already recorded pins for
     this repository root: an earlier stop read a committed config, so the config was removed and
     committed during the session. That is drift, and the stop goes through the drift block, with
