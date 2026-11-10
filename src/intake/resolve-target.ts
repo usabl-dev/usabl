@@ -3,7 +3,7 @@
  *
  * A fixed CSS selector per role narrows the candidates, and the browser accessibility tree decides,
  * so a match is what assistive technology exposes and not what the markup suggests. Names match
- * exactly after trimming both sides. The selectors are constants: text from a requirement or a
+ * exactly once white space is collapsed on both sides. The selectors are constants: text from a requirement or a
  * design file is only ever compared with what the page exposes, never sent to the page.
  *
  * A wrong guess must become a gap, never a verdict, so this unit refuses to pick an element when it
@@ -18,6 +18,7 @@
  * verdict.
  */
 import type { AxNode, AxTreeNode, Page, RoleTarget, TargetRole } from '../contracts/index.js';
+import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 
 // The elements that can carry each role, by tag or by role attribute. A role attribute can hold
 // several tokens, and the browser uses the first one it knows, so a role attribute is matched by
@@ -76,9 +77,12 @@ export type TargetResolution =
   | { kind: 'out-of-reach'; found: number; outOfReach: number }
   | { kind: 'cannot-tell'; reason: CannotTellReason; found: number; inTree: number | null };
 
-/** Whether an accessible name is the name a requirement states, after trimming both. */
+/**
+ * Whether an accessible name is the name a requirement states, with each run of white space read as
+ * one space and none at either end, on both sides. Case and every other character must match.
+ */
 export function sameName(actual: string | null, wanted: string): boolean {
-  return actual !== null && actual.trim() === wanted.trim();
+  return actual !== null && collapseWhiteSpace(actual) === collapseWhiteSpace(wanted);
 }
 
 function roleMatches(role: TargetRole, axRole: string | null): boolean {

@@ -41,6 +41,21 @@ describe('design check kinds', () => {
     });
   });
 
+  it('collapses white space inside a name, the way the browser reports an accessible name', () => {
+    const name = parseBundle(oneRequirement('name', { type: 'name', target: { role: 'button', name: 'Create \t user\n' } }));
+    expect(name.ok && name.bundle.requirements[0]?.assertion).toEqual({
+      type: 'name',
+      target: { role: 'button', name: 'Create user' },
+    });
+    const order = parseBundle(oneRequirement('focus-order', { type: 'focus-order', sequence: ['Create  user', 'Refresh'] }));
+    expect(order.ok && order.bundle.requirements[0]?.assertion).toEqual({ type: 'focus-order', sequence: ['Create user', 'Refresh'] });
+  });
+
+  it('refuses a focus order whose names repeat once white space is collapsed', () => {
+    const reason = reasonOf(oneRequirement('focus-order', { type: 'focus-order', sequence: ['Create user', 'Create  user'] }));
+    expect(reason).toContain('repeats');
+  });
+
   it.each([
     ['heading', { type: 'heading', name: 'Users', level: 7 }, 'assertion.level'],
     ['heading', { type: 'heading', name: 'Users', level: 1.5 }, 'assertion.level'],

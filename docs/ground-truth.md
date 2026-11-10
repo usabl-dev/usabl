@@ -4247,7 +4247,10 @@ A requirement never holds a CSS selector. The roles are `button`, `link`, `headi
 The other assertions are `{ type: heading, name, level }` with a level from 1 to 6;
 `{ type: landmark, role, name? }`; `{ type: focus-order, sequence: [name, ...] }` with 2 to 200
 names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size above 0 and up
-to 200. Names are stored trimmed. The loader refuses, as `approval_required`, an empty name, a
+to 200. Names are stored the way the browser reports an accessible name: each run of ASCII white
+space is one space, with none at either end, and they are compared with the page's names the same
+way, so "Create  user" matches "Create user". Case and every other character must match. The
+loader refuses, as `approval_required`, an empty name, a
 heading level that is not a whole number from 1 to 6, a focus order that repeats a name, an
 unknown role, an unknown field, and a `source` whose file key, node id, or version does not fit
 its grammar.
@@ -4257,7 +4260,7 @@ can have it (for a button: `button`, `[role~="button"]`, button-type inputs, and
 attribute is matched by token, because the browser uses the first role token it knows, so
 `role="button menuitem"` is a candidate. usabl reads each candidate's role and computed name from
 Chromium's accessibility tree, and keeps the ones whose role matches and whose name equals the
-requirement's name after trimming. It then compares how many candidates the page has in all,
+requirement's name once white space is collapsed on both. It then compares how many candidates the page has in all,
 inside open shadow roots and in every frame too, with how many it read. Last, it counts the nodes
 of the page's whole accessibility tree that are not ignored and have the role and the name. The
 browser builds that tree from every role source, so it also sees an element in a closed shadow

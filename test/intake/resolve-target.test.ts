@@ -38,6 +38,11 @@ describe('resolveTarget', () => {
     expect((await resolveTarget(page, { role: 'button', name: 'refresh' })).kind).toBe('none');
   });
 
+  it('reads a run of white space inside a name as one space, on both sides', async () => {
+    const page = pageWith({ '#a': button('Create  user') });
+    expect((await resolveTarget(page, { role: 'button', name: 'Create user' })).kind).toBe('one');
+  });
+
   it('uses the accessibility tree role, not the tag', async () => {
     const page = pageWith({ '#a': { name: 'Refresh', role: 'generic', states: {} } });
     expect((await resolveTarget(page, { role: 'button', name: 'Refresh' })).kind).toBe('none');

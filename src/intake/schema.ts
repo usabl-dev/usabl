@@ -19,6 +19,7 @@ import type {
   TargetRole,
   VoiceAssertion,
 } from '../contracts/index.js';
+import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 import { normalizeToken } from '../voicing/normalize.js';
 import { describeFileKeyProblem, describeNodeIdProblem, describeVersionProblem } from './design-source.js';
 import { describeRequirementIdProblem } from './requirement-ids.js';
@@ -193,9 +194,14 @@ const LANDMARK_ROLES = [
   'form',
 ] as const satisfies readonly LandmarkRole[];
 
-// A name is compared with the accessible name after trimming both, so it is stored trimmed, and a
-// name that is empty after trimming would match nothing a person could have meant.
-const accessibleName = (field: string) => z.string().trim().min(1, `${field} must not be empty`);
+// The browser reports an accessible name with each run of white space as one space, so a name is
+// stored that way, trimmed, and compared that way. A name that is empty then would match nothing a
+// person could have meant.
+const accessibleName = (field: string) =>
+  z
+    .string()
+    .transform((value) => collapseWhiteSpace(value))
+    .pipe(z.string().min(1, `${field} must not be empty`));
 
 const targetSchema = z
   .object({
