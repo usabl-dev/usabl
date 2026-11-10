@@ -13,7 +13,6 @@ import type { CoverageGap, Deps, EvidenceFloor, FloorEntry, Finding, Result, Usa
 import { buildFindings } from '../gate/index.js';
 import { coverageIncomplete, notEvaluatedCounts } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
-import { neutralize } from '../primitives/neutralize.js';
 import { computeIdentity, FLOOR_VERSION, identityKey, identitySchemeFor } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { runWithFloorGaps } from '../run.js';
@@ -270,7 +269,7 @@ function intermittentTotal(groups: IntermittentGroup[]): number {
 
 /**
  * The stability lines of a baseline report. Screen ids come from the operator's config and rules
- * from usabl, but both are neutralized anyway, as every line here is. No element key is printed:
+ * from usabl, but both are scrubbed anyway, as every line here is. No element key is printed:
  * a key can carry page text, and a screen and rule are enough to find the barrier with usabl check.
  */
 function formatStability(groups: IntermittentGroup[]): string[] {
@@ -280,7 +279,7 @@ function formatStability(groups: IntermittentGroup[]): string[] {
   const total = intermittentTotal(groups);
   return [
     `scanned twice: ${total} barrier${total === 1 ? '' : 's'} came and went between the two scans (intermittent) and ${total === 1 ? 'was' : 'were'} not recorded:`,
-    ...groups.map((group) => `  - screen ${neutralize(group.screenId)}, rule ${neutralize(group.rule)}: ${group.count}`),
+    ...groups.map((group) => `  - screen ${scrubString(group.screenId)}, rule ${scrubString(group.rule)}: ${group.count}`),
     'an intermittent barrier is not on the floor, so it blocks as new on any later run where it appears.',
     'to handle one: fix it (a control repeated in every table row is usually one fix);',
     'or check the screen against fixed data, so it shows the same rows on every run;',
@@ -292,7 +291,7 @@ function formatStability(groups: IntermittentGroup[]): string[] {
 function formatDirtyGuardedPaths(paths: string[]): string {
   const lines = [
     `refused: guarded paths other than ${EVIDENCE_FLOOR_PATH} are dirty`,
-    ...paths.map((path) => `  - ${neutralize(path)}`),
+    ...paths.map((path) => `  - ${scrubString(path)}`),
     'a floor draft is reviewed on its own, so other policy changes must be committed first.',
     'review those files, commit or revert them, then run usabl baseline again.',
   ];
@@ -318,9 +317,11 @@ function formatSuccessReport(entryCount: number, intermittent: IntermittentGroup
 /**
  * Each file the scans could not place on a screen, by repository path, with the planner's reason,
  * which says why and how to fix it. A baseline scans every UI file, so this is where a shared file
- * that no route mapping reaches, such as a layout every route imports, first shows up. Listed in
- * full and sorted, so the operator can fix the map file by file and the output never changes
- * between runs. No page text is involved: the path and the reason both come from the source tree.
+ * that no route mapping reaches, such as a layout every route imports, first shows up. Sorted, so
+ * the output never changes between runs, and bounded, so hundreds of files with one shared cause
+ * do not bury the rest of the report. No page text is involved, but the path and the reason both
+ * come from the source tree, which can hold credential-shaped text or a forged frame marker, so
+ * every line is scrubbed.
  */
 function unplacedFileLines(coverages: ReadonlyArray<Result['coverage']>): string[] {
   const byRef = new Map<string, string>();
@@ -335,11 +336,19 @@ function unplacedFileLines(coverages: ReadonlyArray<Result['coverage']>): string
     return [];
   }
   const refs = [...byRef.keys()].sort();
+  const hidden = refs.length - MAX_LISTED_UNPLACED;
   return [
     `files usabl could not place on any screen: ${refs.length}`,
-    ...refs.map((ref) => `  - ${neutralize(ref)}: ${neutralize(byRef.get(ref) ?? '')}`),
+    ...refs.slice(0, MAX_LISTED_UNPLACED).map((ref) => `  - ${scrubString(ref)}: ${scrubString(byRef.get(ref) ?? '')}`),
+    ...(hidden > 0
+      ? [`  ${hidden} more files not shown. Place the files above, then run usabl baseline again to list the rest.`]
+      : []),
   ];
 }
+
+// A large app can hold hundreds of files usabl cannot place, often for one shared cause. The list
+// prints this many, the same bound usabl check uses, then the count of the rest.
+const MAX_LISTED_UNPLACED = 20;
 
 // The default refusal when coverage is incomplete. A floor is an acceptance of existing debt, so a
 // run that admits it did not see everything must not mint one. Name the numbers and the two ways

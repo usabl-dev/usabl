@@ -1537,8 +1537,10 @@ page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case 
 such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
 the first such file in its gap list and then lists every other one with its reason, sorted.
 `usabl baseline` scans every UI file, so it is where these show up first: its refusal on
-incomplete coverage, and its `--partial` report, list every such file with its reason, sorted. No
-page text is printed in either list.
+incomplete coverage, and its `--partial` report, list such files with their reasons, sorted: the
+first 20, then the count of the rest, the same bound `usabl check` uses. No page text is printed
+in either list, and every line goes through the surface scrubber, because a path or an import in
+source can hold credential-shaped text or a forged frame marker.
 
 An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not

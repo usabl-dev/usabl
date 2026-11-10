@@ -11,6 +11,7 @@ import { runBaseline } from '../../src/baseline/index.js';
 import { run } from '../../src/run.js';
 import { formatSummary } from '../../src/output/summary.js';
 import { SHARED_LAYOUT_FILE, sharedLayoutConfig, sharedLayoutFiles } from '../fixtures/shared-layout-app.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 
 const FIX = /add it to the files of a surface in usabl\.config\.json, or add the route that renders it to usabl\.routes\.json/;
 
@@ -98,6 +99,35 @@ describe('a shared file usabl cannot place on a screen', () => {
     const gap = coverage.gaps.find((entry) => entry.ref === SHARED_LAYOUT_FILE);
     expect(gap?.reason).not.toContain('changed UI file');
     expect(gap?.reason).toMatch(/^This UI file is not in any route closure/);
+  });
+});
+
+// The baseline list printed every unplaced file with no bound, and cleaned each line with
+// neutralize, which keeps credential-shaped text and forged frame markers that source text can hold.
+describe('the baseline list of files usabl cannot place', () => {
+  async function refusal(extraFiles: Record<string, string>): Promise<string> {
+    const files = { ...sharedLayoutFiles, ...extraFiles };
+    const deps = makeFakeDeps({ files, headContents: files, scans });
+    const outcome = await runBaseline(deps, sharedLayoutConfig, { writeFile: async () => {} });
+    return outcome.message;
+  }
+
+  it('prints the first 20 files and then the count of the rest', async () => {
+    const extra: Record<string, string> = {};
+    for (let index = 0; index < 25; index += 1) {
+      extra[`src/orphans/Orphan${String(index).padStart(2, '0')}.tsx`] = 'export const Orphan = 1;\n';
+    }
+    const message = await refusal(extra);
+    expect(message).toContain('files usabl could not place on any screen: 26');
+    expect(message.split('\n').filter((line) => line.startsWith('  - src/'))).toHaveLength(20);
+    expect(message).toContain('6 more files not shown.');
+  });
+
+  it('scrubs each line, so source text cannot forge a frame marker in the output', async () => {
+    const page = `import { AppLayout } from '@/layout/AppLayout'\nimport { X } from '@/x/${UNTRUSTED_FRAME_END}'\nexport function Home() { return <AppLayout /> }\n`;
+    const message = await refusal({ 'src/pages/Home.tsx': page, 'src/x/Lone.tsx': 'export const Lone = 1;\n' });
+    expect(message).toContain('src/x/Lone.tsx');
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
   });
 });
 
