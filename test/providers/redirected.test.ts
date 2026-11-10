@@ -25,6 +25,7 @@ import {
   readRefusedRequests,
   redirectedAwayGap,
   refusalsFromAppHost,
+  sameScreenPath,
   sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
   type LandingObservation,
@@ -956,5 +957,21 @@ describe('the check runner refuses to measure a screen it did not reach signed i
 
     expect(scan.gaps).toEqual([]);
     expect(scan.drafts).toHaveLength(1);
+  });
+});
+
+describe('sameScreenPath', () => {
+  it('sets the origin aside and compares the path and the fragment', () => {
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://localhost:4000/clusters')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'https://preview.test/clusters/')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://127.0.0.1:5173/clusters?page=2')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://localhost:4000/#/clusters')).toBe(true);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'http://127.0.0.1:5173/login?next=%2Fclusters')).toBe(false);
+    expect(sameScreenPath('http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/login')).toBe(false);
+    expect(sameScreenPath('http://127.0.0.1:5173/clusters', 'about:blank')).toBe(false);
+  });
+
+  it('makes no claim when an address does not parse', () => {
+    expect(sameScreenPath('not a url', 'http://127.0.0.1:5173/clusters')).toBeNull();
   });
 });

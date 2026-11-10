@@ -391,6 +391,19 @@ function recoveryStandsDown(observation: LandingObservation): boolean {
 }
 
 /**
+ * The part of a parsed address that names the screen: the path with one trailing slash removed, and
+ * the fragment, which a hash router uses for the whole route. The query is left out for the reason
+ * given at the top of this file.
+ */
+function screenPart(parsed: URL): string {
+  const path =
+    parsed.pathname.length > 1 && parsed.pathname.endsWith('/')
+      ? parsed.pathname.slice(0, -1)
+      : parsed.pathname;
+  return `${path.length === 0 ? '/' : path}${parsed.hash}`;
+}
+
+/**
  * The comparable form of an address: origin, path with one trailing slash removed, and fragment.
  * Returns null when the string is not a URL this can parse, which the caller falls back from.
  */
@@ -401,11 +414,21 @@ function normalizeUrl(raw: string): string | null {
   } catch {
     return null;
   }
-  const path =
-    parsed.pathname.length > 1 && parsed.pathname.endsWith('/')
-      ? parsed.pathname.slice(0, -1)
-      : parsed.pathname;
-  return `${parsed.origin}${path.length === 0 ? '/' : path}${parsed.hash}`;
+  return `${parsed.origin}${screenPart(parsed)}`;
+}
+
+/**
+ * Whether two addresses name the same screen when their origins are set aside: the same path, up to
+ * one trailing slash, and the same fragment. The Playwright helper reads it, because a test often
+ * runs on its own base URL, on another port, or on localhost where the config says 127.0.0.1. Null
+ * when either address does not parse, so no claim is made either way.
+ */
+export function sameScreenPath(expectedUrl: string, landedUrl: string): boolean | null {
+  try {
+    return screenPart(new URL(expectedUrl)) === screenPart(new URL(landedUrl));
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -18,12 +18,14 @@ import type {
   RequirementBundle,
   Result,
   ScreenScan,
+  SurfaceConfig,
   UsablConfig,
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
 import { markUnseenScreens } from '../coverage/unseen.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
+import { readStorageStateEnv } from '../deps/session.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { assertIdField } from '../intake/input-refusal.js';
 import { loadRequirements } from '../intake/load.js';
@@ -34,6 +36,7 @@ import {
   heldThroughout,
   measureReachability,
   measureReadiness,
+  readApiResponses,
   readinessSignalOf,
   selectorHeldBeforeWalk,
   signalTimeoutMsFor,
@@ -41,6 +44,14 @@ import {
   type ReadinessMeasurement,
   type ReadinessSignal,
 } from '../providers/reachability.js';
+import {
+  observeLanding,
+  readRefusedRequests,
+  redirectedAwayGap,
+  sameScreenPath,
+  sanitizeUrlForDisplay,
+  type LandingObservation,
+} from '../providers/redirected.js';
 import { attachRowScopeToDrafts } from '../providers/row-scope.js';
 import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 
@@ -122,6 +133,12 @@ export interface CheckPageOptions {
   // to the current working directory. Parent directories are never searched. A root passed here
   // with no usabl.config.json in it is a gap; the default root with none is not.
   projectRoot?: string;
+  // The address this page should be at. Only its path and fragment are compared with the page's
+  // own address, so a test that runs on another host or port still matches. A path such as
+  // '/clusters' is read against the page's own address. Left out, a page labeled with a surface
+  // that usabl.config.json lists is held to that surface's url, and any other page is not held to
+  // an address, because it claims no screen.
+  expectedUrl?: string;
 }
 
 // A page a caller hands us has no config file behind it, so the providers run against a neutral
@@ -370,19 +387,43 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       labeledScreenId === null || config === null
         ? undefined
         : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
-    const signal = readinessSignalOf(reachedWhen);
-    if (signal === null || config === null) {
-      const { drafts, gaps, notes } = await runChecks();
-      return finish(drafts, gaps, notes);
+    const signal = config === null ? null : readinessSignalOf(reachedWhen);
+    let before: { measured: ReadinessMeasurement } | null = null;
+    if (signal !== null && config !== null) {
+      const waited = await readinessBeforeChecks(page, screenId, signal, config);
+      if ('gap' in waited) {
+        // The screen is not known to be showing, so no provider runs on it.
+        return finish([], [waited.gap]);
+      }
+      before = waited;
     }
 
-    const before = await readinessBeforeChecks(page, screenId, signal, config);
-    if ('gap' in before) {
-      // The screen is not known to be showing, so no provider runs on it.
-      return finish([], [before.gap]);
+    // Whether the page is at the screen it claims to be, after the readiness wait, so a redirect
+    // the application runs on load has landed. A page that is somewhere else is not that screen,
+    // so no provider runs on it.
+    const expected = expectedAddress(options, labeledScreenId, config, pwPage.url());
+    let landing: LandingObservation | null = null;
+    if (expected !== null) {
+      const landed = await landingBeforeChecks(page, screenId, labeledScreenId !== null, expected, config, reachedWhen);
+      if ('gap' in landed) {
+        return finish([], [landed.gap]);
+      }
+      landing = landed.observation;
     }
-    await page.markWalkStart();
+
+    if (before !== null) {
+      await page.markWalkStart();
+    }
     const { drafts, gaps, notes } = await runChecks();
+    // Rule A again, as the CLI reads it after the checks: an identity request refused during the
+    // checks means the page was not reached signed in.
+    const late = landing === null ? null : await lateRefusalGap(page, screenId, landing);
+    if (late !== null) {
+      return finish([], [...gaps, late]);
+    }
+    if (before === null || signal === null || config === null) {
+      return finish(drafts, gaps, notes);
+    }
     // Measured again after the checks, as the CLI does. A part holds only if it held both times.
     // An unseen page loses its notes with its drafts: they describe a page that is not the screen.
     const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
@@ -440,6 +481,106 @@ async function readinessBeforeChecks(
     ? unseenGap(screenId, signal, measured)
     : unseenGap(screenId, signal, { ...measured, selectorPresent: false }, signalWaitMs);
   return gap === null ? { measured } : { gap };
+}
+
+/**
+ * The address checkPage holds the page to, or null when the page claims none. The caller's
+ * expectedUrl comes first. A labeled page whose id names a surface in usabl.config.json is held to
+ * that surface's url. An unlabeled page, or one whose id names no configured surface, claims no
+ * address, so it is not held to one.
+ */
+function expectedAddress(
+  options: CheckPageOptions,
+  labeledScreenId: string | null,
+  config: UsablConfig | null,
+  pageUrl: string,
+): string | null {
+  if (options.expectedUrl !== undefined) {
+    try {
+      return new URL(String(options.expectedUrl), pageUrl).toString();
+    } catch {
+      // An address that does not parse is still a claim. The comparison cannot hold for it, so
+      // the page is a gap rather than a guess.
+      return String(options.expectedUrl);
+    }
+  }
+  if (labeledScreenId === null || config === null) {
+    return null;
+  }
+  return config.surfaces.find((surface) => surface.id === labeledScreenId)?.url ?? null;
+}
+
+function landingRef(screenId: string): string {
+  return `landing:${screenId}`;
+}
+
+// The CLI's assertion that a run is signed in: a storage state named in USABL_STORAGE_STATE. Rules
+// A and B of the landing check are claims about a session that was asserted and did not work, so
+// without it they say nothing, as in the CLI.
+function sessionAsserted(): boolean {
+  return readStorageStateEnv(process.env) !== null;
+}
+
+function landingGap(screenId: string, reason: string): CoverageGap {
+  return { ref: landingRef(screenId), state: 'not-covered', reason: scrubString(reason) };
+}
+
+/**
+ * Holds the page to the address it claims, then to the CLI's landing rules A to C from
+ * providers/redirected.ts. The address is compared by path and fragment only. The rules are read
+ * with the expected address moved onto the page's own origin, so Rule C, which compares origins
+ * too, reads the same path and fragment and nothing else.
+ */
+async function landingBeforeChecks(
+  page: Page,
+  screenId: string,
+  labeled: boolean,
+  expected: string,
+  config: UsablConfig | null,
+  reachedWhen: SurfaceConfig['reachedWhen'],
+): Promise<{ observation: LandingObservation } | { gap: CoverageGap }> {
+  let landedUrl: string | null;
+  try {
+    const reported = await page.currentUrl();
+    landedUrl = reported.trim().length > 0 ? reported : null;
+  } catch {
+    landedUrl = null;
+  }
+  const claim = labeled ? `this page is screen ${screenId}, at ${sanitizeUrlForDisplay(expected)}` : `this page is at ${sanitizeUrlForDisplay(expected)}`;
+  if (landedUrl === null || sameScreenPath(expected, landedUrl) !== true) {
+    const where = landedUrl === null ? 'the page could not report its address' : `the page is at ${sanitizeUrlForDisplay(landedUrl)}`;
+    return {
+      gap: landingGap(
+        screenId,
+        `checkPage was told ${claim}, and ${where}. Only the path and the fragment are compared, so a test ` +
+          'on another host or port still matches. The page is not that screen, so usabl did not check it and reports ' +
+          'no findings for it. If the session expired, sign in again before the check. If the screen moved, correct ' +
+          'its url in usabl.config.json or pass expectedUrl. Addresses are shown without their sign-in credentials, ' +
+          'query string, or fragment, because any of them can carry a token, so two addresses that differ only in ' +
+          'the fragment look the same here.',
+      ),
+    };
+  }
+  const expectedParsed = new URL(expected);
+  const requestedUrl = new URL(`${expectedParsed.pathname}${expectedParsed.search}${expectedParsed.hash}`, landedUrl).toString();
+  const observation = await observeLanding(page, {
+    requestedUrl,
+    appBaseUrl: config?.appBaseUrl ?? '',
+    sessionConfigured: sessionAsserted(),
+    reachedWhen,
+  });
+  const ruled = redirectedAwayGap(screenId, observation);
+  return ruled === null ? { observation } : { gap: landingGap(screenId, ruled.reason) };
+}
+
+/** Rule A on the refused-request record as it stands after the checks, as the CLI reads it. */
+async function lateRefusalGap(page: Page, screenId: string, landing: LandingObservation): Promise<CoverageGap | null> {
+  const ruled = redirectedAwayGap(screenId, {
+    ...landing,
+    unauthorizedApiUrls: await readRefusedRequests(page),
+    apiResponses: await readApiResponses(page),
+  });
+  return ruled === null ? null : landingGap(screenId, ruled.reason);
 }
 
 function readinessRef(screenId: string): string {

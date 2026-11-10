@@ -173,6 +173,22 @@ function headingPage(heading: string): string {
 </html>`;
 }
 
+// A sign-in page: accessible, with a password field.
+const SIGN_IN_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in</title>
+  </head>
+  <body>
+    <main>
+      <h1>Sign in</h1>
+      <label>Password <input type="password" /></label>
+      <button type="submit">Sign in</button>
+    </main>
+  </body>
+</html>`;
+
 const HEADING_REQUIREMENT = `version: 1
 requirements:
   - id: clusters-heading
@@ -670,7 +686,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await page.setContent(html, { waitUntil: 'domcontentloaded' });
+      // The page is served at the address the config gives the screen, because checkPage holds a
+      // labeled page to that address. Nothing listens there; the route answers instead.
+      await page.route('http://127.0.0.1:5173/clusters', (route) =>
+        route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }),
+      );
+      await page.goto('http://127.0.0.1:5173/clusters', { waitUntil: 'domcontentloaded' });
       return await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 5 });
     } finally {
       await context.close();
@@ -713,5 +734,132 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
     expect(result.drafts).toEqual([]);
     expect(result.gaps).toHaveLength(1);
     expect(result.gaps[0]?.reason).toContain('/api/orders');
+  });
+});
+
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labeled page to its screen address', { timeout: 60_000 }, () => {
+  let browser: Browser;
+  let server: Server;
+  let port: number;
+  let dir: string;
+
+  // Every path answers with the same accessible page, so only the address can tell the screens apart.
+  // The sign-in path also shows a password field, as a sign-in page does.
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+    server = createServer((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(path.startsWith('/login') || path.startsWith('/account') ? SIGN_IN_HTML : headingPage('Clusters'));
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('test server has no port');
+    }
+    port = address.port;
+    // The config names another port, as a project whose tests run on their own base URL does.
+    dir = await mkdtemp(join(tmpdir(), 'usabl-checkpage-landing-'));
+    const config = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['src/**'],
+      discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [
+        { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/clusters.tsx'] },
+        { id: 'hash-clusters', url: 'http://127.0.0.1:5173/#/clusters', files: ['src/hash.tsx'] },
+        { id: 'account', url: 'http://127.0.0.1:5173/account', files: ['src/account.tsx'] },
+      ],
+      guardedPaths: [],
+    };
+    await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config, null, 2));
+  });
+
+  afterAll(async () => {
+    await browser.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function checkAt(url: string, options: Parameters<typeof checkPage>[1]) {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      return await checkPage(page, { projectRoot: dir, tabCap: 10, ...options });
+    } finally {
+      await context.close();
+    }
+  }
+
+  const ordinary: Array<[string, () => string, string]> = [
+    ['on its own base URL and port', () => `http://127.0.0.1:${port}/clusters`, 'clusters'],
+    ['on localhost where the config says 127.0.0.1', () => `http://localhost:${port}/clusters`, 'clusters'],
+    ['with a trailing slash the config does not have', () => `http://127.0.0.1:${port}/clusters/`, 'clusters'],
+    ['in a hash-routed app', () => `http://localhost:${port}/#/clusters`, 'hash-clusters'],
+  ];
+  for (const [name, urlOf, screenId] of ordinary) {
+    it(`is verified ${name}`, async () => {
+      const result = await checkAt(urlOf(), { screenId });
+      expect(result.gaps).toEqual([]);
+      expect(result.verdict).toBe('verified');
+    });
+  }
+
+  it('is not_covered, names both addresses, and runs no checks when the session expired and the page landed on a sign-in path', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/login?next=%2Fclusters`, { screenId: 'clusters' });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toMatchObject({ ref: 'landing:clusters', state: 'not-covered' });
+    expect(result.gaps[0]?.reason).toContain('/clusters');
+    expect(result.gaps[0]?.reason).toContain('/login');
+    // The query can carry a return address or a token, so it is not shown.
+    expect(result.gaps[0]?.reason).not.toContain('next=');
+  });
+
+  it('is not_covered when a hash-routed app landed on another route', async () => {
+    const result = await checkAt(`http://localhost:${port}/#/login`, { screenId: 'hash-clusters' });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:hash-clusters']);
+  });
+
+  it('does not check the address of an unlabeled page, which claims no screen', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/elsewhere`, {});
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('holds the page to the address the caller passes', async () => {
+    const met = await checkAt(`http://127.0.0.1:${port}/reports`, { screenId: 'reports', expectedUrl: '/reports' });
+    expect(met.gaps).toEqual([]);
+    expect(met.verdict).toBe('verified');
+
+    const missed = await checkAt(`http://127.0.0.1:${port}/login`, { screenId: 'clusters', expectedUrl: 'http://localhost:9999/clusters' });
+    expect(missed.verdict).toBe('not_covered');
+    expect(missed.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+  });
+
+  it('applies the CLI rule for a password field when the run asserts a session the CLI way', async () => {
+    const before = process.env['USABL_STORAGE_STATE'];
+    process.env['USABL_STORAGE_STATE'] = join(dir, 'state.json');
+    try {
+      const result = await checkAt(`http://127.0.0.1:${port}/account`, { screenId: 'account' });
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:account']);
+      expect(result.gaps[0]?.reason).toContain('asks for a password');
+    } finally {
+      if (before === undefined) {
+        delete process.env['USABL_STORAGE_STATE'];
+      } else {
+        process.env['USABL_STORAGE_STATE'] = before;
+      }
+    }
+  });
+
+  it('does not apply the session rules when the run asserts no session', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/account`, { screenId: 'account' });
+    expect(result.gaps).toEqual([]);
   });
 });
