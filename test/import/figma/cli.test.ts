@@ -126,6 +126,10 @@ describe('usabl import figma', () => {
   it.each([
     [['figma'], 'give the Figma file key'],
     [['other', 'K', '--frame', 'A=a', '--out', 'x'], 'the only source is figma'],
+    // Flags given before the command word reach the import first, as main hands them over, and
+    // the import refuses them: its first argument must be the source.
+    [['--owner', 'import', 'figma', 'K', '--frame', 'A=a', '--out', 'x'], 'the only source is figma'],
+    [['--owner', 'import', '--min-target', '24', 'figma', 'K', '--frame', 'A=a', '--out', 'x'], 'the only source is figma'],
     [['figma', '../K', '--frame', 'A=a', '--out', 'x'], 'file key must be a Figma file key'],
     [['figma', 'K', '--out', 'x'], 'give at least one --frame'],
     [['figma', 'K', '--frame', 'A=a'], 'give --out'],

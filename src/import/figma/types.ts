@@ -2,8 +2,9 @@
  * The parts of Figma's REST file format that usabl reads, and the check that a network answer has
  * that shape before anything reads it.
  *
- * The types are kept local so usabl's published types never depend on Figma's package. They are a
- * subset of Figma's GetFileResponse: every field here is one Figma's published types also have.
+ * The types are kept local so usabl's published types never depend on Figma's package. They are
+ * written by hand to match a subset of Figma's published file format (GetFileResponse). Nothing in
+ * this repository checks them against Figma's own package yet.
  * Dev Mode annotations are typed as a bare object in Figma's REST types, so their shape follows the
  * Plugin API (label, labelMarkdown) and is to be confirmed on a real design file.
  *

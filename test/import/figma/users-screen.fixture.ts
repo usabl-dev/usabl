@@ -3,10 +3,10 @@
  * notes follow the kit in src/import/figma/kit.ts: stamps are component instances placed over the design
  * element they annotate, and coordinates are absolute, as in the API.
  *
- * The file carries every field Figma's published GetFileResponse type requires for each node type,
- * filled with plain defaults, so it is a file Figma could send and not only the subset usabl reads.
- * The types below spell those fields out. A compile-time check against Figma's own package is not
- * part of this repository yet.
+ * The file is written to match Figma's published file format by hand: it carries the fields that
+ * format lists as required for each node type, filled with plain defaults, so it is meant to be a
+ * file Figma could send and not only the subset usabl reads. The types below spell those fields
+ * out. Nothing in this repository checks them against Figma's own package yet.
  */
 import type {
   FigmaAnnotation,
