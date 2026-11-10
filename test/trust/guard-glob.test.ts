@@ -22,7 +22,7 @@ import { makeGitReader } from '../../src/deps/git.js';
 import { computePolicyHash } from '../../src/evidence/receipt.js';
 import { run } from '../../src/run.js';
 import { enforcePolicy } from '../../src/surfaces/policy-enforce.js';
-import { buildGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
+import { buildGuardedSet, expandConfigGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -548,6 +548,48 @@ describe('a guardedPaths entry the guard cannot evaluate', REAL_GIT, () => {
     expect(refused.exitCode).toBe(2);
     expect(refused.message).toContain('usabl.config.json');
     await expect(policyCheckWith(root, ['owner'])).resolves.toMatchObject({ exitCode: 0 });
+  });
+});
+
+/**
+ * The requirements value is a folder, not a glob, and the requirements loader accepts any folder
+ * name. The guard reads it as a literal path, as it did before the matcher.
+ */
+describe('the requirements folder', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const config: UsablConfig = { ...configWith(['policy/']), requirements: 'requirements (v2)' };
+  const files = {
+    'requirements (v2)/flows.yaml': 'flows: []\n',
+    'policy/rules.json': '{}\n',
+    'src/App.tsx': 'export {}\n',
+  };
+
+  it('guards the folder as a path, locally and in CI', async () => {
+    root = await repoWith(config, files);
+    await write(root, 'requirements (v2)/flows.yaml', 'flows: [changed]\n');
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    const local = await run(realDeps(root), config);
+    expect(local.dirtyGuardedPaths).toEqual(['requirements (v2)/flows.yaml']);
+
+    await git(root, ['checkout', '-b', 'feature']);
+    await git(root, ['commit', '-am', 'change the requirements and the app']);
+    const out = await policyCheckAt(root);
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toContain('requirements (v2)/flows.yaml');
+    expect(out.message).not.toContain('src/App.tsx');
+    expect(out.message).not.toContain('read the guardedPaths entry');
+  });
+
+  it('lists the same files as before the matcher', async () => {
+    root = await repoWith(config, files);
+    const deps = realDeps(root);
+    const before = await previousExpansion(deps, buildGuardedSet(config));
+    expect(await expandConfigGuardedSet(deps, config)).toEqual(before);
   });
 });
 

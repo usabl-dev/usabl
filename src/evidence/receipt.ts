@@ -13,7 +13,7 @@
 import type { Deps, Receipt, ScannerVersions, ScreenScan, UsablConfig } from "../contracts/index.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
-import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
+import { expandConfigGuardedSet } from "../trust/guard.js";
 import { assertIdField, InputRefusedError } from "../intake/input-refusal.js";
 
 export interface ReceiptArgs {
@@ -171,10 +171,7 @@ export async function mintReceipt(
   checkReceiptInput(config, args);
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
-  const expandedGuardedPaths = await expandGuardedSet(
-    deps,
-    buildGuardedSet(config),
-  );
+  const expandedGuardedPaths = await expandConfigGuardedSet(deps, config);
   const [sourceTree, policy] = await Promise.all([
     deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
@@ -251,10 +248,7 @@ export async function verifyReceipt(
   currentSourceTree: string,
 ): Promise<ReceiptVerification> {
   const failedFields: string[] = [];
-  const expandedGuardedPaths = await expandGuardedSet(
-    deps,
-    buildGuardedSet(config),
-  );
+  const expandedGuardedPaths = await expandConfigGuardedSet(deps, config);
   const policyHash = await computePolicyHash(deps, expandedGuardedPaths);
 
   if (receipt.sourceTree !== currentSourceTree) {
