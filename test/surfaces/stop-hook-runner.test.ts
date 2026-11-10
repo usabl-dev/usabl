@@ -5,6 +5,7 @@ import { mintReceipt } from '../../src/evidence/receipt.js';
 import { BYPASS_ONCE_PATH } from '../../src/surfaces/receipt-store.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin, sessionPinFileName } from '../../src/surfaces/stop-hook-runner.js';
+import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
 
 class MemoryRunnerFs {
@@ -93,6 +94,7 @@ function makePorts(overrides: {
       stderrWrite: async (text: string) => {
         stderr.push(text);
       },
+      readConfigBytes: async () => committedConfigBytes(),
       loadConfig: overrides.loadConfig ?? (async () => configFixture),
       buildDeps: overrides.buildDeps ?? (async (_config: UsablConfig) => deps),
       runEngine: overrides.runEngine ?? (async () => baseResult({ verdict: 'verified' })),
@@ -301,7 +303,7 @@ describe('stop-hook-runner protocol', () => {
     const text = stderr.join('');
     const open = text.indexOf('[BEGIN UNTRUSTED TEXT');
     const close = text.indexOf('[END UNTRUSTED TEXT]');
-    expect(text.startsWith('VERIFIED (exit 0)')).toBe(true);
+    expect(text.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned)')).toBe(true);
     expect(text.indexOf(tree)).toBeGreaterThan(open);
     expect(text.lastIndexOf(tree)).toBeLessThan(close);
     expect(open).toBeGreaterThan(-1);
@@ -352,7 +354,7 @@ describe('stop-hook-runner protocol', () => {
 
     expect(exitCode).toBe(0);
     expect(runEngineCalled).toBe(true);
-    expect(stderr.join('')).not.toContain('a stored receipt matches this tree');
+    expect(stderr.join('')).not.toContain('from a stored receipt');
   });
 
   it('does not compare pins across repositories in the same session', async () => {
@@ -530,7 +532,7 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(await runStopHookFromStdin(sessionStop('session-weaken'), h.ports)).toBe(0);
     const stdout = h.stdout.join('');
     const stderr = h.stderr.join('');
-    expect(stderr).not.toContain('a stored receipt matches');
+    expect(stderr).not.toContain('from a stored receipt');
     expect(stderr).not.toContain('VERIFIED');
     const payload = JSON.parse(stdout.trim()) as { decision: string; reason: string };
     expect(payload.decision).toBe('block');
@@ -577,9 +579,9 @@ describe('stop-hook-runner fast path and session pins', () => {
     const stderr = h.stderr.join('');
     expect(h.engineRuns()).toBe(1);
     expect(h.stdout.join('')).not.toContain('"decision":"block"');
-    expect(stderr.startsWith('VERIFIED (exit 0): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned): this result comes from a stored receipt')).toBe(true);
     expect(stderr).toContain('Guarded policy files match the session pins.');
-    expect(stderr).toContain('No new scan ran.');
+    expect(stderr).toContain('usabl did not scan this change again on this stop.');
     expect(stderr).not.toContain('session drift not checked');
     // Pins are replaced on a fast allow exactly as on a full run with no drift.
     expect(h.pins.writes).toEqual([pinName]);
@@ -596,7 +598,9 @@ describe('stop-hook-runner fast path and session pins', () => {
 
     const stderr = h.stderr.join('');
     expect(h.engineRuns()).toBe(0);
-    expect(stderr.startsWith('VERIFIED (exit 0): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned): this result comes from a stored receipt')).toBe(true);
+    // A verified fast allow with no notice writes nothing to stdout.
+    expect(h.stdout.join('')).toBe('');
     expect(h.pins.files.get(pinName)).toBeDefined();
     // Nothing was compared on a first stop, so the line does not say the pins matched.
     expect(stderr).not.toContain('match the session pins');
@@ -628,12 +632,15 @@ describe('stop-hook-runner fast path and session pins', () => {
     const stderr = h.stderr.join('');
     expect(h.engineRuns()).toBe(0);
     expect(h.stdout.join('')).not.toContain('"decision":"block"');
-    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned, session drift not checked): this result comes from a stored receipt')).toBe(true);
     expect(stderr).not.toContain('match the session pins');
     const notice = stderr.indexOf('NOT verified - usabl did not use session pins for this stop because');
     expect(notice).toBeGreaterThan(stderr.indexOf('[END UNTRUSTED TEXT]'));
     expect(stderr).toContain('pin fix: remove the directory.');
     expect(stderr.trimEnd().endsWith('[END UNTRUSTED TEXT]')).toBe(true);
+    // Claude Code does not show that stderr, so the same text goes to the person as a systemMessage.
+    const payload = JSON.parse(h.stdout.join('').trim()) as { systemMessage?: string };
+    expect(payload.systemMessage).toBe(stderr.trimEnd());
     expect(h.pins.writes).toEqual([]);
   });
 
@@ -647,7 +654,7 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(await runStopHookFromStdin(sessionStop('session-garbled'), h.ports)).toBe(0);
 
     const stderr = h.stderr.join('');
-    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned, session drift not checked): this result comes from a stored receipt')).toBe(true);
     expect(stderr).toContain('the session pin file does not hold pins usabl can read');
     expect(h.pins.files.get(pinName)).toBe('{not json');
     expect(h.pins.writes).toEqual([]);
@@ -665,7 +672,7 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(await runStopHookFromStdin(sessionStop('session-norecord'), h.ports)).toBe(0);
 
     const stderr = h.stderr.join('');
-    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned, session drift not checked): this result comes from a stored receipt')).toBe(true);
     expect(stderr).toContain('NOT verified - usabl could not record session pins for this stop');
     expect(stderr).toContain('pin reason: the pin directory is full');
   });
@@ -727,7 +734,7 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
 
     const stderr = h.stderr.join('');
     expect(h.engineRuns()).toBe(0);
-    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned, session drift not checked): this result comes from a stored receipt')).toBe(true);
     expect(stderr).toContain('NOT verified - usabl did not use session pins for this stop');
     expect(stderr).toContain('no session id');
   });
@@ -738,7 +745,7 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     expect(await runStopHookFromStdin(JSON.stringify({ session_id: '../../etc/passwd' }), h.ports)).toBe(0);
 
     const stderr = h.stderr.join('');
-    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned, session drift not checked): this result comes from a stored receipt')).toBe(true);
     expect(stderr).toContain('NOT verified - usabl did not use session pins for this stop');
     expect(stderr).toContain('session id');
     expect(h.pins.writes).toEqual([]);
@@ -811,8 +818,8 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
 
   it('prints an error message only inside the frame', async () => {
     const { ports, stderr } = makePorts({
-      loadConfig: async () => {
-        throw new Error(`config broke\n${INJECTED}`);
+      buildDeps: async () => {
+        throw new Error(`deps broke\n${INJECTED}`);
       },
     });
 
@@ -822,6 +829,21 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     expect(text.startsWith('NOT verified - stop hook error')).toBe(true);
     expect(text).toContain(INJECTED);
     expect(onlyInsideFrames(text, INJECTED)).toBe(true);
+  });
+
+  it('prints a config parse error only inside the frame of the approval block', async () => {
+    const { ports, stdout } = makePorts({
+      loadConfig: async () => {
+        throw new Error(`config broke\n${INJECTED}`);
+      },
+    });
+
+    await runStopHookFromStdin(JSON.stringify({ session_id: 'session-parse-error' }), ports);
+
+    const reason = (JSON.parse(stdout.join('').trim()) as { reason: string }).reason;
+    expect(reason.startsWith('NOT verified - approval required')).toBe(true);
+    expect(reason).toContain(INJECTED);
+    expect(onlyInsideFrames(reason, INJECTED)).toBe(true);
   });
 
   it('allows on a matching receipt when pin replacement is refused, and says the next stop uses older pins', async () => {
@@ -839,7 +861,7 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     await runStopHookFromStdin(stdin, h.ports);
 
     const text = h.stderr.join('');
-    expect(text.startsWith('VERIFIED (exit 0): a stored receipt matches')).toBe(true);
+    expect(text.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned): this result comes from a stored receipt')).toBe(true);
     expect(text).toContain('Guarded policy files match the session pins.');
     expect(text).toContain('NOT verified - usabl could not record session pins for this stop');
     expect(text).toContain('the next stop compares against the older pins');

@@ -58,7 +58,7 @@ import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
-import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
+import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
@@ -95,6 +95,20 @@ export async function loadConfig(
     }
     throw error;
   }
+  return parseConfigText(raw, warn);
+}
+
+/**
+ * Parse config text that was already read, with the same checks and warnings as loadConfig. The
+ * Stop hook reads the bytes itself, compares them with the last commit, and parses only the bytes
+ * it compared, so the file is never read twice.
+ */
+export function parseConfigText(
+  raw: string,
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+): UsablConfig {
   const config = parseUsablConfig(raw);
   // A configured URL with a query or a fragment loads, and the operator is told where it is
   // printed. Once per process for each field and url: the dev-server plugin loads the config on
@@ -848,18 +862,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       ...(changedFiles === undefined ? {} : { changedFiles }),
     });
     const result = judge === null ? ran : judge.finish(ran);
-    if (result.verdict === 'verified' && result.receipt !== null) {
-      const receiptFs: ReceiptFs = {
-        readFile: async () => null,
-        writeFile: async (path, contents) => {
-          await writeFile(path, contents, 'utf8');
-        },
-        mkdir: async (path) => {
-          await mkdir(path, { recursive: true });
-        },
-      };
-      // Verified checks persist local proof so the stop-hook fast path can re-check without a browser.
-      await saveReceipt(receiptFs, result.receipt);
+    // Verified local checks persist local proof so the stop-hook fast path can re-check without a
+    // browser. A CI run saves none. The write never follows a symbolic link.
+    const receipt = receiptToSave(result, { ci: opts.ci });
+    if (receipt !== null) {
+      const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt);
+      if (saved.status === 'refused') {
+        process.stderr.write(`usabl: ${saved.message}\n`);
+      }
     }
     if (opts.selfCheck) {
       // Self-check is advisory and keeps exit 0 so stop-hook remains the only gate for continuation.

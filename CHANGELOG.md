@@ -202,6 +202,64 @@
 
 ### Fixed
 
+- The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
+  the repository root first, so a stop in a subfolder reads the root config, the root receipt,
+  and the root bypass file. A config that differs from HEAD, is missing from the working tree,
+  cannot be read, or does not parse blocks as approval required, says what clears it, and lets
+  one continuation through. Before, a corrupt config ended in an allow with "stop hook error". A
+  repository with no config in the working tree or at HEAD allows with "usabl is not configured
+  here". A new, uncommitted config runs, and the guard holds it for approval as before, when HEAD
+  exists. A repository with no commits, or an orphan branch with none yet, has no HEAD: the stop
+  fails open with git's "make a first commit" step and does not block. Gate effect: the Stop hook
+  blocks where it allowed.
+
+- The Stop hook blocks when guarded policy diverged on a run with no verdict, whatever the exit
+  code, and lets one continuation through. A run where every screen was unseen ends with exit 4,
+  and the hook allowed every exit 4 run, so diverged policy lost its approval block. A verdict
+  usabl does not recognize now blocks on exit 4 too, as the threat model said. A crash with clean
+  policy still fails open. Gate effect: the Stop hook blocks where it allowed.
+
+- The Stop hook's fast path line now reads "VERIFIED (exit 0, stored receipt, not re-scanned)"
+  and says usabl did not scan the change again on that stop. The threat model now says a user
+  with a shell on the same machine can write a receipt that verifies, and that receipt signing
+  is not built.
+
+- The Stop hook treats a `usabl.config.json` removed and committed during a session as drift.
+  When the working tree and HEAD both lack the config, but the session already recorded pins for
+  the repository root, the stop goes through the drift block with one continuation. Before, it
+  allowed with "usabl is not configured here". A repository that never had a config still allows
+  with that note. Gate effect: the Stop hook blocks where it allowed.
+
+- A stop that starts outside any git work tree, such as inside `.git`, now says the hook could not
+  find the repository and checked nothing, names the folder inside the untrusted frame, and says
+  to run `usabl check` from the project root. Before, it said the repository had no config. The
+  hook also starts its search at `CLAUDE_PROJECT_DIR` when that names a folder, so a stop from
+  `.git` in Claude Code reads the project root. Gate effect: such a stop in Claude Code is checked,
+  and can block, where it allowed with a false note.
+
+- In Claude Code, a Stop hook allow now also writes its text as a `systemMessage` on stdout,
+  which Claude Code shows to the person. It is shown for every allow except a verified stop and
+  an idle stop that carry no notice. Claude Code does not show the stderr of a Stop hook that
+  exits 0, so every "NOT verified" allow, the pin notices, and the receipt notice were silent
+  there. A block and the Cursor answer are unchanged. Gate effect: none; the stop goes through as
+  before, and the person now sees why.
+
+- Stop hook input that is not JSON now prints a line that says the stop went through and nothing
+  was checked, and says to check the hook command in `.claude/settings.json` or
+  `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check`. Gate effect: none.
+
+- A receipt that cannot be saved for any reason, such as `EACCES` on `.usabl`, no longer changes
+  the result. Before, only a link was handled, and any other failure threw before the decision, so
+  a verified stop read "stop hook error" and `usabl check` stopped with an error. Now the verdict
+  stands and the "NOT saved" notice carries the first line of the reason inside the untrusted
+  frame. Gate effect: a verified stop reads VERIFIED where it read as a stop hook error.
+
+- Hook and assistant wording. The guidance for a missing usabl names both messages npm can print.
+  A config that differs from the last commit "did not parse"; the way out for a config that does
+  not parse names `usabl init --force` and the files it overwrites. A continuation that goes
+  through no longer says "to clear this block". The current Cursor rule says "machine-checkable
+  accessibility barriers". Gate effect: none.
+
 - A flow requirement that passed only on speech recorded before its first step no longer
   passes. The capture runs for the life of the page, so the drain a flow took before its first
   step held every announcement since the last drain, such as one an earlier check caused, and
@@ -963,6 +1021,23 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
+  `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`
+  downloaded and ran whatever package held the npm name usabl, with no prompt. `npm exec --no`
+  runs a local or global install, or a copy already in npm's own cache, and never downloads. With
+  usabl not installed, each stop still makes one registry request. When usabl cannot run, the
+  Claude Code and Cursor hooks print one line that says so and how to install it, and exit 1,
+  which both treat as a failed hook that does not block. `usabl install --claude`,
+  `--claude-skill`, and `--cursor` rewrite a file the previous release wrote with `npx usabl`, and
+  still refuse any other differing file. `usabl doctor` reports such a file as a security drift and names the reinstall
+  command.
+
+- The receipt store never writes through a symbolic link. It refuses a link at `.usabl` or at
+  `.usabl/receipt.json`, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place. A committed link there could redirect the write to another file the user
+  can write. `usabl check --ci` no longer saves a receipt. A refused save is said plainly and
+  changes no verdict.
 
 - The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
   pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server
