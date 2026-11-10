@@ -12,6 +12,27 @@
  */
 export type CodeownersMatch = 'match' | 'none' | 'unknown';
 
+/**
+ * A CODEOWNERS line with its comment removed. A `#` at the start of the line or after whitespace
+ * starts a comment, as GitHub documents. A `#` inside a token, such as `/src/file#1.ts`, is not
+ * documented: GitHub may read it as part of the pattern. Then usabl cannot tell which rule matches
+ * a path last, so this returns the token that holds it and the caller refuses the whole file.
+ */
+export function stripCodeownersComment(line: string): { ok: true; text: string } | { ok: false; token: string } {
+  for (let index = 0; index < line.length; index += 1) {
+    if (line.charAt(index) !== '#') {
+      continue;
+    }
+    if (index === 0 || /\s/.test(line.charAt(index - 1))) {
+      return { ok: true, text: line.slice(0, index) };
+    }
+    const start = line.slice(0, index).search(/\S+$/);
+    const end = line.slice(index).search(/\s/);
+    return { ok: false, token: line.slice(start, end === -1 ? line.length : index + end) };
+  }
+  return { ok: true, text: line };
+}
+
 export type CompiledCodeownersPattern =
   | { ok: true; state: (path: string) => CodeownersMatch }
   | { ok: false; reason: string };

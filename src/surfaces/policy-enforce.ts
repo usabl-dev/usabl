@@ -4,7 +4,7 @@
  * Accessibility and policy checks split GitHub required status only.
  * GitHub review lookup is injected. `run()` stays GitHub-free.
  */
-import { compileCodeownersPattern, type CodeownersMatch } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, stripCodeownersComment, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
 import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
@@ -217,7 +217,14 @@ const OWNER_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | { ok: false; message: string } {
   const rules: CodeownersRule[] = [];
   for (const line of raw.split('\n')) {
-    const trimmed = line.replace(/#.*$/, '').trim();
+    const content = stripCodeownersComment(line);
+    if (!content.ok) {
+      return {
+        ok: false,
+        message: `CODEOWNERS token ${content.token} holds a # that does not follow a space, so usabl cannot tell whether GitHub reads it as part of the pattern or as a comment`,
+      };
+    }
+    const trimmed = content.text.trim();
     if (trimmed.length === 0) {
       continue;
     }

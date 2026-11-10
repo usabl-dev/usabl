@@ -465,6 +465,36 @@ describe('enforcePolicy', () => {
       expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
     });
 
+    const hashChange = (codeowners: string): Parameters<typeof policyGit>[0] => ({
+      codeowners,
+      trusted: { 'usabl.config.json': '{"guardedPaths":["src/"]}', 'src/file#1.ts': 'one\n' },
+      head: {
+        'usabl.config.json': '{"guardedPaths":["src/"]}',
+        '.usabl-evidence.json': '{"version":1,"entries":[]}',
+        'src/file#1.ts': 'changed\n',
+      },
+    });
+
+    it('refuses the whole file when a # sits inside a pattern', async () => {
+      // Cutting the line at that # would read `/src/file` with no owner, which matches nothing, and
+      // leave `/src/ @alice` as the last match. GitHub may read the # as part of the pattern.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: hashChange('/src/ @alice\n/src/file#1.ts @org/team\n'), listReviews: aliceApproved }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('#');
+      expect(out.message).toContain('/src/file#1.ts');
+    });
+
+    it('reads a # after whitespace as a comment, as in GitHub\'s example', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: hashChange('*.js @bob\n/src/ @alice #This is an inline comment.\n'), listReviews: aliceApproved }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
     it('still refuses the whole file on a pattern it cannot parse, even after a matching user line', async () => {
       const out = await enforcePolicy(
         policyResult,
