@@ -612,9 +612,28 @@ interface AllowText {
   message: string;
   // Notices written after the decision line: a receipt that was not saved, pins that were not used.
   notices?: string[];
-  // True only for a VERIFIED line. A verified allow with no notice is the one allow a person does
-  // not need to see.
-  verified?: boolean;
+  // True only for a VERIFIED line or an idle line (no UI file changed, so nothing to check). With
+  // no notice, these are the allows a person does not need to see: neither is a failure to look.
+  quiet?: boolean;
+}
+
+/**
+ * Whether a decision allow is a quiet one: the gate verified the change, or the run was idle.
+ * The idle line is usabl's own words and ends "You may stop.". An idle run with diverged guarded
+ * policy that was let through on a continuation opens with the same verdict word, but it says
+ * NOT verified and ends in the untrusted frame, so it is never quiet.
+ */
+function isQuietDecision(result: Result, message: string): boolean {
+  if (result.verdict === 'verified') {
+    return message.startsWith('VERIFIED');
+  }
+  return (
+    result.verdict === null &&
+    result.coverage.nothingToCheck === true &&
+    message.startsWith('NO VERDICT: IDLE') &&
+    message.endsWith('You may stop.') &&
+    !message.includes('NOT verified')
+  );
 }
 
 /**
@@ -633,7 +652,7 @@ async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, op
     await emitCursorAllow(ports);
     return;
   }
-  if (text.verified === true && lines.length === 1) {
+  if (text.quiet === true && lines.length === 1) {
     return;
   }
   await emitSystemMessage(ports, lines.join('\n'));
@@ -788,7 +807,7 @@ export async function runStopHook(
       if (receiptCheck.verified) {
         await emitProtocolAllow(
           ports,
-          { message: receiptCheck.details, notices: pinNotices(pinNotice), verified: true },
+          { message: receiptCheck.details, notices: pinNotices(pinNotice), quiet: true },
           options,
         );
         return 0;
@@ -824,7 +843,7 @@ export async function runStopHook(
     }
     await emitProtocolAllow(
       ports,
-      { message: decision.message, notices, verified: result.verdict === 'verified' && decision.message.startsWith('VERIFIED') },
+      { message: decision.message, notices, quiet: isQuietDecision(result, decision.message) },
       options,
     );
     return 0;

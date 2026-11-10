@@ -51,6 +51,14 @@ function result(overrides: Partial<Result> = {}): Result {
   };
 }
 
+function idle(): Result {
+  return result({
+    verdict: null,
+    summary: 'nothing to check',
+    coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+  });
+}
+
 interface HarnessOptions {
   bytes?: ConfigBytes;
   engine?: Result;
@@ -163,15 +171,18 @@ describe('Claude Stop hook allows that carry a notice write a systemMessage the 
     expect(await stop(h, input(false))).toContain('NO VERDICT: RUN FAILED (exit 4)');
   });
 
-  it('a run with nothing to check', async () => {
-    const h = harness({
-      engine: result({
-        verdict: null,
-        summary: 'nothing to check',
-        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
-      }),
-    });
-    expect(await stop(h, input(false))).toContain('NO VERDICT: IDLE');
+  it('a run with nothing to check that carries a notice, with the whole text', async () => {
+    const h = harness({ engine: idle() });
+    const message = await stop(h, input(false, null));
+    expect(message.startsWith('NO VERDICT: IDLE')).toBe(true);
+    expect(message).toContain('NOT verified - usabl did not use session pins for this stop');
+  });
+
+  it('an idle run with diverged guarded policy let through because continuation is active', async () => {
+    const h = harness({ engine: { ...idle(), dirtyGuardedPaths: ['usabl.config.json'] } });
+    const message = await stop(h, input(true));
+    expect(message.startsWith('NO VERDICT: IDLE (exit 0): NOT verified.')).toBe(true);
+    expect(message).toContain('continuation already active');
   });
 
   it('a blocking verdict let through because continuation is active', async () => {
@@ -220,6 +231,15 @@ describe('Claude Stop hook output that does not change', () => {
     expect(await runStopHookFromStdin(input(false), h.ports)).toBe(0);
     expect(h.stdout()).toBe('');
     expect(h.stderr()).toContain('VERIFIED (exit 0)');
+  });
+
+  // No UI file changed, so there was nothing to check. That is not a failure to look, and a
+  // message on every such stop would be noise.
+  it('an idle allow with no notice writes nothing to stdout', async () => {
+    const h = harness({ engine: idle() });
+    expect(await runStopHookFromStdin(input(false), h.ports)).toBe(0);
+    expect(h.stdout()).toBe('');
+    expect(h.stderr()).toContain('NO VERDICT: IDLE');
   });
 
   it('a block is one decision object, with no systemMessage', async () => {
