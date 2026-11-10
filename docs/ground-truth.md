@@ -4645,11 +4645,14 @@ the box it reads can be larger than the area a pointer can hit:
 - the element, or an element above it, is fixed or sticky, and the element reaches past the
   viewport;
 - the walk up passes 512 elements;
-- the scroll into view for the hit test (below) moves an element above whose overflow is hidden or
-  clip on that axis, or moves the window while the root or the body hides overflow on that axis.
-  A person cannot make that scroll, so what it shows is not what a pointer user meets. This counts
-  as the overflow limit. Each overflow value is read before the scroll, and a value usabl does not
-  know counts as hidden;
+- bringing the control fully into view needs a scroll of an element above whose overflow is
+  hidden or clip on that axis, or of the window while the root or the body hides overflow on that
+  axis. A person cannot make that scroll, so what it shows is not what a pointer user meets. This
+  counts as the overflow limit. Before the hit test, usabl first scrolls with `nearest`, which moves
+  a box only when the control is not fully inside its scrollport, and judges only that scroll; the
+  centered scroll after it is not judged, so a fully visible control that is not centered in such
+  a box, as in a carousel, is not counted. Each overflow value is read before any scroll, and a
+  value usabl does not know counts as hidden;
 - the hit test misses (below);
 - the box read again after the scroll into view differs from the first read in width or height by
   more than 0.01 pixels, so the size that was measured may not be the size a person meets, for

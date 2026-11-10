@@ -125,9 +125,11 @@ needs review: something clips or covers part of the control, it does not take po
 it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
 usabl puts every scroll position back afterwards.
 
-Two more rules guard that scroll. If it moves a box that hides its overflow (`hidden` or `clip`),
-or moves the page while the page hides its overflow, the check is needs review: a person cannot
-make that scroll, so what it shows is not what they meet. If the control is a different size
+Two more rules guard that scroll. If bringing the control fully into view needs a scroll of a box
+that hides its overflow (`hidden` or `clip`), or of the page while the page hides its overflow, the
+check is needs review: a person cannot make that scroll, so what it shows is not what they meet. A
+control already fully in view, such as one in the visible part of a carousel, is not counted, even
+when it is not centered. If the control is a different size
 after the scroll than before, the check is needs review too, because the measured size may not be
 the size a person meets.
 

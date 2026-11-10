@@ -45,8 +45,9 @@
   measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
   `clip-path`, `clip`, or mask; an element above it hides or scrolls its overflow and the control
   reaches past that element's edges; it is fixed or sticky and reaches past the viewport; the
-  scroll into view moves a box that hides its overflow, which a person cannot scroll; the control
-  changes size on that scroll; or a hit test misses. Target size passes only when the browser
+  control can be brought fully into view only by a scroll of a box or page that hides its overflow,
+  which a person cannot make; the control changes size when it is scrolled into view; or a hit
+  test misses. Target size passes only when the browser
   confirms, with the control scrolled into view, that its center and the middle of each edge land
   on the control, so a control covered at any of the five points, one that takes no pointer
   events, one partly off the page, and one inside a scaled clipping element are needs review;
