@@ -263,9 +263,9 @@
 ### Fixed
 
 - A change to a file under a glob entry in `guardedPaths`, such as `policy/*.json`, now needs
-  approval in CI, whether the pull request edits, adds, or deletes it. Before, `usabl enforce
-  policy` listed each entry with a literal git pathspec, so a glob entry listed nothing and the
-  check printed "no policy change". The local guard and the CI check now list each ref once with
+  approval in CI, whether the pull request edits, adds, or deletes it. Before,
+  `usabl enforce policy` listed each entry with a literal git pathspec, so a glob entry listed
+  nothing and the check printed "no policy change". The local guard and the CI check now list each ref once with
   `-z` and select from those listings with the same matcher, with Node's dot rule for wildcards.
   The local guard also adds what `fs.glob` finds on the working tree. A file deleted locally under
   a glob entry is now named in the local check. Before, the pattern text was compared, read as
