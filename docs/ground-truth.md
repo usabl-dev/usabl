@@ -3068,13 +3068,22 @@ trigger. The installer takes it the way it takes the history workflow's branch (
 the branch already in usabl's own file kept on a re-run. That trigger line is the only line of a
 gate that changes with the branch, and the file then names the branch: doctor and the installer
 recognise usabl's own draft for whichever plain branch the trigger names, and any other trigger
-form is drifted. When the gate, the docs gate, and the history workflow on disk name different
+form is drifted. The branch filter applies to the `pull_request` event only. GitHub takes no
+branch filter on `pull_request_review`, so a review on a pull request into any branch starts the
+gate. The judge then looks for the `pull_request` run that built this exact pull request, head,
+and base (below). A pull request into another branch normally has none, so the judge fails closed
+and `usabl-required` reports red on it; that red check blocks nothing on a branch that does not
+require it. When the gate, the docs gate, and the history workflow on disk name different
 branches, the installer prints one step naming each file and its branch, and changes none of
 them. A gate, docs gate, or history workflow that is byte for byte the unedited draft an earlier
 0.3.0 build wrote (a gate triggering on an unquoted `[main]`, and older comment text) is rewritten
-to this draft with the engine pin it held; doctor reads it as drifted and says to run the
-installer. The step that places the engine at `../usabl` skips the unpack, with one printed
-line, when that path is the checkout itself (a repository named usabl).
+to this draft with the engine pin it held, if it held one. The rewrite line says when the trigger
+moved, from which branch to which, and the line to change to put it back (`origin/HEAD` can be
+stale after a rename), and says to commit the file. Doctor reads such a file as drifted and says
+to run the installer; it says the pin is kept only when the file has one. The step that places
+the engine at `../usabl` skips the unpack when that path is the checkout itself (a repository
+named usabl). It prints one line that also says an app installing usabl from `file:../usabl`
+cannot build there, and that renaming the repository fixes it.
 
 **The engine pin and the install report.** `npm run build` ends with
 `scripts/write-build-info.mjs`, which writes `dist/build-info.json`: the package version, the
@@ -3133,11 +3142,19 @@ merge without an owner's approval. `usabl install --ci` and `usabl install --bra
 `usabl install --branch-rule` verifies the required check, code-owner review, at least one
 required approving review (a count of 0 requires no review at all), and dismissal of stale
 approvals on push, each by classic protection or by an active ruleset, on the branch the gate
-workflow on disk names in its trigger. With no gate workflow, or a trigger it cannot read, it
-checks `main` and says it assumed it. A ruleset on `~DEFAULT_BRANCH` counts only when the
-repository's default branch is that branch, and when GitHub's default branch is another branch
-the output says in one line that the gate covers only pull requests into the branch it names. Each part that is
-off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`: wired only when the last
+workflow on disk names in its trigger. With no gate workflow, it reads the branch the docs gate
+workflow names, since the docs gate requires the same check, and its advice names
+`install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
+or no permission), it checks `main` and says it assumed it in each line that names it. An
+assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
+default branch. When GitHub reports another default branch, or cannot say which one it is, the
+result is "cannot verify": it names both branches when it can, and the next step. A default
+branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. When a gate
+names one branch and GitHub's default branch is another, the output says in one line that the
+gate covers only pull requests into the branch it names, and names the line to change. Each part
+that is off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, with the branch lines in the next step; a verified branch that
+is not GitHub's default branch reads as drifted, not wired. It also reports `workflow-owners`: wired only when the last
 `CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
 rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate

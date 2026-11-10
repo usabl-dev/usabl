@@ -50,6 +50,14 @@ names the line to change in each file, if your default branch has another name. 
 command again keeps the branch each file already names. After install, the branch in each
 file is the one that counts. Nothing else in the files changes with the branch.
 
+The branch filter applies to the `pull_request` event. The gate also runs on
+`pull_request_review`, and GitHub takes no branch filter on that event, so a review on a pull
+request into any branch starts the gate. On a review the gate does not build the app. It
+looks for the `pull_request` run that built this exact pull request, head, and base. A pull
+request into another branch normally has no such run, so the gate fails closed and
+`usabl-required` reports red on it. That red check blocks nothing on a branch that does not
+require it.
+
 When the files name different branches, for example a gate on `main` and a history workflow
 on `trunk`, the command prints one step that names each file and its branch. It does not
 change a file to make them agree.
@@ -58,7 +66,9 @@ change a file to make them agree.
 at `../usabl`, for an app whose lockfile installs usabl from `file:../usabl`. GitHub checks a
 repository out into `<name>/<name>`, so in a repository named usabl, `../usabl` is the
 checkout itself. The step then prints one line and skips the unpack, so the engine is never
-unpacked over your code.
+unpacked over your code. An app that installs usabl from `file:../usabl` cannot build in a
+repository named usabl, and the line says so: rename the repository to fix it. An app that
+does not install usabl from that path needs no change.
 
 **No secrets.** The engine repository is public, so no job needs a token to fetch it. The
 only token any job reads is the run's own `GITHUB_TOKEN`. A pull request from a fork runs
@@ -108,9 +118,20 @@ it, so a pull request that edits `.github/workflows/` can make `usabl-required` 
 owner review on `.github/workflows/` is what stops it.
 
 `usabl install --branch-rule` and `usabl doctor` check the protection on the branch the gate
-workflow names in its trigger. With no gate workflow, or a trigger usabl cannot read, they
-check `main` and say they assumed it. When GitHub reports another default branch, they say so
-in one line: the gate then covers only pull requests into the branch it names.
+workflow names in its trigger. A documentation repository with only the docs gate is checked
+on the branch the docs gate names, and the advice names `usabl install --docs-ci`.
+
+With no gate workflow, a trigger usabl cannot read, or a gate file it cannot read (a folder,
+or a file it has no permission to read), they check `main` and say in each line that they
+assumed it. A check on an assumed `main` passes only when there is no gate file and GitHub
+reports `main` as the default branch. When GitHub reports another default branch, or cannot
+say which one it is, the check is not verified and exits 2: it names both branches when it
+can, and the next step.
+
+When the gate names one branch and GitHub reports another as the default branch, they say so
+in one line: the gate then covers only pull requests into the branch it names. The next line
+says which line to change to gate the default branch. `usabl doctor` then reads the branch
+protection as drifted, not wired.
 
 ## After an earlier 0.3.0 build
 
@@ -118,10 +139,13 @@ An earlier build of 0.3.0 wrote the gates with `branches: [main]` in the trigger
 and with some comments and step names that said "main". This version does not read those
 files as its own draft, so `usabl doctor` reports them as drifted. Run `usabl install --ci`
 again (and `usabl install --docs-ci` if you use the docs gate). When a file is that earlier
-draft with no edits, the command rewrites it to this draft, keeps the engine pin it held,
-and says so. An earlier gate, which could only name `main`, gets the default branch git
-names. Review the change and commit it. A file you edited is still refused: reconcile it by
-hand.
+draft with no edits, the command rewrites it to this draft, keeps the engine pin it held if
+it held one, and says so. An earlier gate, which could only name `main`, gets the default
+branch git names. When that is not `main`, the rewrite line says the trigger moved, from
+`main` to which branch, and which line to change to put `main` back. Check it: git records
+the default branch when you clone, and does not update it when a team renames the branch.
+Review the change and commit it; it is only on disk until you do. A file you edited is still
+refused: reconcile it by hand.
 
 ## Settings you may need
 

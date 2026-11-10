@@ -969,6 +969,13 @@ nowhere else: the `pull_request` trigger of the gate and the docs gate, and the 
 the history workflow, which also names it in its scan job's `if:`. Any other name is not written:
 the file names `main` and the report prints a step to check it.
 
+The branch filter applies to the `pull_request` event only. GitHub takes no branch filter on
+`pull_request_review`, so a review on a pull request into any branch starts the gate. `build-app`
+does not run on a review. The judge looks for the `pull_request` run that built this exact pull
+request, head, and base. A pull request into another branch normally has none, because the branch
+filter kept the gate from running on it, so the judge fails closed and `usabl-required` reports
+red. That red check blocks nothing on a branch that does not require it, and it is never a pass.
+
 What runs where, and what each job holds:
 
 | Job | Runs head code? | Token | Secrets | Checks out |
