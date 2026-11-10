@@ -124,7 +124,7 @@ describe('the ledger sources in a real repository', () => {
     const ledger = buildLedger({ ...read.input, now: NOW });
 
     expect(ledger.rows.map((row) => [row.rule, row.elementKey, row.state, row.daysOpen, row.mayBeMore, row.mayBeLess])).toEqual([
-      [A.rule, A.elementKey, 'fixed', 27, true, false],
+      [A.rule, A.elementKey, 'left-the-floor', 27, true, true],
       [B.rule, B.elementKey, 'reopened', 25, true, true],
       [N.rule, N.elementKey, 'open', 24, false, false],
       [R_OLD.rule, R_OLD.elementKey, 'open', 20, true, true],
@@ -142,7 +142,8 @@ describe('the ledger sources in a real repository', () => {
     // Only N is exact, so it is the only number in a median.
     expect(ledger.totals).toEqual({
       open: { rows: 3, exactRows: 1, medianDays: 24, longestDays: 24 },
-      fixed: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
+      fixed: { rows: 0, exactRows: 0, medianDays: null, longestDays: null },
+      'left-the-floor': { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
       reopened: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
     });
   });

@@ -78,10 +78,12 @@ describe('usabl debt ledger', () => {
       /^at least 41 +open +2026-01-01 +2026-01-01 +clusters +pf-focus-into-dialog +first baseline, last seen 2026-01-06 +clusters\|/u,
     );
     expect(body[1]).toMatch(
-      /^not known \(20 by the floor\) +fixed +2026-01-01 +2026-01-21 +clusters +button-name +first baseline, incomplete +\(counted, no element\)$/u,
+      /^not known \(20 by the floor\) +left the floor +2026-01-01 +2026-01-21 +clusters +button-name +first baseline, incomplete +\(counted, no element\)$/u,
     );
     expect(body[2]).toMatch(/^not known \(5 by the floor\) +fixed +2026-01-01 +2026-01-06 +clusters +pf-dialog-label +first baseline, incomplete +clusters\|/u);
-    expect(lines).toContain('Totals: 1 open, none exact, so no median. 2 fixed, none exact, so no median. 0 reopened.');
+    expect(lines).toContain(
+      'Totals: 1 open, none exact, so no median. 1 fixed, none exact, so no median. 1 left the floor, none exact, so no median. 0 reopened.',
+    );
     expect(lines).toContain('"first baseline": seen at the first baseline; may be older.');
   });
 
@@ -101,7 +103,7 @@ describe('usabl debt ledger', () => {
     const days = lines.slice(header + 1, header + 5).map((line) => line.split(/ {2,}/u)[0]);
     // Ties sort by identity: button-name before pf-focus-into-dialog, aria-hidden-focus before aria-required-attr.
     expect(days).toEqual(['not known (41 by the floor)', 'at least 41', '31 days', 'at most 31']);
-    expect(lines).toContain('Totals: 4 open, 1 exact, median 31 days, longest 31 days. 0 fixed. 0 reopened.');
+    expect(lines).toContain('Totals: 4 open, 1 exact, median 31 days, longest 31 days. 0 fixed. 0 left the floor. 0 reopened.');
     expect(lines).toContain('"at least N": the true number may be larger. "at most N": it may be smaller.');
     expect(lines).toContain('"not known (N by the floor)": it may be larger or smaller. N is what the floor alone shows.');
 

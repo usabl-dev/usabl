@@ -92,13 +92,54 @@ describe('buildLedger', () => {
     expect(rowFor(ledger, A).daysOpen).toBe(2);
   });
 
-  it('marks an accessibility barrier fixed when it leaves the floor', () => {
+  it('says an accessibility barrier that only left the floor left the floor, never that it was fixed', () => {
     const ledger = buildLedger(input([snap(0, floorOf([A, B])), snap(9, floorOf([B]))]));
     const row = rowFor(ledger, A);
-    expect(row).toMatchObject({ state: 'fixed', daysOpen: 9, lastChange: { commit: commitAt(9), date: dayAt(9) } });
+    expect(row).toMatchObject({ state: 'left-the-floor', daysOpen: 9, lastChange: { commit: commitAt(9), date: dayAt(9) } });
     expect(row.spans).toEqual([
       { start: { commit: commitAt(0), date: dayAt(0) }, end: { commit: commitAt(9), date: dayAt(9), by: 'floor' }, days: 9 },
     ]);
+    expect(row).toMatchObject({ mayBeMore: true, mayBeLess: true });
+    expect(row.mayBeMoreReasons).toContain('left-the-floor');
+    expect(row.mayBeLessReasons).toContain('left-the-floor');
+    const note = row.incomplete.find((gap) => gap.cause === 'left-the-floor');
+    expect(note?.detail).toMatch(/cannot tell a fix from a floor reset, a prune, or a renamed screen without the history/u);
+  });
+
+  describe('every way an identity leaves the floor without a scan lands on left the floor', () => {
+    it('a re-baseline that drops it', () => {
+      const ledger = buildLedger(input([snap(0, floorOf([A, B])), snap(5, floorOf([B, C]))]));
+      expect(rowFor(ledger, A)).toMatchObject({ state: 'left-the-floor', mayBeMore: true, mayBeLess: true });
+    });
+
+    it('a reset of the floor at the same version', () => {
+      const ledger = buildLedger(input([snap(0, floorOf([A, B])), snap(3, { version: 3, entries: [] })]));
+      for (const row of ledger.rows) expect(row).toMatchObject({ state: 'left-the-floor', daysOpen: 3, mayBeMore: true, mayBeLess: true });
+    });
+
+    it('a prune the history did not confirm: one clean scan is not a fix', () => {
+      const floor = floorOf([A, B]);
+      const ledger = buildLedger(input([snap(0, floor), snap(6, floorOf([B]))], historyOn([scanAt(4, floor, [[A, 0], [B, 1]])])));
+      expect(rowFor(ledger, A)).toMatchObject({ state: 'left-the-floor', daysOpen: 6, mayBeMore: true, mayBeLess: true });
+    });
+
+    it('a renamed screen: the old row left the floor, and the new one may be older', () => {
+      const renamed: FloorEntry = { ...A, screenId: 'cluster-list', elementKey: (A.elementKey ?? '').replace('clusters|', 'cluster-list|') };
+      const ledger = buildLedger(input([snap(0, floorOf([A])), snap(10, floorOf([renamed]))]));
+      const old = ledger.rows.find((row) => row.screenId === 'clusters');
+      const fresh = ledger.rows.find((row) => row.screenId === 'cluster-list');
+      expect(old).toMatchObject({ state: 'left-the-floor', daysOpen: 10, mayBeMore: true, mayBeLess: true });
+      expect(fresh).toMatchObject({ state: 'open', daysOpen: 31, mayBeMore: true });
+      expect(fresh?.mayBeMoreReasons).toEqual(['first-floor-for-screen']);
+    });
+
+    it('a fix the history confirmed stays fixed when the floor drops it later', () => {
+      const floor = floorOf([A]);
+      const ledger = buildLedger(
+        input([snap(0, floor), snap(9, floorOf([]))], historyOn([scanAt(2, floor, [[A, 1]]), scanAt(3, floor, [[A, 0]]), scanAt(5, floor, [[A, 0]])])),
+      );
+      expect(rowFor(ledger, A)).toMatchObject({ state: 'fixed', daysOpen: 5, mayBeLess: false });
+    });
   });
 
   it('marks an accessibility barrier fixed at the record that confirms the fix: two full scans in a row that see none', () => {
@@ -187,6 +228,8 @@ describe('buildLedger', () => {
     expect(row.state).toBe('reopened');
     expect(row.spans.map((span) => span.days)).toEqual([4, 31]);
     expect(row.daysOpen).toBe(35);
+    // The first span only left the floor, so the sum may be wrong either way.
+    expect(row).toMatchObject({ mayBeMore: true, mayBeLess: true });
   });
 
   it('withdraws a fix that came back on an unchanged source tree and labels the row intermittent', () => {
@@ -211,13 +254,14 @@ describe('buildLedger', () => {
     );
     expect(ledger.rows.map((row) => [row.rule, row.state, row.daysOpen])).toEqual([
       [C.rule, 'open', 41],
-      [B.rule, 'fixed', 30],
-      [A.rule, 'fixed', 20],
+      [B.rule, 'left-the-floor', 30],
+      [A.rule, 'left-the-floor', 20],
     ]);
     // Every row is in the first floor, so none is exact, and there is no median.
     expect(ledger.totals).toEqual({
       open: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
-      fixed: { rows: 2, exactRows: 0, medianDays: null, longestDays: null },
+      fixed: { rows: 0, exactRows: 0, medianDays: null, longestDays: null },
+      'left-the-floor': { rows: 2, exactRows: 0, medianDays: null, longestDays: null },
       reopened: { rows: 0, exactRows: 0, medianDays: null, longestDays: null },
     });
   });
@@ -328,10 +372,13 @@ describe('buildLedger with incomplete history', () => {
       input([snap(0, floorOf([A, B])), snap(9, floorOf([B]))], { kind: 'off', ref: 'origin/usabl/history', cause: 'no-history', detail: null }),
     );
     for (const row of ledger.rows) {
-      expect(row.incomplete.map((gap) => gap.cause)).toEqual(['no-history']);
-      expect(row.incomplete[0]?.detail).toMatch(/origin\/usabl\/history/u);
-      expect(row).toMatchObject({ mayBeLess: true, mayBeLessReasons: ['no-usable-history'] });
+      const note = row.incomplete.find((gap) => gap.cause === 'no-history');
+      expect(note?.detail).toMatch(/origin\/usabl\/history/u);
+      expect(row.mayBeLess).toBe(true);
+      expect(row.mayBeLessReasons).toContain('no-usable-history');
     }
+    expect(rowFor(ledger, A).incomplete.map((gap) => gap.cause)).toEqual(['left-the-floor', 'no-history']);
+    expect(rowFor(ledger, B).incomplete.map((gap) => gap.cause)).toEqual(['no-history']);
     expect(ledger.history).toEqual({ kind: 'off', ref: 'origin/usabl/history', cause: 'no-history', detail: null });
   });
 

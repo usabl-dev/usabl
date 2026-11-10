@@ -70,7 +70,9 @@ export interface LedgerInput {
   now: string;
 }
 
-export type LedgerState = 'open' | 'fixed' | 'reopened';
+// fixed: the history showed it, with two full scans of main in a row that saw none. left-the-floor:
+// it only left the floor, which a fix, a floor reset, a prune, and a renamed screen all look like.
+export type LedgerState = 'open' | 'fixed' | 'left-the-floor' | 'reopened';
 
 export interface LedgerSpanEnd extends LedgerPoint {
   // floor: it left the floor. history: two full scans of main in a row saw none. gap: the history
@@ -94,7 +96,8 @@ export type LedgerGapCause =
   | 'record-off-line'
   | 'hash-collision'
   | 'first-floor-for-screen'
-  | 'not-seen';
+  | 'not-seen'
+  | 'left-the-floor';
 
 export interface LedgerGap {
   cause: LedgerGapCause;
@@ -111,7 +114,9 @@ export type LedgerMoreReason =
   // It entered the floor where the floor history breaks, so it may be older under an earlier key.
   | 'entered-at-gap'
   // A span ended where the floor history breaks, and it may have stayed open after.
-  | 'ended-at-gap';
+  | 'ended-at-gap'
+  // A span ended only because it left the floor. It may have stayed on the page after.
+  | 'left-the-floor';
 
 /** Why the true number of days could be smaller than the one the ledger counts. */
 export type LedgerLessReason =
@@ -121,7 +126,9 @@ export type LedgerLessReason =
   // The history is on, but no full scan of main saw it during one of its spans.
   | 'not-seen'
   // A history record that touches it could not be placed in time.
-  | 'history-unplaced';
+  | 'history-unplaced'
+  // A span ended only because it left the floor. It may have been fixed before.
+  | 'left-the-floor';
 
 export interface LedgerRow {
   screenId: string;
@@ -339,6 +346,17 @@ export function buildLedger(input: LedgerInput): Ledger {
     if (last === undefined || last.end !== null) return;
     if (cause === null) {
       last.end = { ...at, by: 'floor' };
+      addGap(
+        row,
+        {
+          cause: 'left-the-floor',
+          detail:
+            `It left the floor at ${short(at.commit)}, and no two scans of main in a row saw it gone before then. ` +
+            'usabl cannot tell a fix from a floor reset, a prune, or a renamed screen without the history, ' +
+            'so its days may be larger or smaller.',
+        },
+        { more: 'left-the-floor', less: 'left-the-floor' },
+      );
       return;
     }
     last.end = { ...cause.at, by: 'gap' };
@@ -616,9 +634,16 @@ export function buildLedger(input: LedgerInput): Ledger {
       }));
       const first = spans[0] as LedgerSpan;
       const last = spans[spans.length - 1] as LedgerSpan;
-      const fixedOnce = spans.slice(0, -1).some((span) => span.end?.by === 'floor' || span.end?.by === 'history');
-      const fixedLast = last.end?.by === 'floor' || last.end?.by === 'history';
-      const state: LedgerState = fixedOnce ? 'reopened' : fixedLast ? 'fixed' : 'open';
+      // Reopened: it closed, by a fix or by leaving the floor, and came back. Only a fix the history
+      // showed is called fixed.
+      const closedOnce = spans.slice(0, -1).some((span) => span.end?.by === 'floor' || span.end?.by === 'history');
+      const state: LedgerState = closedOnce
+        ? 'reopened'
+        : last.end?.by === 'history'
+          ? 'fixed'
+          : last.end?.by === 'floor'
+            ? 'left-the-floor'
+            : 'open';
       return {
         screenId: row.entry.screenId,
         rule: row.entry.rule,
@@ -667,6 +692,11 @@ export function buildLedger(input: LedgerInput): Ledger {
         ? { kind: 'on', ref: history.ref, head: history.head, records: history.records.length, skipped: history.skipped }
         : { kind: 'off', ref: history.ref, cause: history.cause, detail: history.detail },
     rows: built,
-    totals: { open: totalsFor('open'), fixed: totalsFor('fixed'), reopened: totalsFor('reopened') },
+    totals: {
+      open: totalsFor('open'),
+      fixed: totalsFor('fixed'),
+      'left-the-floor': totalsFor('left-the-floor'),
+      reopened: totalsFor('reopened'),
+    },
   };
 }

@@ -39,8 +39,16 @@ export function daysCell(row: Pick<LedgerRow, 'daysOpen' | 'mayBeMore' | 'mayBeL
 function stateCell(row: LedgerRow): string {
   if (row.state === 'reopened') return openNow(row) ? 'reopened, open now' : 'reopened, fixed again';
   if (row.state === 'open' && !openNow(row)) return 'open until a gap';
+  if (row.state === 'left-the-floor') return 'left the floor';
   return row.state;
 }
+
+const STATE_WORDS: Record<LedgerState, string> = {
+  open: 'open',
+  fixed: 'fixed',
+  'left-the-floor': 'left the floor',
+  reopened: 'reopened',
+};
 
 function notesCell(row: LedgerRow): string {
   const notes: string[] = [];
@@ -51,7 +59,8 @@ function notesCell(row: LedgerRow): string {
   return notes.join(', ');
 }
 
-function totalsPart(state: LedgerState, totals: LedgerStateTotals): string {
+function totalsPart(key: LedgerState, totals: LedgerStateTotals): string {
+  const state = STATE_WORDS[key];
   if (totals.rows === 0) return `0 ${state}.`;
   if (totals.exactRows === 0 || totals.medianDays === null || totals.longestDays === null) {
     return `${totals.rows} ${state}, none exact, so no median.`;
@@ -107,7 +116,7 @@ export function formatLedger(ledger: Ledger): string {
   lines.push(
     '',
     `Totals: ${totalsPart('open', ledger.totals.open)} ${totalsPart('fixed', ledger.totals.fixed)} ` +
-      `${totalsPart('reopened', ledger.totals.reopened)}`,
+      `${totalsPart('left-the-floor', ledger.totals['left-the-floor'])} ${totalsPart('reopened', ledger.totals.reopened)}`,
     'The median and the longest are over exact rows only: rows whose days cannot be wrong either way.',
     '',
     '"N days": what the floor and the history show, to the day.',
