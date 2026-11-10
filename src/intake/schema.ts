@@ -11,12 +11,16 @@ import type {
   ContentAssertion,
   DocAssertion,
   FlowAssertion,
+  LandmarkAssertion,
+  LandmarkRole,
   Requirement,
   RequirementBundle,
   SpeechObligation,
+  TargetRole,
   VoiceAssertion,
 } from '../contracts/index.js';
 import { normalizeToken } from '../voicing/normalize.js';
+import { describeFileKeyProblem, describeNodeIdProblem, describeVersionProblem } from './design-source.js';
 import { describeRequirementIdProblem } from './requirement-ids.js';
 
 export type ParseBundleResult =
@@ -159,22 +163,149 @@ const docAssertionSchema = z
   })
   .strict();
 
+// The roles a design requirement can name. LANDMARK_ROLES is the subset a landmark check takes.
+const TARGET_ROLES = [
+  'button',
+  'link',
+  'heading',
+  'img',
+  'textbox',
+  'checkbox',
+  'menuitem',
+  'tab',
+  'main',
+  'navigation',
+  'banner',
+  'contentinfo',
+  'complementary',
+  'region',
+  'search',
+  'form',
+] as const satisfies readonly TargetRole[];
+const LANDMARK_ROLES = [
+  'main',
+  'navigation',
+  'banner',
+  'contentinfo',
+  'complementary',
+  'region',
+  'search',
+  'form',
+] as const satisfies readonly LandmarkRole[];
+
+// A name is compared with the accessible name after trimming both, so it is stored trimmed, and a
+// name that is empty after trimming would match nothing a person could have meant.
+const accessibleName = (field: string) => z.string().trim().min(1, `${field} must not be empty`);
+
+const targetSchema = z
+  .object({
+    role: z.enum(TARGET_ROLES),
+    name: accessibleName('name'),
+  })
+  .strict();
+
+const nameAssertionSchema = z.object({ type: z.literal('name'), target: targetSchema }).strict();
+
+const headingAssertionSchema = z
+  .object({
+    type: z.literal('heading'),
+    name: accessibleName('name'),
+    level: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)], {
+      errorMap: () => ({ message: 'level must be a whole number from 1 to 6' }),
+    }),
+  })
+  .strict();
+
+const landmarkAssertionSchema = z
+  .object({
+    type: z.literal('landmark'),
+    role: z.enum(LANDMARK_ROLES),
+    name: accessibleName('name').optional(),
+  })
+  .strict();
+
+// The walk that checks a focus order stops after this many focus stops, so a longer sequence could
+// never be reached.
+const FOCUS_SEQUENCE_LIMIT = 200;
+
+const focusOrderAssertionSchema = z
+  .object({
+    type: z.literal('focus-order'),
+    sequence: z
+      .array(accessibleName('each sequence entry'))
+      .min(2, 'sequence needs at least two names, because one name has no order')
+      .max(FOCUS_SEQUENCE_LIMIT, `sequence can list at most ${FOCUS_SEQUENCE_LIMIT} names`),
+  })
+  .strict();
+
+const targetSizeAssertionSchema = z
+  .object({
+    type: z.literal('target-size'),
+    target: targetSchema,
+    minCssPx: z
+      .number({ required_error: 'minCssPx is required: the smallest width and height, in CSS pixels, such as 24' })
+      .positive('minCssPx must be more than 0')
+      .max(200, 'minCssPx must be at most 200 CSS pixels'),
+  })
+  .strict();
+
+// The design tool fields a requirement records. Each one is checked against a narrow set of
+// visible characters, because each later goes into a URL or a report line.
+const sourceText = (describe: (value: string) => string | null) =>
+  z.string().superRefine((value, ctx) => {
+    const problem = describe(value);
+    if (problem !== null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }
+  });
+
+const sourceSchema = z
+  .object({
+    tool: z.literal('figma'),
+    file: sourceText(describeFileKeyProblem),
+    node: sourceText(describeNodeIdProblem),
+    version: sourceText(describeVersionProblem),
+  })
+  .strict();
+
 const assertionSchema = z.discriminatedUnion('type', [
   contentAssertionSchema,
   flowAssertionSchema,
   docAssertionSchema,
   voiceAssertionSchema,
+  nameAssertionSchema,
+  headingAssertionSchema,
+  landmarkAssertionSchema,
+  focusOrderAssertionSchema,
+  targetSizeAssertionSchema,
 ]);
+
+// A focus order names each stop once. A name listed twice could be either of two stops, and
+// checking it would be a guess about which one the design meant, so the file is refused instead.
+function refineFocusOrder(assertion: z.infer<typeof focusOrderAssertionSchema>, ctx: z.RefinementCtx): void {
+  const seen = new Set<string>();
+  assertion.sequence.forEach((name, index) => {
+    if (seen.has(name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['assertion', 'sequence', index],
+        message: 'this name repeats an earlier entry; list each name once, so the check never has to guess which stop is meant',
+      });
+    }
+    seen.add(name);
+  });
+}
 
 const requirementSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(['content', 'flow', 'doc', 'voice']),
+    kind: z.enum(['content', 'flow', 'doc', 'voice', 'name', 'heading', 'landmark', 'focus-order', 'target-size']),
     surface: z.string(),
     description: z.string().min(1, 'description is required'),
     assertion: assertionSchema,
     owner: z.string().min(1, 'owner must not be empty').optional(),
     approved: z.boolean(),
+    source: sourceSchema.optional(),
   })
   .strict()
   .superRefine((requirement, ctx) => {
@@ -204,6 +335,10 @@ const requirementSchema = z
 
     if (requirement.assertion.type === 'voice') {
       refineVoiceAssertion(requirement.assertion, ctx);
+    }
+
+    if (requirement.assertion.type === 'focus-order') {
+      refineFocusOrder(requirement.assertion, ctx);
     }
   });
 
@@ -305,6 +440,14 @@ function toVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>): Voic
   return normalized;
 }
 
+function toLandmarkAssertion(assertion: z.infer<typeof landmarkAssertionSchema>): LandmarkAssertion {
+  const normalized: LandmarkAssertion = { type: 'landmark', role: assertion.role };
+  if (assertion.name !== undefined) {
+    normalized.name = assertion.name;
+  }
+  return normalized;
+}
+
 function toAssertion(assertion: z.infer<typeof assertionSchema>): Requirement['assertion'] {
   switch (assertion.type) {
     case 'content':
@@ -315,6 +458,20 @@ function toAssertion(assertion: z.infer<typeof assertionSchema>): Requirement['a
       return toDocAssertion(assertion);
     case 'voice':
       return toVoiceAssertion(assertion);
+    case 'name':
+      return { type: 'name', target: { role: assertion.target.role, name: assertion.target.name } };
+    case 'heading':
+      return { type: 'heading', name: assertion.name, level: assertion.level };
+    case 'landmark':
+      return toLandmarkAssertion(assertion);
+    case 'focus-order':
+      return { type: 'focus-order', sequence: [...assertion.sequence] };
+    case 'target-size':
+      return {
+        type: 'target-size',
+        target: { role: assertion.target.role, name: assertion.target.name },
+        minCssPx: assertion.minCssPx,
+      };
   }
 }
 
@@ -330,6 +487,9 @@ function toRequirement(requirement: z.infer<typeof requirementSchema>): Requirem
 
   if (requirement.owner !== undefined) {
     normalized.owner = requirement.owner;
+  }
+  if (requirement.source !== undefined) {
+    normalized.source = { ...requirement.source };
   }
 
   return normalized;

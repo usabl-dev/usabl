@@ -503,7 +503,16 @@ export interface InteractionContract {
 }
 
 // ---- design intake + docs output (producers wired; reachable via `usabl docs` and the usabl/docs export) ----
-export type RequirementKind = 'content' | 'flow' | 'doc' | 'voice';
+export type RequirementKind =
+  | 'content'
+  | 'flow'
+  | 'doc'
+  | 'voice'
+  | 'name'
+  | 'heading'
+  | 'landmark'
+  | 'focus-order'
+  | 'target-size';
 export interface ContentAssertion {
   type: 'content';
   selector: string;
@@ -527,14 +536,91 @@ export interface VoiceAssertion {
   obligations: SpeechObligation[];
   maxTabPath?: number;
 }
+// The roles a design requirement can name, the roles designers annotate. A requirement finds its
+// element by role and accessible name, the way a designer names it, and the browser accessibility
+// tree decides the role, so a div with role="button" is a button.
+export type TargetRole =
+  | 'button'
+  | 'link'
+  | 'heading'
+  | 'img'
+  | 'textbox'
+  | 'checkbox'
+  | 'menuitem'
+  | 'tab'
+  | 'main'
+  | 'navigation'
+  | 'banner'
+  | 'contentinfo'
+  | 'complementary'
+  | 'region'
+  | 'search'
+  | 'form';
+export type LandmarkRole = Extract<
+  TargetRole,
+  'main' | 'navigation' | 'banner' | 'contentinfo' | 'complementary' | 'region' | 'search' | 'form'
+>;
+// One element as a designer names it: what it is and what it is called. The name is compared with
+// the accessible name exactly, after trimming both.
+export interface RoleTarget {
+  role: TargetRole;
+  name: string;
+}
+// The element with this role and name exists on the screen.
+export interface NameAssertion {
+  type: 'name';
+  target: RoleTarget;
+}
+// The heading with this name is at this level.
+export interface HeadingAssertion {
+  type: 'heading';
+  name: string;
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+}
+// The screen has a landmark with this role, and this name when one is given.
+export interface LandmarkAssertion {
+  type: 'landmark';
+  role: LandmarkRole;
+  name?: string;
+}
+// Tab from the start of the screen reaches these names in this order. Other stops may come
+// between them. Each name is listed once.
+export interface FocusOrderAssertion {
+  type: 'focus-order';
+  sequence: string[];
+}
+// The element is at least this many CSS pixels wide and high.
+export interface TargetSizeAssertion {
+  type: 'target-size';
+  target: RoleTarget;
+  minCssPx: number;
+}
+// Where a requirement drafted from a design came from, so a design change after approval can be
+// flagged. Every field is read from the design tool, checked by the loader, and treated as data.
+export interface RequirementSource {
+  tool: 'figma';
+  file: string; // the file key
+  node: string; // the id of the design node the requirement was drafted from
+  version: string; // the file version the requirement was drafted from
+}
 export interface Requirement {
   id: string;
   kind: RequirementKind;
   surface: string;
   description: string;
-  assertion: ContentAssertion | FlowAssertion | DocAssertion | VoiceAssertion;
+  assertion:
+    | ContentAssertion
+    | FlowAssertion
+    | DocAssertion
+    | VoiceAssertion
+    | NameAssertion
+    | HeadingAssertion
+    | LandmarkAssertion
+    | FocusOrderAssertion
+    | TargetSizeAssertion;
   owner?: string;
   approved: boolean;
+  source?: RequirementSource;
 }
 export interface RequirementBundle {
   version: 1;
