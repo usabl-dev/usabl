@@ -157,6 +157,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
 
 // A page whose heading text breaks an authored design requirement. Nothing else on it fails, so
 // a regression can only come from the requirement.
+// Pages whose router moves them to the sign-in path, as an application does when its session check
+// is refused. One moves 300 ms after load. One moves when its first control gets focus, which the
+// keyboard walk gives it, so the page leaves its screen while the checks run.
+const MOVE_TO_SIGN_IN =
+  `history.replaceState(null, '', '/login'); document.title = 'Sign in';` +
+  ` document.querySelector('main').innerHTML = '<h1>Sign in</h1><label>Password <input type="password" /></label><button type="submit">Sign in</button>';`;
+const MOVING_PAGES: Record<string, string> = {
+  '/moves-after-load': headingPage('Clusters').replace('</body>', `<script>setTimeout(() => { ${MOVE_TO_SIGN_IN} }, 300);</script></body>`),
+  '/moves-on-focus': headingPage('Clusters').replace(
+    '</body>',
+    `<script>document.querySelector('button').addEventListener('focus', () => { ${MOVE_TO_SIGN_IN} }, { once: true });</script></body>`,
+  ),
+};
+
 function headingPage(heading: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -750,7 +764,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     server = createServer((req, res) => {
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(path.startsWith('/login') || path.startsWith('/account') ? SIGN_IN_HTML : headingPage('Clusters'));
+      const body = MOVING_PAGES[path];
+      res.end(body ?? (path.startsWith('/login') || path.startsWith('/account') ? SIGN_IN_HTML : headingPage('Clusters')));
     });
     await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
     const address = server.address();
@@ -839,6 +854,22 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     const missed = await checkAt(`http://127.0.0.1:${port}/login`, { screenId: 'clusters', expectedUrl: 'http://localhost:9999/clusters' });
     expect(missed.verdict).toBe('not_covered');
     expect(missed.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+  });
+
+  it('waits for the page to settle before it reads the address, so a page that moves to sign in after load is not_covered', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/moves-after-load`, { screenId: 'moving', expectedUrl: '/moves-after-load' });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:moving']);
+    expect(result.gaps[0]?.reason).toContain('/login');
+  });
+
+  it('reads the address again after the checks, so a page that left its screen while they ran is not_covered', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/moves-on-focus`, { screenId: 'moving', expectedUrl: '/moves-on-focus' });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:moving']);
+    expect(result.gaps[0]?.reason).toContain('/login');
   });
 
   it('applies the CLI rule for a password field when the run asserts a session the CLI way', async () => {

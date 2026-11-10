@@ -404,6 +404,15 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     const expected = expectedAddress(options, labeledScreenId, config, pwPage.url());
     let landing: LandingObservation | null = null;
     if (expected !== null) {
+      // With no readiness signal, nothing has waited yet. The address is read once the page has
+      // settled, the way the CLI reads it, so a router that moves to a sign-in page a moment after
+      // load has moved before the read.
+      if (before === null) {
+        const settled = await settleBeforeAddressRead(page, screenId);
+        if (settled !== null) {
+          return finish([], [settled]);
+        }
+      }
       const landed = await landingBeforeChecks(page, screenId, labeledScreenId !== null, expected, config, reachedWhen);
       if ('gap' in landed) {
         return finish([], [landed.gap]);
@@ -420,6 +429,12 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     const late = landing === null ? null : await lateRefusalGap(page, screenId, landing);
     if (late !== null) {
       return finish([], [...gaps, late]);
+    }
+    // The address again, after the checks. A page that left its screen while they ran, such as a
+    // router that moved to a sign-in page, was not that screen for every check, so its findings go.
+    const moved = expected === null ? null : (await addressGap(page, screenId, labeledScreenId !== null, expected, 'after the checks')).gap;
+    if (moved !== null) {
+      return finish([], [...gaps, moved]);
     }
     if (before === null || signal === null || config === null) {
       return finish(drafts, gaps, notes);
@@ -539,28 +554,11 @@ async function landingBeforeChecks(
   config: UsablConfig | null,
   reachedWhen: SurfaceConfig['reachedWhen'],
 ): Promise<{ observation: LandingObservation } | { gap: CoverageGap }> {
-  let landedUrl: string | null;
-  try {
-    const reported = await page.currentUrl();
-    landedUrl = reported.trim().length > 0 ? reported : null;
-  } catch {
-    landedUrl = null;
+  const address = await addressGap(page, screenId, labeled, expected, null);
+  if (address.gap !== null) {
+    return { gap: address.gap };
   }
-  const claim = labeled ? `this page is screen ${screenId}, at ${sanitizeUrlForDisplay(expected)}` : `this page is at ${sanitizeUrlForDisplay(expected)}`;
-  if (landedUrl === null || sameScreenPath(expected, landedUrl) !== true) {
-    const where = landedUrl === null ? 'the page could not report its address' : `the page is at ${sanitizeUrlForDisplay(landedUrl)}`;
-    return {
-      gap: landingGap(
-        screenId,
-        `checkPage was told ${claim}, and ${where}. Only the path and the fragment are compared, so a test ` +
-          'on another host or port still matches. The page is not that screen, so usabl did not check it and reports ' +
-          'no findings for it. If the session expired, sign in again before the check. If the screen moved, correct ' +
-          'its url in usabl.config.json or pass expectedUrl. Addresses are shown without their sign-in credentials, ' +
-          'query string, or fragment, because any of them can carry a token, so two addresses that differ only in ' +
-          'the fragment look the same here.',
-      ),
-    };
-  }
+  const landedUrl = address.landedUrl;
   const expectedParsed = new URL(expected);
   const requestedUrl = new URL(`${expectedParsed.pathname}${expectedParsed.search}${expectedParsed.hash}`, landedUrl).toString();
   const observation = await observeLanding(page, {
@@ -571,6 +569,66 @@ async function landingBeforeChecks(
   });
   const ruled = redirectedAwayGap(screenId, observation);
   return ruled === null ? { observation } : { gap: landingGap(screenId, ruled.reason) };
+}
+
+/**
+ * Waits for the page to settle, as the CLI's gotoReady does before it reads the address. Used only
+ * when no readiness signal ran, because that wait already settled the page. A page that does not
+ * settle is a gap: its address could still change.
+ */
+async function settleBeforeAddressRead(page: Page, screenId: string): Promise<CoverageGap | null> {
+  try {
+    await page.gotoReady();
+    return null;
+  } catch (error: unknown) {
+    return landingGap(
+      screenId,
+      `checkPage waited for the page to settle before it read the page's address, and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+    );
+  }
+}
+
+/**
+ * Whether the page is at the address it claims, by path and fragment only. Returns the address the
+ * page reported when it is, or a landing gap that names both addresses when it is not. `when` says
+ * when the address was read, for a read after the checks.
+ */
+async function addressGap(
+  page: Page,
+  screenId: string,
+  labeled: boolean,
+  expected: string,
+  when: string | null,
+): Promise<{ landedUrl: string; gap: null } | { landedUrl: null; gap: CoverageGap }> {
+  let landedUrl: string | null;
+  try {
+    const reported = await page.currentUrl();
+    landedUrl = reported.trim().length > 0 ? reported : null;
+  } catch {
+    landedUrl = null;
+  }
+  if (landedUrl !== null && sameScreenPath(expected, landedUrl) === true) {
+    return { landedUrl, gap: null };
+  }
+  const claim = labeled ? `this page is screen ${screenId}, at ${sanitizeUrlForDisplay(expected)}` : `this page is at ${sanitizeUrlForDisplay(expected)}`;
+  const where = landedUrl === null ? 'the page could not report its address' : `the page is at ${sanitizeUrlForDisplay(landedUrl)}`;
+  const read = when === null ? where : `${when}, ${where}`;
+  const outcome =
+    when === null
+      ? 'The page is not that screen, so usabl did not check it and reports no findings for it.'
+      : 'The page left that screen while it was checked, so usabl reports no findings for it.';
+  return {
+    landedUrl: null,
+    gap: landingGap(
+      screenId,
+      `checkPage was told ${claim}, and ${read}. Only the path and the fragment are compared, so a test ` +
+        `on another host or port still matches. ${outcome} If the session expired, sign in again before the check. ` +
+        'If the screen moved, correct ' +
+        'its url in usabl.config.json or pass expectedUrl. Addresses are shown without their sign-in credentials, ' +
+        'query string, or fragment, because any of them can carry a token, so two addresses that differ only in ' +
+        'the fragment look the same here.',
+    ),
+  };
 }
 
 /** Rule A on the refused-request record as it stands after the checks, as the CLI reads it. */
