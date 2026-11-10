@@ -8,7 +8,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BrowserDriver, Page } from '../../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../../src/deps/real.js';
 import type { Edit, TargetFinder } from '../../../src/measure/sensitivity/catalog.js';
-import type { AppliedEdit } from '../../../src/measure/sensitivity/edits.js';
+import type { Page as PwPage } from 'playwright';
+import { playwrightPageOf } from '../../../src/providers/engines/shared.js';
+import { locateInPage, type AppliedEdit } from '../../../src/measure/sensitivity/edits.js';
 import { makeRealMutationEditor } from '../../../src/measure/sensitivity/real-editor.js';
 import { findTargets } from '../../../src/measure/sensitivity/targets.js';
 import { REAL_PROCESS_BUDGET_MS } from '../../support/timing.js';
@@ -28,8 +30,12 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <button type="button" id="open-lazy">Open the lazy dialog</button>
 <div id="lazy-dialog" role="dialog" aria-label="Lazy" hidden></div>
 <button type="button" id="sticky" aria-label="Sticky">S</button>
+<x-host></x-host>
 </main>
 <script>
+  customElements.define('x-host', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<button type="button">In the shadow</button>'; }
+  });
   document.getElementById('first').addEventListener('click', () => { document.body.dataset.clicked = 'yes'; });
   document.getElementById('jump').addEventListener('click', () => { document.getElementById('last').focus(); });
   // A document listener in the capture phase runs before any listener on the element.
@@ -136,8 +142,32 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('sensitivity edits in Chr
   it('removes an element and stands its parent in for it', async () => {
     await withEdit({ selector: 'h1', every: true }, { kind: 'remove-element' }, async (page, applied) => {
       expect(await page.queryAll('h1')).toEqual([]);
-      expect(await applied.locate(['#main', '#first', 'html'])).toEqual(['target', 'inside', 'around']);
+      // An ancestor of the stand-in is not around it. Only a shadow host is.
+      expect(await applied.locate(['#main', '#first', 'html'])).toEqual(['target', 'inside', 'elsewhere']);
     });
+  });
+
+  it('counts the shadow host of a changed element as around it, and no other ancestor', async () => {
+    const page = await driver.open(url);
+    try {
+      await page.gotoReady();
+      const pw = playwrightPageOf(page) as PwPage;
+      // An edit reaches the top document only, so the anchor in a shadow root is built here.
+      const result = await pw.evaluateHandle(() => ({
+        anchors: [document.querySelector('x-host')?.shadowRoot?.querySelector('button')],
+      }));
+      try {
+        expect(await result.evaluate(locateInPage as never, ['x-host', '#main', 'x-host >> button'])).toEqual([
+          'around',
+          'elsewhere',
+          'target',
+        ]);
+      } finally {
+        await result.dispose();
+      }
+    } finally {
+      await page.close();
+    }
   });
 
   it('cancels one key on the element: Tab stays on it, Enter does not click it', async () => {

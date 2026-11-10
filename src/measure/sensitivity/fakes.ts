@@ -13,6 +13,8 @@ export interface FakeElement {
   path: string;
   // The path of the element that holds it, for locating a reported element.
   parent?: string;
+  // The path of the shadow host when the element sits in a shadow root.
+  host?: string;
   role?: string | null;
   name?: string | null;
   text?: string;
@@ -151,7 +153,7 @@ export function makeFakeMutationEditor(options: { refuse?: string; check?: EditC
               if (!dom.elements.has(path) || dom.elements.get(path)?.removed === true) return 'unresolved';
               if (anchors.includes(path)) return 'target';
               if (anchors.some((anchor) => holds(dom, anchor, path))) return 'inside';
-              if (anchors.some((anchor) => holds(dom, path, anchor))) return 'around';
+              if (anchors.some((anchor) => dom.elements.get(anchor)?.host === path)) return 'around';
               return 'elsewhere';
             });
           },

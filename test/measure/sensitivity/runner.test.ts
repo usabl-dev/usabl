@@ -37,7 +37,9 @@ function freshDom() {
   return makeFakeDom({
     elements: [
       { path: 'main', role: 'main', name: null },
-      { path: '#save', parent: 'main', role: 'button', name: 'Save', text: 'Save' },
+      { path: 'x-toolbar', parent: 'main' },
+      // #save sits in the shadow root of x-toolbar.
+      { path: '#save', parent: 'x-toolbar', host: 'x-toolbar', role: 'button', name: 'Save', text: 'Save' },
       { path: '#other', parent: 'main', role: 'button', name: 'Other', text: 'Other' },
     ],
     selectors: { button: ['#save', '#other'] },
@@ -245,10 +247,12 @@ describe('measureEntry', () => {
     expect((await measureEntry(deps, entry({ reportedOn: 'screen' }), SCREEN)).outcome).toBe('caught');
   });
 
-  it('accepts a finding on the element that holds the target for an entry reported around it', async () => {
-    const { deps } = setup([namesProvider('button-name', 'main')]);
+  it('accepts a finding on the shadow host of the target for an entry reported around it, and no other ancestor', async () => {
+    const { deps } = setup([namesProvider('button-name', 'x-toolbar')]);
     expect((await measureEntry(deps, entry({ reportedOn: 'around-target' }), SCREEN)).outcome).toBe('caught');
-    const inside = setup([namesProvider('button-name', 'main')]);
+    const ancestor = setup([namesProvider('button-name', 'main')]);
+    expect((await measureEntry(ancestor.deps, entry({ reportedOn: 'around-target' }), SCREEN)).outcome).toBe('unreadable');
+    const inside = setup([namesProvider('button-name', 'x-toolbar')]);
     expect((await measureEntry(inside.deps, entry({ reportedOn: 'inside-target' }), SCREEN)).outcome).toBe('unreadable');
   });
 

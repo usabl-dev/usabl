@@ -86,7 +86,7 @@ export interface TargetFinder {
  * Where the expected rule reports the defect, relative to the element the edit changed.
  * - target: on the element itself.
  * - inside-target: on the element or an element inside it, such as an alert inside a live region.
- * - around-target: on the element or one that holds it. A removed element is replaced by its parent.
+ * - around-target: on the element or its shadow host. A removed element is replaced by its parent.
  * - screen: anywhere on the screen, for a rule that reports the page or the control that opens
  *   something rather than the thing that was changed.
  */

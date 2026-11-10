@@ -18,7 +18,7 @@ import type { Edit } from './catalog.js';
  * Where one reported element sits relative to the changed elements.
  * - target: it is a changed element, or the parent that stands in for a removed one.
  * - inside: it sits inside one.
- * - around: it holds one.
+ * - around: it is the shadow host of one.
  * - elsewhere: it is somewhere else on the page.
  * - unresolved: its path names no single element on the page now, so where it sits is unknown.
  */
@@ -394,6 +394,10 @@ export function locateInPage(result: EditResultInPage, paths: string[]): Element
     }
     return node.parentNode;
   };
+  const hostOf = (node: Node): Element | null => {
+    const root = node.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
   const holds = (outer: Node, inner: Node): boolean => {
     for (let current: Node | null = parentOf(inner); current !== null; current = parentOf(current)) {
       if (current === outer) {
@@ -413,7 +417,9 @@ export function locateInPage(result: EditResultInPage, paths: string[]): Element
     if (result.anchors.some((anchor) => holds(anchor, element))) {
       return 'inside';
     }
-    if (result.anchors.some((anchor) => holds(element, anchor))) {
+    // Around is narrow on purpose: only the shadow host of a changed element. A wider ancestor,
+    // such as main or body, would let a new page-level finding count as on the target.
+    if (result.anchors.some((anchor) => hostOf(anchor) === element)) {
       return 'around';
     }
     return 'elsewhere';

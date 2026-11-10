@@ -26,6 +26,8 @@ function dom(): FakeDom {
       { path: '#blank', parent: 'main', role: 'button', name: '' },
       { path: '#hidden-dialog', parent: 'main' },
       { path: '#intro', parent: 'main', role: 'paragraph', name: null, text: 'Welcome' },
+      { path: 'x-card', parent: 'main' },
+      { path: 'x-card >> button', parent: 'x-card', host: 'x-card', role: 'button', name: 'Open', text: 'Open' },
     ],
     selectors: {
       button: ['#save', '#close', '#blank'],
@@ -150,9 +152,13 @@ describe('the fake mutation editor', () => {
     if (outcome.kind !== 'applied') throw new Error('edit not applied');
     expect(await outcome.edit.locate(['main', '#save', '#nowhere'])).toEqual(['target', 'inside', 'unresolved']);
 
+    // Around is only the shadow host of a changed element, never every ancestor.
     const second = await makeFakeMutationEditor().apply(makeFakeDomPage(dom()), ['#save'], { kind: 'remove-text-name' });
     if (second.kind !== 'applied') throw new Error('edit not applied');
-    expect(await second.edit.locate(['main', '#close'])).toEqual(['around', 'elsewhere']);
+    expect(await second.edit.locate(['main', '#close'])).toEqual(['elsewhere', 'elsewhere']);
+    const shadowed = await makeFakeMutationEditor().apply(makeFakeDomPage(dom()), ['x-card >> button'], { kind: 'remove-text-name' });
+    if (shadowed.kind !== 'applied') throw new Error('edit not applied');
+    expect(await shadowed.edit.locate(['x-card', 'main'])).toEqual(['around', 'elsewhere']);
   });
 
   it('stands a removed element\'s parent in for it', async () => {
