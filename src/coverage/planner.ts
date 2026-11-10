@@ -361,7 +361,7 @@ export async function computeCoverage(
       gaps.push({
         ref: route.url,
         state: 'skipped',
-        reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id, or change the route path.`,
+        reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id of its own, or change the route path.`,
       });
     }
     // The same holds for a route the router fallback could not read, and for a router file that

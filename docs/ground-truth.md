@@ -4358,6 +4358,12 @@ a verified receipt over a real failure.
 usabl refuses any id that could stand for more than one screen, checked when coverage is planned,
 before the idle return, because a docs page can be scanned in a run where no app file changed.
 
+The router fallback joins the segments of a path with `-`, so two paths can give one id: `/a-b`
+and `/a/b` both give `a-b`. Neither route is named. Both are set aside like a route whose derived
+id fails the grammar, so a wide-blast change records each as a `skipped` gap, and every other
+route still runs. `usabl init` refuses the whole draft in that case, names the file and line of
+each route that shares an id, and says to change a path or write the sidecar by hand.
+
 **A surface and a discovered route may share an id, but the config has to say so.** Set
 `"overridesDiscoveredRoute": true` on the surface. That is how a surface controls the scan URL for
 a screen discovery already owns, which is what makes query variants and deep links possible.

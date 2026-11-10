@@ -503,6 +503,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       notes.push(`Review: ${where}: ${entry.reason}`);
     }
     let attributed = 0;
+    const wheresById = new Map<string, string[]>();
     for (const route of parsed) {
       const where = `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`;
       if (!isProvenRoutePath(route.path)) {
@@ -563,6 +564,22 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         url: route.path,
         entryFile,
       });
+      wheresById.set(screenId, [...(wheresById.get(screenId) ?? []), where]);
+    }
+    // Two route paths can give one id: /a-b and /a/b both give a-b. A sidecar with both is refused
+    // when usabl reads it, and one without either never scans that screen, so nothing is written.
+    const colliding = [...wheresById.values()].filter((wheres) => wheres.length > 1);
+    if (colliding.length > 0) {
+      throw new Error(
+        [
+          'usabl init refused to write usabl.config.json and usabl.routes.json: route paths in the router file give the ' +
+            'same screen id, so usabl could not tell those screens apart, and a sidecar that left one out would never ' +
+            'scan it. Nothing was written. The routes that share an id:',
+          ...colliding.map((wheres) => `  ${wheres.map((where) => operatorText(where)).join(' and ')}`),
+          'Fix: change one of the route paths, or write usabl.routes.json by hand with a screen id of its own for each ' +
+            'route. Then run usabl init again.',
+        ].join('\n'),
+      );
     }
     notes.push(`Attributed ${attributed} of ${routes.length} routes to local entry files.`);
     if (routerRaw.includes('path="*"') || routerRaw.includes("path='*'")) {

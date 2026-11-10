@@ -164,6 +164,22 @@ export function parseRouterFallback(
     }
     routes.push({ screenId: derived.screenId, url: route.path, entryFile: null });
   }
+  // Two paths can give one id: /a-b and /a/b both give a-b. One id for two screens lets a floor
+  // entry or a finding of one absorb the other's, so neither is named. Both are set aside like a
+  // route whose id is refused, so a wide-blast change reports each as a gap.
+  const pathsById = new Map<string, number>();
+  for (const route of routes) pathsById.set(route.screenId, (pathsById.get(route.screenId) ?? 0) + 1);
+  const named = routes.filter((route) => pathsById.get(route.screenId) === 1);
+  for (const route of routes) {
+    if (pathsById.get(route.screenId) === 1) continue;
+    unusable.push({
+      url: route.url,
+      reason:
+        'this route path gives the same screen id as another route path in the router file, so usabl ' +
+        'cannot tell the two screens apart and named neither.',
+    });
+  }
+  routes.splice(0, routes.length, ...named);
   // A list read on an assumption is not proven at check time. It is reported like a route usabl
   // could not read, so wide blast records a gap and drift refuses until the sidecar acknowledges
   // it. The routes it read stay in the list. Entries are ordered by line; the sort is stable.
