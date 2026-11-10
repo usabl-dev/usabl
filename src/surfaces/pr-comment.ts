@@ -25,6 +25,7 @@ import { debtSentence, trackingOffSentence } from '../output/debt.js';
 import {
   applyNoiseBudget,
   formatCollapsedGroupCount,
+  formatShowAllHint,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
@@ -419,7 +420,9 @@ function carriedWord(value: unknown, cap: TextCap): string {
 //   1. announcements: current state from the transcript, not part of any verdict;
 //   2. disclosed notes: what a check did not read, which never changes the verdict;
 //   3. advisory findings: preview and model judgment never gate;
-//   4. recorded debt: carried and waived findings the gate already accepted;
+//   4. findings that do not gate: carried and waived findings the gate already accepted, and new
+//      deterministic findings whose confidence is neither fail nor unverified, so they do not
+//      block (in the collapsed view, a rule group whose representative does not gate);
 //   5. notices for floored accessibility barriers this run did not see;
 //   6. coverage gaps after the first one of each state;
 //   7. the framed detail under a gating finding, which keeps its first line;
@@ -460,18 +463,29 @@ interface CommentItem {
   detailCut: boolean;
 }
 
+// What one item of a section is, and what more than one are, for the line that says how many were
+// cut.
+interface ItemNoun {
+  one: string;
+  many: string;
+}
+
 // A section: the lines before its items, the items, and the lines after them. `noun` names what
 // one item is, for the line that says how many were cut.
 // `close` is printed right after the items and before the cut count, so a section whose items sit
 // inside one frame can close the frame there and the count stays outside it.
+// `after` can depend on how many items were cut, for a line that counts what is shown.
 interface CommentSection {
   kind: 'section';
   before: string[];
   items: CommentItem[];
   close: string[];
-  after: string[];
-  noun: string;
+  after: string[] | ((cut: number) => string[]);
+  noun: ItemNoun;
 }
+
+const FINDINGS: ItemNoun = { one: 'finding', many: 'findings' };
+const GAPS: ItemNoun = { one: 'gap', many: 'gaps' };
 
 type CommentPart = { kind: 'fixed'; lines: string[] } | { kind: 'cut-note' } | CommentSection;
 
@@ -487,8 +501,8 @@ function itemFrom(lines: string[], tier: CutTier, detailTier?: CutTier): Comment
 function section(
   before: string[],
   items: CommentItem[],
-  after: string[],
-  noun: string,
+  after: CommentSection['after'],
+  noun: ItemNoun,
   close: string[] = [],
 ): CommentSection {
   return { kind: 'section', before, items, close, after, noun };
@@ -498,8 +512,17 @@ function fixed(lines: string[]): CommentPart {
   return { kind: 'fixed', lines };
 }
 
-function cutLine(count: number, noun: string): string {
-  return `- ${wholeNumber(count)} more ${noun} not shown here, to keep this comment under the size GitHub accepts.`;
+// The line under a section that lost items. `gating` counts the cut items that gate: when every
+// cut item gates, the line says so, and when only some do, it says how many.
+function cutLine(count: number, gating: number, noun: ItemNoun): string {
+  const what = count === 1 ? noun.one : noun.many;
+  const counted =
+    gating === 0
+      ? `${wholeNumber(count)} more ${what}`
+      : gating === count
+        ? `${wholeNumber(count)} more gating ${what}`
+        : `${wholeNumber(count)} more ${what}, ${wholeNumber(gating)} of them gating,`;
+  return `- ${counted} not shown here, to keep this comment under the size usabl posts.`;
 }
 
 function cutNote(cutItems: number, cutDetails: number): string {
@@ -508,7 +531,7 @@ function cutNote(cutItems: number, cutDetails: number): string {
     cutDetails === 0
       ? ''
       : `, and ${wholeNumber(cutDetails)} gating ${cutDetails === 1 ? 'finding shows' : 'findings show'} only ${cutDetails === 1 ? 'its' : 'their'} first line`;
-  return `_This comment is longer than GitHub accepts, so ${items}${details}. Each section says what it left out. ${FULL_RESULT_POINTER}_`;
+  return `_This comment was shortened to stay under the size usabl posts, so ${items}${details}. Each section says what it left out. ${FULL_RESULT_POINTER}_`;
 }
 
 function renderParts(parts: CommentPart[]): string {
@@ -537,11 +560,12 @@ function renderParts(parts: CommentPart[]): string {
       }
     }
     lines.push(...part.close);
-    const cut = part.items.filter((entry) => entry.cut).length;
+    const cutItemsHere = part.items.filter((entry) => entry.cut);
+    const cut = cutItemsHere.length;
     if (cut > 0) {
-      lines.push(cutLine(cut, part.noun));
+      lines.push(cutLine(cut, cutItemsHere.filter((entry) => entry.tier === 'gating').length, part.noun));
     }
-    lines.push(...part.after);
+    lines.push(...(typeof part.after === 'function' ? part.after(cut) : part.after));
   }
   return lines.join('\n');
 }
@@ -652,13 +676,13 @@ function renderFindingGroup(
   withStatus = false,
 ): CommentSection {
   if (findings.length === 0) {
-    return section([`### ${title}`], [], ['- none'], 'findings');
+    return section([`### ${title}`], [], ['- none'], FINDINGS);
   }
   return section(
     [`### ${title}`],
     findings.map((finding) => findingItem(finding, withStatus, tier)),
     [],
-    'findings',
+    FINDINGS,
   );
 }
 
@@ -705,9 +729,22 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): Com
         ? itemFrom(lines, 'gating', 'gating-detail')
         : itemFrom(lines, 'recorded');
     }),
-    [
+    // The hint counts the rule groups shown. When the size bound cut some, it is worked out again
+    // from the groups still shown, so it never says more are shown than the comment holds.
+    (cut) => [
       '',
-      `_${view.showAllHint ?? ''}_`,
+      `_${
+        cut === 0
+          ? (view.showAllHint ?? '')
+          : formatShowAllHint(
+              {
+                totalFindingCount: view.totalCount,
+                shownGroupCount: view.groups.length - cut,
+                totalGroupCount: view.totalGroupCount,
+              },
+              noun,
+            )
+      }_`,
       ...(recordedCount === 0
         ? []
         : [
@@ -715,7 +752,7 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): Com
             `_Of these, ${wholeNumber(gatingCount)} gate this run and ${wholeNumber(recordedCount)} are recorded debt that does not block it._`,
           ]),
     ],
-    'rule groups',
+    { one: 'rule group', many: 'rule groups' },
   );
 }
 
@@ -736,7 +773,7 @@ function renderFloorUnconfirmed(result: Result): CommentSection | null {
       item([framedLine({ label: 'notice', value: unconfirmedNotice(entry), cap: 'notice' })], [], 'floor-notice'),
     ),
     [''],
-    'notices',
+    { one: 'notice', many: 'notices' },
     [UNTRUSTED_FRAME_END],
   );
 }
@@ -778,10 +815,10 @@ function gapStateKey(state: unknown): string {
 
 function renderCoverageGaps(result: Result): CommentSection {
   if (!Array.isArray(result.coverage.gaps)) {
-    return section(['### Coverage gaps', NOT_A_LIST], [], [], 'gaps');
+    return section(['### Coverage gaps', NOT_A_LIST], [], [], GAPS);
   }
   if (result.coverage.gaps.length === 0) {
-    return section(['### Coverage gaps', '- none'], [], [], 'gaps');
+    return section(['### Coverage gaps', '- none'], [], [], GAPS);
   }
   // At most GAPS_PER_STATE_CAP gaps of each state are named, in the order they arrived. The rest
   // of each state are counted on one line, so a change that touches hundreds of files no screen
@@ -817,7 +854,7 @@ function renderCoverageGaps(result: Result): CommentSection {
     ['### Coverage gaps'],
     items,
     over.length === 0 ? [] : [...over, `_${FULL_RESULT_POINTER}_`],
-    'gaps',
+    GAPS,
   );
 }
 
@@ -851,7 +888,7 @@ function renderNotes(result: Result): CommentSection | null {
       ),
     ),
     [],
-    'notes',
+    { one: 'note', many: 'notes' },
   );
 }
 
@@ -917,7 +954,7 @@ function renderAnnouncements(result: Result): CommentSection {
     items.push(item(lines, [], 'announcement'));
   }
 
-  return section(before, items, items.length === 0 ? ['- none'] : [], 'screens');
+  return section(before, items, items.length === 0 ? ['- none'] : [], { one: 'screen', many: 'screens' });
 }
 
 /** The failing and unconfirmed breakdown behind the new count, omitted when nothing is new. */

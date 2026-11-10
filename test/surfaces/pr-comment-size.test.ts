@@ -245,7 +245,7 @@ describe('pull request comment size', () => {
 
     expect(body(markdown).length).toBeLessThanOrEqual(COMMENT_BODY_LIMIT);
     // Gating first lines were cut, so the last tier was reached.
-    expect(markdown).toMatch(/more (gating )?findings not shown here/);
+    expect(markdown).toMatch(/more gating findings not shown here/);
     const gapSection = markdown.slice(markdown.indexOf('### Coverage gaps'));
     for (const state of ['not-covered', 'unresolved', 'capability-denied', 'skipped']) {
       expect(gapSection).toContain(`(\`${state}\`)`);
@@ -253,6 +253,54 @@ describe('pull request comment size', () => {
     expect(gapSection).toContain('ref: `odd`');
     // The second unresolved gap is not the first of its state, so it goes before any gating line.
     expect(gapSection).not.toContain('ref: `src/y2.tsx`');
+  });
+
+  it('says the comment was shortened to stay under the size usabl posts', () => {
+    const long = 'y'.repeat(300);
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      finding({ screenId: `${long}-${index}`, rule: `${long}${index}`, layer: long, elementKey: `n-${index}` }),
+    );
+    const markdown = projectPrComment(result({ findings }), { noiseBudget: { default: 1_000_000 } } as never);
+
+    expect(markdown).toContain('_This comment was shortened to stay under the size usabl posts, so ');
+    expect(markdown).not.toContain('GitHub accepts');
+    // Only gating first lines were cut in this section, so the line names them as gating.
+    expect(markdown).toMatch(/^- \d+ more gating findings not shown here, to keep this comment under the size usabl posts\.$/m);
+  });
+
+  it('uses the singular for one cut item', () => {
+    // One screen of announcements, which is cut first, and gating findings whose first lines alone
+    // pass the bound, so the one screen is cut and its section counts one item.
+    const long = 'y'.repeat(300);
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      finding({ screenId: `${long}-${index}`, rule: `${long}${index}`, layer: long, elementKey: `n-${index}` }),
+    );
+    const markdown = projectPrComment(
+      result({ findings, screens: [screen('clusters', [stop(0, 'Clusters')])] }),
+      { noiseBudget: { default: 1_000_000 } } as never,
+    );
+
+    expect(markdown).toMatch(/^- 1 more screen not shown here, to keep this comment under the size usabl posts\.$/m);
+    expect(markdown).not.toMatch(/- 1 more screens /);
+  });
+
+  it('counts only the rule groups still shown in the collapsed hint after a cut', () => {
+    // Each finding repeats once, so every rule group stands for two findings and the view is
+    // collapsed by rule. The groups do not gate, so they are cut early, after the hint was worked
+    // out from the noise budget.
+    const long = 'w'.repeat(300);
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      finding({ screenId: `${long}-${index}`, rule: `${long}${index}`, layer: long, status: 'carried', elementKey: `c-${index}`, whatUserExperiences: long, why: long, fix: long }),
+    ).flatMap((entry, index) => [entry, { ...entry, elementKey: `c2-${index}` }]);
+    const markdown = projectPrComment(
+      result({ verdict: 'verified', exitCode: 0, findings }),
+      { noiseBudget: { default: 1_000_000 } } as never,
+    );
+
+    const cut = Number(/^- (\d+) more rule groups not shown here/m.exec(markdown)?.[1]);
+    expect(cut).toBeGreaterThan(0);
+    expect(markdown).toContain(`(${400 - cut} of 400 rule groups shown)`);
+    expect(markdown).not.toContain('400 rule groups; some rules repeat');
   });
 
   it('leaves an ordinary comment exactly as it was, with no note about cutting', () => {
