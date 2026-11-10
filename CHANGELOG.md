@@ -273,9 +273,11 @@
 
 - When a stored receipt for an unchanged tree does not verify, the Stop hook's notice after the
   decision line now says why, one plain reason per failed binding, such as "a waiver this receipt
-  relied on ended at ...". Before, the reason was dropped. A receipt that failed only because the
-  files changed adds no notice, so a verified stop after an edit stays quiet. Gate effect: none;
-  the hook runs the full check as before, and the person sees why.
+  relied on ended at ...". Before, the reason was dropped. The notice appears only when the full
+  check that follows reaches a verdict. A receipt that failed only because the files changed adds
+  no notice, so a verified stop after an edit stays quiet, and an idle or failed run adds none,
+  so those stops read as they would with no stored receipt. Gate effect: none; the hook runs the
+  full check as before, and the person sees why.
 
 - A run now reads the tree before it plans and again after it scans, and the receipt binds the
   first read. Before, the receipt bound the tree read after the scan, so a file written during a
@@ -291,18 +293,22 @@
 
 - The Chromium version a receipt binds is now the version of the binary that scans:
   Playwright's headless shell (`chrome-headless-shell`), which a headless run launches, not the
-  full browser `chromium.executablePath()` names. usabl finds the headless shell beside the full
-  browser and binds what it prints for `--version`, or the revision in its folder name as
-  `revision-<number>` when it prints none. Before, the version was the revision in the full
-  browser's folder name, so a replaced headless shell, or a different browser placed at the full
-  browser's path, read the same value as before. A stored receipt that holds a Chromium revision
+  full browser `chromium.executablePath()` names. usabl finds the headless shell in the same
+  browsers folder, at the revision the `chromium-headless-shell` entry names in the
+  `browsers.json` of the installed `playwright-core`, never at the full browser's revision or in
+  another shell folder left on disk. It binds what the shell prints for `--version`, or the
+  revision in its folder name as `revision-<number>` when it prints none. Before, the version was
+  the revision in the full browser's folder name, so a replaced headless shell, or a different
+  browser placed at the full browser's path, read the same value as before. A stored receipt that holds a Chromium revision
   does not verify once after the upgrade, and the stop hook runs one full check. Gate effect: a
   stored receipt stops verifying when the headless shell changes, so the stop hook runs a full
   check where it allowed.
 
 - A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. When the
-  headless shell cannot be found, the Chromium version is unreadable; the full browser's version
-  is never bound in its place. `usabl doctor` reports an unreadable version with the fix. Gate
+  headless shell cannot be found, because Playwright's `browsers.json` cannot be read, names no
+  single shell revision, or gives it a per-platform override, or because the shell's folder is
+  missing, the Chromium version is unreadable; the full browser's version is never bound in its
+  place. `usabl doctor` reports an unreadable version with the fix. Gate
   effect: a run with a version usabl cannot read is not covered, with a gap on `scanner versions`
   that names the fix, and mints no receipt.
 
