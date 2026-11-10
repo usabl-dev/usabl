@@ -167,6 +167,12 @@
 
 ### Fixed
 
+- A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
+  surface no longer stops the run. The search for the app's `package.json` read a file such as
+  `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
+  with ENOTDIR, and the run ended with no verdict. The search now starts from the file's folder,
+  and a read of a path below a file returns nothing, the same as a missing file.
+
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
   flow had already changed it and could miss a barrier the flow had removed from view.
