@@ -99,7 +99,10 @@ export function usablVitePlugin(opts: {
     clientModuleSource: overlayClientModuleSource,
     defaultPort: DEFAULT_DEV_PORT,
   });
-  let injectSourceAttributes = false;
+  // Whether Vite is serving, from configResolved. The source attributes and the overlay loader are
+  // for the dev server only. Until Vite says which command it runs, and in a build, both stay off,
+  // so a production bundle never carries a loader for a module only the dev server answers.
+  let serving = false;
 
   return {
     // We keep a minimal plugin shape so host apps provide Vite, and this package stays engine-focused.
@@ -109,7 +112,7 @@ export function usablVitePlugin(opts: {
     // or it finds no tags to annotate and jump-to-source never gets a line.
     enforce: 'pre',
     configResolved(config) {
-      injectSourceAttributes = config.command === 'serve';
+      serving = config.command === 'serve';
       host.applyServerConfig(config.server);
     },
     configureServer(server) {
@@ -137,11 +140,14 @@ export function usablVitePlugin(opts: {
       }
     },
     transformIndexHtml(html) {
+      if (!serving) {
+        return html;
+      }
       // webdriver and usabl=off prevent the engine and Playwright oracles from grading the badge itself.
       return injectLoader(html);
     },
     transform(code, id) {
-      if (!injectSourceAttributes) {
+      if (!serving) {
         return null;
       }
       const injected = host.transformSource(code, id);

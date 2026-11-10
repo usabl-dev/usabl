@@ -492,6 +492,8 @@ describe('usablVitePlugin', () => {
   it('injects a guarded overlay loader into HTML', async () => {
     const plugin = usablVitePlugin({ run: async () => baseResult({}) });
     const html = '<html><body><main>app</main></body></html>';
+    // Vite resolves its config before it transforms HTML; the loader is injected only in serve.
+    plugin.configResolved?.({ command: 'serve' });
 
     const transformed = await plugin.transformIndexHtml?.(html);
 
@@ -1185,6 +1187,8 @@ describe('usablVitePluginFromConfig', () => {
   it('injects the same guarded loader as the base plugin', async () => {
     const plugin = usablVitePluginFromConfig({ cwd: '/repo/app' }, makeFactoryPorts({}));
     const html = '<html><body><main>app</main></body></html>';
+    // Vite resolves its config before it transforms HTML; the loader is injected only in serve.
+    plugin.configResolved?.({ command: 'serve' });
 
     const transformed = await plugin.transformIndexHtml?.(html);
 

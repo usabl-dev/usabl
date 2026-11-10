@@ -2987,6 +2987,11 @@ client runs inside the tested page's own JavaScript realm, so the page can inter
 what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
+The Vite plugin adds the overlay loader to the page only in `vite serve`. In `vite build`, and
+before Vite has resolved its config, `transformIndexHtml` returns the HTML unchanged, so a
+production bundle never carries a loader for `/__usabl/client.js`, a module only the dev server
+answers.
+
 The overlay and the CLI start the scan browser through the same shared browser in
 `src/deps/real.ts`, so both ask for Chromium's sandbox, fall back the same way, and honor
 `browserSandbox` (section 22). When a scan ran without the sandbox, the dev server output says so
