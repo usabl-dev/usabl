@@ -166,33 +166,58 @@ export function sortStateFrom(attributes: unknown): string | null {
   return null;
 }
 
+// What a call gives when its timer ends first.
+const OUT_OF_TIME: unique symbol = Symbol('out of time');
+
 /**
  * One read of the whole tree, with the sort state of every header. The budget covers the whole
- * read, so a table with many headers cannot stretch it.
+ * read, so a table with many headers cannot stretch it. Each call races a timer that ends at the
+ * start of the read plus the budget, so a call that is slow or never returns cannot hold the scan:
+ * when the timer wins, the read is over budget at once.
  */
 export async function readFullAxTree(send: CdpSend, now: () => number = Date.now): Promise<AxTreeRead> {
   const start = now();
+  const deadline = start + AX_TREE_TIME_BUDGET_MS;
   const overTime = (): boolean => now() - start > AX_TREE_TIME_BUDGET_MS;
-  const result = await send('Accessibility.getFullAXTree');
+  const timed = async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+    const call = send(method, params);
+    // A call that loses the race may still fail later. Nothing waits for it then.
+    call.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeUp = new Promise<typeof OUT_OF_TIME>((resolve) => {
+      timer = setTimeout(() => resolve(OUT_OF_TIME), Math.max(0, deadline - now()));
+    });
+    try {
+      return await Promise.race([call, timeUp]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const overBudgetTime: AxTreeRead = { kind: 'over-budget', limit: 'time' };
+
+  const result = await timed('Accessibility.getFullAXTree');
+  if (result === OUT_OF_TIME) {
+    return overBudgetTime;
+  }
   const rawNodes = getProp(result, 'nodes');
   if (Array.isArray(rawNodes) && rawNodes.length > AX_TREE_NODE_BUDGET) {
     return { kind: 'over-budget', limit: 'nodes' };
   }
   if (overTime()) {
-    return { kind: 'over-budget', limit: 'time' };
+    return overBudgetTime;
   }
   const tree = axTreeFromCdp(result);
   for (const node of tree.nodes) {
     if (node.ignored || node.role === null || !HEADER_ROLES.has(node.role)) {
       continue;
     }
-    const described = await send('DOM.describeNode', { backendNodeId: node.nodeId });
+    const described = await timed('DOM.describeNode', { backendNodeId: node.nodeId });
+    if (described === OUT_OF_TIME || overTime()) {
+      return overBudgetTime;
+    }
     const sort = sortStateFrom(getProp(getProp(described, 'node'), 'attributes'));
     if (sort !== null) {
       node.states.sort = sort;
-    }
-    if (overTime()) {
-      return { kind: 'over-budget', limit: 'time' };
     }
   }
   return { kind: 'tree', documentNodeId: tree.documentNodeId, nodes: tree.nodes };

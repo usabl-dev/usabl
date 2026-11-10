@@ -1132,7 +1132,8 @@ order, led by the drain taken before the first step, which is what the one drain
 step used to read.
 
 Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
-over either is the gap above. Measured on `usabl-app` (commit 6118ea7, served by its own Vite dev
+over either is the gap above. The time bound is a timer: each browser call in the read races it,
+so a call that is slow or never returns ends the read at 500 ms. Measured on `usabl-app` (commit 6118ea7, served by its own Vite dev
 server): `usabl-app` has no delete or save flow, so five click actions across its four screens
 were measured instead. Every read stayed inside the budget, at 26 to 250 ms, and the browser
 returned 179 to 300 nodes per read (132 to 207 kept after inline text boxes and field content

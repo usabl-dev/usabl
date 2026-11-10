@@ -4,7 +4,7 @@
  * the parent chain, role, name, six states, aria-busy, and aria-controls. Values are never read,
  * and a read past its budget in time or in nodes is not a tree.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AX_TREE_NODE_BUDGET, AX_TREE_TIME_BUDGET_MS, axTreeFromCdp, readFullAxTree, sortStateFrom } from '../../src/deps/ax-tree.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 
@@ -154,6 +154,34 @@ describe('readFullAxTree', () => {
       return method === 'Accessibility.getFullAXTree' ? header : { node: { attributes: [] } };
     };
     expect(await readFullAxTree(send, () => clock)).toEqual({ kind: 'over-budget', limit: 'time' });
+  });
+
+  describe('with a call that never returns', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Each call races a timer that ends at the start of the read plus the budget. A call that never
+    // returns cannot hold the scan: the timer wins and the read is over budget at once.
+    async function readWith(send: (method: string) => Promise<unknown>): Promise<unknown> {
+      vi.useFakeTimers();
+      let result: unknown = 'still waiting';
+      void readFullAxTree(send).then((read) => {
+        result = read;
+      });
+      await vi.advanceTimersByTimeAsync(AX_TREE_TIME_BUDGET_MS + 1);
+      return result;
+    }
+
+    it('is over budget when the tree read itself never returns', async () => {
+      expect(await readWith(() => new Promise(() => undefined))).toEqual({ kind: 'over-budget', limit: 'time' });
+    });
+
+    it('is over budget when a sort read never returns', async () => {
+      const send = (method: string): Promise<unknown> =>
+        method === 'Accessibility.getFullAXTree' ? Promise.resolve(header) : new Promise(() => undefined);
+      expect(await readWith(send)).toEqual({ kind: 'over-budget', limit: 'time' });
+    });
   });
 
   it('holds exactly the budget the ground truth states', () => {
