@@ -21,6 +21,10 @@ interface ScriptedPageSpec {
   afterBody?: string;
   // The paths of the open modal dialogs that hold the focused element, at each stop.
   modals?: string[][];
+  // The browser's node id of the focused element at each stop, and of the element the Tab after the
+  // body stop lands on. Left out, the page gives no node id, as the fake page does.
+  keys?: Array<string | null>;
+  afterBodyKey?: string;
   onTab?: () => void;
 }
 
@@ -109,6 +113,10 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
     drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor, spec.bodyAt), []),
     activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor, spec.bodyAt), null),
     activeModalDialogs: async () => readAt(spec.modals ?? [], currentIndex(cursor, spec.bodyAt), []),
+    activeElementKey: async () =>
+      spec.afterBodyKey !== undefined && spec.bodyAt !== undefined && cursor > spec.bodyAt
+        ? spec.afterBodyKey
+        : readAt(spec.keys ?? [], currentIndex(cursor, spec.bodyAt), null),
     activeElementIs: async (selector: string) => selector === 'body' && spec.bodyAt !== undefined && cursor === spec.bodyAt,
   });
 }
@@ -393,6 +401,23 @@ describe('makeKeyboardWalkProvider', () => {
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3, afterBody: '#b' });
 
     expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+  });
+
+  it('accepts a path match alone only for the first stop walked when the browser gives node ids', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const spec = { ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3, keys: ['node-1', 'node-2', 'node-3', null] };
+
+    // The same element at a stop already walked.
+    const sameElement = await makeScriptedPage({ ...spec, afterBody: '#b', afterBodyKey: 'node-2' });
+    expect(draftsOf(await provider.run(makeContext(sameElement)))).toEqual([]);
+
+    // A new element at the path of the first stop, as a list that re-rendered puts there.
+    const newFirst = await makeScriptedPage({ ...spec, afterBody: '#a', afterBodyKey: 'node-9' });
+    expect(draftsOf(await provider.run(makeContext(newFirst)))).toEqual([]);
+
+    // A new element at the path of a later stop is not the start of the focus order.
+    const newLater = await makeScriptedPage({ ...spec, afterBody: '#b', afterBodyKey: 'node-9' });
+    expect(rules(draftsOf(await provider.run(makeContext(newLater))))).toEqual(['keyboard-walk-truncated']);
   });
 
   it('leaves focus on the body after a complete walk, so the next Tab lands on the first stop', async () => {

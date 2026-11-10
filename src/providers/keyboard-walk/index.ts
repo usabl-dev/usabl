@@ -222,9 +222,11 @@ function truncatedWalkDraft(
  * Whether focus on the body is the end of the focus order. In Chromium, Tab after the last control
  * moves focus to the body, and the next Tab goes back to the first control. So one more Tab must land
  * on a stop the walk already reached. Any walked stop counts, not only the first, and a stop counts
- * when the element or the path is the same. A first control that went away during the walk, such as
- * a timed banner, moves every control after it, so the control the Tab lands on has a new path and
- * is still the same element. A list that re-rendered puts a new element at a path already walked.
+ * when the element is the same. A first control that went away during the walk, such as a timed
+ * banner, moves every control after it, so the control the Tab lands on has a new path and is still
+ * the same element. A list that re-rendered puts a new element at the path of the first stop, so a
+ * path match counts too: at any stop when the browser gives no node id, and only at the first stop
+ * when it gives one for both elements.
  * A walk that reached no stop has nothing to wrap to, and on a page with nothing to focus the next
  * Tab leaves focus on the body. That walk is left to the body-only detector, which reads the
  * transcript. If the next Tab lands on a control instead, a script dropped focus before the walk
@@ -252,7 +254,17 @@ async function landedOnWalkedStop(page: Page, walked: readonly WalkedStop[]): Pr
   }
   const path = await page.activePath();
   const key = await page.activeElementKey();
-  return walked.some((stop) => stop.path === path || (key !== null && stop.key === key));
+  return walked.some((stop, index) => {
+    if (key !== null && stop.key === key) {
+      return true;
+    }
+    // When the browser gives a node id for both, a different id is a different element. A path
+    // match then counts only for the first stop walked, where a list that re-rendered puts a new
+    // element at the start of the focus order. At any later stop it could be another element that
+    // took a walked path while focus fell to the body in the middle of the page.
+    const bothKnown = key !== null && stop.key !== null;
+    return stop.path === path && (!bothKnown || index === 0);
+  });
 }
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
