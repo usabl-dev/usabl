@@ -4,6 +4,23 @@
 
 ### Added
 
+- Design input from Figma. `usabl import figma <file key> --frame <Frame name>=<surface id> --out
+  <file>` reads the accessibility stamps in a Figma file and writes draft requirements, each with
+  `approved: false` and the Figma file, node, and version it came from. Every note it cannot turn
+  into a check, such as a speech note, is listed with the reason, never dropped. It never
+  overwrites a file. `usabl drift design` lists the approved requirements whose design file
+  changed since, and exits 2, never "no drift", when it cannot read a file. Both read the token
+  from `FIGMA_TOKEN` only, never print it, do not follow redirects, and are the only commands that
+  call the Figma API; nothing on the check, gate, or hook path can reach that code. Tested end to
+  end with a mock file built from Figma's published file format; not yet run on a real design file.
+- Five requirement kinds that find an element by role and accessible name, the way a screen reader
+  user does: `name`, `heading` (with its level), `landmark`, `focus-order` (a Tab walk reaches the
+  names in order), and `target-size` (the laid-out size in CSS pixels). A page that does not match
+  fails. When usabl cannot tell, for example two elements share the name or a candidate sits in a
+  shadow root it cannot read, the result is needs review, never a guess. `checkPage` runs them too.
+- A requirement with `approved: false` now never blocks, whatever its kind: its findings, and any
+  check that could not run, are shown as preview.
+
 - `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
   catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
   on pages one at a time in the scan browser, after the page is ready and before any check runs.
