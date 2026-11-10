@@ -99,6 +99,11 @@ function linesText(lines: readonly number[]): string {
   return `${lines.length === 1 ? 'line' : 'lines'} ${joinList(lines.map(String))}`;
 }
 
+/** "line 8" or "lines 8 and 12": where the draft for this branch carries the name. */
+export function branchLinesText(workflow: BranchedWorkflow, branch: string): string {
+  return linesText(branchLines(workflow, branch));
+}
+
 /** One workflow after its plan was applied, for the branch report. */
 export interface BranchOutcome {
   workflow: BranchedWorkflow;

@@ -844,21 +844,36 @@ async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promis
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
   // doctor cannot positively confirm the setting and must not guess it is present or absent.
   // The branch the gate workflow on disk runs on, or main, assumed, when no gate names one.
+  // What the check says about the branch it read (main assumed, or another default branch on
+  // GitHub) goes into the next step, so doctor never hides it behind a wired line.
   const result = await verifyBranchRule(deps.gh, target);
+  const label = branchRuleLabel(target);
+  const note = result.branchNote;
   if (result.action === 'verified') {
-    return { id: 'branch-rule', label: branchRuleLabel(target), state: 'wired', nextStep: '' };
+    // Protection on a branch that is not GitHub's default branch still leaves pull requests into the
+    // default branch without a gate, so the surface is not wired.
+    if (result.otherDefault !== null) {
+      return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
+    }
+    return { id: 'branch-rule', label, state: 'wired', nextStep: '' };
   }
   if (result.action === 'not-applied') {
+    const branch = target.source === 'assumed' ? `${target.name} branch, which usabl assumed,` : `${target.name} branch`;
     return {
       id: 'branch-rule',
-      label: branchRuleLabel(target),
+      label,
       state: 'missing',
-      nextStep: `The ${target.name} branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The ${branch} does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.${note === null ? '' : ` ${note}`}`,
     };
+  }
+  if (note !== null) {
+    // The first line of the result says why it could not verify; the note says what to do.
+    const why = (result.message.split('\n')[0] ?? '').replace(/^cannot verify: /, '');
+    return { id: 'branch-rule', label, state: 'unknown', nextStep: `usabl cannot confirm branch protection: ${why} ${note}` };
   }
   return {
     id: 'branch-rule',
-    label: branchRuleLabel(target),
+    label,
     state: 'unknown',
     nextStep: 'usabl cannot confirm branch protection (gh unavailable, or the read was inconclusive). Verify by hand; see "usabl install --branch-rule".',
   };
