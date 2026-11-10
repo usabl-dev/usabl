@@ -5,7 +5,7 @@
  */
 import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
-import { configError } from '../intake/config-error.js';
+import { operatorText } from '../intake/config-error.js';
 import { braceRangeIn, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
 const CONFIG_PATH = 'usabl.config.json';
@@ -79,40 +79,7 @@ export function buildGuardedSet(config: GuardConfigSource): string[] {
 // groups, so these two characters are the only ones that make an entry a pattern.
 const GLOB_CHARACTERS = /[*{]/;
 
-/**
- * The canonical form of a guardedPaths entry, the form git prints a path in: no leading `./`, no
- * repeated or trailing `/`, and no `.` segment. A `..` segment takes away the segment before it,
- * as git does with a pathspec. `.` alone is the whole tree, written as the empty string. Every step
- * below reads this form and never the raw entry text, because git output never holds `./` or `//`,
- * and an entry compared as written would match nothing.
- */
-function canonicalEntry(entry: string): string {
-  if (entry.startsWith('/')) {
-    throw unmatchableEntry(entry, 'it starts with /, so it does not name a path from the repository root');
-  }
-  const segments: string[] = [];
-  for (const segment of entry.split('/')) {
-    if (segment === '' || segment === '.') {
-      continue;
-    }
-    if (segment === '..') {
-      const parent = segments.pop();
-      if (parent === undefined) {
-        throw unmatchableEntry(entry, 'a .. segment leaves the repository root');
-      }
-      if (GLOB_CHARACTERS.test(parent)) {
-        throw unmatchableEntry(entry, 'a .. segment follows a wildcard');
-      }
-      continue;
-    }
-    segments.push(segment);
-  }
-  return segments.join('/');
-}
-
-// Why the matcher cannot evaluate an entry the way Node's glob does, or null when it can. Config
-// load refuses these forms, but the guard also reads the trusted ref's config, which config load
-// never checked, so it must not read such an entry as matching nothing.
+// Why the matcher cannot evaluate an entry the way Node's glob does, or null when it can.
 function unmatchableForm(path: string): string | null {
   const character = UNSUPPORTED_GLOB_CHARACTERS.find((candidate) => path.includes(candidate));
   if (character !== undefined) {
@@ -123,28 +90,95 @@ function unmatchableForm(path: string): string | null {
   }
   const range = braceRangeIn(path);
   if (range !== null) {
-    return `it uses the brace range ${range}, which the guard cannot match; list the alternatives with commas, such as {1,2,3}`;
+    return `it uses the brace range ${range}, which the guard cannot match`;
   }
   return null;
 }
 
-function unmatchableEntry(entry: string, reason: string): Error {
-  return configError`usabl cannot read the guardedPaths entry "${entry}": ${reason}. So usabl cannot tell which guarded files changed, and it checked none. Correct the entry in usabl.config.json at the trusted ref (HEAD for a local run).`;
+// A segment the matcher reads as a pattern, or one it cannot evaluate.
+const PATTERN_SEGMENT = /[*{}[\]()?\\]/;
+
+// The literal folder above the first segment that is a pattern. The empty string is the whole tree.
+function literalFolder(segments: string[]): string {
+  const first = segments.findIndex((segment) => PATTERN_SEGMENT.test(segment));
+  return (first === -1 ? segments : segments.slice(0, first)).join('/');
 }
 
-interface GuardedEntry {
-  // The canonical form. The empty string is the whole tree.
+/** How the guard reads one entry. */
+export interface GuardedEntry {
+  // The entry as written.
+  text: string;
+  // The canonical form, or the folder an entry read wide guards. The empty string is the whole tree.
   path: string;
   glob: boolean;
+  // Why the entry is read wide, as the folder above what the matcher cannot evaluate, or null.
+  readWide: string | null;
 }
 
-function readGuardedEntry(entry: string): GuardedEntry {
-  const path = canonicalEntry(entry);
+/**
+ * How the guard reads an entry. It is read in canonical form, the form git prints a path in: no
+ * leading `./`, no repeated or trailing `/`, and no `.` segment. A `..` segment takes away the
+ * segment before it, as git does with a pathspec. `.` alone is the whole tree, written as the empty
+ * string. Every step below reads this form and never the raw entry text, because git output never
+ * holds `./` or `//`, and an entry compared as written would match nothing.
+ *
+ * This never throws because of what an entry says, and never guards less because it cannot read
+ * one. An entry in a form the matcher cannot evaluate (a brace range, `?`, `[ ]`, `( )`, `\`, a bad
+ * brace, or a `..` after a wildcard) is read wide: it guards the literal folder above the first
+ * segment the matcher cannot evaluate. An entry with no such folder (one that starts with `/`, or a
+ * `..` that leaves the root) guards the whole tree. Config load refuses these forms, but the guard
+ * also reads a trusted ref's config, which config load never checked. A literal entry, such as the
+ * requirements folder, is a path: no glob rule applies to it.
+ */
+export function readGuardedEntry(entry: string, literal = false): GuardedEntry {
+  const wide = (path: string, reason: string): GuardedEntry => ({ text: entry, path, glob: false, readWide: reason });
+  if (entry.startsWith('/')) {
+    return wide('', 'it starts with /, so it names no path from the repository root');
+  }
+  const segments: string[] = [];
+  for (const segment of entry.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      const parent = segments.pop();
+      if (parent === undefined) {
+        return wide('', 'a .. segment leaves the repository root');
+      }
+      if (!literal && PATTERN_SEGMENT.test(parent)) {
+        return wide(literalFolder([...segments, parent]), 'a .. segment follows a wildcard');
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const path = segments.join('/');
+  if (literal) {
+    return { text: entry, path, glob: false, readWide: null };
+  }
   const problem = unmatchableForm(path);
   if (problem !== null) {
-    throw unmatchableEntry(entry, problem);
+    return wide(literalFolder(segments), problem);
   }
-  return { path, glob: GLOB_CHARACTERS.test(path) };
+  return { text: entry, path, glob: GLOB_CHARACTERS.test(path), readWide: null };
+}
+
+/**
+ * The sentence that names an entry the guard read wide and says how to write it. The entry comes
+ * from a config file, so it is scrubbed and capped before it is printed.
+ */
+export function readWideNotice(entry: GuardedEntry): string {
+  const scope = entry.path === '' ? 'the whole repository' : `the folder ${operatorText(entry.path)}/`;
+  return (
+    `usabl read the guardedPaths entry "${operatorText(entry.text)}" as ${scope}, because ${entry.readWide ?? ''}, ` +
+    'so a change anywhere there needs a code owner approval. Write the entry as a path from the repository root ' +
+    'that uses only *, **, and {a,b} groups, and list the alternatives of a range with commas, such as {1,2,3}.'
+  );
+}
+
+/** How the guard reads every entry of a config. */
+export function readGuardedEntries(config: GuardConfigSource): GuardedEntry[] {
+  return buildGuardedSet(config).map((entry) => readGuardedEntry(entry));
 }
 
 // The folder a git listing must cover to find every file an entry can match: the entry itself
@@ -229,7 +263,26 @@ export async function expandGuardedSet(
   guardedPaths: string[],
   trustedRef = 'HEAD',
 ): Promise<string[]> {
-  const entries = guardedPaths.map(readGuardedEntry);
+  return expandEntries(
+    deps,
+    guardedPaths.map((entry) => readGuardedEntry(entry)),
+    trustedRef,
+  );
+}
+
+/**
+ * The guarded files for a config, with the requirements folder read as a path. Receipts, pins, the
+ * debt history, and the local guard all expand through this, so each reads every entry the same way.
+ */
+export async function expandConfigGuardedSet(
+  deps: Deps,
+  config: GuardConfigSource,
+  trustedRef = 'HEAD',
+): Promise<string[]> {
+  return expandEntries(deps, readGuardedEntries(config), trustedRef);
+}
+
+async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: string): Promise<string[]> {
   const prefixes = listingPrefixes(entries);
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
   const [refListings, workingByEntry] = await Promise.all([
@@ -261,11 +314,7 @@ export async function checkGuard(deps: Deps, config: UsablConfig, trustedRef = '
     return [CONFIG_PATH];
   }
 
-  const expanded = await expandGuardedSet(
-    deps,
-    buildGuardedSet(scopeConfig ?? { guardedPaths: [] }),
-    trustedRef,
-  );
+  const expanded = await expandConfigGuardedSet(deps, scopeConfig ?? { guardedPaths: [] }, trustedRef);
   const diverged: string[] = [];
   for (const path of expanded) {
     const [working, trusted] = await Promise.all([deps.fs.readFile(path), deps.git.show(trustedRef, path)]);
@@ -290,6 +339,18 @@ export async function listDivergedGuardedPathsAtRefs(
   trustedRef: string,
   workingRef: string,
 ): Promise<string[]> {
+  return (await guardScopeAtRefs(git, trustedRef, workingRef)).diverged;
+}
+
+/**
+ * The diverged guarded paths at two refs, and a notice for each entry the guard read wide, so the
+ * policy check can name the entry and say how to write it.
+ */
+export async function guardScopeAtRefs(
+  git: Pick<GitReader, 'show' | 'lsFilesUnder'>,
+  trustedRef: string,
+  workingRef: string,
+): Promise<{ diverged: string[]; readWide: string[] }> {
   const [workingConfig, trustedConfig] = await Promise.all([
     git.show(workingRef, CONFIG_PATH),
     git.show(trustedRef, CONFIG_PATH),
@@ -298,12 +359,13 @@ export async function listDivergedGuardedPathsAtRefs(
   const scopeRaw = configDiverged ? trustedConfig : workingConfig;
   const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
   if (scopeConfig === null && !configDiverged) {
-    return [CONFIG_PATH];
+    return { diverged: [CONFIG_PATH], readWide: [] };
   }
 
   // Each ref is listed once, and the same matcher the local guard uses selects the guarded files,
   // so a glob entry lists its files at both refs and a file the head deleted is still compared.
-  const entries = buildGuardedSet(scopeConfig ?? { guardedPaths: [] }).map(readGuardedEntry);
+  const entries = readGuardedEntries(scopeConfig ?? { guardedPaths: [] });
+  const readWide = entries.filter((entry) => entry.readWide !== null).map(readWideNotice);
   const prefixes = listingPrefixes(entries);
   const [trustedFiles, workingFiles] = await Promise.all([
     git.lsFilesUnder(trustedRef, prefixes),
@@ -321,7 +383,7 @@ export async function listDivergedGuardedPathsAtRefs(
       diverged.push(path);
     }
   }
-  return diverged.sort();
+  return { diverged: diverged.sort(), readWide };
 }
 
 /**
@@ -329,7 +391,7 @@ export async function listDivergedGuardedPathsAtRefs(
  * This unit stays pure and does not write pin state to disk.
  */
 export async function computeSessionPins(deps: Deps, config: UsablConfig): Promise<SessionPins> {
-  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
+  const expanded = await expandConfigGuardedSet(deps, config);
   const pins: SessionPins = {};
   for (const path of expanded) {
     pins[path] = sha256((await deps.git.show('HEAD', path)) ?? '');

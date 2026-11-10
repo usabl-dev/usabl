@@ -6,7 +6,7 @@
  */
 import { compileCodeownersPattern, stripCodeownersComment, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
-import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
+import { guardScopeAtRefs } from '../trust/guard.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 import { parseResultDocument } from '../intake/result-document.js';
 
@@ -168,11 +168,13 @@ export async function enforcePolicy(result: Result, deps: PolicyEnforceDeps): Pr
   }
 
   // Git refs are the policy source of truth. A forged stdin verdict cannot skip CODEOWNERS.
-  const dirtyGuardedPaths = await listDivergedGuardedPathsAtRefs(
-    deps.git,
-    deps.trustedRef,
-    deps.pr.headSha,
-  );
+  const scope = await guardScopeAtRefs(deps.git, deps.trustedRef, deps.pr.headSha);
+  const outcome = await decidePolicy(scope.diverged, deps);
+  // Each entry the guard read wide is named in every outcome, with how to write it.
+  return scope.readWide.length === 0 ? outcome : { ...outcome, message: `${outcome.message}. ${scope.readWide.join(' ')}` };
+}
+
+async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps): Promise<EnforceOutcome> {
   if (dirtyGuardedPaths.length === 0) {
     return { exitCode: 0, message: 'no policy change' };
   }

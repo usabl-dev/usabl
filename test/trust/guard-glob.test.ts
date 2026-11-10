@@ -460,14 +460,29 @@ describe('a guardedPaths entry that is not in canonical form', REAL_GIT, () => {
   }
 });
 
+/** The CI policy check with these reviews of the head commit. */
+async function policyCheckWith(
+  root: string,
+  reviewers: string[],
+): Promise<{ exitCode: number; message: string }> {
+  const headSha = await git(root, ['rev-parse', 'HEAD']);
+  return enforcePolicy(verified, {
+    trustedRef: 'main',
+    pr: { authorLogin: 'author', headSha },
+    git: makeGitReader({ cwd: root }),
+    listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha })),
+  });
+}
+
 /**
- * Config load refuses these forms, but the guard reads the trusted ref's config without config
- * load. Node's glob expands a brace range and `?`, and the guard's matcher does not, so such an
- * entry used to match nothing in CI and an edited file under it printed "no policy change". A
- * path from outside the repository root has no meaning in a git listing. The guard now refuses
- * each of them and names the entry.
+ * Config load refuses these forms, but the guard also reads the trusted ref's config, which config
+ * load never checked, and every earlier release accepted a brace range. Node's glob expands a range
+ * and `?`, and the guard's matcher does not, so such an entry used to match nothing in CI. The
+ * guard never throws on such an entry and never guards less: it guards the literal folder above the
+ * first segment it cannot evaluate, or the whole tree when there is none, and the policy check
+ * names the entry. A change there needs a code owner's approval, which a review can give.
  */
-describe('a guardedPaths entry the guard cannot match', REAL_GIT, () => {
+describe('a guardedPaths entry the guard cannot evaluate', REAL_GIT, () => {
   let root = '';
 
   afterEach(async () => {
@@ -476,26 +491,64 @@ describe('a guardedPaths entry the guard cannot match', REAL_GIT, () => {
 
   const files = { 'policy/rule1.json': '{}\n', 'policy/rule2.json': '{}\n', 'src/App.tsx': 'export {}\n' };
 
-  for (const entry of ['policy/rule{1..3}.json', 'policy/{q..s}ule1.json', 'policy/rule?.json', '/policy/rule1.json', '../policy/rule1.json', 'policy/*/../rule1.json']) {
+  // [entry, the folder it is read as ('' is the whole tree)]
+  const cases: Array<[string, string]> = [
+    ['policy/rule{1..3}.json', 'policy'],
+    ['policy/{q..s}ule1.json', 'policy'],
+    ['policy/rule?.json', 'policy'],
+    ['policy/*/../rule1.json', 'policy'],
+    ['/policy/rule1.json', ''],
+    ['../policy/rule1.json', ''],
+  ];
+
+  for (const [entry, folder] of cases) {
     const config = configWith([entry]);
 
-    it(`refuses in CI and names ${entry}`, async () => {
+    it(`reads ${entry} wide in CI: approval required, named, and clearable by an owner`, async () => {
       root = await repoWith(config, files);
       await git(root, ['checkout', '-b', 'feature']);
       await write(root, 'policy/rule1.json', '{"changed":true}\n');
       await git(root, ['commit', '-am', 'change a rule']);
-      await expect(policyCheckAt(root)).rejects.toThrow(`guardedPaths entry "${entry}"`);
+      const refused = await policyCheckAt(root);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.message).toContain('policy/rule1.json');
+      expect(refused.message).toContain(`guardedPaths entry "${entry}"`);
+      expect(refused.message).toContain(folder === '' ? 'the whole repository' : `the folder ${folder}/`);
+      const approved = await policyCheckWith(root, ['owner']);
+      expect(approved.exitCode).toBe(0);
+      expect(approved.message).toContain(`guardedPaths entry "${entry}"`);
     });
 
-    it(`refuses in the local guard and names ${entry}`, async () => {
+    it(`reads ${entry} wide in the local guard`, async () => {
       root = await repoWith(config, files);
       await write(root, 'policy/rule1.json', '{"changed":true}\n');
       const result = await run(realDeps(root), config);
-      expect(result.verdict).toBeNull();
-      expect(result.exitCode).toBe(4);
-      expect(result.summary).toContain(`guardedPaths entry "${entry}"`);
+      expect(result.verdict).toBe('approval_required');
+      expect(result.dirtyGuardedPaths).toEqual(['policy/rule1.json']);
     });
   }
+
+  it('reads a change outside the folder as no policy change, and still names the entry', async () => {
+    root = await repoWith(configWith(['policy/rule{1..3}.json']), files);
+    await git(root, ['checkout', '-b', 'feature']);
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    await git(root, ['commit', '-am', 'change the app']);
+    const out = await policyCheckAt(root);
+    expect(out.exitCode).toBe(0);
+    expect(out.message).toMatch(/^no policy change/);
+    expect(out.message).toContain('guardedPaths entry "policy/rule{1..3}.json"');
+  });
+
+  it('lets the pull request that repairs the entry pass with an owner approval', async () => {
+    root = await repoWith(configWith(['policy/rule{1..3}.json']), files);
+    await git(root, ['checkout', '-b', 'feature']);
+    await write(root, 'usabl.config.json', JSON.stringify(configWith(['policy/rule1.json', 'policy/rule2.json'])));
+    await git(root, ['commit', '-am', 'list the rules with commas']);
+    const refused = await policyCheckAt(root);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.message).toContain('usabl.config.json');
+    await expect(policyCheckWith(root, ['owner'])).resolves.toMatchObject({ exitCode: 0 });
+  });
 });
 
 /**
