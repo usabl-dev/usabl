@@ -4,6 +4,29 @@
 
 ### Added
 
+- `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
+  catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
+  on pages one at a time in the scan browser, after the page is ready and before any check runs.
+  Each defect is scanned clean and mutated through the real checks and gated by the real gate. It
+  is caught only when a new, definite failure from an expected rule is on the changed element, or
+  anywhere on the screen for a defect reported there. It is unreadable whenever the scans cannot
+  say: a coverage gap, findings the checks could not confirm, a new finding away from the change,
+  or a change that did not hold through the scan with nothing caught. A catch stands when the page
+  puts the change back later in the scan, and its row says so. A defect already on the element is not
+  applicable, and a finding the page already had never counts. It runs on fixture pages that ship
+  with usabl, with no app and no config, and with `--app` on the surfaces in `usabl.config.json`
+  too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
+  screen's flow and voice steps, and the command prints the real page loads and step counts before
+  it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
+  hash, every outcome, and every rule of the checks that can block (axe, PatternFly, RHDS, keyboard
+  walk, docs) that the catalog does not exercise, and prints "caught N of
+  M" with every miss by name. On the fixture pages it catches 25 of the 28 it can make and read: a
+  visible control taken out of the Tab order and a menu that does not open on Enter are missed, and
+  a broken live region under a voice requirement is preview only. A menu toggle that loses
+  `aria-expanded` is caught, with a note that the page sets it again when the menu probe clicks the
+  toggle. It is measurement: it mints no verdict and no receipt, nothing on a verdict path reads its
+  file, and it exits 0 whenever it ran. `npm run test:sensitivity` runs its real-browser tests.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
