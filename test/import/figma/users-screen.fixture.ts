@@ -1,6 +1,6 @@
 /**
  * A mock Figma design file for a Users screen, as GET /v1/files/:key returns it. The accessibility
- * notes follow the GitHub Annotation Toolkit: stamps are component instances placed over the design
+ * notes follow the kit in src/import/figma/kit.ts: stamps are component instances placed over the design
  * element they annotate, and coordinates are absolute, as in the API.
  *
  * The file carries every field Figma's published GetFileResponse type requires for each node type,

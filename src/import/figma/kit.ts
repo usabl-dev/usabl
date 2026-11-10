@@ -1,6 +1,6 @@
 /**
- * Recognizes accessibility annotation kit notes in a Figma file. The names follow the GitHub
- * Annotation Toolkit: Heading, Landmark, Ordering, and Button stamps, and Button Details cards.
+ * Recognizes accessibility annotation kit notes in a Figma file. The names follow a common
+ * published annotation kit: Heading, Landmark, Ordering, and Button stamps, and Button Details cards.
  * Other notes of that kit, such as Image Stamps, are recognized too, so the importer can list them
  * as notes it did not turn into a check. Another kit can be added to KIT_COMPONENTS without
  * touching the importer. Names and property values are untrusted design text: this unit only
@@ -34,7 +34,7 @@ function normalizeName(name: string): string {
 }
 
 // How a kit note is recognized, including kinds usabl does not read: an instance whose component
-// name ends in "Stamp" or "Details", as every note of the GitHub Annotation Toolkit does. The
+// name ends in "Stamp" or "Details", as every note of that kit does. The
 // component set name wins, since variant names such as "Level=h1" say nothing about the kit. When
 // the file lists no component for the instance, its own layer name is used. Only instances count,
 // because a plain frame or text layer that a designer happens to call "Order Details" is design

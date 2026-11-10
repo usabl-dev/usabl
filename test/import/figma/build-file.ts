@@ -1,6 +1,6 @@
 /**
  * Builds small Figma files for importer tests. Each test places a few design elements and kit
- * stamps in one frame named "Screen". Component names follow the GitHub Annotation Toolkit.
+ * stamps in one frame named "Screen". Component names follow the kit in src/import/figma/kit.ts.
  */
 import type { FigmaFile, FigmaNode, FigmaRect } from '../../../src/import/figma/types.js';
 
