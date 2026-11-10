@@ -56,7 +56,7 @@ function secondMatchPage(path: string): string | null {
 // overflow, a button inside a box that scrolls and holds it in full, and the shapes usabl does not
 // measure: a rotated button, a button cut by clip-path, a masked button, a button in a 12 pixel box
 // that scrolls, and a fixed button partly below the viewport. The moved and scaled buttons are
-// measured.
+// measured. They sit in rows of their own, so the scaled button does not cover the moved one.
 const BUTTON = 'width:44px;height:44px;padding:0;border:0';
 const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shapes</title></head><body><main>
   <p style="width:80px;font:16px/20px monospace">Go <a id="wraps" href="#x">to the user list now</a></p>
@@ -67,10 +67,44 @@ const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   <button id="clip-path" style="${BUTTON};clip-path:inset(0 0 30px 0)">Cut</button>
   <button id="masked" style="${BUTTON};mask-image:linear-gradient(black, transparent)">Fade</button>
   <div style="height:12px;overflow:auto"><button id="short-scroll" style="${BUTTON}">Scroll</button></div>
-  <button id="moved" style="${BUTTON};transform:translate(5px, 5px)">Move</button>
-  <button id="scaled" style="width:22px;height:22px;padding:0;border:0;transform:scale(2)">Grow</button>
+  <div style="padding:16px"><button id="moved" style="${BUTTON};transform:translate(5px, 5px)">Move</button></div>
+  <div style="padding:16px"><button id="scaled" style="width:22px;height:22px;padding:0;border:0;transform:scale(2)">Grow</button></div>
   <button id="fixed-off" style="${BUTTON};position:fixed;bottom:-30px;left:0">Low</button>
 </main></body></html>`;
+
+// Controls whose box is at least 24 CSS pixels each way, but part of which a pointer cannot hit.
+// None of them may pass. Each sits in a row of its own, so no case covers another. The two scaled
+// cases are the shapes the named limits miss: the clip edge is read in layout pixels while the box
+// is scaled, so only the hit test sees that half of the button is cut off.
+const ROW = 'height:80px';
+const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Missed</title></head><body style="margin:0"><main>
+  <div style="${ROW}"><div style="height:40px;overflow:hidden;transform:scale(0.5);transform-origin:0 0"><button id="scaled-clip" aria-label="Scaled clip" style="width:60px;height:60px;padding:0;border:0"></button></div></div>
+  <div style="${ROW}"><div style="transform:scale(0.5);transform-origin:0 0"><div style="height:40px;overflow:hidden"><button id="scaled-above" aria-label="Scaled above" style="width:60px;height:60px;padding:0;border:0"></button></div></div></div>
+  <div style="${ROW}"><div style="content-visibility:auto;height:12px"><button id="content-visibility" aria-label="Content visibility" style="${BUTTON}"></button></div></div>
+  <div style="${ROW};position:relative"><button id="off-left" aria-label="Off left" style="${BUTTON};position:absolute;left:-30px;top:0"></button></div>
+  <div style="${ROW}"><button id="no-pointer" aria-label="No pointer" style="${BUTTON};pointer-events:none"></button></div>
+  <div style="${ROW};position:relative"><button id="covered" aria-label="Covered" style="${BUTTON}"></button><div style="position:absolute;left:22px;top:0;width:22px;height:44px;background:#fff"></div></div>
+</main></body></html>`;
+
+// Controls a pointer can hit in full, which must still pass: a plain button, a round one, one in a
+// box that scrolls without cutting it off, and one far down a long page, so the read must scroll to
+// it. The page starts scrolled, and a key press writes every scroll position to the body, so the
+// test can show that the read puts each one back.
+const HIT_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hit</title></head><body style="margin:0"><main>
+  <div style="${ROW}"><button id="plain" aria-label="Plain" style="${BUTTON}"></button></div>
+  <div style="${ROW}"><button id="round" aria-label="Round" style="${BUTTON};border-radius:50%"></button></div>
+  <div id="scroller" style="height:200px;overflow:auto"><div style="height:80px"></div><button id="inner" aria-label="Inner" style="${BUTTON}"></button><div style="height:600px"></div></div>
+  <div style="height:3000px"></div>
+  <button id="far" aria-label="Far" style="${BUTTON}"></button>
+  <div style="${ROW}"></div>
+</main><script>
+  const scroller = document.getElementById('scroller');
+  window.scrollTo(0, 50);
+  scroller.scrollTop = 10;
+  document.addEventListener('keydown', () => {
+    document.body.dataset.scroll = [window.scrollX, window.scrollY, scroller.scrollLeft, scroller.scrollTop].join(',');
+  });
+</script></body></html>`;
 
 // Three buttons in order. On the blur page, the second one drops focus when it gets it, so a Tab
 // walk falls to the body in the middle of the page.
@@ -104,6 +138,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
       const path = (req.url ?? '').split('?')[0] ?? '';
       const pages: Readonly<Record<string, string>> = {
         '/shapes.html': SHAPES_PAGE,
+        '/missed.html': MISSED_PAGE,
+        '/hit.html': HIT_PAGE,
         '/shadow.html': SHADOW_PAGE,
         '/focus-blur.html': focusPage(true),
         '/focus.html': focusPage(false),
@@ -172,7 +208,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
   it('reads a box that wraps onto two lines and a box an element above clips', async () => {
     await withPage('/shapes.html', async (page) => {
       expect((await page.boundingBox('#wraps'))?.fragments ?? 0).toBeGreaterThan(1);
-      expect(await page.boundingBox('#clipped')).toMatchObject({ width: 44, height: 44, fragments: 1, unmeasurable: ['overflow-clipped'] });
+      // The box above shows only 12 pixels of the button at once, so the hit test misses as well.
+      expect(await page.boundingBox('#clipped')).toMatchObject({ width: 44, height: 44, fragments: 1, unmeasurable: ['overflow-clipped', 'hit-test-missed'] });
       expect(await page.boundingBox('#scrolls')).toMatchObject({ fragments: 1, unmeasurable: [] });
     });
   });
@@ -180,12 +217,16 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
   it('names each shape it does not measure, and measures a moved or scaled box', async () => {
     await withPage('/shapes.html', async (page) => {
       const limits = async (selector: string) => (await page.boundingBox(selector))?.unmeasurable;
-      expect(await limits('#rotated')).toEqual(['rotated-or-skewed']);
-      expect(await limits('#skewed-inside')).toEqual(['rotated-or-skewed']);
-      expect(await limits('#clip-path')).toEqual(['clip-path']);
-      expect(await limits('#masked')).toEqual(['mask']);
-      expect(await limits('#short-scroll')).toEqual(['overflow-clipped']);
-      expect(await limits('#fixed-off')).toEqual(['outside-viewport']);
+      // The named limits alone, for shapes where this test does not pin what the hit test finds:
+      // whether a point near the edge of a turned box, or under a mask, lands on the button.
+      const named = async (selector: string) => (await limits(selector))?.filter((limit) => limit !== 'hit-test-missed');
+      expect(await named('#rotated')).toEqual(['rotated-or-skewed']);
+      expect(await named('#skewed-inside')).toEqual(['rotated-or-skewed']);
+      expect(await named('#masked')).toEqual(['mask']);
+      // Each of these hides part of the button, so the hit test misses too.
+      expect(await limits('#clip-path')).toEqual(['clip-path', 'hit-test-missed']);
+      expect(await limits('#short-scroll')).toEqual(['overflow-clipped', 'hit-test-missed']);
+      expect(await limits('#fixed-off')).toEqual(['outside-viewport', 'hit-test-missed']);
       expect(await page.boundingBox('#moved')).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: [] });
       expect(await page.boundingBox('#scaled')).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: [] });
     });
@@ -205,6 +246,65 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         if (provider === null) throw new Error('no target size provider');
         const output = await provider.run({ page, screen: { id: 'users', url: `${baseUrl}/shapes.html` }, config: testConfig() });
         expect({ name, confidence: draftsOf(output).map((draft) => draft.confidence) }).toEqual({ name, confidence: ['unverified'] });
+      }
+    });
+  });
+
+  async function targetSizeConfidence(page: Page, name: string, path: string): Promise<string[]> {
+    const provider = designCheckProvider({
+      id: 'size',
+      kind: 'target-size',
+      surface: 'users',
+      description: `The ${name} button is at least 24 CSS pixels`,
+      assertion: { type: 'target-size', target: { role: 'button', name }, minCssPx: 24 },
+      approved: true,
+    });
+    if (provider === null) throw new Error('no target size provider');
+    const output = await provider.run({ page, screen: { id: 'users', url: `${baseUrl}${path}` }, config: testConfig() });
+    return draftsOf(output).map((draft) => draft.confidence);
+  }
+
+  it('asks for review, never a pass, when part of a large enough box cannot be hit', async () => {
+    await withPage('/missed.html', async (page) => {
+      const cases: ReadonlyArray<[string, string]> = [
+        ['#scaled-clip', 'Scaled clip'],
+        ['#scaled-above', 'Scaled above'],
+        ['#content-visibility', 'Content visibility'],
+        ['#off-left', 'Off left'],
+        ['#no-pointer', 'No pointer'],
+        ['#covered', 'Covered'],
+      ];
+      for (const [selector, name] of cases) {
+        const box = await page.boundingBox(selector);
+        // The box alone is large enough, so only the hit test can keep the check from passing.
+        expect({ selector, large: (box?.width ?? 0) >= 24 && (box?.height ?? 0) >= 24 }).toEqual({ selector, large: true });
+        expect({ selector, missed: box?.unmeasurable.includes('hit-test-missed') }).toEqual({ selector, missed: true });
+        expect({ selector, confidence: await targetSizeConfidence(page, name, '/missed.html') }).toEqual({ selector, confidence: ['unverified'] });
+      }
+      // No named limit sees a scaled clip: the hit test is what stops it.
+      expect((await page.boundingBox('#scaled-clip'))?.unmeasurable).toEqual(['hit-test-missed']);
+      expect((await page.boundingBox('#scaled-above'))?.unmeasurable).toEqual(['hit-test-missed']);
+    });
+  });
+
+  it('passes a control a pointer can hit in full, and puts back every scroll position it moved', async () => {
+    await withPage('/hit.html', async (page) => {
+      const scroll = async () => {
+        await page.press('Shift');
+        return page.getAttribute('body', 'data-scroll');
+      };
+      const before = await scroll();
+      // The page starts scrolled, so putting it back is not the same as scrolling to the top.
+      expect(before).toBe('0,50,0,10');
+      for (const [selector, name] of [
+        ['#plain', 'Plain'],
+        ['#round', 'Round'],
+        ['#inner', 'Inner'],
+        ['#far', 'Far'],
+      ] as const) {
+        expect({ selector, box: await page.boundingBox(selector) }).toEqual({ selector, box: { width: 44, height: 44, fragments: 1, unmeasurable: [] } });
+        expect({ selector, confidence: await targetSizeConfidence(page, name, '/hit.html') }).toEqual({ selector, confidence: [] });
+        expect({ selector, scroll: await scroll() }).toEqual({ selector, scroll: before });
       }
     });
   });

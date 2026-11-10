@@ -574,6 +574,7 @@ describe('target size requirement', () => {
     ['mask', 'mask'],
     ['overflow-clipped', 'hides or scrolls its overflow'],
     ['outside-viewport', 'past the edge of the viewport'],
+    ['hit-test-missed', "part of the control's box cannot be hit"],
   ] as const)('is unconfirmed, never a pass, when the box read says %s', async (limit, reason) => {
     // A box large enough to pass, so only the limit can keep it from passing.
     const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: [limit] }));
@@ -587,6 +588,21 @@ describe('target size requirement', () => {
     const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: ['clip-path', 'rotated-or-skewed'] }));
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.why).toMatch(/rotated or skewed.*clip-path/u);
+  });
+
+  it('names a missed hit test last, after the shapes it lists by name', async () => {
+    const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: ['hit-test-missed', 'overflow-clipped'] }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.why).toMatch(/hides or scrolls its overflow.*cannot be hit/u);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ unmeasurable: ['overflow-clipped', 'hit-test-missed'] });
+  });
+
+  it('is unconfirmed, never a pass, when only the hit test missed and the box is large enough', async () => {
+    // The box read alone would pass: the hit test is the last gate before a pass.
+    const drafts = await run(r, sized({ width: 60, height: 60, unmeasurable: ['hit-test-missed'] }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('does not take pointer events');
+    expect(drafts[0]?.why).toContain('partly off the page');
   });
 
   it('is unconfirmed, never a pass, when the element is laid out in more than one box', async () => {

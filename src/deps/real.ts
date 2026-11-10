@@ -826,14 +826,16 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
 }`;
 
 // The order BoxLimit values are reported in. The browser function below writes the same names.
-const BOX_LIMITS: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport'];
+const BOX_LIMITS: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport', 'hit-test-missed'];
 
 // The laid-out box of the first element a selector matches, in CSS pixels, or null. The box
 // includes transforms. It also says how many boxes the element is laid out in, and each reason the
 // box may not be the area a pointer can hit (see BoxLimit). The walk up follows the flat tree,
 // through slots and out of shadow roots, and stops at 512 elements; a deeper element reads as
 // clipped, which only ever asks for review. Each check fails closed: a value it cannot read counts.
-// A fixed element can escape an ancestor that clips; it is still read as clipped.
+// A fixed element can escape an ancestor that clips; it is still read as clipped. Last, a hit test
+// scrolls the element into view and asks the browser what is at five points of its box. The size
+// and fragments returned are always those of the first read, before any scroll.
 const BOUNDING_BOX_FUNCTION = `function (query) {
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
@@ -930,6 +932,53 @@ const BOUNDING_BOX_FUNCTION = `function (query) {
     if (box.left < -epsilon || box.top < -epsilon || box.right > width + epsilon || box.bottom > height + epsilon) {
       limits.add('outside-viewport');
     }
+  }
+  // The hit test. The limits above name shapes the box read cannot stand for; this asks the browser
+  // directly. The element is scrolled into view, its box is read again, and the browser is asked
+  // which element is at the center and at the middle of each edge, 1 CSS pixel in. Edge middles,
+  // not corners, so a round or pill-shaped control is not flagged. A point is a hit only when the
+  // answer is the element or an element inside it; null (outside the viewport) is a miss. Any
+  // error is a miss. Every scroll position the scroll changed is put back before the function
+  // returns, and nothing here waits.
+  const saved = [];
+  for (let node = parentOf(element); node !== null; node = parentOf(node)) {
+    saved.push([node, node.scrollLeft, node.scrollTop]);
+  }
+  const windowX = window.scrollX;
+  const windowY = window.scrollY;
+  let missed = false;
+  try {
+    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const seen = element.getBoundingClientRect();
+    const middleX = seen.left + seen.width / 2;
+    const middleY = seen.top + seen.height / 2;
+    const points = [
+      [middleX, middleY],
+      [middleX, seen.top + 1],
+      [seen.right - 1, middleY],
+      [middleX, seen.bottom - 1],
+      [seen.left + 1, middleY],
+    ];
+    for (const [x, y] of points) {
+      const hit = document.elementFromPoint(x, y);
+      if (hit === null || !(hit === element || element.contains(hit))) {
+        missed = true;
+      }
+    }
+  } catch {
+    missed = true;
+  } finally {
+    for (const [node, left, top] of saved) {
+      if (node.scrollLeft !== left || node.scrollTop !== top) {
+        node.scrollTo({ left, top, behavior: 'instant' });
+      }
+    }
+    if (window.scrollX !== windowX || window.scrollY !== windowY) {
+      window.scrollTo({ left: windowX, top: windowY, behavior: 'instant' });
+    }
+  }
+  if (missed) {
+    limits.add('hit-test-missed');
   }
   const order = ${JSON.stringify(BOX_LIMITS)};
   return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };

@@ -536,9 +536,11 @@ const BOX_LIMIT_REASON: Readonly<Record<BoxLimit, string>> = {
     'an element above it hides or scrolls its overflow, and the control reaches past the edges of that element, so only part of it can be on screen at once',
   'outside-viewport':
     'the control is fixed or sticky and reaches past the edge of the viewport, where scrolling cannot bring it into view',
+  'hit-test-missed':
+    "part of the control's box cannot be hit, because something clips it or covers it, it does not take pointer events, or it is partly off the page",
 };
 
-const BOX_LIMIT_ORDER: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport'];
+const BOX_LIMIT_ORDER: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport', 'hit-test-missed'];
 
 // One decimal, rounded down, so a size below the minimum never prints as the minimum.
 function shownSize(pixels: number): number {
@@ -585,7 +587,8 @@ async function checkTargetSize(
   }
   // usabl measures the border box of an element laid out in one box, and only when the box read
   // found no BoxLimit. For any other shape the box it reads can be larger than the area a pointer
-  // can hit, so it does not judge the size.
+  // can hit, so it does not judge the size. The last limit is a hit test of five points of the box,
+  // so a pass also needs the browser to confirm a pointer reaches those points.
   if (box.fragments !== 1) {
     return [
       draft(requirement, 'target-size', 'unverified', {
