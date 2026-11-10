@@ -82,8 +82,9 @@ export function makeHistoryGit(options: { cwd?: string; ref?: string } = {}): Hi
     ref,
     resolveCommit,
     async listFiles(commit) {
-      const out = await git(cwd, ['ls-tree', '--name-only', commit]);
-      return out.split('\n').filter((line) => line.length > 0).sort();
+      // -z, so a name is never quoted, and NUL separated, so a name is never trimmed or split.
+      const out = await git(cwd, ['ls-tree', '--name-only', '-z', commit]);
+      return out.split('\0').filter((name) => name.length > 0).sort();
     },
     async readFile(commit, path) {
       try {

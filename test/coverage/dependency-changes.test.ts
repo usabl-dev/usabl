@@ -1,7 +1,15 @@
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
+import { makeFsGlob } from '../../src/deps/fs.js';
+import { makeGitReader } from '../../src/deps/git.js';
+import { run } from '../../src/run.js';
 
 const fsOf = (files: Record<string, string>): FsGlob => makeFakeDeps({ files }).fs;
 const trustedOf = (files: Record<string, string>) => async (file: string): Promise<string | null> => files[file] ?? null;
@@ -361,4 +369,185 @@ describe('the folders of the app', () => {
     expect(coverage.affected).toEqual([expect.objectContaining({ screenId: 'home', provenance: 'wide-blast' })]);
     expect(reads.filter((file) => file.includes('elsewhere') && file.endsWith('package.json'))).toEqual([]);
   });
+});
+
+// A configured surface carries its own readiness signal and requirements, which the scan looks up
+// by its screen id. Queuing surfaces by url dropped a surface whose url a route or another surface
+// already had, so it was never checked on a dependency change, while every other surface was.
+describe('surfaces that share a url on a dependency change', () => {
+  const lockChange = async (config: UsablConfig) =>
+    computeCoverage(
+      fsOf(appTree({ 'package-lock.json': '{"lockfileVersion":3}' })),
+      config,
+      ['package-lock.json'],
+      undefined,
+      trustedOf(appTree({ 'package-lock.json': '{"lockfileVersion":2}' })),
+    );
+
+  it('queues two surfaces that share one url, each under its own id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [
+        { id: 'settings', url: 'http://localhost:3000/settings', files: ['src/SettingsPage.tsx'] },
+        { id: 'settings-dialog', url: 'http://localhost:3000/settings', files: ['src/SettingsDialog.tsx'], reachedWhen: '[role="dialog"]' },
+      ],
+    };
+    const coverage = await lockChange(config);
+    expect(coverage.affected.map(({ screenId, url }) => ({ screenId, url }))).toEqual([
+      { screenId: 'clusters', url: 'http://localhost:3000/clusters' },
+      { screenId: 'deployments', url: 'http://localhost:3000/deployments' },
+      { screenId: 'settings', url: 'http://localhost:3000/settings' },
+      { screenId: 'settings-dialog', url: 'http://localhost:3000/settings' },
+    ]);
+    for (const screen of coverage.affected) expect(screen.provenance).toBe('wide-blast');
+  });
+
+  it('queues a surface that shares a url with a discovered route, under its own id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [{ id: 'clusters-empty', url: 'http://localhost:3000/clusters', files: ['src/ClustersEmpty.tsx'] }],
+    };
+    const coverage = await lockChange(config);
+    expect(coverage.affected.map(({ screenId, url }) => ({ screenId, url }))).toEqual([
+      { screenId: 'clusters', url: 'http://localhost:3000/clusters' },
+      { screenId: 'deployments', url: 'http://localhost:3000/deployments' },
+      { screenId: 'clusters-empty', url: 'http://localhost:3000/clusters' },
+    ]);
+  });
+
+  it('still queues a surface that overrides a discovered route once, under the shared id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [{ id: 'clusters', url: 'http://localhost:3000/clusters', files: [], overridesDiscoveredRoute: true }],
+    };
+    const coverage = await lockChange(config);
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters', 'deployments']);
+  });
+
+  it('is scanned by a run under each id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [
+        { id: 'settings', url: 'http://localhost:3000/settings', files: ['src/SettingsPage.tsx'] },
+        { id: 'settings-dialog', url: 'http://localhost:3000/settings', files: ['src/SettingsDialog.tsx'] },
+        { id: 'clusters-empty', url: 'http://localhost:3000/clusters', files: ['src/ClustersEmpty.tsx'] },
+      ],
+    };
+    const files = appTree({ 'package-lock.json': '{"lockfileVersion":3}' });
+    const head = appTree({ 'package-lock.json': '{"lockfileVersion":2}' });
+    const fake = makeFakeDeps({ files, headContents: head });
+    const scanned: string[] = [];
+    const deps = {
+      ...fake,
+      checkRunner: {
+        scan: async (screen: { id: string; url: string }) => {
+          scanned.push(screen.id);
+          return fake.checkRunner.scan(screen);
+        },
+      },
+    };
+    await run(deps, config, { changedFiles: ['package-lock.json'] });
+    expect([...scanned].sort()).toEqual(['clusters', 'clusters-empty', 'deployments', 'settings', 'settings-dialog']);
+  });
+});
+
+// The same rule holds when a wide-blast file changes. A surface that lists the changed file is
+// queued under its own id even when a route or another surface already has its url, because a
+// url does not determine which screen renders.
+describe('surfaces that share a url on a wide-blast file change', () => {
+  const shellChange = async (config: UsablConfig) =>
+    computeCoverage(fsOf(appTree({ 'src/App.tsx': 'export default function App() {}' })), config, ['src/App.tsx']);
+
+  it('queues a surface that lists the file and shares a url with a discovered route', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [{ id: 'clusters-dialog', url: 'http://localhost:3000/clusters', files: ['src/App.tsx'], reachedWhen: '[role="dialog"]' }],
+    };
+    const coverage = await shellChange(config);
+    expect(coverage.affected.map(({ screenId, url }) => ({ screenId, url }))).toEqual([
+      { screenId: 'clusters', url: 'http://localhost:3000/clusters' },
+      { screenId: 'deployments', url: 'http://localhost:3000/deployments' },
+      { screenId: 'clusters-dialog', url: 'http://localhost:3000/clusters' },
+    ]);
+  });
+
+  it('queues two surfaces that list the file and share one url, each under its own id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [
+        { id: 'settings', url: 'http://localhost:3000/settings', files: ['src/App.tsx'] },
+        { id: 'settings-dialog', url: 'http://localhost:3000/settings', files: ['src/App.tsx'] },
+      ],
+    };
+    const coverage = await shellChange(config);
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters', 'deployments', 'settings', 'settings-dialog']);
+  });
+});
+
+// A config can name files, not only globs: a uiFileGlobs entry with no glob character, the router
+// file, and the files of a surface. The climb read each such file as a folder and asked the real
+// disk for <file>/package.json, which throws ENOTDIR, so the run stopped with no verdict.
+describe('an app whose config names files, on a real disk and a real git repository', () => {
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]): Promise<void> => {
+    await execFileAsync('git', args, { cwd });
+  };
+  const DEPS = (version: string): string => JSON.stringify({ name: 'app', dependencies: { '@patternfly/react-core': version } });
+
+  async function repoWith(dir: string): Promise<string> {
+    const repo = await mkdtemp(nodePath.join(tmpdir(), 'usabl-dep-files-'));
+    const prefix = dir === '' ? '' : `${dir}/`;
+    const files: Record<string, string> = {
+      'package.json': JSON.stringify({ private: true }),
+      [`${prefix}package.json`]: DEPS('6.1.0'),
+      [`${prefix}src/App.tsx`]: 'export default function App() { return null; }\n',
+    };
+    for (const [file, text] of Object.entries(files)) {
+      await mkdir(nodePath.dirname(nodePath.join(repo, file)), { recursive: true });
+      await writeFile(nodePath.join(repo, file), text);
+    }
+    await git(repo, ['init', '--quiet', '--initial-branch=main']);
+    await git(repo, ['add', '.']);
+    await git(repo, ['-c', 'user.name=Test User', '-c', 'user.email=test@example.com', 'commit', '--quiet', '--no-verify', '-m', 'seed']);
+    await writeFile(nodePath.join(repo, `${prefix}package.json`), DEPS('6.2.0'));
+    return repo;
+  }
+
+  for (const dir of ['', 'packages/admin']) {
+    it(`counts a bump of the app package.json and never reads below a file (app in ${dir === '' ? 'the root' : dir})`, async () => {
+      const repo = await repoWith(dir);
+      try {
+        const prefix = dir === '' ? '' : `${dir}/`;
+        const app = `${prefix}src/App.tsx`;
+        const config: UsablConfig = {
+          appBaseUrl: 'http://localhost:5173',
+          uiFileGlobs: [app, `${prefix}src/pages/*.tsx`],
+          discovery: { routerFile: app, wideBlastGlobs: [] },
+          surfaces: [{ id: 'home', url: 'http://localhost:5173/', files: [app] }],
+          guardedPaths: ['usabl.config.json'],
+        };
+        const disk = makeFsGlob({ cwd: repo });
+        const reader = makeGitReader({ cwd: repo });
+        const reads: string[] = [];
+        const recording: FsGlob = {
+          readFile: async (file) => {
+            reads.push(file);
+            return disk.readFile(file);
+          },
+          glob: (patterns) => disk.glob(patterns),
+        };
+        const trusted = async (file: string): Promise<string | null> => {
+          reads.push(file);
+          return reader.show('HEAD', file);
+        };
+        const coverage = await computeCoverage(recording, config, [`${prefix}package.json`], undefined, trusted);
+        expect(coverage.affected).toEqual([
+          expect.objectContaining({ screenId: 'home', provenance: 'wide-blast', reason: expect.stringContaining(`${prefix}package.json changed`) }),
+        ]);
+        expect(reads.filter((file) => file.startsWith(`${app}/`))).toEqual([]);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    });
+  }
 });

@@ -266,7 +266,7 @@ an MCP wrapper stays an optional transport.
 src/
   contracts/        index.ts
   primitives/       canonical.ts identity.ts iso8601.ts match-glob.ts neutralize.ts slug.ts sortKey.ts
-  deps/             build.ts real.ts fakes.ts fs.ts git.ts
+  deps/             build.ts real.ts ax-tree.ts fakes.ts fs.ts git.ts
   providers/
     axe/            index.ts notes.ts
     rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
@@ -291,7 +291,7 @@ src/
   session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
-  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (runs voice requirements; section 7.5)
+  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
@@ -441,6 +441,15 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
+  excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+}
+
+// A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
+// a file in a test folder that no screen imports. Not a gap: the gate never reads it. Absent and
+// empty both mean nothing was excluded.
+export interface ExcludedFile {
+  ref: string;    // repository path
+  reason: string; // why it was left out, and what would make it count
 }
 
 export interface Receipt {
@@ -1029,6 +1038,168 @@ Static-only runs. A static-only run grants no live capability, so each voice pro
 `provider intake:<id> denied capability: live`. The screen is then not cleanly scanned: no
 voicing finding, and no clean pass for that screen.
 
+#### 7.5.1 Silent change rule (no contract needed)
+
+The silent change rule is an additional check in the voicing lane. It flags an action step that
+changes the page, is not announced, and does not move focus to a named control. Nobody has to
+write down what the step should have said. It lives in `src/voicing/silent-change.ts` and
+`src/voicing/tree-change.ts`, and its rule id is `voicing/silent-change`.
+
+Where it runs. Inside the two loops that already drive steps: the flow provider's own step loop
+and the contract step runner of each voice requirement. It reads around each step those loops
+drive and never drives a step itself, so it cannot delete a second row. It adds no step, needs
+only the `live` capability, and makes no network call. It runs whenever a flow requirement or a
+voice requirement runs on its screen. With neither, there are no driven steps, nothing runs, and
+no provider is added. Its drafts come back with the drafts of the provider whose loop it watched,
+under its own rule id, never the requirement's.
+
+What an action step is. A step of kind `activate` (Enter on the focused control) or `click`. A
+Tab step is not one: Tab moves focus, and the focused control's name and role are the speech for
+it. A `press` step and a key such as Escape or an arrow key are not judged, and `type` steps
+are out, because a character counter would be a finding on every keystroke.
+
+What it reads, per action step:
+
+1. Did the page change in a way assistive technology can perceive. Two reads of the whole
+   accessibility tree of the main frame, one before the step and one after its settle window
+   (the wait in section 7.5), through `Page.fullAxTree()` over `Accessibility.getFullAXTree`.
+   The browser computes that tree, and no page script world takes part. A change is a node
+   added or removed, or a name or a checked, expanded, pressed, selected, invalid, or sort
+   state that changed, outside the control's own change. Nodes are matched by DOM backend node
+   id. The browser does not expose `aria-sort` as a tree property, so the sort state of each
+   column and row header is read from its attribute through the browser's DOM read, inside the
+   same budget. The control's own change is its own states, the states of its ancestors, and
+   every node its `aria-controls` names, with everything under those nodes, when its own state
+   changed in the same step. A tab that becomes selected also deselects the tab it replaces, a
+   node with the same parent and role that is still in the tree after the step, so that tab's
+   state change, and the nodes its `aria-controls` names, are the control's own change too. A tab
+   that was removed was not deselected, and the panel it controlled is not exempt. So a disclosure that shows its
+   panel, a tab that shows its panel, and a sort header that re-orders its rows are the control
+   speaking for itself, and the voicing tier already checks that speech. Values never count and
+   are never read: a field's value, and the text inside an editable field, are left out of the
+   read.
+2. Was anything heard. The step's own drain, with the same hidden and modal rules as every
+   announcement check (section 11.6), so a region in a dialog the step closed, or outside an
+   open modal, is not heard. Each record carries the live region that wrote it and whether the
+   change was only a removal. A record that holds only a removal, which is how a toast that
+   dismisses itself shows up, is never credited as heard. A live region that also wrote before
+   the first step makes speech from that region inside a step's window a gap, because a ticker
+   or a polling counter speaks whether or not the action did anything.
+3. Did focus move to a named control. Identity is the DOM backend node id
+   (`Page.focusedNodeId()`). Moved means the focused node after the window is a different node
+   than before, has a non-empty accessible name, and has a role other than generic or none. Focus
+   that lands on the control that received the action is never a move: a mouse click focuses the
+   clicked button before the click fires. For a `click` step, the control is the element its
+   selector names, resolved by `Page.controlNodeId()` in an isolated world with a query that looks
+   in the document and in every open shadow root, as the click does. A name change on the acted
+   control while it keeps focus ("Save" becomes "Saved") counts as the control speaking for
+   itself, because readers usually speak a name change on the focused element.
+
+A step that changed the page, was not heard, and moved focus nowhere named is a finding: rule
+`voicing/silent-change`, evidence class `preview`, severity `serious`, confidence `fail`. Its
+element path is the control that received the action: the step's selector for a click, the
+focused element's path for an activate. It names no element, because the control may be the
+row that was deleted. Its evidence is the step as its kind and selector, the counts of nodes
+added, removed, and changed by role, and the names of added nodes only, each once, sorted,
+capped at three. It never holds a value or a removed node's name, so a deleted row's data does
+not reach a pull request comment. Every string goes through the scrubber in the provider. The fix
+text reads: announce the outcome in a live region that is shown and inside the open modal, or
+move focus to a control whose name states it.
+
+The rule stays quiet only where it would repeat the flow requirement's own draft for the same
+step. When the flow fails because its expected announcement was not heard, the rule emits nothing
+for the last step, which is the step the flow judged: the flow's draft already says the step was
+silent, and the gate keys identity by rule, so a second draft would be a second finding for one
+accessibility barrier. When the flow is a gap because a drain could not say what was heard, the
+rule drops its own `announcements undecidable` gap on the step whose drain the flow's gap names,
+the first undecidable one, and on no other step. When a step's drain is undecidable, the rule
+names that reason before any other focus reason, so the flow's gap covers the step. A finding or a
+gap on any other step is always emitted.
+
+What is a gap, never a finding and never a pass. Each is an `unverified` preview draft on the
+step, with the reason in `evidence.extra.reason`:
+
+- `navigated`: the main frame loaded a new document, or the URL path changed, during the step;
+- `not settled`: the page was still changing at the end of the settle window;
+- `still busy`: a node is still `aria-busy` at the end of the window;
+- `tree over budget`: a tree read took more than 500 ms or returned more than 5000 nodes;
+- `unreadable control`: the page changed and the click selector names no one element in the
+  document or one open shadow root, because it matches nothing, is not CSS the browser parses,
+  or matches in both the document and a shadow root, where the click's own order cannot be read.
+  A selector with a combinator (a space, `>`, `+`, or `~`) on a page with any open shadow root is
+  this gap too: the click engine can match it across a shadow boundary, and the browser's own
+  query cannot, so the element found may not be the one the click takes;
+- `focus unreadable`: the focused element cannot be read (section 7.3), or focus after the step
+  is on a node that is not the acted control and is not in the tree read after the step, such as
+  a control inside a same-origin child frame, which the tree read does not cover;
+- `replaced focus`: focus ended on a new node with the same name as the acted control or the
+  node that had focus before, so the read cannot tell a re-render from a move;
+- `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;
+- `background announcements`: the only speech in the window came from a region that also wrote
+  before the first step;
+- `step not run`: the flow driver does not run the step, such as an unknown kind, a click with no
+  selector, or a press with no key. The driver used to skip such a step without a word;
+- `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
+  still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
+  drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
+  error, through the scrubber, because the browser's call log can quote the element's markup;
+- `read failed`: a read the rule needs failed.
+
+Only a step that was read in full, settled, and not busy is dropped when it changed nothing. A
+step that changed nothing but met `read failed`, `navigated`, `not settled`, `tree over budget`,
+or `still busy` is still that gap, because those are checked before the trees are compared.
+
+Flow verdicts now read each step at its own time. The flow loop waits for the page to settle
+after each `click` or `activate` step, and drains after every step. Its verdict reads the union
+of every drain in step order, led by the drain taken before the first step. The hidden and modal
+rules (section 11.6) run when each drain is taken, so each step's text is judged against the page
+as it was after that step. Before, the flow drained once, right after its last step, with no
+wait, and judged every step's text against the page as it was then. This can change a flow
+verdict, in both directions. A team can see these differences:
+
+- text written inside a dialog that a later step closes is now heard, where it was dropped;
+- text written outside an open modal that a later step closes is now dropped, where it was heard;
+- an announcement that lands shortly after the click, inside the settle wait, is now heard, where
+  it was missed;
+- focus that rests on a control named with the expected text, and that a re-render takes away
+  during the wait, is now read after the wait, so the flow can fail where it passed;
+- a step that loads a new document, or whose target is gone after the settle wait (an Undo
+  toast, or a menu that closes on a timer), makes the flow a `not-covered` gap.
+
+The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 second cap, in every
+flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
+the late announcement at the flow verdict.
+
+Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
+over either is the gap above. The time bound is a timer: each browser call in the read races it,
+so a call that is slow or never returns ends the read at 500 ms. Measured on `usabl-app` (commit 6118ea7, served by its own Vite dev
+server): `usabl-app` has no delete or save flow, so five click actions across its four screens
+were measured instead. Every read stayed inside the budget, at 26 to 250 ms, and the browser
+returned 179 to 300 nodes per read (132 to 207 kept after inline text boxes and field content
+are left out).
+
+Known limits. The capture covers the main frame and the light tree. The full tree read covers
+the main frame and, because the browser builds it from the flat tree, open shadow roots too; a
+real-Chromium fixture confirms this. Child frames are read by neither. A node that holds an
+editable field, such as a row or a button with a text box inside, can take its name from its
+contents, and those contents include the field's value. When the browser says such a node's name
+comes from its contents, or does not say where it comes from, the read leaves that name out: it is
+never shown in evidence, a change of it never counts as a page change, and focus that moves to
+that node does not count as a move to a named control. An author-given name, such as
+`aria-label`, is kept. A name built through `aria-labelledby` from a field can still hold that
+field's value, and the rule does not take a name apart. Background announcements are found only from
+the drain taken before the first step: a ticker that first writes inside a step's window, or
+between two steps, reads as speech that step caused. A live region that is drawn again, as a new
+element, counts as a new region, so a ticker that draws its region again is not known as
+background. The settle element count still runs in the page's own world, so
+a page that patches `getElementsByTagName` can end the window early. Moving that count to an
+isolated world is planned, with this rule's patched-page test.
+
+What it never does. It never minds the words: "Saved" after Delete passes this rule and fails a
+contract that requires "deleted". It never blocks: the class is preview, so the gate ignores it
+and `checkPage` lists it as advisory, until calibration (section 26) measures it in both
+directions. It never reads page text as instructions.
+
 ### 7.6 Documentation profile (docs-content)
 
 The same providers run over product documentation pages when a scan target carries
@@ -1187,6 +1358,32 @@ rules that ran, because Deque records applicability for its own rules. Those cou
 
 ### How it works
 
+**Which files changed.** A local run takes the paths
+`git status --porcelain -z --untracked-files=all` reports. A run with `--trusted-ref` joins them
+with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every git listing usabl reads
+(status, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z` and is split on NUL.
+Without `-z`, git quotes a name that holds a byte above 0x7f, a newline, a tab, or a double quote,
+so `src/pages/Über.tsx` arrived as `"src/pages/\303\234ber.tsx"`, matched no UI glob, and a CI
+run read as nothing to check. Names are never trimmed, so a name that starts or ends with a space
+is kept. A `**` in a glob matches any character, a newline included, so a name with a newline
+matches `src/**`. A changed path that starts and ends with a double quote, the shape git prints
+for a quoted name, is an `unresolved` gap that says why, never a file outside the UI globs. A real
+file name of that shape is a gap too, and the reason says to rename it. A name such as `"draft".md`
+does not have that shape and is read as the file it names. The same listing reads the trusted
+requirement files and the guarded files at a ref, so a file there with such a name is read too.
+
+New untracked files are listed one by one. Without `--untracked-files=all`, git status lists a new
+folder as the folder alone, which matches no file glob, and a user's
+`status.showUntrackedFiles=no` hides new files completely. A listing longer than usabl reads (10
+MB of output) stops the run with an error that says so, never a short list read as complete.
+
+A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
+a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
+the files that import it, and the router file or `usabl.routes.json` when a route names it. An
+import left pointing at the old path is an import usabl cannot resolve, so a file moved into a
+test folder under the same name is a gap (see "Test files" below). A move that changes nothing
+else, such as moving a route's entry file while the route still names the old path, is not seen.
+
 Given a set of changed files, discover which surfaces they affect:
 
 1. Build a route manifest from the router source (or use a configured override).
@@ -1230,6 +1427,33 @@ not on the climb, such as another workspace package, does not count. A dependenc
 configured surface with provenance `wide-blast`, and each such screen carries a `reason` that
 names each dependency file and why it counts. With no route and no surface, each dependency file
 is an `unresolved` gap that says there was no screen to check, never nothing to check.
+Surfaces are queued by screen id, never by url, on every path: a dependency change, a changed
+file that matches `wideBlastGlobs` and that a surface lists in its `files`, a route-graph match,
+and a manual surface match. A surface that shares its url with a discovered route or with another
+surface is queued under its own id, with its own readiness signal and requirements, because a url
+does not determine which screen renders. A surface that overrides a discovered route
+(`overridesDiscoveredRoute`) has the route's id, so the two are one entry.
+
+**Test files.** A file named like a test, `*.test.*` or `*.spec.*`, is never a UI file, wherever
+it is. A file in a folder named `test`, `tests`, or `__tests__` is a UI file only when a screen
+reaches it: a route entry file's import graph includes it, or a surface lists it in its `files`.
+So a screen component kept in `src/tests/` is checked when it changes. A file in such a folder
+that matches `uiFileGlobs` and that no screen reaches, such as `src/test/setup.ts`, a helper in
+`src/__tests__/`, or a mock request handler in `src/test/`, is left out and disclosed in
+`coverage.excludedFiles`, with a reason that says usabl found no import of it and how to make it
+count. It is not a gap, so a pull request that edits only test helpers still has nothing to check.
+`usabl check` prints these files under "excluded files, not checked", marked as not blocking, on
+any run, an idle one included. It prints the first 20 and then the count of the rest; the JSON
+output holds the full list.
+
+"No screen reaches it" is read from the import graph, so it is a guess when the graph holds an
+import usabl could not resolve. When an unresolved import's last path segment, with or without its
+extension, equals the file's name without its extension (or its folder name, for an `index` file),
+the file is an `unresolved` gap that names the import and the file that holds it. For example,
+`src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
+`src/tests/Dashboard.tsx` is a gap. An unresolved import that names another file changes nothing.
+A dynamic import built from a template literal, such as `` import(`../tests/${name}`) ``, names no
+file, so a file it loads stays excluded. That is a known limit.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
@@ -1258,8 +1482,9 @@ with that extension is not seen and the file usabl did find is attributed.
 
 Coverage answers two different questions.
 
-**Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
-`uiFileGlobs`, no changed file is a dependency change of the app, and no changed file maps to a
+**Nothing to check** (`coverage.nothingToCheck === true`): no changed file is a UI file (it
+matches `uiFileGlobs` and is not a test file, see "Test files" above), no changed path looks
+quoted, no test-folder file is a gap, no changed file is a dependency change of the app, and no changed file maps to a
 documentation page under a `usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
 exit 0, and an explicit "nothing to check" message. A backend-only PR, a prose change
 with no manifested doc page, and a clean tree with no diff are this path. This is not
@@ -3512,7 +3737,8 @@ add content and flow assertions that the engine enforces alongside the default s
 - `content` requirements become content-matcher providers (compare element text or
   aria-label against the approved string).
 - `flow` requirements become declarative interaction probes (same step runner as the
-  keyboard walk probes).
+  keyboard walk probes). The silent change rule watches their click and activate steps
+  (section 7.5.1). A step the flow driver does not run is reported as a gap of that rule.
 - `doc` requirements are not runtime checks; they feed the output module.
 - `voice` requirements become interaction contracts, one virtual screen reader provider each
   (section 7.5).
@@ -3568,7 +3794,8 @@ repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule i
 `intake:<id>` for content and flow requirements; there is no code path that marks an intake
 draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of the two
 tiers, with the requirement in place of `voicing/`, and are `preview` unless their obligation
-class is promoted (section 7.5).
+class is promoted (section 7.5). A flow or voice provider can also return `voicing/silent-change`
+drafts, which are always `preview` (section 7.5.1).
 
 ### Requirement ids are waiver identities
 

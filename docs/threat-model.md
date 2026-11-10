@@ -293,6 +293,16 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- Every git listing of changed or committed files runs with `-z` and keeps each name as UTF-8
+  text, so a non-ASCII name is not quoted into a path that matches no UI glob, and a changed path
+  that starts and ends with a double quote is a gap. A name whose bytes are not valid UTF-8 loses
+  them in that decoding and no longer names the file. See ground-truth section 8.
+
+- The guard compares guarded files at the trusted ref by the same `-z` listing, so a change to a
+  guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
+  Before, the listing quoted that name, `git show` found no file under it on either ref, and the
+  change was skipped.
+
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
   shared package's files, so a change to a component the app renders exited 0 with nothing
@@ -629,6 +639,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
+
+- Voicing lane: the silent change rule drives no step of its own, reads the accessibility tree the
+  browser computes over CDP and resolves a click step's control in an isolated world, and shows no
+  values and no removed node's name, so page script cannot answer for it and a deleted row's data
+  does not reach output.
 
 **Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
 not run the closed shadow root check, so a change outside a modal there can still count as heard.

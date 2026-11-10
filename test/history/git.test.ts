@@ -53,6 +53,13 @@ describe('makeHistoryGit', () => {
     expect(await port.readFile(second, '2026-12.jsonl')).toBeNull();
   });
 
+  it('lists a history file name git would quote as git stores it', async () => {
+    const port = makeHistoryGit({ cwd: repo, ref: 'usabl/history' });
+    await git(repo, ['config', 'core.quotePath', 'true']);
+    const commit = await port.commitFile(null, 'Über 2026-10.jsonl ', 'one line\n', 'first');
+    expect(await port.listFiles(commit)).toEqual(['Über 2026-10.jsonl ']);
+  });
+
   it('resolves a missing ref to null and answers ancestry', async () => {
     const port = makeHistoryGit({ cwd: repo });
     const head = await port.resolveCommit('HEAD');

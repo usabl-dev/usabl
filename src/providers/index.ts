@@ -16,6 +16,22 @@ import type {
   RuleApplicability,
 } from '../contracts/index.js';
 
+/**
+ * Thrown by a provider that failed part way and still has preview drafts from the work it finished,
+ * such as the silent change rule's drafts for the steps a flow ran before one threw. The failure is
+ * a gap exactly as any thrown error is, with the same message. Only drafts that are not
+ * deterministic are kept, so a failed run can never add evidence that decides a verdict.
+ */
+export class ProviderRunFailed extends Error {
+  readonly drafts: Draft[];
+
+  constructor(message: string, drafts: Draft[]) {
+    super(message);
+    this.name = 'ProviderRunFailed';
+    this.drafts = drafts;
+  }
+}
+
 function deniedCapabilities(provider: Provider, allowed: Set<Capability>): Capability[] {
   return provider.capabilities.filter((capability) => !allowed.has(capability));
 }
@@ -123,6 +139,9 @@ export async function runProviders(
       // Thrown provider work is disclosed as a gap so we never silently pass coverage.
       const message = err instanceof Error ? err.message : String(err);
       gaps.push(notCoveredGap(provider.id, message));
+      if (err instanceof ProviderRunFailed) {
+        drafts.push(...err.drafts.filter((draft) => draft.evidenceClass !== 'deterministic'));
+      }
     }
   }
 

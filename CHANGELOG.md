@@ -4,6 +4,18 @@
 
 ### Added
 
+- The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
+  watches each `click` and `activate` step that a flow requirement or a voice requirement already
+  drives, reads the whole accessibility tree before the step and after its settle window, and
+  reports a preview finding, severity serious, when the page changed, nothing was announced, and
+  focus did not move to a named control. A disclosure, a tab, and a sort header speak for
+  themselves. A step it cannot judge, such as one that navigates, never settles, or names no one
+  control, is an `unverified` preview gap that names the reason. It drives no step of its own,
+  makes no network call, never shows a value or a removed node's name, and never changes a
+  verdict. With no flow or voice requirement it does not run. Under a failing flow it adds
+  nothing for the step the flow judged. The flow driver now reports a step kind it does not run
+  instead of skipping it. `usabl brief` names the rule with flow and voice requirements.
+
 - `usabl install --ci` writes workflows that run as written. The build records the commit it
   came from in `dist/build-info.json`, which the package carries, and `install --ci` and
   `install --docs-ci` pin the engine to that commit when it is a full SHA from a clean tree. A
@@ -186,6 +198,60 @@
   and says usabl did not scan the change again on that stop. The threat model now says a user
   with a shell on the same machine can write a receipt that verifies, and that receipt signing
   is not built.
+
+- A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
+  end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
+  merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
+  `src/pages/Über.tsx` matched no `uiFileGlobs` and the run exited 0 with nothing to check. Every
+  git listing now uses `-z` and keeps names untrimmed. Gate effect: such a run now scans the file,
+  or reports it as not covered.
+
+- A change to a guarded file with such a name, for example `policy/Über.yaml`, now needs
+  approval in CI. Before, the guard at the trusted ref listed the quoted name, found no file
+  under it on either ref, and skipped the change. The policy hash now keys those
+  files by their true names, so a stored receipt for a repository with such guarded files does
+  not verify once after the upgrade, and the stop hook runs one full check. Gate effect: the
+  change is `approval_required` where it passed.
+
+- A changed path that starts and ends with a double quote, the shape git prints for a quoted
+  name, is now an unresolved gap, in CI and in local runs. usabl cannot tell which file it names.
+  Gate effect: such a run is not covered where it read as nothing to check.
+
+- Local runs and the stop hook now list a staged rename by its new name. Before, they listed the
+  old name. They also list new untracked files one by one, so a new folder is listed by its files
+  and `status.showUntrackedFiles=no` no longer hides them. CI runs read the same merge-base diff
+  as before. Gate effect, in local runs and the stop hook: a renamed file is checked under its new
+  name, and a new file in a new folder or hidden by that setting is checked where it read as
+  nothing to check. The old name of a rename is no longer listed, so a file moved out of the UI
+  globs is seen only through the other files the move changes. A listing longer than usabl reads
+  stops the run with an error that says so.
+
+- A trusted requirement file with a non-ASCII name, such as `requirements/Über.yaml`, is now
+  loaded under a trusted ref. Before, it was left out with nothing said. Gate effect: its
+  requirements are checked in CI.
+
+- A UI file in a folder named `test`, `tests`, or `__tests__` is now checked when a screen
+  imports it or a surface lists it, and is an unresolved gap when an import usabl could not
+  resolve may load it. Before, every file in such a folder was dropped, so a real screen kept
+  there read as nothing to check. A file there that no import reaches is listed in
+  `coverage.excludedFiles` and in the summary as not blocking, and is not a gap. Files named
+  `*.test.*` or `*.spec.*` stay excluded. Gate effect, in CI and in local runs: a reachable UI file
+  in such a folder is now scanned, and one an unresolved import may load is not covered.
+
+- Configured surfaces are now queued by screen id on a dependency change and on a change to a
+  file that matches `wideBlastGlobs`. Before, a surface whose url a route or another surface
+  already had was skipped, with its own readiness signal and requirements. Gate effect, in CI and
+  in local runs: more screens are checked on such a change.
+
+- The gate input now refuses a result whose `coverage.excludedFiles` field is malformed. Before,
+  the field was dropped. This changes only a library caller that hands `gate()` its own coverage;
+  a command run builds that field itself. Gate effect: such a call is refused where it went on.
+
+- A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
+  surface no longer stops the run. The search for the app's `package.json` read a file such as
+  `src/App.tsx` as a folder and asked for `src/App.tsx/package.json`. The disk refused that read
+  with ENOTDIR, and the run ended with no verdict. The search now starts from the file's folder,
+  and a read of a path below a file returns nothing, the same as a missing file.
 
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
@@ -795,6 +861,16 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- Flow requirements now read each step at its own time. A flow waits for the page to settle
+  after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and
+  drains after every step. Each step's text is judged against the page as it was after that step,
+  where before the flow drained once after its last step. This can change a flow verdict, in both
+  directions. Text written inside a dialog that a later step closes is now heard, where it was
+  dropped. Text written outside an open modal that a later step closes is now dropped, where it
+  was heard. An announcement that lands shortly after the click is now heard, where it was
+  missed. A step that loads a new document, or whose target is gone after the settle wait, makes
+  the flow a `not-covered` gap.
 
 - `usabl install --overlay` now detects whether the app uses Vite or webpack, from config
   files and `package.json` scripts. In a webpack app it prints the two lines to add to the
