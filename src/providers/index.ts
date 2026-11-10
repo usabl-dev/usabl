@@ -15,11 +15,12 @@ import type {
   ProviderRunResult,
   RuleApplicability,
 } from '../contracts/index.js';
+import { firstLine } from '../primitives/first-line.js';
 
 /**
  * Thrown by a provider that failed part way and still has preview drafts from the work it finished,
  * such as the silent change rule's drafts for the steps a flow ran before one threw. The failure is
- * a gap exactly as any thrown error is, with the same message. Only drafts that are not
+ * a gap as any thrown error is, with the first line of its message only. Only drafts that are not
  * deterministic are kept, so a failed run can never add evidence that decides a verdict.
  */
 export class ProviderRunFailed extends Error {
@@ -138,7 +139,9 @@ export async function runProviders(
     } catch (err) {
       // Thrown provider work is disclosed as a gap so we never silently pass coverage.
       const message = err instanceof Error ? err.message : String(err);
-      gaps.push(notCoveredGap(provider.id, message));
+      // A ProviderRunFailed wraps an error from steps it drove in the browser, whose later lines can
+      // be a call log that quotes the element's markup. Its gap keeps only the first line.
+      gaps.push(notCoveredGap(provider.id, err instanceof ProviderRunFailed ? firstLine(message) || 'the error had no message' : message));
       if (err instanceof ProviderRunFailed) {
         drafts.push(...err.drafts.filter((draft) => draft.evidenceClass !== 'deterministic'));
       }

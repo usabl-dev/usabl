@@ -44,13 +44,14 @@ function stopCommands(raw: string): string[] {
 }
 
 describe('planClaude', () => {
-  it('wires npx usabl stop-hook so the installed bin resolves without a global install', async () => {
-    expect(STOP_HOOK_COMMAND).toBe('npx usabl stop-hook');
+  it('wires npm exec --no -- usabl stop-hook, which runs the installed bin and never downloads', async () => {
+    expect(STOP_HOOK_COMMAND.startsWith('npm_config_loglevel=silent npm exec --no -- usabl stop-hook || ')).toBe(true);
+    expect(STOP_HOOK_COMMAND).not.toContain('npx');
     const fs = memoryFs({});
     const result = await writeClaude(fs, await planClaude(fs));
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('written');
-    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual(['npx usabl stop-hook']);
+    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([STOP_HOOK_COMMAND]);
   });
 
   it('is idempotent once the stable command is wired', async () => {
@@ -77,7 +78,7 @@ describe('planClaude', () => {
       hooks: { PreToolUse: unknown[]; Stop: unknown[] };
     };
     expect(merged.hooks.PreToolUse).toHaveLength(1);
-    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual(['npx usabl stop-hook']);
+    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([STOP_HOOK_COMMAND]);
   });
 
   it('updates a usabl-owned hook wired to the retired dist path, preserving siblings', async () => {
@@ -98,7 +99,7 @@ describe('planClaude', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('written');
-    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual(['npx usabl stop-hook']);
+    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([STOP_HOOK_COMMAND]);
     const merged = JSON.parse(fs.store[CLAUDE_SETTINGS_PATH] ?? '') as {
       hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> };
     };
@@ -116,7 +117,7 @@ describe('planClaude', () => {
     expect(plan.action).toBe('update');
     const result = await writeClaude(fs, plan);
     expect(result.exitCode).toBe(0);
-    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual(['npx usabl stop-hook']);
+    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([STOP_HOOK_COMMAND]);
   });
 
   it('refuses when a Stop hook it cannot recognize is present', async () => {

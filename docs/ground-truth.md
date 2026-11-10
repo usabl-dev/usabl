@@ -1138,13 +1138,18 @@ step, with the reason in `evidence.extra.reason`:
 - `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;
 - `background announcements`: the only speech in the window came from a region that also wrote
   before the first step;
-- `step not run`: the flow driver does not run the step, such as an unknown kind, a click with no
-  selector, or a press with no key. The driver used to skip such a step without a word;
+- `step not run`: the flow driver cannot run the step as written, such as an unknown kind, a
+  click with no selector, a press with no key, or a step with a field its kind does not use. The
+  flow then runs none of its steps and is a `not-covered` gap (see "Flow steps the driver cannot
+  run" below), and the rule's gap for each such step comes with it. The driver used to skip such a
+  step without a word;
 - `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
   still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
   drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
   error, through the scrubber, because the browser's call log can quote the element's markup;
-- `read failed`: a read the rule needs failed.
+- `read failed`: a read the rule needs failed. The draft keeps only the first line of the error,
+  through the same helper as `step threw` and then the scrubber, because a browser error's later
+  lines can quote the element's markup.
 
 Only a step that was read in full, settled, and not busy is dropped when it changed nothing. A
 step that changed nothing but met `read failed`, `navigated`, `not settled`, `tree over budget`,
@@ -1152,7 +1157,7 @@ or `still busy` is still that gap, because those are checked before the trees ar
 
 Flow verdicts now read each step at its own time. The flow loop waits for the page to settle
 after each `click` or `activate` step, and drains after every step. Its verdict reads the union
-of every drain in step order, led by the drain taken before the first step. The hidden and modal
+of the drains taken after its steps, in step order. The hidden and modal
 rules (section 11.6) run when each drain is taken, so each step's text is judged against the page
 as it was after that step. Before, the flow drained once, right after its last step, with no
 wait, and judged every step's text against the page as it was then. This can change a flow
@@ -1170,6 +1175,69 @@ verdict, in both directions. A team can see these differences:
 The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 second cap, in every
 flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
 the late announcement at the flow verdict.
+
+Speech recorded before the flow's first step never counts. An earlier check can leave speech in
+flight, such as a status message that lands after its click. So before its first step the flow
+waits for the page to go quiet, with the same settle wait a `click` step uses, and then takes a
+drain. The capture runs for the life of the page, so that drain holds every announcement since the
+last drain on the page, such as one an earlier check caused, and any that landed during the wait.
+The flow's verdict never passes on that drain and never fails on it: the flow is judged only on
+what was announced after its first step ran. When the expected text is in that drain and the
+flow's own steps did not announce it, the flow is an `unverified` gap. The text was announced
+before the flow's first step, and an earlier check may have changed the page (it may have saved
+once already), so usabl cannot tell whether these steps announce it. When that drain does not
+hold the text either, the flow fails as before, or is a gap when the focused control cannot be
+read. The undecidable reason of that drain decides nothing either, since its texts are not read.
+The silent change rule still takes that drain as its background speech. The voice contract step
+runner already drained and discarded the same way.
+
+In a flow that expects an announcement, a page that does not go quiet within the wait's cap, or a
+wait that fails, makes the flow a `not-covered` gap that says so, and the flow runs none of its
+steps. A failure of the drain itself does the same, because the speech it should have cleared
+could then land in the first step's drain. A flow that expects no announcement judges no speech,
+so it runs on such a page as before. The wait costs at least 2 seconds per flow, up to the 6
+second cap. Real-Chromium tests hold this. In one, an earlier click announces "Saved" and waits,
+the flow only presses Tab, and the flow is a gap. In the other, an earlier click writes "Saved"
+300 ms later and does not wait, and the text lands in the drain the flow does not count.
+
+One limit stays. Speech an earlier check started that lands later than that wait is still read as
+the flow's own. A status message on a timer longer than the quiet window arrives in a step's drain,
+and the flow cannot tell it from speech its steps caused.
+
+Focus that was already there is not evidence. Before its first step, a flow that expects an
+announcement records the focused node, by DOM backend node id (`Page.focusedNodeId()`), and its
+accessible name. After its last step, the focused control's name counts toward the verdict only
+when the focused node or its name differs from what was recorded. When the expected text matches
+the focused control's name but neither changed, and no step's announcement held the text, the
+flow is an `unverified` gap that says focus was already on that control before the flow ran. When
+focus could not be read before the flow, whether it moved is unknown, and the same case is a gap
+that says so. A control drawn again with the same name is a new node, so it still counts as a
+change. A flow whose steps leave focus where it started, such as one that opens a dialog and
+closes it with Escape, is now a gap in this case where it passed, because an earlier check may
+have put focus there. A drain that cannot say what was heard makes the flow a gap on that reason
+unless the steps moved focus to a control with the expected name.
+
+Flow steps the driver cannot run. Before it runs any step, the flow driver checks every step. A
+`click` with no selector, a `press` with no key (a missing, empty, or blank value counts as no
+value), and a step of any kind other than `tab`, `activate`, `press`, or `click` cannot be run. An
+`activate` step presses Enter on the focused control and needs nothing more. A step that carries a
+field its kind does not use cannot be run as written either, because the driver would ignore the
+field and run something other than what was written. Examples are a selector on `activate`,
+`press`, or `tab`, a key on `click`, `times` on `tab`, `shift` on `press`, and `expectedAnnouncement`
+written inside a step, where the flow would then check nothing. A comment field such as `note` is
+an unused field too. `tab` and `activate` take only `do`, `press` takes `do` and `key`, and `click`
+takes `do` and `selector`. That list is one table beside the driver (`FLOW_STEP_FIELDS` in
+`src/intake/map-to-providers.ts`), and a test runs the driver on each kind and checks that it reads
+exactly those fields. When a step cannot be run as written, the flow runs none of its steps, takes
+no drain, and is a `not-covered` gap. The gap's reason names each such step by its number, counted
+from 0, its kind, what it is missing, and each unused field with the fields its kind takes. The
+flow never runs such a step as nothing and never passes. The requirement loader accepts these
+steps in a flow: a flow step needs only a non-empty `do` to load, and any other field loads with
+it. Only voice requirements refuse them when the file loads. So a flow file with such a step loads,
+and the driver then reports the flow as not covered. The gap of a flow provider that throws, as
+for any `ProviderRunFailed`, keeps only the first line of the error, through the same helper the
+silent change rule's gaps use, because a browser error's later lines can quote the element's
+markup.
 
 Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
 over either is the gap above. The time bound is a timer: each browser call in the read races it,
@@ -2895,7 +2963,76 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- The repository root, then the config, before anything is parsed. The hook finds the
+  repository root with `git rev-parse --show-toplevel` from the folder it starts in, because
+  that folder follows the assistant when it changes directory. When `CLAUDE_PROJECT_DIR` is set
+  and names a folder, the hook starts there; Claude Code sets it to the project root. The
+  config, the receipt, the bypass file, the scan, and the session pin key all use the root. The
+  hook then compares the raw bytes of
+  `usabl.config.json` in the working tree with HEAD:
+  - HEAD has the config and the working copy is the same bytes: the hook parses it and goes on.
+  - HEAD has the config and the working copy differs, is missing, or cannot be read, or the
+    config does not parse: block as approval required, before anything parses the working
+    copy. The reason opens "NOT verified - approval required:", says what happened and that
+    nothing was checked, tells the model not to edit the file to clear it, says what clears it,
+    and names `usabl bypass`. Read and parse errors go inside the untrusted frame.
+  - Neither HEAD nor the working tree has the config: allow with "NOT verified - usabl is not
+    configured here: ..." and the step to run `usabl init`. Nothing runs.
+  - The working tree has the config and HEAD does not, but HEAD exists (a new, uncommitted
+    setup): the guard reports `usabl.config.json` as a changed guarded file, as it does for any
+    new guarded file, so the run goes on and ends `approval_required`, which blocks. A new
+    config that does not parse blocks as approval required before the run.
+  - A repository with no commits yet, or an orphan branch with no commit yet, has no HEAD. The
+    hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
+    fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
+    commit" step inside the untrusted frame. It does not block.
+  - Neither HEAD nor the working tree has the config, but this session already recorded pins for
+    this repository root: an earlier stop read a committed config, so the config was removed and
+    committed during the session. That is drift, and the stop goes through the drift block, with
+    `drifted files: usabl.config.json` inside the frame.
+  - The hook found no git work tree from the folder it started in, for example `.git`: allow
+    with "NOT verified - the stop hook ran in a folder outside any git work tree, or git could
+    not run there ... so it could not find the repository and checked nothing on this stop.",
+    the folder inside the untrusted frame, and the step to run `usabl check` from the project
+    root. "usabl is not configured here" is only for a real repository with no config.
+  Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
+  `loop_count` above 0), marked NOT verified, as every other block does. A continuation that
+  goes through tells the model not to edit the file to make a later stop pass; only a block
+  speaks of clearing it.
+- Input that is not JSON: allow with "NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop.", then the step to check the hook command in `.claude/settings.json` or `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check` before calling the change accessible.
+- An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
+  does not show the stderr of a Stop hook that exits 0, and sends its plain stdout to the debug
+  log. So in the Claude protocol, an allow also writes one JSON object to stdout,
+  `{"systemMessage": "..."}`, with the same text stderr gets, and Claude Code shows that field to
+  the person. It is shown for every allow except a verified stop and an idle stop that carry no
+  notice. So it covers every "NOT verified" allow, the "not configured" and "outside a work tree"
+  allows, a run that failed, bypass, every continuation, the pin notices, the "NOT saved" receipt
+  notice, and the invalid input message, and a verified or idle stop that carries a notice gets
+  the whole text. An idle stop means no UI file changed; it is not a failure to check, and a
+  message on every such stop would be noise. Carried values in it are scrubbed and framed as on
+  stderr. A verified or idle stop with no notice writes nothing to stdout. A block is sent
+  as before, as one decision object, and its notices follow on stderr. Cursor's stop hook
+  answer has no field for the person: usabl answers `{}` and writes the notice to stderr, which
+  Cursor does not show in the chat. It is in Cursor's hook output log (the Hooks output
+  channel), which a person has to open.
+- Diverged guarded policy on a run with no verdict: block, whatever the exit code. `run()`
+  ends a run where every screen was unseen with no verdict and exit 4, and the guard still
+  reported the diverged files on it. The hook counts those and the ones its own guard found
+  before the run, so a crash that carries none still blocks. The line opens with the run's
+  own verdict word, for example "NO VERDICT: RUN FAILED (exit 4): NOT verified. Guarded policy
+  files changed, so this change needs approval whatever the run found.", then the approval
+  step and the guarded file lines, with the paths inside the untrusted frame. During an active
+  continuation it allows once, marked NOT verified.
+- usabl not installed: the generated hooks run `npm exec --no -- usabl stop-hook`, which never
+  downloads a package. It runs a local or global install, or a copy already in npm's own cache,
+  and with none of those it makes one registry request and fails. The generated Claude command is
+  a POSIX shell line (`npm_config_loglevel=silent npm exec --no -- usabl stop-hook || { ...; exit
+  1; }`). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
+  usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
+  it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
+  block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets
+  the agent finish. Neither reads it as a pass, and neither is a block a person must clear.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
@@ -2904,15 +3041,28 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   committed policy as it was when the receipt was minted. A policy weakened and committed
   during the session, then checked under the weaker policy, mints a receipt that matches, and
   only the pins see that drift. The fast path records or replaces pins exactly as a full run
-  does. The line reads "VERIFIED (exit 0): a stored receipt matches this tree, the committed
-  policy, the engine, and the scanners. No new scan ran. You may stop." When this stop
+  does. The line reads "VERIFIED (exit 0, stored receipt, not re-scanned): this result comes
+  from a stored receipt. usabl did not scan this change again on this stop. The receipt matches
+  this tree, the committed policy, the engine, and the scanners. You may stop." When this stop
   compared the pins and found no drift, "Guarded policy files match the session pins." comes
-  before "No new scan ran." When the pins were not used, the line carries the
+  before "You may stop." When the pins were not used, the parentheses also carry the
   `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  A receipt is a local file with no signature. A user with a shell on the same machine can
+  write one that verifies, so the line says where the result came from (threat model, Threats
+  1 and 4).
   Detected drift prevents the fast allow: the stop blocks whether or not a receipt matches,
   and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
+- Saving the receipt: only a verified local run saves one, at `.usabl/receipt.json`. The Stop
+  hook reads and writes it under the repository root; `usabl check` writes it in the folder it
+  runs in. `usabl check --ci` saves none. The write refuses a symbolic link at `.usabl`
+  or at the receipt file, writes a temp file opened with no-follow and exclusive create, and
+  renames it into place, as the session pin store does. A save that fails for any reason, a
+  refused link or an error such as `EACCES`, changes no verdict: the hook says "NOT saved -
+  usabl did not save the receipt ..." after the decision line, and the next stop runs the full
+  check. For an error, the first line of the error follows inside the untrusted frame under
+  `reason:`.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with
@@ -2922,8 +3072,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
-- A verdict that is not one of the contract's words, or a null verdict on a run that was neither
-  idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
+- A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
+  null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
   reported, so the run proved nothing about this change." or "NO VERDICT (exit 0): NOT verified.
   usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
@@ -3253,10 +3403,10 @@ not because the loop requires it.
 The gate stays at Stop. Neither path lets the agent grade its own work.
 
 **Task brief (`usabl brief`).** Before it starts a task, the agent runs
-`npx usabl brief --json --files <paths>` with the files the task will edit. At that point the
+`npm exec --no -- usabl brief --json --files <paths>` with the files the task will edit. At that point the
 tree is usually clean, so a brief of the changed files would have nothing to check. The
 installed `/usabl-check` skill and the Cursor rule open with that step, and the skill's
-`allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
+`allowed-tools` lists `Bash(npm exec --no -- usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
 when that is not plain, why: an intake requirement (content, flow, or voice) applies only to
@@ -3535,7 +3685,7 @@ optional. There is no "partial" mode and no per-surface strictness.
 Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
-exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
+exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npm exec --no -- usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch requires the `usabl-required`
 status check and review from code owners, which prints the setting and the `CODEOWNERS` lines
@@ -3736,7 +3886,9 @@ add content and flow assertions that the engine enforces alongside the default s
   aria-label against the approved string).
 - `flow` requirements become declarative interaction probes (same step runner as the
   keyboard walk probes). The silent change rule watches their click and activate steps
-  (section 7.5.1). A step the flow driver does not run is reported as a gap of that rule.
+  (section 7.5.1). A flow with a step the driver cannot run, such as a click with no selector,
+  runs none of its steps and is a `not-covered` gap that names the step (section 7.5.1). Its
+  verdict reads only what was announced after its first step ran.
 - `doc` requirements are not runtime checks; they feed the output module.
 - `voice` requirements become interaction contracts, one virtual screen reader provider each
   (section 7.5).

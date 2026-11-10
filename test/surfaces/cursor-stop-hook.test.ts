@@ -10,6 +10,7 @@ import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
+import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
 
 const configFixture: UsablConfig = {
@@ -72,7 +73,8 @@ function makePorts(overrides: {
   const fs = new MemoryRunnerFs();
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const deps = makeFakeDeps();
+  // The config is committed and unchanged, as the config bytes below say, so the guard is clean.
+  const deps = makeFakeDeps({ files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } });
 
   return {
     fs,
@@ -88,6 +90,7 @@ function makePorts(overrides: {
       stderrWrite: async (text: string) => {
         stderr.push(text);
       },
+      readConfigBytes: async () => committedConfigBytes(),
       loadConfig: async () => configFixture,
       buildDeps: async (_config: UsablConfig) => deps,
       runEngine: overrides.runEngine ?? (async () => baseResult({ verdict: 'verified' })),

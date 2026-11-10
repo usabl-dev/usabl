@@ -324,9 +324,28 @@ describe('the silent change rule in a flow requirement', () => {
     });
 
     it('step not run: the flow driver reports a step kind it does not run instead of ignoring it', async () => {
-      const drafts = await flowDrafts({}, [{ do: 'hover', selector: '#save' }, { do: 'click' }, { do: 'press' }]);
+      // The flow runs none of its steps and is not covered. The rule's gap for each step comes with it.
+      const { page, calls } = worldPage({});
+      const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'hover', selector: '#save' }, { do: 'click' }, { do: 'press' }])))[0];
+      if (provider === undefined) throw new Error('no provider');
+      const result = await runProviders([provider], { page, screen: SCREEN, config: testConfig() }, ['live']);
+      const drafts = result.drafts;
       expect(reasons(drafts)).toEqual(['step not run', 'step not run', 'step not run']);
       expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified', 'unverified', 'unverified']);
+      expect(result.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['provider:intake:save-flow', 'not-covered']]);
+      expect(calls).not.toContain('click');
+      expect(calls).not.toContain('press');
+    });
+
+    it('step not run: the draft says the flow ran none of its steps', async () => {
+      const { page } = worldPage({});
+      const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'tab' }, { do: 'activate', selector: '#save' }])))[0];
+      if (provider === undefined) throw new Error('no provider');
+      const result = await runProviders([provider], { page, screen: SCREEN, config: testConfig() }, ['live']);
+      const drafts = silent(result.drafts);
+      expect(reasons(drafts)).toEqual(['step not run']);
+      expect(drafts[0]?.why).toBe('usabl could not judge the step: the flow cannot run this step as written, so it ran none of its steps and nothing was judged.');
+      expect(drafts[0]?.fix).toContain('with only the fields its kind uses');
     });
 
     it('step threw: the step and those after it are unjudged, and the flow still fails with the same gap', async () => {
@@ -376,6 +395,36 @@ describe('the silent change rule in a flow requirement', () => {
       expect(shown).not.toContain('<button');
     });
 
+    it('read failed: the draft keeps only the first line of the error, never the call log', async () => {
+      const message = [
+        'Accessibility.getFullAXTree failed',
+        'Call log:',
+        '  - reading node <button id="delete" aria-label="Delete alice@example.com">Delete</button>',
+      ].join('\n');
+      const { page } = worldPage({ '#save': addSavedText });
+      let reads = 0;
+      const failing = new Proxy(page, {
+        get(target, property, receiver) {
+          if (property === 'fullAxTree') {
+            return async () => {
+              reads += 1;
+              // The read before the step works, and the read after it fails.
+              if (reads > 1) throw new Error(message);
+              return target.fullAxTree();
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const drafts = silent(await runOne(mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#save' }])))[0], failing));
+      expect(reasons(drafts)).toEqual(['read failed']);
+      expect(drafts[0]?.why).toContain('(Accessibility.getFullAXTree failed)');
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('Call log');
+      expect(shown).not.toContain('alice');
+      expect(shown).not.toContain('<button');
+    });
+
     it('every gap is preview and unverified, with the step in its evidence', async () => {
       const drafts = await flowDrafts({ '#save': (world) => (addSavedText(world), (world.settled = false)) });
       expect(drafts[0]).toMatchObject({
@@ -395,10 +444,13 @@ describe('the silent change rule in a flow requirement', () => {
       expect(await runOne(provider, page)).toEqual([]);
     });
 
-    it('keeps the text the capture held before the first step in its verdict, as the single drain did', async () => {
+    it('does not count the text the capture held before the first step: that speech came from earlier checks', async () => {
+      // The flow's own steps announce nothing, so whether they would announce the text is unknown.
       const { page } = worldPage({}, { live: [{ text: 'Saved', source: { region: 1, removalOnly: false } }] });
       const provider = mapRequirementsToProviders(bundle(flowRequirement([{ do: 'tab' }], 'Saved')))[0];
-      expect(await runOne(provider, page)).toEqual([]);
+      const drafts = await runOne(provider, page);
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-flow', 'unverified']]);
+      expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
     });
 
     it('makes the rule emit nothing for the step the flow already fails on', async () => {
@@ -456,15 +508,22 @@ describe('the silent change rule in a flow requirement', () => {
       expect(silent(drafts)[0]?.evidence.extra).toMatchObject({ step: { do: 'click', selector: '#other' }, reason: 'announcements undecidable' });
     });
 
-    it('drops nothing when the flow gap comes from the drain taken before the first step', async () => {
+    it('never names the drain taken before the first step in its gap, so the gap covers the step it names', async () => {
       const { page } = worldPage({ '#save': addSavedText }, { undecidable: 'closed-shadow-modal' });
       const drafts = await runOne(mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#save' }], 'Saved')))[0], page);
-      // The world stays undecidable, so the step's own drain is undecidable too. The flow gap names the
-      // drain before the first step, which is no step, so the rule's gap on step 1 stays.
-      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
-        ['intake:save-flow', 'unverified'],
-        ['voicing/silent-change', 'unverified'],
-      ]);
+      // The world stays undecidable, so the drain before the first step and the step's own drain are
+      // both undecidable. The flow reads only the step's drain, so its gap names step 0, and the
+      // rule drops its own gap there as a repeat.
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-flow', 'unverified']]);
+    });
+
+    it('is judged on its own steps when only the drain taken before the first step is undecidable', async () => {
+      const { page } = worldPage(
+        { '#save': (world) => (addSavedText(world), (world.undecidable = null), say(world, 'Saved')) },
+        { undecidable: 'closed-shadow-modal' },
+      );
+      const drafts = await runOne(mapRequirementsToProviders(bundle(flowRequirement([{ do: 'click', selector: '#save' }], 'Saved')))[0], page);
+      expect(drafts).toEqual([]);
     });
 
     it('still reports an earlier silent step when the flow fails on its last step', async () => {
