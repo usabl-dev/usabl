@@ -2878,7 +2878,10 @@ lines.
 - Comment: `usabl comment` reads a Result from stdin and prints the PR comment Markdown.
 - Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref` read
   Result JSON from stdin. They project CI status. They never call the gate and never mint a
-  verdict. GitHub stays out of `run()`.
+  verdict. GitHub stays out of `run()`. `enforce accessibility` exits 0 on no accessibility
+  verdict only when the Result also says nothing was to check (`coverage.nothingToCheck` is
+  exactly true), which is the idle run. No verdict with exit 0 on any other Result exits 4 with
+  "accessibility: no verdict", the way the comment and the Stop hook read it.
 - Both read the Result as a document someone else wrote, so both check the whole document against
   the Result contract before they use any of it: every list is a list, every count is a whole
   number, every enum value is one of its values, and every nested object has the fields the
