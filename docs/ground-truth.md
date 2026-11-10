@@ -624,6 +624,7 @@ export interface GitReader {
   diffNameOnly(ref: string): Promise<string[]>; // merge-base..HEAD changed files
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
+  lsFilesUnder(ref: string, prefixes: string[]): Promise<string[]>; // one -z listing; '' is the whole tree
   headRef(): Promise<string>;
 }
 
@@ -2488,8 +2489,9 @@ identity `fixed` only when one of these holds:
   does a row identity: its row and table are kept only as hashes, which no keyboard stop or
   element path carries, so an absent row is confirmed only by the signal.
 
-A floor entry with count 0 accepts no barrier, so its absence pays nothing down: it is never
-claimed `fixed`, and a barrier seen there is `new`.
+A floor entry with count 0 accepts no accessibility barrier, so its absence pays nothing down: it
+is never claimed `fixed`, it is not listed in `floorUnconfirmed`, and an accessibility barrier seen
+there is `new`.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -2910,24 +2912,71 @@ the guarded files with the same matcher the local guard uses (see "Guarded path 
 each guarded file that differs, the owners come from the last `CODEOWNERS` rule that matches it.
 The check refuses a path no rule matches, a path whose last rule names no owner, and a path whose
 last rule names an org team or an email, because usabl cannot resolve team membership or match
-an email to a login. It refuses the whole file on a pattern it cannot parse or an owner that is not
-a `@user`, an `@org/team`, or an email, because GitHub may skip such a line, so the last match is
-unknown. A team or email line that is not the last match for a changed guarded path does not
-block. Every other path needs an approval of the current head from one of its users who is not the
-author. `usabl doctor` reports the same limits in the same words under policy scope.
+an email to a login. It refuses the whole file on a pattern it cannot parse (`**`, `!`, `[ ]`,
+`\`, or a wildcard before the last segment), on an owner that is not a `@user`, an `@org/team`, or
+an email, and on a `#` inside a pattern or owner (one that does not follow whitespace), because
+GitHub may read such a line another way, so the last match is unknown. A `#` at the start of a
+line or after whitespace starts a comment. A team or email line that is not the last match for a
+changed guarded path does not block. Every other path needs an approval of the current head from
+one of its users who is not the author. `usabl doctor` reports the same limits in the same words
+under policy scope.
+
+A pattern matches the way GitHub's CODEOWNERS documentation shows, and a test holds every
+documented example usabl supports. A leading slash anchors at the root, a slash-free pattern
+matches at any depth, and a trailing slash owns everything under the folder. A wildcard in the
+last segment does not match through a parent folder: `docs/*` matches `docs/a.md` and not
+`docs/b/c.md`. Where the documentation leaves a reading open, the matcher tries each reading: a
+pattern with an inner slash and no leading slash (`src/gate/`) may anchor at the root or not, a
+slash-free name with no trailing slash (`gate`) may or may not own a folder of that name, and `?`
+may be a wildcard or a literal. When the readings disagree for a path and that rule could be its
+last match, the last match is unknown, and the check refuses that path with a reason that names
+the pattern. Doctor reads a present workflow file whose last match is unknown as unknown.
 
 ### Guarded path matching
 
-The local guard and the CI check expand `guardedPaths` the same way. A literal entry matches itself
-and every file under it, as a folder. A glob entry (one that holds `*` or a brace group) matches
-the files it names and every file under a folder it names, with Node's dot rule: a wildcard does not
-match a name that starts with a dot, as `fs.glob` does. A dot written in the pattern still
-matches. The local guard selects from the files at the trusted ref and at HEAD, the paths git status
-reports, and what `fs.glob` finds on the working tree, so a guarded file deleted under a glob entry
-is still compared. A literal entry that matches nothing is compared as its own path, so a guarded
-file absent everywhere is still checked. A glob entry is never compared as a path. For a clean tree
-in a repository whose names are plain ASCII, the policy hash in a receipt is the same as before
-this matcher.
+Every `guardedPaths` entry is first read in one canonical form, the form git prints a path in. A
+leading `./` and every `.` segment are dropped, repeated `/` are collapsed, a trailing `/` is
+dropped, a `..` segment takes away the segment before it, and `.` alone is the whole tree. So
+`./src/gate/`, `src/gate//`, and `src/gate` guard the same files. Every later step reads that
+form. Nothing compares the raw entry text with git output.
+
+The guard refuses an entry it cannot evaluate the way Node's glob does, and names the entry: a
+brace range such as `{1..3}` or `{a..c}`, `?`, `[ ]`, `( )`, a `\` escape, a nested or unbalanced
+brace, an entry that starts with `/`, and a `..` segment that leaves the root or follows a
+wildcard. Config load refuses the same glob forms in every glob list, and says to list the
+alternatives of a range with commas. The guard meets them only in a trusted ref's config, which
+config load never read. The refusal is an error, so the run or `usabl enforce policy` stops with no
+verdict and exit 4. Such an entry is never read as matching nothing.
+
+One matcher selects the guarded files from a list of paths. A literal entry matches itself and
+every file under it, as a folder; the whole tree matches every file. A glob entry (one that holds
+`*` or a brace group) matches the files it names and every file under a folder it names, with
+Node's dot rule: a wildcard does not match a name that starts with a dot, as `fs.glob` does. A dot
+written in the pattern still matches. So a dot-named file under a glob entry, such as
+`policy/.override.json` under `policy/*.json`, is not guarded, locally or in CI. Under a literal
+entry a dot-named file is guarded, because git lists it.
+
+The two places select from different lists:
+
+- `usabl enforce policy` lists the trusted ref and the PR head once each with
+  `git ls-tree -r -z`, and the matcher selects from those two listings. It reads no working tree.
+- The local guard lists the trusted ref and HEAD the same way and selects with the same matcher.
+  It then adds, as found, what `fs.glob` finds on the working tree for each entry and for
+  everything under it. That adds files on disk that no commit holds, such as a new untracked file
+  under a guarded folder. The HEAD listing holds a file deleted locally, so that file is still
+  compared.
+
+For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
+mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
+selects on the working tree. For a literal folder the matcher also selects the dot-named files
+under it, which `fs.glob` skips.
+
+A literal entry that matches nothing is compared as its own canonical path, so a guarded file
+absent everywhere is still checked. A glob entry is never compared as a path, and neither is the
+whole tree. A glob entry that starts with a wildcard, such as `**/x.json`, lists the whole tree at
+each ref. If that listing passes the read limit, the run stops with no verdict and says to start
+the entry with a folder name. For a clean tree in a repository whose names are plain ASCII, the
+policy hash in a receipt is the same as before this matcher.
 
 ### Config-guards-itself
 
