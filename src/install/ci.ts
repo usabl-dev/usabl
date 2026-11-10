@@ -26,6 +26,7 @@ import {
   writeFetcherStep,
 } from './artifact-fetch.js';
 import { FIND_BUILD_RUN_SCRIPT, gateRunName } from './build-run.js';
+import { isSafeBranchName, workflowTriggerBranch } from './repo-git.js';
 
 export const USABL_GATE_WORKFLOW_PATH = '.github/workflows/usabl-gate.yml';
 
@@ -474,7 +475,13 @@ const VALIDATE_RESULT_SCRIPT = `          node <<'NODE'
           }
           NODE`;
 
-function gateWorkflow(variant: GateVariant): string {
+// The gate for an app whose default branch is `branch`. The name goes into the pull request trigger
+// and nowhere else, so only a plain name is taken: letters, digits, and . _ - /. It is written
+// quoted, so YAML reads it as text even when it looks like a number.
+function gateWorkflow(variant: GateVariant, branch: string): string {
+  if (!isSafeBranchName(branch)) {
+    throw new Error('the gate workflow branch must be letters, digits, and . _ - / only');
+  }
   return `name: ${variant.name}
 # Each run is named after the event, pull request, head, and base that started it, so a review can
 # find the build of this exact pull request even when another pull request has the same head.
@@ -482,7 +489,7 @@ run-name: ${gateRunName(variant.name)}
 
 on:
   pull_request:
-    branches: [main]
+    branches: ["${branch}"]
     # Retargeting onto main must re-run trusted-ref policy checks.
     types: [opened, synchronize, reopened, edited]
   pull_request_review:
@@ -969,13 +976,21 @@ ${EMBEDDED_GATE_SCRIPT}
 // command and output directory are repository variables (USABL_APP_BUILD_COMMAND, default
 // "npm run build"; USABL_APP_BUILD_DIR, default "dist"), so the file stays byte-stable and the
 // engine ref remains the only value classifyGateWorkflow must reason about.
-export const USABL_GATE_WORKFLOW = gateWorkflow({
+const APP_GATE: GateVariant = {
   name: 'usabl-gate',
   workflowFile: 'usabl-gate.yml',
   buildSteps: APP_BUILD_STEPS,
   buildNeedsEngine: true,
   serveStep: APP_SERVE_STEP,
-});
+};
+
+/** The app gate for pull requests into `branch`. */
+export function gateWorkflowFor(branch: string): string {
+  return gateWorkflow(APP_GATE, branch);
+}
+
+/** The app gate for an app whose default branch is main. */
+export const USABL_GATE_WORKFLOW = gateWorkflowFor('main');
 
 export const USABL_DOCS_GATE_WORKFLOW_PATH = '.github/workflows/usabl-docs-gate.yml';
 
@@ -985,13 +1000,21 @@ export const USABL_DOCS_GATE_WORKFLOW_PATH = '.github/workflows/usabl-docs-gate.
 // command, the built-HTML directory, and the serve port are repository variables
 // (USABL_DOCS_BUILD_COMMAND, USABL_DOCS_BUILT_ROOT, USABL_DOCS_SERVE_PORT), so this file stays
 // byte-stable. usabl.docs.json docsBaseUrl at the trusted ref must point at that port.
-export const USABL_DOCS_GATE_WORKFLOW = gateWorkflow({
+const DOCS_GATE: GateVariant = {
   name: 'usabl-docs-gate',
   workflowFile: 'usabl-docs-gate.yml',
   buildSteps: DOCS_BUILD_STEPS,
   buildNeedsEngine: false,
   serveStep: DOCS_SERVE_STEP,
-});
+};
+
+/** The docs gate for pull requests into `branch`. */
+export function docsGateWorkflowFor(branch: string): string {
+  return gateWorkflow(DOCS_GATE, branch);
+}
+
+/** The docs gate for a repository whose default branch is main. */
+export const USABL_DOCS_GATE_WORKFLOW = docsGateWorkflowFor('main');
 
 export type CiPlan =
   | { action: 'write'; path: string; contents: string }
@@ -1050,12 +1073,12 @@ export async function planWorkflow(
   };
 }
 
-export async function planCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW, engineRef);
+export async function planCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, gateWorkflowFor(branch), engineRef);
 }
 
-export async function planDocsCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_DOCS_GATE_WORKFLOW, engineRef);
+export async function planDocsCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, docsGateWorkflowFor(branch), engineRef);
 }
 
 /** The commit to pin for this build, or null to keep the placeholder. */
@@ -1353,10 +1376,25 @@ function classifyWorkflowLines(raw: string | null, draft: string): { state: Gate
   return drifted;
 }
 
+/**
+ * The state of a workflow whose draft names a branch in its trigger. The branch the file names is
+ * the one it is checked against, so usabl's own draft for any plain branch is recognised. A file
+ * whose trigger is not in usabl's exact form names no branch usabl can read, so it is drifted.
+ */
+export function classifyBranchedWorkflow(
+  raw: string | null,
+  event: 'pull_request' | 'push',
+  draftFor: (branch: string) => string,
+): GateWorkflowState {
+  if (raw === null) return 'missing';
+  const branch = workflowTriggerBranch(raw, event);
+  return branch === null ? 'drifted' : classifyWorkflow(raw, draftFor(branch));
+}
+
 export function classifyGateWorkflow(raw: string | null): GateWorkflowState {
-  return classifyWorkflow(raw, USABL_GATE_WORKFLOW);
+  return classifyBranchedWorkflow(raw, 'pull_request', gateWorkflowFor);
 }
 
 export function classifyDocsGateWorkflow(raw: string | null): GateWorkflowState {
-  return classifyWorkflow(raw, USABL_DOCS_GATE_WORKFLOW);
+  return classifyBranchedWorkflow(raw, 'pull_request', docsGateWorkflowFor);
 }
