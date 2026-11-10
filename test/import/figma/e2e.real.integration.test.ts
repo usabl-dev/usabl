@@ -182,13 +182,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design input from Figma,
   });
 
   describe('checkPage reading the project from a folder', () => {
-    async function writeProject(yaml: string): Promise<string> {
+    // checkPage holds a labeled page to its surface's configured address, so each case writes the
+    // users surface at the page it opens. A page at another address would be a landing gap.
+    async function writeProject(page: (typeof PAGES)[number], yaml: string): Promise<string> {
       const dir = await mkdtemp(join(tmpdir(), 'usabl-figma-checkpage-'));
       const config: UsablConfig = {
         appBaseUrl: baseUrl,
         uiFileGlobs: ['src/**'],
         discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
-        surfaces: [{ id: 'users', url: `${baseUrl}/users-screen.html`, files: ['src/Users.tsx'] }],
+        surfaces: [{ id: 'users', url: `${baseUrl}/${page}`, files: ['src/Users.tsx'] }],
         requirements: 'requirements',
         guardedPaths: [],
       };
@@ -199,12 +201,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design input from Figma,
     }
 
     async function check(page: (typeof PAGES)[number], yaml: string) {
-      const dir = await writeProject(yaml);
+      const dir = await writeProject(page, yaml);
       const context = await browser.newContext();
       try {
         const pwPage = await context.newPage();
         await pwPage.goto(`${baseUrl}/${page}`, { waitUntil: 'domcontentloaded' });
-        return await checkPage(pwPage, { screenId: 'users', projectRoot: dir, tabCap: 20 });
+        const result = await checkPage(pwPage, { screenId: 'users', projectRoot: dir, tabCap: 20 });
+        // The page is the one the case means to check, not a landing gap.
+        expect(result.gaps.filter((gap) => gap.ref.startsWith('landing:'))).toEqual([]);
+        return result;
       } finally {
         await context.close();
         await rm(dir, { recursive: true, force: true });
