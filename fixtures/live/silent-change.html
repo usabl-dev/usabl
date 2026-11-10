@@ -34,6 +34,12 @@
       //   rerender       Save is drawn again with the same name and the new button takes focus.
       //   toast          Save writes a plain paragraph, and one line of a toast already shown dismisses
       //                  itself, so the record holds only a removal.
+      //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
+      //                  the dialog in a later step.
+      //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
+      //                  outside it. Close closes the dialog in a later step.
+      //   late-announce  Save writes "Saved" into the polite region 300 ms after the click, as after a
+      //                  fetch.
       const params = new URLSearchParams(location.search);
       const which = params.get('case') ?? 'silent-save';
       const app = document.getElementById('app');
@@ -150,6 +156,29 @@
         on('save', () => {
           say('Saved');
           document.getElementById('signed-in').remove();
+        });
+      } else if (which === 'dialog-heard') {
+        draw(
+          '<dialog open id="edit"><p>Edit account</p><div aria-live="polite" id="dialog-status"></div>' +
+            '<button type="button" id="save">Save</button><button type="button" id="close">Close</button></dialog>',
+        );
+        on('save', () => {
+          document.getElementById('dialog-status').textContent = 'Saved';
+        });
+        on('close', () => document.getElementById('edit').close());
+      } else if (which === 'modal-outside') {
+        draw('<button type="button" id="delete">Delete</button><dialog id="confirm"><p>Done</p><button type="button" id="close">Close</button></dialog>');
+        on('delete', () => {
+          document.getElementById('confirm').showModal();
+          status.textContent = 'Deleted';
+        });
+        on('close', () => document.getElementById('confirm').close());
+      } else if (which === 'late-announce') {
+        draw('<button type="button" id="save">Save</button>');
+        on('save', () => {
+          setTimeout(() => {
+            status.textContent = 'Saved';
+          }, 300);
         });
       }
     </script>

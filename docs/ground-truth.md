@@ -1131,12 +1131,30 @@ step, with the reason in `evidence.extra.reason`:
   error, through the scrubber, because the browser's call log can quote the element's markup;
 - `read failed`: a read the rule needs failed.
 
-A step that changed nothing is not reported at all, whichever of these it would have met.
+Only a step that was read in full, settled, and not busy is dropped when it changed nothing. A
+step that changed nothing but met `read failed`, `navigated`, `not settled`, `tree over budget`,
+or `still busy` is still that gap, because those are checked before the trees are compared.
 
-The flow verdict does not change. The flow loop now waits for the page to settle after each
-action step and drains after every step. Its verdict reads the union of every drain in step
-order, led by the drain taken before the first step, which is what the one drain after the last
-step used to read.
+Flow verdicts now read each step at its own time. The flow loop waits for the page to settle
+after each `click` or `activate` step, and drains after every step. Its verdict reads the union
+of every drain in step order, led by the drain taken before the first step. The hidden and modal
+rules (section 11.6) run when each drain is taken, so each step's text is judged against the page
+as it was after that step. Before, the flow drained once, right after its last step, with no
+wait, and judged every step's text against the page as it was then. This can change a flow
+verdict, in both directions. A team can see these differences:
+
+- text written inside a dialog that a later step closes is now heard, where it was dropped;
+- text written outside an open modal that a later step closes is now dropped, where it was heard;
+- an announcement that lands shortly after the click, inside the settle wait, is now heard, where
+  it was missed;
+- focus that rests on a control named with the expected text, and that a re-render takes away
+  during the wait, is now read after the wait, so the flow can fail where it passed;
+- a step that loads a new document, or whose target is gone after the settle wait (an Undo
+  toast, or a menu that closes on a timer), makes the flow a `not-covered` gap.
+
+The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 second cap, in every
+flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
+the late announcement at the flow verdict.
 
 Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
 over either is the gap above. The time bound is a timer: each browser call in the read races it,
@@ -1151,8 +1169,10 @@ the main frame and, because the browser builds it from the flat tree, open shado
 real-Chromium fixture confirms this. Child frames are read by neither. A name the browser
 computes from a field, such as `aria-labelledby` pointing at a text box, can hold that field's
 value, and the rule does not take a name apart. Background announcements are found only from
-what a region wrote before the first step: a ticker that first writes inside a step's window
-reads as speech that step caused. The settle element count still runs in the page's own world, so
+the drain taken before the first step: a ticker that first writes inside a step's window, or
+between two steps, reads as speech that step caused. A live region that is drawn again, as a new
+element, counts as a new region, so a ticker that draws its region again is not known as
+background. The settle element count still runs in the page's own world, so
 a page that patches `getElementsByTagName` can end the window early. Moving that count to an
 isolated world is planned, with this rule's patched-page test.
 

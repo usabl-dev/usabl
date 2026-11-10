@@ -325,5 +325,23 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       const drafts = await flow('silent-save', click('#save'), 'Saved');
       expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:accounts-flow', 'fail']]);
     });
+
+    // The flow reads each step's drain at its own time, after the settle wait. These verdicts
+    // differ from the single drain the flow used to take after its last step.
+    const own = (drafts: Draft[]): unknown[] => drafts.filter((draft) => draft.rule === 'intake:accounts-flow').map((draft) => draft.confidence);
+
+    it('now hears text written inside a dialog that a later step closes', async () => {
+      const steps: Step[] = [{ do: 'click', selector: '#save' }, { do: 'click', selector: '#close' }];
+      expect(own(await flow('dialog-heard', steps, 'Saved'))).toEqual([]);
+    });
+
+    it('now drops text written outside an open modal that a later step closes', async () => {
+      const steps: Step[] = [{ do: 'click', selector: '#delete' }, { do: 'click', selector: '#close' }];
+      expect(own(await flow('modal-outside', steps, 'Deleted'))).toEqual(['fail']);
+    });
+
+    it('now hears an announcement that lands shortly after the click', async () => {
+      expect(await flow('late-announce', click('#save'), 'Saved')).toEqual([]);
+    });
   });
 });
