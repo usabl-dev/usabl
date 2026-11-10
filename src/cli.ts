@@ -83,6 +83,9 @@ export async function loadConfig(
   warn: (line: string) => void = (line) => {
     process.stderr.write(`${line}\n`);
   },
+  // The docs manifest the run reads, from the folder usabl runs in. Its presence is what lets a
+  // config with no UI globs load. Tests pass a path of their own.
+  docsManifestPath = 'usabl.docs.json',
 ): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
   let raw: string;
@@ -95,7 +98,36 @@ export async function loadConfig(
     }
     throw error;
   }
-  return parseConfigText(raw, warn);
+  const config = parseConfigText(raw, warn);
+  if (config.uiFileGlobs.length === 0 && !(await fileExists(docsManifestPath))) {
+    throw new Error(emptyUiFileGlobsRefusal(path));
+  }
+  return config;
+}
+
+/**
+ * Why a config with no UI globs is refused. With none, no changed file is a UI file, so every run
+ * reads as nothing to check and exits 0, which reads like a pass on a run that looked at nothing.
+ * A documentation-only repository has no UI files, and its usabl.docs.json says what to check, so
+ * that shape still loads.
+ */
+export function emptyUiFileGlobsRefusal(path: string): string {
+  return (
+    `${scrubString(path)} has an empty uiFileGlobs list, so usabl would read no change as a UI change, ` +
+    'and every run would say nothing to check without looking at anything. usabl did not run. ' +
+    'Set uiFileGlobs to the files that render your UI, such as src/**/*.tsx. ' +
+    'If this repository holds documentation only, add usabl.docs.json, which "usabl init --docs" drafts.'
+  );
+}
+
+// A manifest usabl cannot even look at is not proof of a documentation-only repository.
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

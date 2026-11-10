@@ -846,6 +846,28 @@ describe('loadConfig', () => {
     await loadConfig(path, (line) => warnings.push(line));
     expect(warnings).toHaveLength(2);
   });
+
+  // A config with no UI globs reads no change as a UI change, so every run said nothing to check
+  // and exited 0, which reads like a pass on a run that looked at nothing.
+  it('refuses empty uiFileGlobs when there is no docs manifest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    const docsManifest = join(dir, 'usabl.docs.json');
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/uiFileGlobs/);
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(path);
+    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/usabl\.docs\.json/);
+  });
+
+  it('keeps a docs-only repository working: empty uiFileGlobs loads when usabl.docs.json exists', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    const docsManifest = join(dir, 'usabl.docs.json');
+    await writeFile(docsManifest, '{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}', 'utf8');
+    const config = await loadConfig(path, () => {}, docsManifest);
+    expect(config.uiFileGlobs).toEqual([]);
+  });
 });
 
 describe('parseUsablConfig userinfo without a scheme and two slashes', () => {
