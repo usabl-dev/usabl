@@ -106,9 +106,29 @@ async function existingCandidates(fs: FsGlob, base: string, suffixes: string[]):
 // or nothing on disk.
 type Resolution = { file: string } | { candidates: string[] } | null;
 
+// TypeScript ESM code imports a .ts file under the name it is built to: ./Child.js loads Child.ts
+// or Child.tsx. The compiler and the bundler both map these, and only when no file has the
+// written name. A .d.ts file holds types only and renders nothing, so it is not a candidate.
+const TYPESCRIPT_NAMES: Record<string, string[]> = {
+  '.js': ['.ts', '.tsx'],
+  '.jsx': ['.tsx'],
+  '.mjs': ['.mts'],
+  '.cjs': ['.cts'],
+};
+
+async function resolveTypeScriptName(fs: FsGlob, filePath: string): Promise<Resolution> {
+  const extension = path.extname(filePath);
+  const replacements = TYPESCRIPT_NAMES[extension];
+  if (replacements === undefined) return null;
+  const hits = await existingCandidates(fs, filePath.slice(0, -extension.length), replacements);
+  if (hits.length === 1 && hits[0] !== undefined) return { file: hits[0] };
+  return hits.length > 1 ? { candidates: [...hits].sort() } : null;
+}
+
 async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<Resolution> {
   if (hasKnownExtension(filePath)) {
-    return (await fs.readFile(filePath)) !== null ? { file: filePath } : null;
+    if ((await fs.readFile(filePath)) !== null) return { file: filePath };
+    return resolveTypeScriptName(fs, filePath);
   }
   // File tier before index tier (the bundler prefers a file over a directory index). Within a tier,
   // exactly one hit resolves; more than one is ambiguous, so disclose rather than pick.

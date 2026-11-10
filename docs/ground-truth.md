@@ -1543,7 +1543,13 @@ one candidate exists, for example `Widget.vue` beside `Widget.tsx`, usabl does n
 import links every candidate, so a change to any of them maps to the screen. That can scan a
 screen that does not render the changed file, and never leaves out one that does. The ambiguity
 is still disclosed: the gap of a changed file that maps to no screen names every candidate of an
-ambiguous import on its way. Write the import with its extension to resolve it. One case is not disclosed: an extension outside
+ambiguous import on its way. Write the import with its extension to resolve it.
+
+An import with an extension loads the file of that name when it exists. When it does not, a
+`.js` import is read as the TypeScript file the compiler and the bundler load for it, `.ts` or
+`.tsx`, as is `.jsx` for `.tsx`, `.mjs` for `.mts`, and `.cjs` for `.cts`, at every depth of the
+graph. So `./Child.js` beside `Child.ts` links `Child.ts`. When both `.ts` and `.tsx` exist, the
+import links both and discloses the ambiguity, as above. One case is not disclosed: an extension outside
 the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
 with that extension is not seen and the file usabl did find is attributed.
 
