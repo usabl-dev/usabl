@@ -144,6 +144,47 @@
 
 ### Fixed
 
+- A keyboard walk cut short by a page script is now a truncation. A focus handler that blurs a
+  control, or a keydown handler that stops Tab and drops focus to the body, ended the walk as
+  complete. The walk now presses Tab once more after focus reaches the body and is complete only
+  when focus lands on a control it already walked. Teams will see `keyboard-walk-truncated`, and
+  the screen as not covered, where such a screen read as walked. A page with one control, a skip
+  link, a timed banner that goes away, or a list that re-renders still walks complete.
+
+- A blank screen whose body has an id, such as `<body id="app">`, is now unseen. The blank-page
+  detector read the end of each stop's path, and that body's path is its id, so a screen that
+  crashed on mount read as seen and could verify. Teams will see the not-covered gap that says
+  usabl did not see the screen. A page whose body has an id and that renders its controls is
+  still seen.
+
+- `checkPage` now reports not covered when the page is not at its screen's address. A page
+  labeled with a surface from `usabl.config.json` is held to that surface's `url`, or to
+  `expectedUrl` when the caller passes one, by path and fragment only, and then to the CLI's
+  landing rules. A test whose session expired and landed on a sign-in page was checked as the
+  labeled screen. Teams will see a `landing:<screenId>` gap that names both addresses. A test on
+  its own base URL or port, on `localhost` where the config says `127.0.0.1`, in a hash-routed
+  app, or with a trailing slash still passes. An unlabeled page is not held to an address. A
+  labeled page opened with `setContent` is at `about:blank`, so it now reads as not covered.
+
+- The PatternFly menu probe now waits for a menu that mounts after the click, as the dialog probe
+  waits for its dialog. Teams will see `pf-kebab-expanded-state` findings on late menus that were
+  missed with no draft, and an `unverified` draft when a toggle declares `aria-haspopup="menu"`
+  or `"true"` and no menu appears. A toggle whose menu is already open is left alone. A scan
+  spends up to 2.5 seconds more on each toggle that opens no menu.
+
+- The live-region capture now records only text in the accessibility tree. Text written into a
+  live region under `aria-hidden`, `inert`, `hidden`, `display: none`, or `visibility: hidden`
+  could satisfy a flow's expected announcement, though no screen reader speaks it. Teams will see
+  such a flow fail. Text hidden only on screen, such as PatternFly's screen-reader class, is
+  still heard and still passes.
+
+- `pf-toast-live-region` now flags an alert that it or an element above it hides from assistive
+  technology with `aria-hidden`, `inert`, or `hidden`. That includes an alert in the app root
+  while a PatternFly modal is open when the screen loads, because the modal hides the root.
+  `rhds-dialog-name` no longer counts an empty heading as a name, and the RHDS rules no longer
+  count default-slot text under `aria-hidden` or other hidden content as a name, so each asks the
+  accessibility tree instead. Teams will see more true findings on those rules.
+
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
   flow had already changed it and could miss a barrier the flow had removed from view.
