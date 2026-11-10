@@ -128,12 +128,18 @@ describe('the branch the check reads', () => {
 
   it('checks main and says it assumed it when there is no gate workflow', async () => {
     const target = await gateBranchTarget(async () => null);
-    expect(target).toEqual({ name: 'main', source: 'assumed', reason: `${USABL_GATE_WORKFLOW_PATH} is missing` });
+    expect(target).toEqual({
+      name: 'main',
+      source: 'assumed',
+      reason: `${USABL_GATE_WORKFLOW_PATH} is missing`,
+      gatePresent: false,
+      step: 'Run "usabl install --ci" to write the gate for your default branch, then run "usabl install --branch-rule" again.',
+    });
     const gh = ghWithRuleset('main', { ref_name: { include: ['refs/heads/main'], exclude: [] } });
     const result = await verifyBranchRule(gh.reader, target);
     expect(result.action).toBe('verified');
     expect(result.message).toContain(
-      `usabl checked main because it could not read the branch your gate runs on: ${USABL_GATE_WORKFLOW_PATH} is missing. Run "usabl install --ci" first if your default branch is not main.`,
+      `usabl assumed main because it could not read the branch your gate runs on: ${USABL_GATE_WORKFLOW_PATH} is missing. GitHub reports main as the default branch.`,
     );
   });
 
@@ -144,6 +150,8 @@ describe('the branch the check reads', () => {
       name: 'main',
       source: 'assumed',
       reason: `the trigger in ${USABL_GATE_WORKFLOW_PATH} does not name one branch in the form usabl writes`,
+      gatePresent: true,
+      step: 'usabl reads only a pull_request trigger that names one branch, quoted, the way usabl writes it. Check the protection on each branch your gate runs on by hand, or run "usabl install --ci" to see how the gate differs from the draft.',
     });
   });
 
