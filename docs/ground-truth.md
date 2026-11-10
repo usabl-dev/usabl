@@ -293,6 +293,7 @@ src/
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
+    sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
     stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
@@ -441,6 +442,15 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
+  excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+}
+
+// A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
+// a file in a test folder that no screen imports. Not a gap: the gate never reads it. Absent and
+// empty both mean nothing was excluded.
+export interface ExcludedFile {
+  ref: string;    // repository path
+  reason: string; // why it was left out, and what would make it count
 }
 
 export interface Receipt {
@@ -1349,6 +1359,32 @@ rules that ran, because Deque records applicability for its own rules. Those cou
 
 ### How it works
 
+**Which files changed.** A local run takes the paths
+`git status --porcelain -z --untracked-files=all` reports. A run with `--trusted-ref` joins them
+with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every git listing usabl reads
+(status, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z` and is split on NUL.
+Without `-z`, git quotes a name that holds a byte above 0x7f, a newline, a tab, or a double quote,
+so `src/pages/Über.tsx` arrived as `"src/pages/\303\234ber.tsx"`, matched no UI glob, and a CI
+run read as nothing to check. Names are never trimmed, so a name that starts or ends with a space
+is kept. A `**` in a glob matches any character, a newline included, so a name with a newline
+matches `src/**`. A changed path that starts and ends with a double quote, the shape git prints
+for a quoted name, is an `unresolved` gap that says why, never a file outside the UI globs. A real
+file name of that shape is a gap too, and the reason says to rename it. A name such as `"draft".md`
+does not have that shape and is read as the file it names. The same listing reads the trusted
+requirement files and the guarded files at a ref, so a file there with such a name is read too.
+
+New untracked files are listed one by one. Without `--untracked-files=all`, git status lists a new
+folder as the folder alone, which matches no file glob, and a user's
+`status.showUntrackedFiles=no` hides new files completely. A listing longer than usabl reads (10
+MB of output) stops the run with an error that says so, never a short list read as complete.
+
+A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
+a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
+the files that import it, and the router file or `usabl.routes.json` when a route names it. An
+import left pointing at the old path is an import usabl cannot resolve, so a file moved into a
+test folder under the same name is a gap (see "Test files" below). A move that changes nothing
+else, such as moving a route's entry file while the route still names the old path, is not seen.
+
 Given a set of changed files, discover which surfaces they affect:
 
 1. Build a route manifest from the router source (or use a configured override).
@@ -1392,6 +1428,33 @@ not on the climb, such as another workspace package, does not count. A dependenc
 configured surface with provenance `wide-blast`, and each such screen carries a `reason` that
 names each dependency file and why it counts. With no route and no surface, each dependency file
 is an `unresolved` gap that says there was no screen to check, never nothing to check.
+Surfaces are queued by screen id, never by url, on every path: a dependency change, a changed
+file that matches `wideBlastGlobs` and that a surface lists in its `files`, a route-graph match,
+and a manual surface match. A surface that shares its url with a discovered route or with another
+surface is queued under its own id, with its own readiness signal and requirements, because a url
+does not determine which screen renders. A surface that overrides a discovered route
+(`overridesDiscoveredRoute`) has the route's id, so the two are one entry.
+
+**Test files.** A file named like a test, `*.test.*` or `*.spec.*`, is never a UI file, wherever
+it is. A file in a folder named `test`, `tests`, or `__tests__` is a UI file only when a screen
+reaches it: a route entry file's import graph includes it, or a surface lists it in its `files`.
+So a screen component kept in `src/tests/` is checked when it changes. A file in such a folder
+that matches `uiFileGlobs` and that no screen reaches, such as `src/test/setup.ts`, a helper in
+`src/__tests__/`, or a mock request handler in `src/test/`, is left out and disclosed in
+`coverage.excludedFiles`, with a reason that says usabl found no import of it and how to make it
+count. It is not a gap, so a pull request that edits only test helpers still has nothing to check.
+`usabl check` prints these files under "excluded files, not checked", marked as not blocking, on
+any run, an idle one included. It prints the first 20 and then the count of the rest; the JSON
+output holds the full list.
+
+"No screen reaches it" is read from the import graph, so it is a guess when the graph holds an
+import usabl could not resolve. When an unresolved import's last path segment, with or without its
+extension, equals the file's name without its extension (or its folder name, for an `index` file),
+the file is an `unresolved` gap that names the import and the file that holds it. For example,
+`src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
+`src/tests/Dashboard.tsx` is a gap. An unresolved import that names another file changes nothing.
+A dynamic import built from a template literal, such as `` import(`../tests/${name}`) ``, names no
+file, so a file it loads stays excluded. That is a known limit.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
@@ -1420,8 +1483,9 @@ with that extension is not seen and the file usabl did find is attributed.
 
 Coverage answers two different questions.
 
-**Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
-`uiFileGlobs`, no changed file is a dependency change of the app, and no changed file maps to a
+**Nothing to check** (`coverage.nothingToCheck === true`): no changed file is a UI file (it
+matches `uiFileGlobs` and is not a test file, see "Test files" above), no changed path looks
+quoted, no test-folder file is a gap, no changed file is a dependency change of the app, and no changed file maps to a
 documentation page under a `usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
 exit 0, and an explicit "nothing to check" message. A backend-only PR, a prose change
 with no manifested doc page, and a clean tree with no diff are this path. This is not
@@ -2703,7 +2767,7 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
 `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
-`session`, `debt`, `history`, `serve-build`, `extract-build`, and `help`. `check` is the default
+`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, and `help`. `check` is the default
 when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
@@ -2789,6 +2853,11 @@ lines.
 - Task brief: `usabl brief [--files <path> ...] [--json]` prints what an agent reads before it
   starts a task (see section 11.5). With no `--files` it uses the changed files git reports, the
   same way a local `usabl check` does.
+- Sensitivity evidence: `usabl verify sensitivity [--app] [--screen <id> ...] [--json]` puts each
+  declared defect in its catalog on a page in the scan browser and records whether the real checks
+  and the real gate catch it, in `.usabl/sensitivity.json` (see section 25). It is measurement: it
+  mints no verdict and no receipt. It exits 0 whenever it ran and wrote the file, 2 when a flag or
+  the config is wrong, and 4 when it could not run.
 - CI: the workflow invokes `usabl check --ci --trusted-ref <base>`. On `check`, `--ci` is
   the CI-mode boolean and forces `--trusted-ref` (without it, `check --ci` refuses with
   exit 2). The same `--ci` token is the CI *install target* under `usabl install`; the two
@@ -4352,6 +4421,129 @@ mints a verdict, writes a receipt, or gates, and it is deliberately not a `usabl
 subcommand, so measurement can never be mistaken for a proof. The later fleet view
 aggregates this measurement across repos; verdict authority stays with the gate.
 
+### Sensitivity evidence (`usabl verify sensitivity`)
+
+**What it measures.** Whether the shipped checks and the gate catch a declared set of defects, on
+pages where usabl put each defect itself. It answers "does usabl see this kind of accessibility
+barrier when it is there", one defect at a time. It says nothing about any other defect, and nothing about whether
+a screen is accessible.
+
+**The catalog.** `src/measure/sensitivity/catalog.ts` is a typed, versioned list. Each entry has a
+stable id, one plain sentence, the WCAG 2.2 success criterion it breaks, the rule ids expected to
+report it, the evidence class expected (deterministic or preview), where the rule is expected to
+report it (on the changed element, inside it, on it or its shadow host, or anywhere on the
+screen), and a mutation. A mutation is data: a target finder and one edit. The target finder reads the page only
+through `Page.queryAll`, `Page.axAt`, and `Page.hostMarkup`, the reads the checks use. The edit is
+one of eight fixed kinds: remove attribute, set attribute, remove text name, set style, remove
+element, replace role, swallow a key, and make `focus()` calls do nothing. The two page functions
+that carry them out are written once in `edits.ts`, and an entry's values reach the page only as
+JSON arguments. They run in the page's own world, because two kinds change how the page's script
+behaves. An edit that changes markup reads its change back at once, and again after the last
+provider has run. The two script kinds count what they did: a swallowed key counts the keys aimed at
+the element that reached the page first, and a stubbed `focus()` counts focus that reached the
+element some other way, such as on an element the page added later or by autofocus. Focus by Tab or
+by a pointer press is not counted, because the edit leaves both working on purpose. An entry that no
+shipped rule claims carries the place where a claim to catch it is made.
+
+**The run.** For each entry and screen: load the page and scan it with the real provider stack,
+then gate the scan with the real `gate()` against an empty floor. Load the page again, make the
+edit after readiness and before the transcript walk and every provider, scan it, and gate it
+against a floor of what the clean scan found. Each finding the gate calls `new` and deterministic
+is located on the mutated page, through every draft the gate collapsed into it, against the
+elements the edit changed.
+
+A new finding is dropped when every draft behind it has a rule and element path the clean scan
+already reported: that is a finding the page already had, moved to a new identity because the edit
+changed the name it was keyed on. Only a finding with confidence `fail` counts as a catch. An
+`unverified` finding is the checks saying they could not tell.
+
+The outcome, in this order:
+
+- `unreadable` before anything loads: the entry needs a flow or voice requirement and the design
+  requirements could not be loaded. The reason is the load error.
+- `not applicable`: the screen cannot carry the defect. The entry needs a flow requirement, a voice
+  requirement, or a documentation page the screen does not have; no element matches the target
+  finder; the defect needs more elements than the page has (one toolbar needs no label); or a
+  finding from an expected rule was already on a target element in the clean scan, so the defect
+  was there before the edit.
+- `unreadable`: the scans cannot say. Either scan had a coverage gap, including a screen marked
+  unseen. The edit was not made, or did not take hold when it was read back at once. The gate did
+  not verify the mutated scan, and no new finding explains it. Every new gating finding is
+  `unverified`. Or the only definite new findings are away from the change, for an entry not
+  reported on the screen: the two loads differ, so they prove nothing about the defect.
+- `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
+  it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
+  `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
+  anywhere on the screen.
+- `caught by another rule`: a new gating finding with confidence `fail` from another rule, on the
+  changed element. Counted apart from caught.
+- `preview only`: nothing new gates, and a preview finding is new.
+- `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
+  the reason says so.
+
+The second read comes last. It finds that the change did not hold through the scan when a markup
+change is gone, a key aimed at the element got past the swallow, or focus reached the element in a
+way the edit does not stop. Then `caught` and `caught by another rule` stand, because a new definite
+failure, where the entry says it reports, was measured while the defect was there.
+The row's reason notes that the change did not hold to the end of the scan, and why. Every other
+outcome becomes `unreadable` with that reason, because a miss or a preview finding then proves
+nothing: the checks may never have seen the defect.
+
+**Two levels.** Level 1 runs each entry on its own fixture page, served on loopback from strings
+in `level1.ts`, with no app and no config. The flow and voice pages bring their own requirements.
+The RHDS page defines small stand-in elements with the tag names and shadow structure the RHDS rules
+read; it does not load `@rhds/elements`. Level 2, only with `--app`, runs every entry on every
+surface in `usabl.config.json` (or the ones `--screen` names), through `buildDeps`, so the provider
+stack, the requirements, and the session are the team's own. Only the flow and voice entries scan
+with the team's requirements; every other entry scans with none, so the team's flow and voice steps
+run only for those two entries. It needs the app running and the `live` capability. Before it
+starts it prints the real counts for the screens chosen: each load uses the team's saved session;
+the dialog and menu probes click every dialog trigger and menu toggle on each load; for the flow
+and voice entries the screen's flow and voice steps run on each of their loads, so a step that
+saves or deletes data runs that many times. Both levels go into one file, kept apart.
+
+**The attestation.** `.usabl/sensitivity.json` holds the schema version, the engine version and
+scanner versions a receipt binds, the catalog version and hash, the date (an input), each entry's
+outcome, rules, screen, and reason per level, the totals per outcome, and every rule of the
+deterministic checks (axe, PatternFly, RHDS, keyboard walk, docs) the catalog does not exercise,
+with the reason. A rule that only gives preview findings, such as `voicing/silent-change`, is not
+in that list. The same tree, versions, and pages give the same bytes
+apart from the date. It is scrubbed on the way out. The terminal summary says "caught N of M catalog
+defects" per level, where M counts the entries that were made and read, lists every outcome other
+than caught by name with what was expected, and reports a level where nothing could be made and read
+as measuring nothing, not as a pass.
+
+**Isolation.** The mutation browser is built only by the verify command, which the CLI loads by a
+dynamic import inside that command. No config field or environment variable selects it. `buildDeps`
+never builds it; Level 2 hands it in through the `browserFor` option. No module that run(), the gate,
+the stop hook, the overlay, the CI judge, the pull request comment, checkPage, or the library entry
+imports reaches it, and nothing on those paths reads the attestation.
+`test/measure/sensitivity/isolation.test.ts` pins both.
+
+**Level 1, measured.** On the fixture pages the catalog caught 25 of the 28 defects it could
+make and read. Two were missed: `control-out-of-tab-order` (a visible button with `tabindex="-1"`;
+no shipped rule reports a control Tab never reaches) and `menu-does-not-open-on-enter` (the menu
+probe opens a menu with a click, so no check presses Enter on the toggle). `voice-live-region-broken`
+was preview only, as voice findings are until a class is promoted. `menu-toggle-state-removed` was
+caught by `pf-kebab-expanded-state`, and its row notes that the change did not hold to the end of
+the scan: the menu probe clicks the toggle, and the fixture's script sets `aria-expanded` again.
+`test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
+
+**Limits.** A catch on the fixture pages is a catch on that markup. On a team's app, a mutation
+can land on an element where it creates no accessibility barrier for users, for example a live
+region the flow does not use, and that reads as missed; read a Level 2 miss with the screen in
+hand. The edits run in the page's own world, so page script can see them and could undo one. The
+second read catches a markup change that is gone by the end of the scan, not one the page undid and
+then made again in between. A page key listener on the window that ran before the edit was made is
+not seen by the key count. Edits reach the top document only. A page with no focusable element
+cannot be measured: the keyboard walk never leaves the body, so the screen reads as unseen and
+every entry on it is unreadable. Pages listed in `usabl.docs.json` are not measured on Level 2:
+it reads only the surfaces in `usabl.config.json`, and a surface carries no documentation profile,
+so the documentation entry is not applicable on any Level 2 screen. A finding is located after every provider has acted, so a path such as
+`nth-child(5)` can name another element by then, for example after a toast was added. A defect the
+catalog does not declare is not measured, and every rule of the deterministic checks that no entry expects is listed in
+the file. Preview rules are not listed.
+
 ---
 
 ## 26. Screen-reader validation
@@ -4477,7 +4669,7 @@ Categories:
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
+| 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements and reports a focus trap. No shipped rule reports a visible control that is not on the Tab path (section 25 measures this). PF rules cover dialog focus, kebabs, and row actions. |
 | 2.1.2 | No Keyboard Trap | A | Built (keyboard walk) | Cycle detection in the walk. A Tab cycle that never reaches the body is `keyboard-walk-trap`, plus a truncation gap. A cycle inside one open modal dialog is a truncation gap only. See 7.3. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
 | 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. usabl does not run over time. |

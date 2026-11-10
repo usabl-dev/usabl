@@ -100,6 +100,53 @@ function renderNotes(result: Result): string[] {
   ];
 }
 
+// A pull request can change thousands of files. Each file list prints this many entries, then one
+// line with the count of the rest and where the full list is.
+const MAX_LISTED_FILES = 20;
+const FULL_LIST_NOTE = 'Run usabl check --json to see the full list in coverage.';
+
+/**
+ * The changed files the planner left out on purpose, such as test helpers no screen imports. They
+ * are not gaps and never change the verdict, so the heading says they do not block, and they
+ * print under any run, an idle one included, so a reader can see what usabl did not look at.
+ * Files that share a reason are printed together, then the reason once. A Result built outside
+ * the engine may carry anything here, so an entry whose fields are not strings is skipped.
+ */
+function renderExcludedFiles(result: Result): string[] {
+  const listed: unknown = result.coverage.excludedFiles;
+  if (!Array.isArray(listed)) {
+    return [];
+  }
+  const byReason = new Map<string, string[]>();
+  for (const entry of listed as Array<{ ref?: unknown; reason?: unknown }>) {
+    if (typeof entry?.ref !== 'string' || typeof entry.reason !== 'string') {
+      continue;
+    }
+    byReason.set(entry.reason, [...(byReason.get(entry.reason) ?? []), entry.ref]);
+  }
+  const count = [...byReason.values()].reduce((sum, refs) => sum + refs.length, 0);
+  if (count === 0) {
+    return [];
+  }
+  const lines = [`  excluded files, not checked: ${count} (${NOTES_HEADING})`];
+  let shown = 0;
+  for (const reason of [...byReason.keys()].sort()) {
+    const groupRefs = [...(byReason.get(reason) ?? [])].sort().slice(0, Math.max(0, MAX_LISTED_FILES - shown));
+    if (groupRefs.length === 0) {
+      break;
+    }
+    for (const ref of groupRefs) {
+      lines.push(`    ${boundField(neutralizePrintedText(ref), 'gapRef')}`);
+    }
+    shown += groupRefs.length;
+    lines.push(`    why: ${boundField(neutralizePrintedText(reason), 'gapReason')}`);
+  }
+  if (count > shown) {
+    lines.push(`    ${count - shown} more excluded files not shown. ${FULL_LIST_NOTE}`);
+  }
+  return lines;
+}
+
 function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
   const unplaced = gaps.filter((gap) => gap.state === 'unresolved');
   if (unplaced.length < 2) {
@@ -109,13 +156,15 @@ function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
   const rest = [...unplaced.slice(1)].sort((left, right) =>
     left.ref < right.ref ? -1 : left.ref > right.ref ? 1 : 0,
   );
+  const hidden = rest.length - MAX_LISTED_FILES;
   return [
     `    other files not placed on any screen: ${rest.length}`,
-    ...rest.map(
+    ...rest.slice(0, MAX_LISTED_FILES).map(
       (gap) =>
         `      ${boundField(neutralizePrintedText(gap.ref), 'gapRef')}: ` +
         `${boundField(neutralizePrintedText(gap.reason), 'gapReason')}`,
     ),
+    ...(hidden > 0 ? [`      ${hidden} more files not placed on any screen not shown. ${FULL_LIST_NOTE}`] : []),
   ];
 }
 
@@ -377,9 +426,13 @@ export function formatSummary(result: Result): string {
   lines.push(...renderFloorUnconfirmed(result));
   lines.push(...renderNotEvaluated(result));
   lines.push(...renderNotes(result));
+  lines.push(...renderExcludedFiles(result));
   lines.push(...renderBrowserSandbox(result));
   if (result.dirtyGuardedPaths.length > 0) {
-    lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);
+    // A guarded file name comes from the repository and can hold an escape byte, so each name is
+    // neutralized and bounded like every other printed path.
+    const guarded = result.dirtyGuardedPaths.map((path) => boundField(neutralizePrintedText(path), 'gapRef'));
+    lines.push(`  guarded paths changed: ${guarded.join(', ')}`);
   }
   if (result.verdict === 'approval_required') {
     // result.summary already states the accessibility verdict on the headline line, so a

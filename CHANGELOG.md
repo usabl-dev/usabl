@@ -28,6 +28,29 @@
   names. Review and commit the change. A file you edited is refused as before: reconcile it by
   hand.
 
+- `usabl verify sensitivity` measures which declared accessibility defects the checks catch. A
+  catalog of 28 defects, each with its WCAG criterion and the rules expected to report it, is put
+  on pages one at a time in the scan browser, after the page is ready and before any check runs.
+  Each defect is scanned clean and mutated through the real checks and gated by the real gate. It
+  is caught only when a new, definite failure from an expected rule is on the changed element, or
+  anywhere on the screen for a defect reported there. It is unreadable whenever the scans cannot
+  say: a coverage gap, findings the checks could not confirm, a new finding away from the change,
+  or a change that did not hold through the scan with nothing caught. A catch stands when the page
+  puts the change back later in the scan, and its row says so. A defect already on the element is not
+  applicable, and a finding the page already had never counts. It runs on fixture pages that ship
+  with usabl, with no app and no config, and with `--app` on the surfaces in `usabl.config.json`
+  too (`--screen <id> ...` names some). On the app, only the flow and voice defects run the
+  screen's flow and voice steps, and the command prints the real page loads and step counts before
+  it starts. It writes `.usabl/sensitivity.json` with the engine and scanner versions, the catalog
+  hash, every outcome, and every rule of the checks that can block (axe, PatternFly, RHDS, keyboard
+  walk, docs) that the catalog does not exercise, and prints "caught N of
+  M" with every miss by name. On the fixture pages it catches 25 of the 28 it can make and read: a
+  visible control taken out of the Tab order and a menu that does not open on Enter are missed, and
+  a broken live region under a voice requirement is preview only. A menu toggle that loses
+  `aria-expanded` is caught, with a note that the page sets it again when the menu probe clicks the
+  toggle. It is measurement: it mints no verdict and no receipt, nothing on a verdict path reads its
+  file, and it exits 0 whenever it ran. `npm run test:sensitivity` runs its real-browser tests.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
@@ -202,6 +225,54 @@
   `checkPage` does not run the engines.
 
 ### Fixed
+
+- A changed file with a non-ASCII name, a newline, a double quote, or a space at the start or
+  end of its name is now checked, in CI and in local runs. Before, git quoted such a name in the
+  merge-base diff, a name could be trimmed, and a `**` glob did not match a newline, so
+  `src/pages/Über.tsx` matched no `uiFileGlobs` and the run exited 0 with nothing to check. Every
+  git listing now uses `-z` and keeps names untrimmed. Gate effect: such a run now scans the file,
+  or reports it as not covered.
+
+- A change to a guarded file with such a name, for example `policy/Über.yaml`, now needs
+  approval in CI. Before, the guard at the trusted ref listed the quoted name, found no file
+  under it on either ref, and skipped the change. The policy hash now keys those
+  files by their true names, so a stored receipt for a repository with such guarded files does
+  not verify once after the upgrade, and the stop hook runs one full check. Gate effect: the
+  change is `approval_required` where it passed.
+
+- A changed path that starts and ends with a double quote, the shape git prints for a quoted
+  name, is now an unresolved gap, in CI and in local runs. usabl cannot tell which file it names.
+  Gate effect: such a run is not covered where it read as nothing to check.
+
+- Local runs and the stop hook now list a staged rename by its new name. Before, they listed the
+  old name. They also list new untracked files one by one, so a new folder is listed by its files
+  and `status.showUntrackedFiles=no` no longer hides them. CI runs read the same merge-base diff
+  as before. Gate effect, in local runs and the stop hook: a renamed file is checked under its new
+  name, and a new file in a new folder or hidden by that setting is checked where it read as
+  nothing to check. The old name of a rename is no longer listed, so a file moved out of the UI
+  globs is seen only through the other files the move changes. A listing longer than usabl reads
+  stops the run with an error that says so.
+
+- A trusted requirement file with a non-ASCII name, such as `requirements/Über.yaml`, is now
+  loaded under a trusted ref. Before, it was left out with nothing said. Gate effect: its
+  requirements are checked in CI.
+
+- A UI file in a folder named `test`, `tests`, or `__tests__` is now checked when a screen
+  imports it or a surface lists it, and is an unresolved gap when an import usabl could not
+  resolve may load it. Before, every file in such a folder was dropped, so a real screen kept
+  there read as nothing to check. A file there that no import reaches is listed in
+  `coverage.excludedFiles` and in the summary as not blocking, and is not a gap. Files named
+  `*.test.*` or `*.spec.*` stay excluded. Gate effect, in CI and in local runs: a reachable UI file
+  in such a folder is now scanned, and one an unresolved import may load is not covered.
+
+- Configured surfaces are now queued by screen id on a dependency change and on a change to a
+  file that matches `wideBlastGlobs`. Before, a surface whose url a route or another surface
+  already had was skipped, with its own readiness signal and requirements. Gate effect, in CI and
+  in local runs: more screens are checked on such a change.
+
+- The gate input now refuses a result whose `coverage.excludedFiles` field is malformed. Before,
+  the field was dropped. This changes only a library caller that hands `gate()` its own coverage;
+  a command run builds that field itself. Gate effect: such a call is refused where it went on.
 
 - A config that names a file in `uiFileGlobs`, as the router file, or in the `files` of a
   surface no longer stops the run. The search for the app's `package.json` read a file such as

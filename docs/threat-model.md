@@ -265,6 +265,16 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- Every git listing of changed or committed files runs with `-z` and keeps each name as UTF-8
+  text, so a non-ASCII name is not quoted into a path that matches no UI glob, and a changed path
+  that starts and ends with a double quote is a gap. A name whose bytes are not valid UTF-8 loses
+  them in that decoding and no longer names the file. See ground-truth section 8.
+
+- The guard compares guarded files at the trusted ref by the same `-z` listing, so a change to a
+  guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
+  Before, the listing quoted that name, `git show` found no file under it on either ref, and the
+  change was skipped.
+
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
   shared package's files, so a change to a component the app renders exited 0 with nothing
@@ -870,6 +880,44 @@ on trusts that vendor's package as much as usabl's own dependencies. Both SDKs r
 the page's own world, so page script can change what they read and report; this is one reason their
 findings stay preview. A vendor call that times out keeps running until the scan closes the page.
 Not yet run on a licensed SDK.
+
+---
+
+## Threat 17: A measurement mutation reaching a normal run
+
+**Attack:** `usabl verify sensitivity` changes pages on purpose: it removes names, cancels keys,
+and stops focus calls, to see whether the checks notice. If that step could run during `usabl
+check`, the stop hook, the CI judge, or checkPage, a scan would measure a page usabl broke, and a
+pull request or page text that could switch it on would control what the gate sees.
+
+**Controls:**
+
+- Mutations run only in the scan browser, only from the measure command, and never from page text.
+  The catalog is engine data. An entry picks one of eight fixed edit kinds; the two page functions
+  that carry them out are written once in the engine, and an entry's values reach the page only as
+  JSON arguments. Nothing a page says becomes code.
+- The mutation browser is built only by `usabl verify sensitivity`, which the CLI loads by a dynamic
+  import inside that command. No config field and no environment variable selects it. `buildDeps`
+  never builds it, and no module that run(), the gate, the stop hook, the overlay, the CI judge, the
+  pull request comment, checkPage, or the library entry imports reaches it.
+- The command mints no verdict and no receipt. Its file, `.usabl/sensitivity.json`, is read by no
+  verdict path, and the file being present changes no Result.
+- What it writes and prints goes through `scrubOutboundData` and `scrubString`, because a gap reason
+  can carry a URL or page words.
+
+**Tests:** `test/measure/sensitivity/isolation.test.ts` (no verdict entry point imports the
+measurement, the CLI names it only inside the verify command, the composition root's browser has no
+mutation hook, run() never reads the file and returns the same Result with it there),
+`test/measure/sensitivity/command.test.ts` (the file is scrubbed and deterministic).
+
+**What stays open:** the edits run in the page's own world, so page script on the measured page can
+see them and could undo one. That changes a measurement, never a verdict. Level 2 loads the team's
+app in the scan browser with the team's session, as `usabl check` does, but many more times: two
+loads per catalog entry per screen. On each load the dialog and menu probes click every dialog
+trigger and menu toggle. For the flow and voice entries, the screen's flow and voice steps run on
+each of their loads, so a step that saves or deletes data runs that many times against the team's
+backend. Every other entry scans without the requirements, so their steps do not run. The command
+prints the real counts for the screens chosen before it starts.
 
 ---
 

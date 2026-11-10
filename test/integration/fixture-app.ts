@@ -56,11 +56,12 @@
  * - The runner's lock has one three-way race: a third run that creates a lock
  *   while a second is moving a displaced live lock back leaves two runs believing
  *   they hold it. See scripts/demo-integration-lock.ts.
- * - The runner's 30-minute ceiling on the Vitest step assumes Vitest runs the two
- *   suites in parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip) and
- *   720 s (fixture-clean) with the app's default 60 s readiness budget: 1,350 s in
- *   parallel, 2,070 s in sequence. A serial run (for example one forced through
- *   forwarded Vitest arguments) must raise the ceiling or run one suite at a time.
+ * - The runner's 30-minute ceiling on the Vitest step assumes Vitest runs the three
+ *   suites in parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip),
+ *   720 s (fixture-clean), and 1,140 s (sensitivity-level2) with the app's default
+ *   60 s readiness budget: 1,350 s in parallel, 3,210 s in sequence. A serial run
+ *   (for example one forced through forwarded Vitest arguments) must raise the
+ *   ceiling or run one suite at a time.
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
