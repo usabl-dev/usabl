@@ -402,6 +402,31 @@ describe('buildLedger', () => {
     expect(() => checkSpans([{ start: at(0), end: { ...at(5), by: 'history' as const } }, { start: at(8), end: null }], dayAt(41))).not.toThrow();
   });
 
+  it('says so when commit dates go backwards, and sets both bounds', () => {
+    // c0 is dated day 10 and floors A. c1, made later on the line, is dated day 2 and drops it.
+    const backwards = buildLedger(input([snap(0, floorOf([A]), { date: dayAt(10) }), snap(1, floorOf([]), { date: dayAt(2) })]));
+    const row = rowFor(backwards, A);
+    expect(row).toMatchObject({ daysOpen: 0, mayBeMore: true, mayBeLess: true });
+    expect(row.mayBeMoreReasons).toContain('dates-out-of-order');
+    expect(row.mayBeLessReasons).toContain('dates-out-of-order');
+    const note = row.incomplete.find((gap) => gap.cause === 'dates-out-of-order');
+    expect(note?.detail).toMatch(/dated before/u);
+    expect(note?.detail).toMatch(/counted as 0 days/u);
+
+    // An open span whose start is dated after the head commit.
+    const late = buildLedger(input([snap(0, floorOf([A]), { date: dayAt(50) })]));
+    expect(rowFor(late, A).mayBeLessReasons).toContain('dates-out-of-order');
+
+    // A span that starts before the one before it ended, by date.
+    const overlapping = buildLedger(
+      input([snap(0, floorOf([A])), snap(4, floorOf([]), { date: dayAt(10) }), snap(5, floorOf([A]), { date: dayAt(5) })]),
+    );
+    expect(rowFor(overlapping, A).incomplete.map((gap) => gap.cause)).toContain('dates-out-of-order');
+
+    // Dates in order carry no such note.
+    expect(rowFor(buildLedger(input([snap(0, floorOf([A]))])), A).incomplete.map((gap) => gap.cause)).not.toContain('dates-out-of-order');
+  });
+
   it('gives the same ledger for the same history', () => {
     const floor = floorOf([A, B]);
     const make = () => input([snap(0, floor), snap(7, floorOf([B]))], historyOn([scanAt(3, floor, [[B, 1]])]));

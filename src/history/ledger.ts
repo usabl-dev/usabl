@@ -99,7 +99,8 @@ export type LedgerGapCause =
   | 'hash-collision'
   | 'first-floor-for-screen'
   | 'not-seen'
-  | 'left-the-floor';
+  | 'left-the-floor'
+  | 'dates-out-of-order';
 
 export interface LedgerGap {
   cause: LedgerGapCause;
@@ -118,7 +119,9 @@ export type LedgerMoreReason =
   // A span ended where the floor history breaks, and it may have stayed open after.
   | 'ended-at-gap'
   // A span ended only because it left the floor. It may have stayed on the page after.
-  | 'left-the-floor';
+  | 'left-the-floor'
+  // Commit dates go backwards along its spans, so a span was counted as 0 days.
+  | 'dates-out-of-order';
 
 /** Why the true number of days could be smaller than the one the ledger counts. */
 export type LedgerLessReason =
@@ -130,7 +133,9 @@ export type LedgerLessReason =
   // A history record that touches it could not be placed in time.
   | 'history-unplaced'
   // A span ended only because it left the floor. It may have been fixed before.
-  | 'left-the-floor';
+  | 'left-the-floor'
+  // Commit dates go backwards along its spans, so the count cannot be trusted either way.
+  | 'dates-out-of-order';
 
 export interface LedgerRow {
   screenId: string;
@@ -231,6 +236,8 @@ function short(commit: string): string {
   return commit.slice(0, 12);
 }
 
+// A negative span counts as 0. The ledger notes every such span on its row (dates-out-of-order),
+// so the clamp is never silent.
 function daysBetween(start: string, end: string): number {
   return Math.max(0, Math.floor((Date.parse(end) - Date.parse(start)) / DAY_MS));
 }
@@ -657,6 +664,32 @@ export function buildLedger(input: LedgerInput): Ledger {
           { less: 'not-seen' },
         );
       }
+    }
+  }
+
+  // Committer dates do not have to grow along the first-parent line: a wrong clock, or commits made
+  // earlier and fast-forwarded in, can date a later commit before an earlier one. Said, not hidden.
+  for (const row of rows.values()) {
+    let before: Placed | null = null;
+    for (const span of row.spans) {
+      const stop: Placed = span.end ?? { commit: input.head, date: input.headDate, position: Infinity };
+      const pairs: Array<[Placed, Placed]> = [[span.start, stop]];
+      if (before !== null) pairs.push([before, span.start]);
+      for (const [earlier, later] of pairs) {
+        if (Date.parse(later.date) >= Date.parse(earlier.date)) continue;
+        addGap(
+          row,
+          {
+            cause: 'dates-out-of-order',
+            detail:
+              `Commit dates are out of order: ${short(later.commit)} is dated before ${short(earlier.commit)}, though it comes ` +
+              'later on the first-parent line. Commit dates mark when a commit was made, not when it reached the branch. ' +
+              'A span that would be negative is counted as 0 days, so these days may be larger or smaller.',
+          },
+          { more: 'dates-out-of-order', less: 'dates-out-of-order' },
+        );
+      }
+      before = stop;
     }
   }
 
