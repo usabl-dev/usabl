@@ -61,6 +61,10 @@ export interface InitFs {
   readFile(path: string): Promise<string | null>;
   glob(patterns: string[]): Promise<string[]>;
   writeFile(path: string, contents: string): Promise<void>;
+  // Where a path really is, through symbolic links, written relative to the repository root with
+  // forward slashes: '' for the root, a path that starts with '../' or an absolute path when it is
+  // outside. Null when nothing is at the path.
+  realpath(path: string): Promise<string | null>;
 }
 
 export interface InitDraft {
@@ -213,6 +217,15 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
     throw new Error(
       `usabl init refused --app ${operatorText(appDir)}: the app folder must be one folder, written without the ` +
         'glob characters * ? [ ] { } !, such as packages/web. Nothing was written.',
+    );
+  }
+  // A folder written inside the repository can be a symbolic link to one outside it. A draft for
+  // it would check files the repository does not hold, so the real path decides.
+  const real = await fs.realpath(cleaned);
+  if (real !== null && (posix.isAbsolute(real) || real === '..' || real.startsWith('../'))) {
+    throw new Error(
+      `usabl init refused --app ${operatorText(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
+        'outside this repository. Pass the app folder inside the repository. Nothing was written.',
     );
   }
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.

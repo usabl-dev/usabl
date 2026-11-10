@@ -22,6 +22,8 @@ function memoryFs(files: Record<string, string>): InitFs & { store: Record<strin
     writeFile: async (path, contents) => {
       store[path] = contents;
     },
+    // A memory store has no symbolic links, so every path is its own real path.
+    realpath: async (path) => path,
     store,
   };
 }
@@ -160,6 +162,8 @@ describe('usabl init --app on a monorepo', () => {
       writeFile: async () => {
         throw new Error('this test never writes');
       },
+      // The fixture tree holds no symbolic links.
+      realpath: async (path) => path,
     };
     const globs = ['packages/*', 'packages/{web,admin}', '**', 'packages/we?', 'packages/[w]eb', '!packages/web', 'packages/web/*'];
     for (const fs of [memoryFs(monorepo()), realFs]) {
@@ -273,6 +277,8 @@ describe('usabl init with no --app on a monorepo', () => {
       writeFile: async () => {
         throw new Error('this test never writes');
       },
+      // The fixture tree holds no symbolic links.
+      realpath: async (path) => path,
     };
     await expect(inferInit(fs)).rejects.toThrow(/packages\/admin\n {2}packages\/web\n/);
     const draft = await inferInit(fs, { appDir: 'packages/admin' });
