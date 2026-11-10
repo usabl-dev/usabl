@@ -52,6 +52,14 @@ function secondMatchPage(path: string): string | null {
     : `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Two</title></head><body><main><button type="button">Refresh</button>${extra}</main></body></html>`;
 }
 
+// A link that wraps onto two lines, a 44 pixel button inside a 12 pixel box that hides its
+// overflow, and a button inside a box that scrolls, which a pointer can still reach in full.
+const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shapes</title></head><body><main>
+  <p style="width:80px;font:16px/20px monospace">Go <a id="wraps" href="#x">to the user list now</a></p>
+  <div style="height:12px;overflow:hidden"><button id="clipped" style="width:44px;height:44px;padding:0;border:0">Save</button></div>
+  <div style="height:100px;overflow:auto"><button id="scrolls" style="width:44px;height:44px;padding:0;border:0">Edit</button></div>
+</main></body></html>`;
+
 // Three buttons in order. On the blur page, the second one drops focus when it gets it, so a Tab
 // walk falls to the body in the middle of the page.
 function focusPage(blurSecond: boolean): string {
@@ -81,17 +89,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
     const roles = await readFile(fileURLToPath(new URL('../../fixtures/live/roles.html', import.meta.url)), 'utf8');
     server = createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      const url = req.url ?? '';
-      res.end(
-        secondMatchPage(url) ??
-        (url.startsWith('/shadow.html')
-          ? SHADOW_PAGE
-          : url.startsWith('/focus-blur.html')
-            ? focusPage(true)
-            : url.startsWith('/focus.html')
-              ? focusPage(false)
-              : roles),
-      );
+      const path = (req.url ?? '').split('?')[0] ?? '';
+      const pages: Readonly<Record<string, string>> = {
+        '/shapes.html': SHAPES_PAGE,
+        '/shadow.html': SHADOW_PAGE,
+        '/focus-blur.html': focusPage(true),
+        '/focus.html': focusPage(false),
+      };
+      res.end(secondMatchPage(path) ?? pages[path] ?? roles);
     });
     await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
     const address = server.address();
@@ -146,9 +151,17 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
 
   it('reads the laid-out size of an element in CSS pixels', async () => {
     await withPage('/roles.html', async (page) => {
-      expect(await page.boundingBox('#refresh')).toEqual({ width: 32, height: 32 });
-      expect(await page.boundingBox('#tiny')).toEqual({ width: 16, height: 16 });
+      expect(await page.boundingBox('#refresh')).toEqual({ width: 32, height: 32, fragments: 1, clipped: false });
+      expect(await page.boundingBox('#tiny')).toEqual({ width: 16, height: 16, fragments: 1, clipped: false });
       expect(await page.boundingBox('#nothing-here')).toBeNull();
+    });
+  });
+
+  it('reads a box that wraps onto two lines and a box an element above clips', async () => {
+    await withPage('/shapes.html', async (page) => {
+      expect((await page.boundingBox('#wraps'))?.fragments ?? 0).toBeGreaterThan(1);
+      expect(await page.boundingBox('#clipped')).toMatchObject({ width: 44, height: 44, fragments: 1, clipped: true });
+      expect(await page.boundingBox('#scrolls')).toMatchObject({ fragments: 1, clipped: false });
     });
   });
 

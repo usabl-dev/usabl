@@ -6,7 +6,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import { readFullAxTree } from './ax-tree.js';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -825,21 +825,68 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   return getComputedStyle(element).getPropertyValue(cssProperty);
 }`;
 
-// The laid-out size of the first element a selector matches, in CSS pixels, or null. The box
-// includes transforms, so it is the size a pointer has to hit.
+// The laid-out box of the first element a selector matches, in CSS pixels, or null. The box
+// includes transforms. It also says how many boxes the element is laid out in, and whether an
+// element above it clips it. The walk up follows the flat tree, through slots and out of shadow
+// roots. An ancestor clips when its overflow is hidden or clip on an axis, or its contain value
+// holds paint, and the element reaches past that ancestor's padding box on that axis. A fixed
+// element can escape such an ancestor; it is still read as clipped, which only ever asks for review.
 const BOUNDING_BOX_FUNCTION = `function (query) {
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
     return null;
   }
   const box = element.getBoundingClientRect();
-  return { width: box.width, height: box.height };
+  const fragments = element.getClientRects().length;
+  const clips = (value) => value === 'hidden' || value === 'clip';
+  const parentOf = (node) => {
+    if (node.assignedSlot) {
+      return node.assignedSlot;
+    }
+    if (node.parentElement) {
+      return node.parentElement;
+    }
+    const root = node.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  const epsilon = 0.01;
+  let clipped = false;
+  for (let above = parentOf(element), depth = 0; above !== null && depth < 512 && !clipped; above = parentOf(above), depth += 1) {
+    const style = getComputedStyle(above);
+    // Overflow and paint containment do not apply to an inline box or to an element with no box.
+    if (style.display === 'inline' || style.display === 'contents') {
+      continue;
+    }
+    const paint =/\\b(paint|strict|content)\\b/.test(style.contain);
+    const clipsX = paint || clips(style.overflowX);
+    const clipsY = paint || clips(style.overflowY);
+    if (!clipsX && !clipsY) {
+      continue;
+    }
+    const outer = above.getBoundingClientRect();
+    const left = outer.left + above.clientLeft;
+    const top = outer.top + above.clientTop;
+    const right = left + above.clientWidth;
+    const bottom = top + above.clientHeight;
+    if (clipsX && (box.left < left - epsilon || box.right > right + epsilon)) {
+      clipped = true;
+    }
+    if (clipsY && (box.top < top - epsilon || box.bottom > bottom + epsilon)) {
+      clipped = true;
+    }
+  }
+  return { width: box.width, height: box.height, fragments, clipped };
 }`;
 
-function readBoundingBox(value: unknown): { width: number; height: number } | null {
+function readBoundingBox(value: unknown): ElementBox | null {
   const width = readNumber(getProp(value, 'width'));
   const height = readNumber(getProp(value, 'height'));
-  return width === null || height === null ? null : { width, height };
+  const fragments = readNumber(getProp(value, 'fragments'));
+  const clipped = getProp(value, 'clipped');
+  if (width === null || height === null || fragments === null || !Number.isInteger(fragments) || typeof clipped !== 'boolean') {
+    return null;
+  }
+  return { width, height, fragments, clipped };
 }
 
 
@@ -2544,7 +2591,7 @@ function wrapPage(
       const value = await callInWorld(cdp, READ_WORLD, 'read a computed style', COMPUTED_STYLE_FUNCTION, [selector, property]);
       return typeof value === 'string' ? value : '';
     },
-    async boundingBox(selector: string): Promise<{ width: number; height: number } | null> {
+    async boundingBox(selector: string): Promise<ElementBox | null> {
       return readBoundingBox(await callInWorld(cdp, READ_WORLD, 'read an element size', BOUNDING_BOX_FUNCTION, [selector]));
     },
     async screenshot(selector?: string): Promise<Buffer> {

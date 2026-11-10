@@ -723,6 +723,17 @@ export type AxTreeRead =
 export interface ElementRef {
   selector: string;
 }
+// What Page.boundingBox read about one element. `width` and `height` are the CSS pixel size of its
+// border box as the browser lays it out, transforms included. `fragments` is how many boxes the
+// element is laid out in: an inline element that wraps onto two lines has two, and its size is the
+// box around both. `clipped` is true when an element above it hides part of it through overflow
+// hidden or clip, or paint containment, so the area a pointer can hit may be smaller than the box.
+export interface ElementBox {
+  width: number;
+  height: number;
+  fragments: number;
+  clipped: boolean;
+}
 // Why a row an element sits in could not be told apart from other rows. See RowContextRead.
 export type RowAmbiguity =
   // The table keys its rows, and this row has no key of the kind the table uses.
@@ -965,10 +976,9 @@ export interface Page {
   setZoom(percent: number): Promise<void>;
   setReducedMotion(enabled: boolean): Promise<void>;
   getComputedStyle(selector: string, property: string): Promise<string>;
-  // The rendered width and height, in CSS pixels, of the first element a selector matches in the
-  // document, as the browser lays it out. Read in an isolated world, so page script cannot answer
-  // for it. Null when nothing matches.
-  boundingBox(selector: string): Promise<{ width: number; height: number } | null>;
+  // The laid-out box of the first element a selector matches in the document. Read in an isolated
+  // world, so page script cannot answer for it. Null when nothing matches. See ElementBox.
+  boundingBox(selector: string): Promise<ElementBox | null>;
   screenshot(selector?: string): Promise<Buffer>;
   // Present only on a page opened by the judge's isolated browser: the distinct origins of the
   // requests it blocked since the page opened. A blocked script can remove the very control a

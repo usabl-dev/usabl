@@ -507,6 +507,33 @@ async function checkTargetSize(requirement: Requirement, assertion: TargetSizeAs
       }),
     ];
   }
+  // usabl measures the border box of an element laid out in one box that nothing clips. For any
+  // other shape the box it reads can be larger than the area a pointer can hit, so it does not
+  // judge the size.
+  if (box.fragments !== 1) {
+    return [
+      draft(requirement, 'target-size', 'unverified', {
+        elementPath: match.selector,
+        node: match.node,
+        whatUserExperiences: `Whether ${question} is unknown.`,
+        why: `The element is laid out in ${box.fragments} boxes, such as a link that wraps onto two lines, and usabl measures only an element laid out in one box.`,
+        fix: 'Check the size of this control by hand, or keep it in one box, for example with display: inline-block.',
+        extra: { fragments: box.fragments },
+      }),
+    ];
+  }
+  if (box.clipped) {
+    return [
+      draft(requirement, 'target-size', 'unverified', {
+        elementPath: match.selector,
+        node: match.node,
+        whatUserExperiences: `Whether ${question} is unknown.`,
+        why: 'An element above this control clips it, for example with overflow: hidden, so the area a pointer can hit may be smaller than the control. usabl does not measure a clipped control.',
+        fix: 'Check the size of this control by hand, or let the element above it show the control in full.',
+        extra: { width: box.width, height: box.height, clipped: true },
+      }),
+    ];
+  }
   // The measured size is compared, never a rounded one: 23.96 pixels is below a 24 pixel minimum.
   if (box.width >= min && box.height >= min) {
     return [];

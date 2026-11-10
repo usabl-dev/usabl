@@ -4281,7 +4281,7 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 | `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
 | `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree cannot be read |
 | `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
-| `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, or its size cannot be read |
+| `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, its size cannot be read, it is laid out in more than one box, or an element above it clips it |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
@@ -4298,8 +4298,16 @@ stop it already walked without passing the body (a focus trap, or a list that re
 no node id to tell the elements apart). With node ids, a new element at a walked path is a new stop,
 and the walk goes on. The check needs the page as it loaded: it is skipped as a gap if a check that
 changes the page ran first, the same as the keyboard walk. The target size check reads the
-element's laid-out box with `getBoundingClientRect` in an isolated world, and compares the size
-as read; the message shows it to one decimal, rounded down, so 23.95 reads as 23.9 and never as 24.
+element's laid-out border box with `getBoundingClientRect` in an isolated world, and compares the
+size as read; the message shows it to one decimal, rounded down, so 23.95 reads as 23.9 and never
+as 24. It measures only the border box of an element laid out in one box that nothing clips. An
+element laid out in more than one box, such as an inline link that wraps onto two lines
+(`getClientRects` gives more than one), is unknown, because the box around all of them can be
+larger than each one. So is an element that an element above it clips: one whose overflow is
+hidden or clip on an axis, or whose `contain` value holds paint, where the element reaches past
+that ancestor's padding box on that axis. A fixed element that escapes such an ancestor is still
+read as clipped, which only ever asks for review. The check does not measure overlap with other
+elements that cover part of the control, or the spacing between targets.
 
 These checks cover the sizes, names, and order that a design states. They do not check every
 control on the page. axe's own `target-size` rule is a separate question: it runs in the docs

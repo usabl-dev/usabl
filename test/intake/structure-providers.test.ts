@@ -484,9 +484,26 @@ describe('focus order requirement', () => {
 describe('target size requirement', () => {
   const r = req({ type: 'target-size', target: { role: 'button', name: 'Refresh' }, minCssPx: 24 });
 
-  function sized(box: { width: number; height: number } | null): Page {
-    return pageWith({ '#r': button('Refresh') }, { boundingBox: async () => box });
+  // One unclipped box unless the case says otherwise.
+  function sized(box: { width: number; height: number; fragments?: number; clipped?: boolean } | null): Page {
+    const read = box === null ? null : { fragments: 1, clipped: false, ...box };
+    return pageWith({ '#r': button('Refresh') }, { boundingBox: async () => read });
   }
+
+  it('is unconfirmed, never a pass, when the element is laid out in more than one box', async () => {
+    // An inline link that wraps onto two lines: the union of its boxes is large, each box may not be.
+    const drafts = await run(r, sized({ width: 120, height: 40, fragments: 2 }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('laid out in 2 boxes');
+  });
+
+  it('is unconfirmed, never a pass, when an element above it clips it', async () => {
+    const drafts = await run(r, sized({ width: 44, height: 44, clipped: true }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('clips it');
+  });
 
   it('passes at or above the minimum in both directions', async () => {
     expect(await run(r, sized({ width: 24, height: 32 }))).toEqual([]);
@@ -515,7 +532,7 @@ describe('target size requirement', () => {
   });
 
   it('is unconfirmed when two elements have the name', async () => {
-    const page = pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }, { boundingBox: async () => ({ width: 1, height: 1 }) });
+    const page = pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }, { boundingBox: async () => ({ width: 1, height: 1, fragments: 1, clipped: false }) });
     const drafts = await run(r, page);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');

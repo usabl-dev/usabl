@@ -57,7 +57,7 @@ accessible name, never by a CSS selector.
 | Landmark stamp, on an area | `landmark` | That landmark exists (a region or form also needs a name) |
 | Button stamp, with a Button Details card for the name | `name` | Exactly one button with that accessible name |
 | Ordering stamps 1, 2, 3, ... | `focus-order` | Pressing Tab from the top reaches those names in that order |
-| Button stamp, with `--min-target` | `target-size` | That button is at least the given size in CSS pixels |
+| Button stamp, with `--min-target` | `target-size` | That button is at least the given size in CSS pixels (see below) |
 
 A note the importer cannot read is listed with the reason and left out of the file. That includes
 speech notes such as "Announce 'Refreshing'", image stamps, Dev Mode notes, and a heading stamp with
@@ -94,6 +94,11 @@ Once approved, each check gives one of these:
   one in a closed shadow root; the focus walk was cut short, for example by a control that moves
   focus away when it gets it; or no button has the name, so its size cannot be measured. usabl
   never guesses. A run with a needs review finding is not verified.
+
+The target size check measures the border box of a control laid out in one box that nothing
+clips. A control that wraps onto two lines, or that an element above it clips, for example with
+`overflow: hidden`, is needs review. The check does not measure overlap with other elements or the
+spacing between targets.
 
 `checkPage` in a Playwright test runs the same checks when it reads the project from
 `projectRoot`.
