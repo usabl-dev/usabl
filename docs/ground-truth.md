@@ -1116,7 +1116,10 @@ step, with the reason in `evidence.extra.reason`:
 - `tree over budget`: a tree read took more than 500 ms or returned more than 5000 nodes;
 - `unreadable control`: the page changed and the click selector names no one element in the
   document or one open shadow root, because it matches nothing, is not CSS the browser parses,
-  or matches in both the document and a shadow root, where the click's own order cannot be read;
+  or matches in both the document and a shadow root, where the click's own order cannot be read.
+  A selector with a combinator (a space, `>`, `+`, or `~`) on a page with any open shadow root is
+  this gap too: the click engine can match it across a shadow boundary, and the browser's own
+  query cannot, so the element found may not be the one the click takes;
 - `focus unreadable`: the focused element cannot be read (section 7.3), or focus after the step
   is on a node that is not the acted control and is not in the tree read after the step, such as
   a control inside a same-origin child frame, which the tree read does not cover;

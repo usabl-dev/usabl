@@ -954,13 +954,35 @@ export async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: s
   }
 }
 
+/**
+ * Whether a CSS selector holds a combinator: a space, `>`, `+`, or `~` between two compound
+ * selectors. Text inside quotes, attribute brackets, and an nth formula such as `2n + 1` is not
+ * one. A combinator in any other place counts, inside `:is()` too, so the answer leans to true.
+ * Exported for its tests.
+ */
+export function selectorHasCombinator(selector: string): boolean {
+  const bare = selector
+    // An escaped character is part of a name.
+    .replace(/\\[\s\S]/gu, 'a')
+    .replace(/"[^"]*"|'[^']*'/gu, 'a')
+    .replace(/\[[^\]]*\]/gu, '[a]')
+    .replace(/:nth-[a-z-]+\(\s*(?:even|odd|[-+0-9n\s]*)\s*\)/giu, ':nth()')
+    // Space next to a comma, a parenthesis, or a combinator sign is not a combinator itself.
+    .replace(/\s*([,()>+~])\s*/gu, '$1')
+    .trim();
+  return /[\s>+~]/u.test(bare);
+}
+
 // The element a click step's selector names, looked up in the document and in every open shadow
 // root, or null. The click pierces open shadow roots, and document.querySelector does not, so a
 // lookup in the document alone would miss a control the click reaches. A selector the browser
 // cannot parse is null, never a guess. Matches in the document and in a shadow root together are
-// null too, because the click's order across them is its own. Returned as an object, not a value,
-// so its node can be described.
-const CONTROL_ELEMENT_FUNCTION = `function (query) {
+// null too, because the click's order across them is its own. A selector with a combinator on a
+// page with any open shadow root is null as well: the click engine can match it across a shadow
+// boundary, such as a button inside a shadow root under a row, and the browser's own query
+// cannot, so the element found may not be the one the click takes. Returned as an object, not a
+// value, so its node can be described.
+const CONTROL_ELEMENT_FUNCTION = `function (query, hasCombinator) {
   const scopes = [document];
   let first = null;
   let count = 0;
@@ -982,6 +1004,7 @@ const CONTROL_ELEMENT_FUNCTION = `function (query) {
       if (element.shadowRoot) scopes.push(element.shadowRoot);
     }
   }
+  if (hasCombinator && scopes.length > 1) return null;
   return count === 0 || (inShadow && count > 1) ? null : first;
 }`;
 
@@ -995,7 +1018,7 @@ async function backendNodeIdForControl(cdp: CDPSession, selector: string): Promi
   const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the control a step acts on');
   try {
     const evaluated: unknown = await cdp.send('Runtime.evaluate', {
-      expression: `(${CONTROL_ELEMENT_FUNCTION})(${JSON.stringify(selector)})`,
+      expression: `(${CONTROL_ELEMENT_FUNCTION})(${JSON.stringify(selector)}, ${String(selectorHasCombinator(selector))})`,
       contextId,
       objectGroup: CONTROL_NODE_GROUP,
       includeCommandLineAPI: false,

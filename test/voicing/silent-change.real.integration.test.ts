@@ -164,6 +164,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       </script>
     </body></html>`;
 
+    // The same controls with no shadow root, so a selector with a combinator can be resolved.
+    const LIGHT_CONTROLS_PAGE = CONTROLS_PAGE.replace('<x-card></x-card>', '');
+
     // The click lands where the resolution points: a mouse click focuses the button it lands on.
     async function clickedIsResolved(page: Page, selector: string): Promise<void> {
       const resolved = await page.controlNodeId(selector);
@@ -181,10 +184,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
     });
 
     it('resolves the first of several matches in the document, the one the click takes', async () => {
-      await withPage(CONTROLS_PAGE, async (page) => {
+      await withPage(LIGHT_CONTROLS_PAGE, async (page) => {
         const read = await page.fullAxTree();
         if (read.kind !== 'tree') throw new Error('the read was over budget');
         expect(await page.controlNodeId('main > button.row-action')).toBe(named(read.nodes, 'button', 'Delete row 1')?.nodeId);
+        await clickedIsResolved(page, 'main > button.row-action');
+      });
+    });
+
+    it('cannot say which control a selector with a combinator means on a page with an open shadow root', async () => {
+      await withPage(CONTROLS_PAGE, async (page) => {
+        expect(await page.controlNodeId('main > button.row-action')).toBeNull();
+        expect(await page.controlNodeId('main #save')).toBeNull();
+        // A selector with no combinator still resolves there.
+        expect(await page.controlNodeId('#save')).not.toBeNull();
       });
     });
 
@@ -307,6 +320,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       const drafts = await flow('frame-focus', click('#edit'));
       expect(outcome(drafts)).toEqual(['focus unreadable']);
       expect(drafts[0]?.confidence).toBe('unverified');
+    });
+
+    it('reports a click whose combinator selector also matches inside an open shadow root as a gap, unreadable control', async () => {
+      expect(outcome(await flow('shadow-combinator', click('.row button')))).toEqual(['unreadable control']);
     });
   });
 

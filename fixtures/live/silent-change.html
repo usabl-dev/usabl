@@ -36,6 +36,9 @@
       //                  itself, so the record holds only a removal.
       //   frame-focus    Edit writes a plain paragraph and moves focus to a named button inside a
       //                  same-origin child frame, which the tree read does not cover.
+      //   shadow-combinator  Two rows each hold a Delete button, the first inside an open shadow root.
+      //                  The click engine can match ".row button" across the shadow boundary, and
+      //                  the browser's own query matches only the document button.
       //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
       //                  the dialog in a later step.
       //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
@@ -168,6 +171,22 @@
           say('Editing');
           document.getElementById('editor').contentDocument.querySelector('button').focus();
         });
+      } else if (which === 'shadow-combinator') {
+        customElements.define(
+          'x-row-actions',
+          class extends HTMLElement {
+            constructor() {
+              super();
+              this.attachShadow({ mode: 'open' }).innerHTML = '<button type="button">Delete first</button>';
+              this.shadowRoot.querySelector('button').addEventListener('click', () => say('Deleted first'));
+            }
+          },
+        );
+        draw(
+          '<div class="row"><x-row-actions></x-row-actions></div>' +
+            '<div class="row"><button type="button" id="second">Delete second</button></div>',
+        );
+        on('second', () => say('Deleted second'));
       } else if (which === 'dialog-heard') {
         draw(
           '<dialog open id="edit"><p>Edit account</p><div aria-live="polite" id="dialog-status"></div>' +

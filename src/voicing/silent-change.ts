@@ -212,8 +212,8 @@ const GAP_TEXT: Record<SilentChangeGap, { why: string; fix: string }> = {
     fix: MANUAL_CHECK,
   },
   'unreadable control': {
-    why: 'the control the step acts on could not be resolved to one element in the document or in an open shadow root',
-    fix: 'Name the control with a CSS selector that matches one element, in the document or in one open shadow root.',
+    why: 'the control the step acts on could not be resolved to one element in the document or in an open shadow root, or its selector has a combinator on a page with an open shadow root, where the click can match across the shadow boundary',
+    fix: 'Name the control with a CSS selector that matches one element, in the document or in one open shadow root. On a page with an open shadow root, use a selector with no combinator, such as an id.',
   },
   'focus unreadable': {
     why: 'the element that has focus could not be read, such as one inside a closed shadow root, a frame from another origin, or a child frame the tree read does not cover',
