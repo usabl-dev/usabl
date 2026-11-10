@@ -129,9 +129,21 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
   },
   {
     name: 'debt',
-    usage: 'usabl debt [options]',
+    usage: 'usabl debt [ledger] [options]',
     summary: 'List the accessibility debt that remains, by screen and rule.',
-    flags: [{ name: '--json', help: 'Print the debt as JSON instead of text.' }, TRUSTED_REF_FLAG],
+    flags: [
+      { name: '--json', help: 'Print the debt, or the ledger, as JSON instead of text.' },
+      {
+        name: '--out',
+        value: '<file>',
+        help: 'For ledger: also write the full ledger as JSON to this file.',
+      },
+      {
+        name: '--trusted-ref',
+        value: '<git-ref>',
+        help: 'Read the floor from this git ref. For ledger, default: HEAD.',
+      },
+    ],
   },
   {
     name: 'history',

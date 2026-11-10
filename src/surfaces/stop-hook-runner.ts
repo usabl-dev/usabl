@@ -20,7 +20,7 @@ import { buildDeps } from '../deps/build.js';
 import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
-import { loadConfig } from '../cli.js';
+import { loadConfig } from '../intake/load-config.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {

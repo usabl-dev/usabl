@@ -54,6 +54,8 @@ export interface CliOptions {
   historySubcommand: 'record' | 'append' | null;
   historyFile: string | null;
   outPath: string | null;
+  // `usabl debt ledger`: how long accessibility barriers stay open. Null for plain `usabl debt`.
+  debtSubcommand: 'ledger' | null;
   // The single install target for `usabl install`, or null when this is not an install
   // run or when zero or several target flags were given (installRefusal handles those).
   installTarget: InstallTarget | null;
@@ -132,6 +134,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let historySubcommand: 'record' | 'append' | null = null;
   let historyFile: string | null = null;
   let outPath: string | null = null;
+  let debtSubcommand: 'ledger' | null = null;
   // Install target flags are tracked separately from the command so the exactly-one rule
   // can be enforced after parsing. --ci reuses the existing `ci` boolean below.
   let overlay = false;
@@ -170,6 +173,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
         historyFile = token;
         continue;
       }
+      if (command === 'debt' && debtSubcommand === null && token === 'ledger') {
+        debtSubcommand = 'ledger';
+        continue;
+      }
       command = token;
       if (command !== 'enforce') {
         enforceCheck = null;
@@ -183,6 +190,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
       if (command !== 'history') {
         historySubcommand = null;
         historyFile = null;
+      }
+      if (command !== 'debt') {
+        debtSubcommand = null;
       }
       continue;
     }
@@ -354,6 +364,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     historySubcommand,
     historyFile,
     outPath,
+    debtSubcommand,
     installTarget,
     cursorStopHook,
     isolatedBrowser,

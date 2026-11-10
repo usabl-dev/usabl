@@ -149,7 +149,7 @@ describe('the ledger sources in a real repository', () => {
   it('reads the committed floor, never the working tree', async () => {
     await writeFile(join(repo, '.usabl-evidence.json'), '{"version": 3, "entries": []}\n', 'utf8');
     const read = await readLedgerSources(makeLedgerGit({ cwd: repo }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main');
-    await git(repo, ['checkout', '--quiet', '--', '.usabl-evidence.json']);
+    await writeFile(join(repo, '.usabl-evidence.json'), `${JSON.stringify(PRUNED, null, 2)}\n`, 'utf8');
     if (read.kind !== 'read') throw new Error(read.message);
     expect(buildLedger({ ...read.input, now: NOW }).rows).toHaveLength(5);
   });
