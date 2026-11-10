@@ -402,6 +402,9 @@ export interface TranscriptStop {
   index: number;
   elementPath: string;
   announcement: AnnouncementToken[];
+  // Set only when the body had focus at this stop. The blank-page detector reads it, because a
+  // body with an id has that id as its path.
+  onBody?: true;
 }
 
 export interface ScreenScan {
@@ -587,6 +590,9 @@ export interface Page {
   drainAnnouncements(): Promise<string[]>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
+  // The browser's node id for the focused element, or null. It stays the same while the element
+  // is in the document, so the keyboard walk can tell a moved control from a new one.
+  activeElementKey(): Promise<string | null>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
   // Named attributes of the element and each element above it, nearest first, along the flat tree,
@@ -760,8 +766,26 @@ also returns a gap for each alert it could not check:
    tree, so a slotted alert climbs through its slot. It runs over CDP in an isolated
    world, so it sees slots inside closed shadow roots, which page script cannot, and a
    page that redefines `assignedSlot` or `parentNode` cannot change what it reads. An
-   alert passes only when the nearest value above it is polite or assertive and the
-   alert does not set off on itself. Its own live value does not count as a
+   alert passes only when the nearest value above it is polite or assertive, the
+   alert does not set off on itself, and neither the alert nor anything above it hides
+   its subtree from assistive technology with `aria-hidden`, `inert`, or `hidden`, by
+   the same rule the announcement capture applies. A live region inside such content
+   announces nothing, so the alert fails there, and the draft says it is hidden. The
+   ancestor read returns attributes and not tag names, so a closed `dialog` element
+   above the alert is not seen here. The fix for that case says to remove `aria-hidden`,
+   `inert`, or `hidden` from the alert and the elements above it. One case is the modal
+   pattern working as intended: a PatternFly modal sets `aria-hidden="true"` on the app
+   root, a child of the body, while it is open, and the live region works again when it
+   closes. So when the only hidden element in the chain is the body's child, and a modal
+   dialog is open outside it, the alert is judged by its live region alone, as with no
+   modal open. A modal counts as open when it is a `dialog` in the browser's `:modal`
+   state, or an element whose role and `aria-modal` make it a modal dialog, and it is in
+   the accessibility tree. The rule knows which entry of the chain is the body's child
+   only when the root element holds one body, no other child but the head, and the alert
+   is not in the head. When it cannot tell, and a modal is open, the alert gets an
+   `unverified` draft whose reason names the open modal, never a `fail`. An alert whose
+   own container is hidden, below the body's child, still fails with or without a modal.
+   Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
    its timer, and an alert with more than 512 ancestors each become their own
    not-covered gap, never a pass, and the check goes on to the other alerts.
@@ -769,7 +793,21 @@ also returns a gap for each alert it could not check:
    trigger.
 3. `pf-focus-into-dialog`: focus moves into a dialog or menu on open.
 4. `pf-kebab-expanded-state`: kebab and menu toggles carry correct aria-expanded and
-   aria-haspopup, and focus enters the menu.
+   aria-haspopup, and focus enters the menu. The menu probe clicks each toggle and waits
+   for a new menu the way the dialog probe waits for its dialog, polling for up to 2.5
+   seconds, so a menu that mounts a moment after the click is checked. When the toggle
+   declares `aria-haspopup="menu"`, or `"true"`, its legacy synonym, and no menu
+   appears, the probe emits one `unverified` draft, because it could not check where
+   focus goes. A toggle that promises no menu and opens none is not reported. A menu
+   counts as opened when it is new after the click, or when it was in the page but out of
+   the accessibility tree before the click and is in it after, as a menu toggled with the
+   `hidden` attribute is. This costs one accessibility read per menu in the page before
+   each click, and one per such hidden menu on each poll while the probe waits. A toggle
+   whose `aria-expanded` is `true` before the click is skipped when a menu is open on the
+   page, or when the element its `aria-controls` names is in the accessibility tree,
+   because the click would close that menu. With no menu open, the toggle reports a state
+   that is not true, so the probe emits one `unverified` draft that says so, and does not
+   click it.
 5. `pf-icon-button-name`: icon-only buttons, kebab toggles, and pagination arrows have
    an accessible name.
 6. `pf-table-header-assoc`: table header association is present, and empty/loading
@@ -840,16 +878,23 @@ and stay out of it.
 
 | Rule | Element | Fails when | Evidence |
 | --- | --- | --- | --- |
-| `rhds-button-accessible-label` | `rh-button` | no `accessible-label`, no default-slot text, and the tree name of the inner button is empty | tree |
+| `rhds-button-accessible-label` | `rh-button` | no `accessible-label`, no default-slot text a screen reader can reach, and the tree name of the inner button is empty | tree |
 | `rhds-cta-link` | `rh-cta` | no `href` or an empty one, and its first child in the default slot is not an `a` or a `button` | markup |
 | `rhds-tabs-paired` | `rh-tabs` | the count of `rh-tab` children in the tab slot differs from the count of `rh-tab-panel` children in the default slot | markup |
-| `rhds-dialog-name` | `rh-dialog` | no `accessible-label`, no `h1` to `h6` heading in the header or default slot, no trigger with text, and the tree name of the inner dialog is empty | tree |
+| `rhds-dialog-name` | `rh-dialog` | no `accessible-label`, no `h1` to `h6` heading with text in the header or default slot, no trigger with text, and the tree name of the inner dialog is empty | tree |
 | `rhds-switch-label` | `rh-switch` | no `accessible-label`, no `label[for]` that names its id, and the tree name of the host is empty | tree |
 | `rhds-accordion-header-parent` | `rh-accordion-header` | its parent is not `rh-accordion` | markup |
 | `rhds-skip-link-target` | `rh-skip-link` | no `href` (or an empty one) and no slotted `a`, or an `href` fragment that names no element by id (or an anchor by name) in the document, as written or percent-decoded | markup |
 
 Default slot means a child with no `slot` attribute or with `slot=""`, as the DOM assigns
-it. The component takes any unslotted heading as its name, so an `h1` counts.
+it. The component takes any unslotted heading as its name, so an `h1` counts. An empty
+heading names nothing, so it does not count as a name source, and the rule asks the tree.
+Default-slot text is only the text a screen reader can reach: text under `aria-hidden`,
+`inert`, `hidden`, a closed `dialog`, `display: none`, or `visibility: hidden` is left out,
+so an "x" under `aria-hidden` does not stand in for a name. Text hidden only on screen, such
+as a screen-reader-only class, still counts. A markup source that is missing sends the rule to
+the tree, so leaving hidden text out can only lead to more tree checks, never to a fail the
+tree does not confirm.
 
 All drafts are `deterministic`. The markup rules fail outright. The naming rules trust the
 accessibility tree: markup decides whether a name source exists, and a draft fails only when
@@ -907,8 +952,28 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
-**How the walk ends.** The walk starts on the body. Only focus on the body completes it: a
-browser moves focus there after the last control on the page. Tab that brings focus back to
+**How the walk ends.** The walk starts on the body. Only focus on the body can complete it: a
+browser moves focus there after the last control on the page. A script that blurs a control
+when it gets focus, or a keydown handler that stops Tab and drops focus, also leaves focus on
+the body, in the middle of the page. So the walk confirms the end with one more Tab. In
+Chromium, Tab after the last control moves focus to the body and the next Tab goes back to the
+first control, on a page with three controls and on a page with one; on a page with no control,
+every Tab leaves focus on the body (`test/providers/keyboard-walk.real.integration.test.ts`
+records this). The walk is complete only when that extra Tab lands on a stop it already walked.
+Any walked stop counts, not only the first, and a stop counts when it is the same element or has
+the same path. The element is matched by the browser's own node id, read over CDP
+(`Page.activeElementKey`), which does not change while the element stays in the document. So a
+first control that goes away during the walk, such as a timed banner whose removal moves every
+control after it to a new path, still wraps to a known stop, and so does a list that re-renders
+and puts a new item at the path of the first stop. When the browser gives a node id for both
+elements, a path match alone counts only for the first stop walked, so another element that took
+a later stop's path does not confirm the end. After the extra Tab, the walk discards what that
+Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
+where it did before the end was confirmed. A walk that reached no stop is complete only when
+the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
+below, which runs in the CLI only. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
+more Tab did not go back to a control the walk had reached. A page with one control or a skip
+link wraps as any other page does. Tab that brings focus back to
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
 never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
 `keyboard-walk-truncated` as `unverified`, and the cycle is the stops from the first visit of
@@ -960,6 +1025,28 @@ and frames, the walk cannot tell one control there from another. It stops and em
 `keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
 covered instead of passing. A closed shadow root that does not hold focus, such as one
 inside a focusable host, is walked past as usual.
+
+**A blank page.** Each stop of the transcript the check runner collects records whether the body
+had focus there (`onBody`), read from the page in an isolated world. A screen where every stop
+has focus on the body is unseen: a page that never rendered, one behind a login, and one that
+threw on mount all look like this, so its findings are dropped and it gets a `not-covered` gap
+(`coverage/unseen.ts`). The detector reads that fact, not the path. A body with an id has that
+id as its path, so `<body id="app">` never read as the body when the detector read the tail of
+the path, and a screen that crashed on mount read as seen. An empty transcript is no evidence
+either way, so it is not unseen. The detector runs in the CLI only. `checkPage` collects no
+transcript, so it has no blank-page detector: a blank or crashed page handed to `checkPage` reads
+as checked unless its screen declares a `reachedWhen` readiness signal that the page fails.
+
+Known limits of what the scan sees. A page with no tabbable control has a walk that stays on the
+body, so the CLI reads it as unseen. A readiness signal that holds does not change that, because
+the two detectors are independent (`coverage/unseen.ts`). In `checkPage` the same page reads as
+checked. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
+and that wait is a wall-clock limit: a menu or dialog that opens later is read as one that did
+not open, which is an `unverified` draft when the toggle or trigger promised it and nothing
+otherwise. The live-region
+capture still records text that is out of the accessibility tree in three cases it does not
+read: text under `content-visibility: hidden`, text inside a closed `details` element, and text
+under an element hidden through `ElementInternals`.
 
 The other checks that read focus treat an unreadable focus the same way. Each transcript
 stop records why its focused element could not be read. At such a stop, the interaction
@@ -3505,7 +3592,16 @@ that writes `Saved` into a polite region inside its dialog and closes the dialog
 is not heard: by the time the change is read, the dialog is closed, and no screen reader speaks the
 text. The hidden state is read again at drain, the way the modal state is, so a region whose
 dialog closes one task later, or after a promise that follows the write, is not heard either.
-Anything that hides the region by the drain decides, which can only make the capture hear less. It covers a region inside `aria-hidden="true"`, an
+Anything that hides the region by the drain decides, which can only make the capture hear less.
+Inside a live region, the capture records only text in the accessibility tree. A change whose
+added nodes are all out of it is not recorded, and the text recorded for the region leaves out
+every part under `aria-hidden`, `inert`, `hidden`, a closed `dialog`, `display: none`, or
+`visibility: hidden`. So text written into a polite region only under an `aria-hidden` child, which
+no screen reader speaks, cannot satisfy a flow's expected announcement. Text hidden only on
+screen stays in the tree and every screen reader speaks it, so it is still recorded: PatternFly's
+screen-reader class, a clip rectangle, a box of zero size, opacity 0, and a `display: contents`
+wrapper. Visibility is read on the element that holds each text node, so a child that sets
+`visibility: visible` inside a hidden wrapper is heard. It covers a region inside `aria-hidden="true"`, an
 `aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
 says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
 back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as
@@ -3591,6 +3687,39 @@ invisible character, throws `InputRefusedError` before `checkPage` reads the pro
 the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
+
+**The page's address.** A test whose session expired lands on a sign-in page, and the page
+handed to `checkPage` is then not the screen it is labeled with. So when `options.screenId`
+names a surface that `usabl.config.json` lists, `checkPage` holds the page to that surface's
+`url`. The caller can pass `options.expectedUrl` instead, as a full address or a path such as
+`/clusters` read against the page's own address. Only the path, with one trailing slash removed,
+and the fragment are compared. The origin and the port are set aside, because a test often runs
+on its own base URL, on another port, or on `localhost` where the config says `127.0.0.1`. The
+query is set aside too, as in the CLI's Rule C. The fragment is compared because a hash router
+keeps the whole route there. A hash route, a fragment that starts with `#/`, is read the way a
+path is: only the part before its first `?` is compared, with one trailing slash removed, so
+`#/clusters?page=2` and `#/clusters/` match `#/clusters`. Any other fragment is compared whole.
+An `expectedUrl` that is not an http or https address, such as `about:blank`, is the same
+`landing:<screenId>` gap, with a reason that says so, and `checkPage` does not throw. When the
+screen declares no readiness signal, `checkPage` first waits for the page to settle, as the CLI
+does, and then reads the address. It reads the address again after the checks, and a page that
+left its screen while they ran is the same gap, with its findings dropped. A page at another path or fragment is a `not-covered` gap with ref
+`landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
+and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
+applied to the page, with the expected address moved onto the page's own origin, so Rule C
+compares only the path and the fragment. Rules A and B fire only when the run asserts a session,
+because they are claims about a session that was asserted and did not work. A test asserts one
+with `options.signedIn: true`, or the CLI's way, with `USABL_STORAGE_STATE` set. A Playwright test
+usually signs in through its context's storage state, which usabl cannot see, so it says so with
+`signedIn`. Without `signedIn` or the variable, a sign-in page served at the screen's own path,
+as a sign-in proxy can serve it, is not caught: the path matches and Rules A and B are off. An adopted page records only the requests sent after `checkPage` was
+called, so Rule A sees a refusal only from those, and it is read again after the checks, as in the
+CLI. A rule that fires is the same `landing:<screenId>` gap. An unlabeled page, and a page whose id
+names no configured surface, claims no address, so it is not held to one unless the caller passes
+`expectedUrl`. The address check runs after the readiness wait described next. A page that the
+test opened with `setContent` is at `about:blank`, so a labeled one is a gap; serve it at the
+screen's address or leave it unlabeled. An in-page anchor changes the fragment, so a page whose
+test followed one is a gap until the caller passes `expectedUrl` with that fragment.
 
 When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
 holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits

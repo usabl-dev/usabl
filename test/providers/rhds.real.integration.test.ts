@@ -154,6 +154,19 @@ const DIALOG_H1_OPEN = page(
   </script>`,
 );
 
+// An open dialog whose only heading is empty, and a button whose only text is an "x" under
+// aria-hidden. Neither is a name, so each rule must ask the accessibility tree. The dialog opens as
+// a modal, which makes the rest of the page inert, so the button sits inside it.
+const EMPTY_NAME_SOURCES = page(
+  'Empty name sources',
+  `<main><h1>Empty name sources</h1>
+  <rh-dialog id="empty-heading"><h2></h2><p>Body</p><rh-button id="hidden-x"><span aria-hidden="true">x</span></rh-button></rh-dialog></main>
+  <script type="module">
+    await customElements.whenDefined('rh-dialog');
+    document.getElementById('empty-heading').show();
+  </script>`,
+);
+
 // A closed dialog with no name source in its markup: the tree cannot be asked.
 const DIALOG_CLOSED_UNNAMED = page('Dialog closed', '<main><h1>Closed</h1><rh-dialog id="closed-unnamed"><p>Body</p></rh-dialog></main>');
 
@@ -202,6 +215,7 @@ const PAGES: Record<string, string> = {
   '/pf-in-frame': PF_IN_FRAME,
   '/dialog-h1-open': DIALOG_H1_OPEN,
   '/dialog-closed-unnamed': DIALOG_CLOSED_UNNAMED,
+  '/empty-name-sources': EMPTY_NAME_SOURCES,
   '/in-shadow': IN_SHADOW,
   '/in-frame': IN_FRAME,
   '/inner-frame': INNER_FRAME,
@@ -384,6 +398,19 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
     const closed = await scan('/dialog-closed-unnamed', false);
     expect(closed.drafts.filter((draft) => draft.layer === 'rhds')).toEqual([
       expect.objectContaining({ rule: 'rhds-dialog-name', elementPath: '#closed-unnamed', confidence: 'unverified' }),
+    ]);
+  });
+
+  it('asks the tree for a dialog whose only heading is empty and a button whose only text is hidden', async () => {
+    const result = await scan('/empty-name-sources', false);
+    expect(
+      result.drafts
+        .filter((draft) => draft.layer === 'rhds')
+        .map((draft) => [draft.rule, draft.elementPath, draft.confidence])
+        .sort(),
+    ).toEqual([
+      ['rhds-button-accessible-label', '#hidden-x', 'fail'],
+      ['rhds-dialog-name', '#empty-heading', 'fail'],
     ]);
   });
 

@@ -392,6 +392,65 @@
   with ENOTDIR, and the run ended with no verdict. The search now starts from the file's folder,
   and a read of a path below a file returns nothing, the same as a missing file.
 
+- A keyboard walk cut short by a page script is now a truncation. A focus handler that blurs a
+  control, or a keydown handler that stops Tab and drops focus to the body, ended the walk as
+  complete. The walk now presses Tab once more after focus reaches the body and is complete only
+  when focus lands on a control it already walked. Teams will see `keyboard-walk-truncated` where
+  such a screen read as walked, and the screen as not covered unless the evidence floor holds a
+  truncation for that screen. A page with one control, a skip link, a timed banner that goes
+  away, or a list that re-renders still walks complete. After that Tab the walk puts focus back on
+  the body and discards what the Tab announced, so a flow that starts with a Tab still starts on
+  the first control.
+
+- A blank screen whose body has an id, such as `<body id="app">`, is now unseen. The blank-page
+  detector read the end of each stop's path, and that body's path is its id, so a screen that
+  crashed on mount read as seen and could verify. Teams will see the not-covered gap that says
+  usabl did not see the screen. A page whose body has an id and that renders its controls is
+  still seen.
+
+- `checkPage` now reports not covered when the page is not at its screen's address. A page
+  labeled with a surface from `usabl.config.json` is held to that surface's `url`, or to
+  `expectedUrl` when the caller passes one, by path and fragment only, and then to the CLI's
+  landing rules. A test whose session expired and landed on a sign-in page was checked as the
+  labeled screen. Teams will see a `landing:<screenId>` gap that names both addresses. With no
+  readiness signal, `checkPage` waits for the page to settle before it reads the address, and
+  reads it again after the checks, so a router that moves to a sign-in page a moment after load,
+  or while the checks run, is the same gap. A test on its own base URL or port, on `localhost`
+  where the config says `127.0.0.1`, or with a trailing slash still passes, and so does a
+  hash-routed app, whose route is compared without the query inside it and with one trailing
+  slash removed. An unlabeled page is not held to an address. A labeled page opened with
+  `setContent` is at `about:blank`, so it now reads as not covered, and an `expectedUrl` that is
+  not http or https is the same gap instead of an error.
+
+- `checkPage` takes `signedIn: true` for a test that is signed in. It turns on the two landing
+  rules that read a refused data request or a password field as a session that did not work, as
+  `USABL_STORAGE_STATE` does. Teams that pass it will see a `landing:<screenId>` gap where a
+  sign-in page was served at the screen's own path. Without it, or the variable, such a page is
+  still not caught.
+
+- The PatternFly menu probe now waits for a menu that mounts after the click, as the dialog probe
+  waits for its dialog. Teams will see `pf-kebab-expanded-state` findings on late menus that were
+  missed with no draft, and an `unverified` draft when a toggle declares `aria-haspopup="menu"`
+  or `"true"` and no menu appears. A menu that stays in the page while closed, such as one
+  toggled with the `hidden` attribute, counts as opened when the click exposes it. A toggle whose
+  menu is already open is left alone. Teams will also see an `unverified` draft on a toggle that
+  says `aria-expanded="true"` while no menu is open. A scan spends up to 2.5 seconds more on each
+  toggle that opens no menu.
+
+- The live-region capture now records only text in the accessibility tree. Text written into a
+  live region under `aria-hidden`, `inert`, `hidden`, `display: none`, or `visibility: hidden`
+  could satisfy a flow's expected announcement, though no screen reader speaks it. Teams will see
+  such a flow fail. Text hidden only on screen, such as PatternFly's screen-reader class, is
+  still heard and still passes.
+
+- `pf-toast-live-region` now flags an alert that it or an element above it hides from assistive
+  technology with `aria-hidden`, `inert`, or `hidden`, and its fix says to remove them. An alert
+  in the app root while a modal dialog is open outside it is judged by its live region as before,
+  because the modal hides the root on purpose. When the rule cannot tell which element is the
+  app root, that alert is `unverified`, never a failure. `rhds-dialog-name` no longer counts an empty heading as a name, and the RHDS rules no longer
+  count default-slot text under `aria-hidden` or other hidden content as a name, so each asks the
+  accessibility tree instead. Teams will see more true findings on those rules.
+
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
   flow had already changed it and could miss a barrier the flow had removed from view.

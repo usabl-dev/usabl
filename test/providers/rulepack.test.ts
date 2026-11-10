@@ -217,21 +217,46 @@ describe('makeRulepackProvider', () => {
     expect(gapsOf(namedOutput)).toEqual([]);
   });
 
-  it('flags kebab toggles missing expanded or haspopup state and skips complete toggles', async () => {
+  // A toggle whose attributes match its accessibility tree state. The toggle that declares a menu
+  // opens one and moves focus into it, as a correct toggle does. The other declares no menu and opens
+  // none, so the menu probe waits its full 2.5 seconds for a menu and then says nothing. That wait is
+  // the probe's real cost on such a toggle, so this test needs more than the default 5 seconds.
+  async function kebabContext(toggle: ElementRef, attributes: Record<string, string>, opensMenu: boolean): Promise<ProviderContext> {
+    const menu = element('.kebab-menu');
+    let open = false;
+    const states: Record<string, unknown> = {};
+    if (attributes['aria-expanded'] !== undefined) {
+      states['expanded'] = attributes['aria-expanded'] === 'true';
+    }
+    if (attributes['aria-haspopup'] !== undefined) {
+      states['haspopup'] = attributes['aria-haspopup'];
+    }
+    const ctx = await makeContext({ [SEL.menuToggle]: [toggle] }, { [toggle.selector]: { name: 'Row actions', role: 'button', states } });
+    const queryAll = ctx.page.queryAll.bind(ctx.page);
+    const axAt = ctx.page.axAt.bind(ctx.page);
+    Object.assign(ctx.page, {
+      queryAll: async (selector: string) => (selector === SEL.menu ? (open ? [menu] : []) : queryAll(selector)),
+      axAt: async (selector: string) => (selector === menu.selector && open ? { name: 'Row actions', role: 'menu', states: {} } : axAt(selector)),
+      getAttribute: async (selector: string, name: string) => (selector === toggle.selector ? (attributes[name] ?? null) : null),
+      click: async (selector: string) => {
+        if (selector === toggle.selector && opensMenu) {
+          open = true;
+        }
+      },
+      press: async (key: string) => {
+        if (key === 'Escape') {
+          open = false;
+        }
+      },
+      activeElementWithin: async (selector: string) => selector === menu.selector && open,
+    });
+    return ctx;
+  }
+
+  it('flags kebab toggles missing expanded or haspopup state and skips complete toggles', { timeout: 15_000 }, async () => {
     const toggle = element('.kebab-toggle');
     const provider = makeRulepackProvider();
-    const missingStatesContext = await makeContext(
-      {
-        [SEL.menuToggle]: [toggle],
-      },
-      {
-        [toggle.selector]: {
-          name: 'Row actions',
-          role: 'button',
-          states: { expanded: false },
-        },
-      },
-    );
+    const missingStatesContext = await kebabContext(toggle, { 'aria-expanded': 'false' }, false);
 
     const missingStateDrafts = draftsOf(await provider.run(missingStatesContext));
 
@@ -243,18 +268,7 @@ describe('makeRulepackProvider', () => {
       elementPath: toggle.selector,
     });
 
-    const completeStatesContext = await makeContext(
-      {
-        [SEL.menuToggle]: [toggle],
-      },
-      {
-        [toggle.selector]: {
-          name: 'Row actions',
-          role: 'button',
-          states: { expanded: false, haspopup: 'menu' },
-        },
-      },
-    );
+    const completeStatesContext = await kebabContext(toggle, { 'aria-expanded': 'false', 'aria-haspopup': 'menu' }, true);
 
     const completeStatesOutput = await provider.run(completeStatesContext);
     expect(draftsOf(completeStatesOutput)).toEqual([]);

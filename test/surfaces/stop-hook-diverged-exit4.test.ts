@@ -93,7 +93,9 @@ describe('Stop hook on a run where every screen is unseen and guarded policy div
   const config = testConfig({
     surfaces: [{ id: 'overview', url: 'http://127.0.0.1:4200/overview', files: ['fixtures/app/src/OverviewPage.tsx'] }],
   });
-  const bodyOnly: TranscriptStop[] = [{ index: 0, elementPath: 'html > body:nth-child(2)', announcement: [] }];
+  const bodyOnly: TranscriptStop[] = [
+    { index: 0, elementPath: 'html > body:nth-child(2)', announcement: [], onBody: true },
+  ];
   const blank: ScreenScan = {
     screenId: 'overview',
     url: 'http://127.0.0.1:4200/overview',

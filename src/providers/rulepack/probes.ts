@@ -4,7 +4,7 @@
  * Focus checks stay inside Page predicates so selector strings are never compared to DOM path strings.
  */
 import { setTimeout as delay } from 'node:timers/promises';
-import type { AxNode, Draft, ProviderContext } from '../../contracts/index.js';
+import type { AxNode, Draft, ElementRef, ProviderContext } from '../../contracts/index.js';
 import { SEL } from './selectors.js';
 
 const FOCUS_SETTLE_TIMEOUT_MS = 2_500;
@@ -164,6 +164,28 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
   return drafts;
 }
 
+/**
+ * Whether a menu is open on the page for an expanded toggle: the element its aria-controls names is
+ * exposed to assistive technology, or any menu on the page is. A menu that stays in the page while
+ * it is closed is hidden from assistive technology, so it does not count.
+ */
+async function menuOpenFor(ctx: ProviderContext, toggle: ElementRef): Promise<boolean> {
+  const controls = (await ctx.page.getAttribute(toggle.selector, 'aria-controls')) ?? '';
+  for (const id of controls.split(/\s+/).filter((token) => token.length > 0)) {
+    // An attribute selector with the id quoted, so an id with any character still names one element.
+    const selector = `[id="${id.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+    if ((await ctx.page.axAt(selector)) !== null) {
+      return true;
+    }
+  }
+  for (const menu of await ctx.page.queryAll(SEL.menu)) {
+    if ((await ctx.page.axAt(menu.selector)) !== null) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
   const toggles = await ctx.page.queryAll(SEL.menuToggle);
   const drafts: Draft[] = [];
@@ -171,20 +193,80 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
   for (const toggle of toggles) {
     try {
       const toggleNode = await ctx.page.axAt(toggle.selector);
+      // A toggle whose menu is already open closes it on the click, so the click would show no new
+      // menu and read as a promise broken. Its menu is left as it is. A toggle that says it is
+      // expanded while no menu is open reports a state that is not true, which is itself an
+      // accessibility barrier the probe cannot judge, so it says so instead of skipping in silence.
+      if ((await ctx.page.getAttribute(toggle.selector, 'aria-expanded')) === 'true') {
+        if (!(await menuOpenFor(ctx, toggle))) {
+          drafts.push(
+            draft(
+              ctx,
+              toggleNode,
+              'pf-kebab-expanded-state',
+              toggle.selector,
+              'unverified',
+              'Could not verify menu focus behavior.',
+              'The toggle reports aria-expanded="true", but no menu is open on the page, so the probe could not check where focus goes.',
+              'Set aria-expanded to "true" only while the menu is open, and to "false" when it closes.',
+            ),
+          );
+        }
+        continue;
+      }
+      // aria-haspopup="menu", and "true", its legacy synonym, promise a menu. A PatternFly
+      // MenuToggle found by its OUIA type promises nothing by markup alone.
+      const haspopup = await ctx.page.getAttribute(toggle.selector, 'aria-haspopup');
+      const declaresMenu = haspopup === 'menu' || haspopup === 'true';
       // Record the menus already open before this toggle acts. The menu this toggle opens is one
       // that appears now but was not present before the click. Scoping the focus check to those,
       // rather than any [role=menu] on the page, fixes both directions: a stale menu sitting ahead
       // in query order no longer causes a false fail, and focus resting in an unrelated already-open
       // menu no longer counts as this toggle's success (a false pass).
-      const menusBefore = new Set((await ctx.page.queryAll(SEL.menu)).map((menu) => menu.selector));
+      //
+      // A menu can also stay in the page while it is closed, hidden from assistive technology, as a
+      // menu toggled with the hidden attribute is. The click exposes it rather than adding it, so a
+      // menu hidden before the click and exposed after it counts as opened too.
+      const before = await ctx.page.queryAll(SEL.menu);
+      const menusBefore = new Set(before.map((menu) => menu.selector));
+      const hiddenBefore: ElementRef[] = [];
+      for (const menu of before) {
+        if ((await ctx.page.axAt(menu.selector)) === null) {
+          hiddenBefore.push(menu);
+        }
+      }
       await ctx.page.click(toggle.selector);
 
-      const openedMenus = (await ctx.page.queryAll(SEL.menu)).filter(
-        (menu) => !menusBefore.has(menu.selector),
-      );
+      // A menu can mount a moment after the click, so wait for it the way the dialog probe waits
+      // for its dialog. Read once at once, a late menu was missed with no draft.
+      let openedMenus: ElementRef[] = [];
+      await waitFor(async () => {
+        openedMenus = (await ctx.page.queryAll(SEL.menu)).filter((menu) => !menusBefore.has(menu.selector));
+        for (const menu of hiddenBefore) {
+          if ((await ctx.page.axAt(menu.selector)) !== null) {
+            openedMenus.push(menu);
+          }
+        }
+        return openedMenus.length > 0;
+      });
       if (openedMenus.length === 0) {
-        // No new menu opened, so there is nothing to judge focus against. Do not fault the toggle.
         await ctx.page.press('Escape');
+        // A toggle that promised a menu and opened none is a promise the probe could not check.
+        // Any other toggle opened something that is not a menu, which says nothing about it.
+        if (declaresMenu) {
+          drafts.push(
+            draft(
+              ctx,
+              toggleNode,
+              'pf-kebab-expanded-state',
+              toggle.selector,
+              'unverified',
+              'Could not verify menu focus behavior.',
+              `The toggle declares aria-haspopup="${haspopup}" but no menu appeared when it was activated, so the probe could not check where focus goes.`,
+              'Confirm the toggle opens a menu, or remove aria-haspopup from it.',
+            ),
+          );
+        }
         continue;
       }
 
