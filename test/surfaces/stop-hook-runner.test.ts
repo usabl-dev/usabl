@@ -5,6 +5,7 @@ import { mintReceipt } from '../../src/evidence/receipt.js';
 import { BYPASS_ONCE_PATH } from '../../src/surfaces/receipt-store.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin, sessionPinFileName } from '../../src/surfaces/stop-hook-runner.js';
+import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
 
 class MemoryRunnerFs {
@@ -93,6 +94,7 @@ function makePorts(overrides: {
       stderrWrite: async (text: string) => {
         stderr.push(text);
       },
+      readConfigBytes: async () => committedConfigBytes(),
       loadConfig: overrides.loadConfig ?? (async () => configFixture),
       buildDeps: overrides.buildDeps ?? (async (_config: UsablConfig) => deps),
       runEngine: overrides.runEngine ?? (async () => baseResult({ verdict: 'verified' })),
@@ -811,8 +813,8 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
 
   it('prints an error message only inside the frame', async () => {
     const { ports, stderr } = makePorts({
-      loadConfig: async () => {
-        throw new Error(`config broke\n${INJECTED}`);
+      buildDeps: async () => {
+        throw new Error(`deps broke\n${INJECTED}`);
       },
     });
 
@@ -822,6 +824,21 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     expect(text.startsWith('NOT verified - stop hook error')).toBe(true);
     expect(text).toContain(INJECTED);
     expect(onlyInsideFrames(text, INJECTED)).toBe(true);
+  });
+
+  it('prints a config parse error only inside the frame of the approval block', async () => {
+    const { ports, stdout } = makePorts({
+      loadConfig: async () => {
+        throw new Error(`config broke\n${INJECTED}`);
+      },
+    });
+
+    await runStopHookFromStdin(JSON.stringify({ session_id: 'session-parse-error' }), ports);
+
+    const reason = (JSON.parse(stdout.join('').trim()) as { reason: string }).reason;
+    expect(reason.startsWith('NOT verified - approval required')).toBe(true);
+    expect(reason).toContain(INJECTED);
+    expect(onlyInsideFrames(reason, INJECTED)).toBe(true);
   });
 
   it('allows on a matching receipt when pin replacement is refused, and says the next stop uses older pins', async () => {
