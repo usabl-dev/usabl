@@ -18,7 +18,11 @@ import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { legacyDownloadDrift } from '../install/usabl-command.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
-import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
+import { gateBranchTarget, verifyBranchRule, REQUIRED_CHECK, type BranchTarget, type GhReader } from '../install/branch-rule.js';
+import { workflowTriggerBranch } from '../install/repo-git.js';
+import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
+import { DOCS_GATE_BRANCHED, GATE_BRANCHED, earlierDraftPin, type BranchedWorkflow } from '../install/workflow-branch.js';
+import { HISTORY_BRANCHED } from '../install/history-ci.js';
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
@@ -79,9 +83,15 @@ function claudeSkillLabel(skill: ClaudeSkillDescriptor): string {
 const CURSOR_LABEL = 'cursor stop hook + assistant (.cursor/hooks + commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const HISTORY_CI_LABEL = `ci history workflow (${USABL_HISTORY_WORKFLOW_PATH})`;
-// The label names the check the operator must require. It reads that name from branch-rule
-// rather than spelling it out, so doctor can never tell someone to require a stale job name.
-const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
+const DOCS_CI_LABEL = `ci docs gate workflow (${USABL_DOCS_GATE_WORKFLOW_PATH})`;
+// The label names the check the operator must require and the branch the check read. It reads the
+// check name from branch-rule rather than spelling it out, so doctor can never tell someone to
+// require a stale job name.
+function branchRuleLabel(target: BranchTarget): string {
+  return target.source !== 'assumed'
+    ? `branch protection (${target.name} requires ${REQUIRED_CHECK})`
+    : `branch protection (${target.name}, assumed, requires ${REQUIRED_CHECK})`;
+}
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 const CHROMIUM_SANDBOX_LABEL = 'chromium sandbox (isolates the pages usabl scans)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
@@ -659,7 +669,20 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
-async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
+// The next step for a workflow file that is the unedited draft an earlier 0.3.0 build wrote, or
+// null when it is not. Install rewrites such a file and keeps a pin it holds, so the step says to run
+// it. It promises to keep the pin only when the file has one.
+function earlierDraftStep(raw: string | null, workflow: BranchedWorkflow, what: string, command: string): string | null {
+  const pin = earlierDraftPin(raw, workflow);
+  if (pin === null) return null;
+  const rewrite =
+    pin === 'pinned'
+      ? 'it rewrites the file and keeps its engine pin.'
+      : 'it rewrites the file. The file has no engine pin yet, so install pins the engine to the commit this usabl was built from, or prints the line to edit.';
+  return `The ${what} is the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise. Run "${command}": ${rewrite}`;
+}
+
+async function collectCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {
   // doctor asks a finer question than planCi: is the gate workflow present, structurally
   // correct, AND pinned to a trusted engine commit? classifyGateWorkflow answers that from the
   // same draft constant install uses.
@@ -672,12 +695,12 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   const raw = await deps.fs.readFile(USABL_GATE_WORKFLOW_PATH);
   const state = classifyGateWorkflow(raw);
   if (state === 'wired') {
-    return { id: 'ci', label: CI_LABEL, state: 'wired', nextStep: '' };
+    return { id: 'ci', label, state: 'wired', nextStep: '' };
   }
   if (state === 'missing') {
     return {
       id: 'ci',
-      label: CI_LABEL,
+      label,
       state: 'missing',
       nextStep: 'No usabl gate workflow. Run "usabl install --ci" to write the draft.',
     };
@@ -685,7 +708,7 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   if (state === 'unpinned') {
     return {
       id: 'ci',
-      label: CI_LABEL,
+      label,
       state: 'drifted',
       // Do not tell the operator to run "usabl install --ci" here. That command fills the pin
       // only when this usabl has a clean build commit; without one it changes nothing and
@@ -696,23 +719,26 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   }
   return {
     id: 'ci',
-    label: CI_LABEL,
+    label,
     state: 'drifted',
-    nextStep: 'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+    nextStep:
+      earlierDraftStep(raw, GATE_BRANCHED, 'gate workflow', 'usabl install --ci') ??
+      'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
   };
 }
 
-async function collectHistoryCi(deps: DoctorDeps): Promise<SurfaceReport> {
+async function collectHistoryCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {
   // The same recognizer rules as the gate, from the draft install writes, for whichever branch the
   // file names. The history workflow is optional, so missing is information, not a fault.
-  const state = classifyHistoryWorkflow(await deps.fs.readFile(USABL_HISTORY_WORKFLOW_PATH));
+  const raw = await deps.fs.readFile(USABL_HISTORY_WORKFLOW_PATH);
+  const state = classifyHistoryWorkflow(raw);
   if (state === 'wired') {
-    return { id: 'history-ci', label: HISTORY_CI_LABEL, state: 'wired', nextStep: '' };
+    return { id: 'history-ci', label, state: 'wired', nextStep: '' };
   }
   if (state === 'missing') {
     return {
       id: 'history-ci',
-      label: HISTORY_CI_LABEL,
+      label,
       state: 'missing',
       nextStep: 'No usabl history workflow. It is optional: it scans the default branch so a fixed accessibility barrier closes its slot in the accepted debt. Run "usabl install --ci" to write it.',
     };
@@ -720,7 +746,7 @@ async function collectHistoryCi(deps: DoctorDeps): Promise<SurfaceReport> {
   if (state === 'unpinned') {
     return {
       id: 'history-ci',
-      label: HISTORY_CI_LABEL,
+      label,
       state: 'drifted',
       // As for the gate: the edit always works, and a re-run of install --ci without a clean build
       // commit would change nothing.
@@ -729,9 +755,77 @@ async function collectHistoryCi(deps: DoctorDeps): Promise<SurfaceReport> {
   }
   return {
     id: 'history-ci',
-    label: HISTORY_CI_LABEL,
+    label,
     state: 'drifted',
-    nextStep: 'A history workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+    nextStep:
+      earlierDraftStep(raw, HISTORY_BRANCHED, 'history workflow', 'usabl install --ci') ??
+      'A history workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+  };
+}
+
+async function collectDocsCi(deps: DoctorDeps, label: string): Promise<SurfaceReport> {
+  // The same recognizer rules as the app gate, from the draft install writes, for whichever branch
+  // the file names. The docs gate is optional, as the history workflow is, so missing is
+  // information, not a fault.
+  const raw = await deps.fs.readFile(USABL_DOCS_GATE_WORKFLOW_PATH);
+  const state = classifyDocsGateWorkflow(raw);
+  if (state === 'wired') {
+    return { id: 'docs-ci', label, state: 'wired', nextStep: '' };
+  }
+  if (state === 'missing') {
+    return {
+      id: 'docs-ci',
+      label,
+      state: 'missing',
+      nextStep: 'No usabl docs gate workflow. It is optional: it gates pull requests to rendered documentation. Run "usabl install --docs-ci" to write it.',
+    };
+  }
+  if (state === 'unpinned') {
+    return {
+      id: 'docs-ci',
+      label,
+      state: 'drifted',
+      // As for the gate: the edit always works, and a re-run of install --docs-ci without a clean
+      // build commit would change nothing.
+      nextStep: `The docs gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_DOCS_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with a full 40-character commit SHA you trust.`,
+    };
+  }
+  return {
+    id: 'docs-ci',
+    label,
+    state: 'drifted',
+    nextStep:
+      earlierDraftStep(raw, DOCS_GATE_BRANCHED, 'docs gate workflow', 'usabl install --docs-ci') ??
+      'A docs gate workflow is present but differs from the usabl draft. Run "usabl install --docs-ci" to see where, and reconcile by hand.',
+  };
+}
+
+// The branch each workflow label names and the branch the branch rule check reads, from the files
+// on disk. A file that cannot be read names no branch, and the check then assumes main and says so.
+interface BranchLabels {
+  ci: string;
+  docsCi: string;
+  historyCi: string;
+  target: BranchTarget;
+}
+
+async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
+  const read = async (path: string): Promise<string | null> => {
+    try {
+      return await deps.fs.readFile(path);
+    } catch (error) {
+      if (!isFsReadError(error)) throw error;
+      return null;
+    }
+  };
+  const named = (label: string, runsOn: string, branch: string | null): string => (branch === null ? label : `${label} for ${runsOn} ${branch}`);
+  return {
+    ci: named(CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_GATE_WORKFLOW_PATH), 'pull_request')),
+    docsCi: named(DOCS_CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_DOCS_GATE_WORKFLOW_PATH), 'pull_request')),
+    historyCi: named(HISTORY_CI_LABEL, 'pushes to', workflowTriggerBranch(await read(USABL_HISTORY_WORKFLOW_PATH), 'push')),
+    // The app gate's branch, or the docs gate's when there is no app gate. gateBranchTarget reads the
+    // files itself, so a file it cannot read says so instead of reading as missing.
+    target: await gateBranchTarget((path) => deps.fs.readFile(path)),
   };
 }
 
@@ -796,25 +890,41 @@ async function collectChromiumSandbox(deps: DoctorDeps): Promise<SurfaceReport> 
   };
 }
 
-async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
+async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promise<SurfaceReport> {
   // verified is the only wired mapping. not-applied is a confident absence (missing).
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
   // doctor cannot positively confirm the setting and must not guess it is present or absent.
-  const result = await verifyBranchRule(deps.gh);
+  // The branch the gate workflow on disk runs on, or main, assumed, when no gate names one.
+  // What the check says about the branch it read (main assumed, or another default branch on
+  // GitHub) goes into the next step, so doctor never hides it behind a wired line.
+  const result = await verifyBranchRule(deps.gh, target);
+  const label = branchRuleLabel(target);
+  const note = result.branchNote;
   if (result.action === 'verified') {
-    return { id: 'branch-rule', label: BRANCH_RULE_LABEL, state: 'wired', nextStep: '' };
+    // Protection on a branch that is not GitHub's default branch still leaves pull requests into the
+    // default branch without a gate, so the surface is not wired.
+    if (result.otherDefault !== null) {
+      return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
+    }
+    return { id: 'branch-rule', label, state: 'wired', nextStep: '' };
   }
   if (result.action === 'not-applied') {
+    const branch = target.source === 'assumed' ? `${target.name} branch, which usabl assumed,` : `${target.name} branch`;
     return {
       id: 'branch-rule',
-      label: BRANCH_RULE_LABEL,
+      label,
       state: 'missing',
-      nextStep: `The main branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The ${branch} does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.${note === null ? '' : ` ${note}`}`,
     };
+  }
+  if (note !== null) {
+    // The first line of the result says why it could not verify; the note says what to do.
+    const why = (result.message.split('\n')[0] ?? '').replace(/^cannot verify: /, '');
+    return { id: 'branch-rule', label, state: 'unknown', nextStep: `usabl cannot confirm branch protection: ${why} ${note}` };
   }
   return {
     id: 'branch-rule',
-    label: BRANCH_RULE_LABEL,
+    label,
     state: 'unknown',
     nextStep: 'usabl cannot confirm branch protection (gh unavailable, or the read was inconclusive). Verify by hand; see "usabl install --branch-rule".',
   };
@@ -897,9 +1007,10 @@ function ownerProblem(rule: CodeownersRule): string | null {
 // that matches each workflow file present must name valid owners, and so must the last rule for any
 // workflow file a pull request could add, because GitHub takes the last matching rule and a rule
 // with no owner takes ownership away.
-async function collectWorkflowOwners(deps: DoctorDeps): Promise<SurfaceReport> {
+// branch is the branch the gate workflow runs on, or main when no gate names one.
+async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<SurfaceReport> {
   const fix =
-    'Add "/.github/workflows/ @your-login" to .github/CODEOWNERS, after any rule that matches a workflow file, and require review from code owners on main. ' +
+    `Add "/.github/workflows/ @your-login" to .github/CODEOWNERS, after any rule that matches a workflow file, and require review from code owners on ${branch}. ` +
     'Any pull request can change the workflow that runs on it, so its own verdict is not evidence; an owner approval is what stops it merging.';
   const missing = (detail: string): SurfaceReport => ({
     id: 'workflow-owners',
@@ -1091,6 +1202,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
       guardRead(claudeSkillId(skill), claudeSkillLabel(skill), () => collectClaudeSkill(deps, skill)),
     ),
   );
+  const labels = await readBranchLabels(deps);
   return [
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
     await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
@@ -1104,10 +1216,11 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),
     ...skillReports,
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
-    await guardRead('ci', CI_LABEL, () => collectCi(deps)),
-    await guardRead('history-ci', HISTORY_CI_LABEL, () => collectHistoryCi(deps)),
-    await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
-    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps)),
+    await guardRead('ci', labels.ci, () => collectCi(deps, labels.ci)),
+    await guardRead('docs-ci', labels.docsCi, () => collectDocsCi(deps, labels.docsCi)),
+    await guardRead('history-ci', labels.historyCi, () => collectHistoryCi(deps, labels.historyCi)),
+    await guardRead('branch-rule', branchRuleLabel(labels.target), () => collectBranchRule(deps, labels.target)),
+    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps, labels.target.name)),
     await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
   ];
 }

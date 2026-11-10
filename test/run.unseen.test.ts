@@ -8,6 +8,8 @@ import { describe, it, expect } from 'vitest';
 import { run } from '../src/run.js';
 import { runBaseline } from '../src/baseline/index.js';
 import { makeFakeDeps } from '../src/deps/fakes.js';
+import { makeCheckRunner } from '../src/providers/check-runner.js';
+import { makeStepRunner } from '../src/providers/keyboard-walk/steps.js';
 import { testConfig } from './helpers.js';
 import type { Draft, ScreenScan, TranscriptStop } from '../src/contracts/index.js';
 
@@ -31,7 +33,7 @@ const changedAll = [
 // dev server whose backend was down: every one of fifty tab presses left focus here.
 const BODY_PATH = 'html > body:nth-child(2)';
 
-const bodyOnlyStops: TranscriptStop[] = [{ index: 0, elementPath: BODY_PATH, announcement: [] }];
+const bodyOnlyStops: TranscriptStop[] = [{ index: 0, elementPath: BODY_PATH, announcement: [], onBody: true }];
 
 const realStops = (path: string): TranscriptStop[] => [{ index: 0, elementPath: path, announcement: [] }];
 
@@ -351,6 +353,54 @@ describe('unseen screens', () => {
     const overview = r.screens.find((s) => s.screenId === 'overview');
     expect(overview?.drafts).toEqual([]);
     const gap = overview?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('keyboard stop');
+  });
+});
+
+describe('a crashed screen whose body has an id', () => {
+  // The path of a body with an id is that id, so the blank-page detector that read the path tail
+  // never saw this body. The scan is built by the real check runner and step runner over a page
+  // that answers as Chromium does for <body id="app"> with nothing to focus: every Tab leaves focus
+  // on the body, and the body's path is #app.
+  async function crashedScan(): Promise<ScreenScan> {
+    const fakes = makeFakeDeps();
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (url) =>
+          Object.assign(await fakes.browser.open(url), {
+            activePath: async () => '#app',
+            activeElementIs: async (selector: string) => selector === 'body',
+          }),
+        close: async () => {},
+      },
+      providers: [],
+      config,
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 3,
+    });
+    return runner.scan({ id: 'overview', url: config.surfaces[0]!.url });
+  }
+
+  it('never reads verified', async () => {
+    const scan = await crashedScan();
+    expect(scan.stops.map((stop) => stop.elementPath)).toEqual(['#app']);
+
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: changedAll,
+      scans: {
+        overview: scan,
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+        inventories: { screenId: 'inventories', url: config.surfaces[2]!.url, stops: realStops('a:nth-child(3)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+      },
+    });
+
+    const r = await run(deps, config);
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+    const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
     expect(gap?.reason).toContain('keyboard stop');
   });
 });
