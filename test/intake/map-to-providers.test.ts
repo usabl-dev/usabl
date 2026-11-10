@@ -519,6 +519,86 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
+  describe('before its first step, the flow waits for the page to go quiet', () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+
+    it('does not count an announcement an earlier check started that lands during that wait', async () => {
+      // "Saved" is still in flight from an earlier check. It lands at the first moment the page is
+      // given time: the wait, or else the flow's first step.
+      const live: string[] = [];
+      const inFlight = ['Saved'];
+      const land = (): void => {
+        live.push(...inFlight.splice(0, inFlight.length));
+      };
+      const calls: string[] = [];
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          settleAfterAction: vi.fn(async () => {
+            calls.push('settle');
+            land();
+            return { settled: true, waitedMs: 0 };
+          }),
+          tab: vi.fn(async () => {
+            calls.push('tab');
+            land();
+          }),
+          drainAnnouncements: vi.fn(async () => {
+            calls.push('drain');
+            return live.splice(0, live.length);
+          }),
+          activeNode: vi.fn(async () => axNode('Save')),
+          activePath: vi.fn(async () => '#save'),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts.map((draft) => draft.rule)).toEqual(['intake:flow-save']);
+      expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
+      expect(calls).toEqual(['settle', 'drain', 'tab', 'drain']);
+    });
+
+    it('is a gap that says so when the page does not go quiet, and runs no step', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({ tab, settleAfterAction: vi.fn(async () => ({ settled: false, waitedMs: 3000 })) }),
+      });
+
+      await expect(provider!.run(context)).rejects.toThrow('the page did not go quiet before the flow');
+      expect(tab).not.toHaveBeenCalled();
+    });
+
+    it('is a gap that says so when the wait itself fails', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({
+          tab,
+          settleAfterAction: vi.fn(async () => {
+            throw new Error('Execution context was destroyed');
+          }),
+        }),
+      });
+
+      await expect(provider!.run(context)).rejects.toThrow('the wait for the page to go quiet before the flow failed');
+      expect(tab).not.toHaveBeenCalled();
+    });
+
+    it('still runs a flow that expects no announcement on a page that does not go quiet', async () => {
+      // Such a flow judges no speech, so the wait decides nothing for it.
+      const provider = mapRequirementsToProviders(flowBundle({ type: 'flow', steps: [{ do: 'tab' }] }))[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({ tab, settleAfterAction: vi.fn(async () => ({ settled: false, waitedMs: 3000 })) }),
+      });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+      expect(tab).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('a flow step the driver cannot run', () => {
     // Each step the driver cannot run as written, with what the gap must say about it.
     const cases: Array<[string, Record<string, unknown>, string]> = [

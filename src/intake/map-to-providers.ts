@@ -365,12 +365,30 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
     }
   };
 
+  // An earlier check can leave speech in flight, such as a status message that lands after its
+  // click. So the flow first waits for the page to go quiet, with the same wait a click step uses,
+  // and that speech lands before the drain below.
+  let quiet: ActionSettle | null;
+  try {
+    quiet = await page.settleAfterAction();
+  } catch {
+    quiet = null;
+  }
   // The capture runs for the life of the page, so the drain before the first step holds every
   // announcement since the last drain, such as one an earlier check caused. The verdict never
   // reads it: the flow is judged only on what was announced after its first step ran. The silent
   // change rule takes it as background speech. A failure of this drain still fails the flow,
   // because the speech it should have cleared could then land in the first step's drain.
   watch.start(await takeDrain(null));
+  // A page that did not go quiet may still speak for an earlier check during the first step. A flow
+  // that judges speech cannot tell that speech from its own, so it runs none of its steps.
+  if (assertion.expectedAnnouncement !== undefined && (quiet === null || !quiet.settled)) {
+    throw new Error(
+      quiet === null
+        ? 'the wait for the page to go quiet before the flow failed, so speech an earlier check started could be counted as the flow\'s own. The flow ran none of its steps.'
+        : 'the page did not go quiet before the flow started, so speech an earlier check started could be counted as the flow\'s own. The flow ran none of its steps.',
+    );
+  }
   for (const [index, step] of assertion.steps.entries()) {
     const action = isActionStep(step);
     if (action) {

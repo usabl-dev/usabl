@@ -389,6 +389,19 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
     });
 
+    it('does not count an announcement an earlier action started that lands 300 ms later', async () => {
+      // The earlier action clicks Save and does not wait, so "Saved" is still in flight when the
+      // flow starts. The flow waits for the page to go quiet before its first step, so the text
+      // lands in the drain the flow does not count. Its own step clicks the heading, which announces
+      // nothing.
+      const earlier = async (page: Page): Promise<void> => {
+        await page.click('#save');
+      };
+      const drafts = await flow('late-announce', click('h1'), 'Saved', earlier);
+      expect(own(drafts)).toHaveLength(1);
+      expect(drafts.find((draft) => draft.rule === 'intake:accounts-flow')?.evidence.extra?.announcements).toEqual([]);
+    });
+
     it('still passes when a step of the flow announces, after an earlier action announced the same text', async () => {
       const earlier = async (page: Page): Promise<void> => {
         await page.click('#save');
