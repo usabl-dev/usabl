@@ -1137,10 +1137,11 @@ step, with the reason in `evidence.extra.reason`:
 - `announcements undecidable`: the drain cannot say which announcements a screen reader spoke;
 - `background announcements`: the only speech in the window came from a region that also wrote
   before the first step;
-- `step not run`: the flow driver cannot run the step, such as an unknown kind, a click with no
-  selector, or a press with no key. The flow then runs none of its steps and is a `not-covered`
-  gap (see "Flow steps the driver cannot run" below), and the rule's gap for each such step comes
-  with it. The driver used to skip such a step without a word;
+- `step not run`: the flow driver cannot run the step as written, such as an unknown kind, a
+  click with no selector, a press with no key, or a step with a field its kind does not use. The
+  flow then runs none of its steps and is a `not-covered` gap (see "Flow steps the driver cannot
+  run" below), and the rule's gap for each such step comes with it. The driver used to skip such a
+  step without a word;
 - `step threw`: the step failed, which leaves it and the steps after it unjudged. The provider
   still fails the way it always did, as a `not-covered` gap with the same reason, and the rule's
   drafts for the steps that ran come with it. The rule's draft keeps only the first line of the
@@ -1174,31 +1175,68 @@ The wait costs at least 2 seconds per `click` or `activate` step, up to the 6 se
 flow, whether or not it expects an announcement. Real-Chromium tests hold the two dialog cases and
 the late announcement at the flow verdict.
 
-Speech from before the flow never counts. The capture runs for the life of the page, so the drain
-the flow takes before its first step holds every announcement since the last drain on the page,
-such as one an earlier check caused. The flow's verdict never reads that drain: the flow is judged
-only on what was announced after its first step ran. A flow that passed only because the expected
-text was in that drain now fails, or is a gap when the focused control cannot be read. The
-undecidable reason of that drain decides nothing either, since its texts are not read. The silent
-change rule still takes that drain as its background speech. In a flow that expects an
-announcement, a failure of that drain still makes the flow a `not-covered` gap, because the speech
-it should have cleared could then land in the first step's drain. A real-Chromium test holds this:
-an earlier click announces "Saved", the flow only presses Tab, and the flow fails. The voice
-contract step runner already drained and discarded the same way.
+Speech recorded before the flow's first step never counts. An earlier check can leave speech in
+flight, such as a status message that lands after its click. So before its first step the flow
+waits for the page to go quiet, with the same settle wait a `click` step uses, and then takes a
+drain. The capture runs for the life of the page, so that drain holds every announcement since the
+last drain on the page, such as one an earlier check caused, and any that landed during the wait.
+The flow's verdict never passes on that drain and never fails on it: the flow is judged only on
+what was announced after its first step ran. When the expected text is in that drain and the
+flow's own steps did not announce it, the flow is an `unverified` gap. The text was announced
+before the flow's first step, and an earlier check may have changed the page (it may have saved
+once already), so usabl cannot tell whether these steps announce it. When that drain does not
+hold the text either, the flow fails as before, or is a gap when the focused control cannot be
+read. The undecidable reason of that drain decides nothing either, since its texts are not read.
+The silent change rule still takes that drain as its background speech. The voice contract step
+runner already drained and discarded the same way.
 
-One limit stays. The flow also passes when the control that has focus after its last step is named
-with the expected text, and the flow does not check that its steps moved focus there. A flow whose
-steps leave focus where an earlier check put it can pass on that control's name.
+In a flow that expects an announcement, a page that does not go quiet within the wait's cap, or a
+wait that fails, makes the flow a `not-covered` gap that says so, and the flow runs none of its
+steps. A failure of the drain itself does the same, because the speech it should have cleared
+could then land in the first step's drain. A flow that expects no announcement judges no speech,
+so it runs on such a page as before. The wait costs at least 2 seconds per flow, up to the 6
+second cap. Real-Chromium tests hold this. In one, an earlier click announces "Saved" and waits,
+the flow only presses Tab, and the flow is a gap. In the other, an earlier click writes "Saved"
+300 ms later and does not wait, and the text lands in the drain the flow does not count.
+
+One limit stays. Speech an earlier check started that lands later than that wait is still read as
+the flow's own. A status message on a timer longer than the quiet window arrives in a step's drain,
+and the flow cannot tell it from speech its steps caused.
+
+Focus that was already there is not evidence. Before its first step, a flow that expects an
+announcement records the focused node, by DOM backend node id (`Page.focusedNodeId()`), and its
+accessible name. After its last step, the focused control's name counts toward the verdict only
+when the focused node or its name differs from what was recorded. When the expected text matches
+the focused control's name but neither changed, and no step's announcement held the text, the
+flow is an `unverified` gap that says focus was already on that control before the flow ran. When
+focus could not be read before the flow, whether it moved is unknown, and the same case is a gap
+that says so. A control drawn again with the same name is a new node, so it still counts as a
+change. A flow whose steps leave focus where it started, such as one that opens a dialog and
+closes it with Escape, is now a gap in this case where it passed, because an earlier check may
+have put focus there. A drain that cannot say what was heard makes the flow a gap on that reason
+unless the steps moved focus to a control with the expected name.
 
 Flow steps the driver cannot run. Before it runs any step, the flow driver checks every step. A
 `click` with no selector, a `press` with no key (a missing, empty, or blank value counts as no
 value), and a step of any kind other than `tab`, `activate`, `press`, or `click` cannot be run. An
-`activate` step presses Enter on the focused control and needs nothing more. When a step cannot be
-run, the flow runs none of its steps, takes no drain, and is a `not-covered` gap. The gap's reason
-names each such step by its number, counted from 0, its kind, and what it is missing. The flow
-never runs such a step as nothing and never passes. The requirement loader refuses such steps only
-in voice requirements: a flow step needs only a non-empty `do` to load. So for a flow, the driver
-is the only check.
+`activate` step presses Enter on the focused control and needs nothing more. A step that carries a
+field its kind does not use cannot be run as written either, because the driver would ignore the
+field and run something other than what was written. Examples are a selector on `activate`,
+`press`, or `tab`, a key on `click`, `times` on `tab`, `shift` on `press`, and `expectedAnnouncement`
+written inside a step, where the flow would then check nothing. A comment field such as `note` is
+an unused field too. `tab` and `activate` take only `do`, `press` takes `do` and `key`, and `click`
+takes `do` and `selector`. That list is one table beside the driver (`FLOW_STEP_FIELDS` in
+`src/intake/map-to-providers.ts`), and a test runs the driver on each kind and checks that it reads
+exactly those fields. When a step cannot be run as written, the flow runs none of its steps, takes
+no drain, and is a `not-covered` gap. The gap's reason names each such step by its number, counted
+from 0, its kind, what it is missing, and each unused field with the fields its kind takes. The
+flow never runs such a step as nothing and never passes. The requirement loader accepts these
+steps in a flow: a flow step needs only a non-empty `do` to load, and any other field loads with
+it. Only voice requirements refuse them when the file loads. So a flow file with such a step loads,
+and the driver then reports the flow as not covered. The gap of a flow provider that throws, as
+for any `ProviderRunFailed`, keeps only the first line of the error, through the same helper the
+silent change rule's gaps use, because a browser error's later lines can quote the element's
+markup.
 
 Cost. Two tree reads per action step. Each read is bounded at 500 ms and 5000 nodes, and a read
 over either is the gap above. The time bound is a timer: each browser call in the read races it,
