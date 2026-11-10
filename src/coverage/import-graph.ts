@@ -7,6 +7,7 @@
 // Use POSIX paths so coverage keys stay stable across operating systems.
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
+import { braceRangeIn, expandBraces, matchGlob, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import {
   type AliasConfig,
   isAliasLikeSpecifier,
@@ -39,7 +40,57 @@ export type UnresolvableImport =
       targets: string[];
       // Every file found at those paths, sorted.
       candidates: string[];
+    }
+  | {
+      importer: string;
+      // The call as written, shortened, for the reason text.
+      specifier: string;
+      // An import.meta.glob or import.meta.globEager call. Vite loads every file its patterns
+      // match, and usabl does not follow them.
+      kind: 'glob-import';
+      // The patterns, written relative to the repository root, sorted. Null when usabl could not
+      // read them, which means the call may load any file.
+      patterns: string[] | null;
+    }
+  | {
+      importer: string;
+      // The call as written, shortened, for the reason text.
+      specifier: string;
+      // An import() or require() whose path is built at run time, so usabl cannot follow it.
+      kind: 'dynamic-import';
+      // The fixed start of the path, written relative to the repository root, sorted. The call
+      // may load any file whose path starts with one of them. Null when the path has no fixed
+      // start usabl can resolve, which means the call may load any file.
+      prefixes: string[] | null;
+    }
+  | {
+      importer: string;
+      specifier: string;
+      // A bare import, such as 'tests/Widget', that the tsconfig baseUrl resolves to a file in
+      // the repository. The compiler reads baseUrl, but a bundler reads it only with a plugin, and
+      // usabl cannot tell which one this build uses. So the import is not followed.
+      kind: 'base-url';
+      // Every file the import resolves to under a baseUrl, sorted.
+      candidates: string[];
     };
+
+/**
+ * How much of a file's source the graph reads as imports.
+ *
+ * The default reads static imports on one line and dynamic imports of a fixed path. It maps
+ * changed files to screens, and an import it misses leaves a file unmapped, which is a gap.
+ *
+ * `complete` also reads imports across several lines, re-exports, imports for side effects,
+ * require() of a fixed path, bare imports a configured alias maps, and bare imports under a
+ * tsconfig baseUrl. The planner uses it to ask whether any screen could load a test file. There an
+ * import it misses would read as "nothing loads this file" and exclude it, so it reads more and may
+ * link a file that only a string names. That can only make a test file count as a UI file.
+ */
+export interface ImportGraphOptions {
+  complete?: boolean;
+  // The folders bare imports resolve under, from the tsconfig baseUrl. Read only when complete.
+  baseUrlDirs?: readonly string[];
+}
 
 export interface ImportGraphView {
   get(file: string): string[];
@@ -74,11 +125,323 @@ function extractSpecifiers(source: string): string[] {
   }
   for (const match of source.matchAll(DYNAMIC_IMPORT_RE)) {
     const [, specifier] = match;
-    if (typeof specifier === 'string') {
+    // A template literal with a ${...} part is a path built at run time, not a file name. It is
+    // recorded as a dynamic import instead (see findLoaderCalls).
+    if (typeof specifier === 'string' && !specifier.includes('${')) {
       found.push(specifier);
     }
   }
   return found;
+}
+
+// The complete reading. `from '...'` matches a static import or a re-export on one line or across
+// several, and `import '...'` an import for its side effects. Either can match text that only looks
+// like an import, which links a file usabl did not need to, the safe direction for this reading.
+const FROM_ANYWHERE_RE = /\bfrom\s*(["'`])([^"'`\n]+)\1/g;
+const SIDE_EFFECT_IMPORT_RE = /\bimport\s*(["'`])([^"'`\n]+)\1/g;
+
+function extractEverySpecifier(source: string, calls: readonly LoaderCall[]): string[] {
+  const found = new Set<string>(extractSpecifiers(source));
+  for (const pattern of [FROM_ANYWHERE_RE, SIDE_EFFECT_IMPORT_RE]) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[2];
+      if (typeof specifier === 'string') found.add(specifier);
+    }
+  }
+  for (const call of calls) {
+    if (call.kind === 'literal') found.add(call.path);
+  }
+  return [...found];
+}
+
+// ---- loads usabl cannot follow ----
+//
+// Three ways to load a module leave no import usabl can resolve: an import.meta.glob call, an
+// import() or require() whose path is built at run time, and a bare import that only a tsconfig
+// baseUrl resolves. The graph does not follow them. It records each one in `unresolvable`, with
+// the files it may load, so the planner can tell a test file that nothing loads from one that a
+// screen may load in a way usabl cannot see.
+
+// The longest call text a reason quotes.
+const MAX_CALL_TEXT = 80;
+
+const GLOB_CALL_RE = /\bimport\.meta\.glob(?:Eager)?(?![\w$])/g;
+const DYNAMIC_CALL_RE = /(?<![\w$.])(?:import|require)\s*\(/g;
+
+// Skips spaces, line breaks, and comments. A comment inside a call, such as a webpack chunk name,
+// is common and is not part of the path.
+function skipBlank(source: string, from: number): number {
+  let index = from;
+  for (;;) {
+    while (index < source.length && /\s/u.test(source.charAt(index))) index += 1;
+    if (source.startsWith('/*', index)) {
+      const close = source.indexOf('*/', index + 2);
+      if (close === -1) return source.length;
+      index = close + 2;
+      continue;
+    }
+    if (source.startsWith('//', index)) {
+      const end = source.indexOf('\n', index);
+      if (end === -1) return source.length;
+      index = end + 1;
+      continue;
+    }
+    return index;
+  }
+}
+
+// A quoted string that starts at `start`. A template literal with a ${...} part is `interpolated`,
+// and `text` is then the text before it. Null when the text there is not a string, or holds a
+// backslash, which this reader does not decode.
+type QuotedString = { text: string; end: number; interpolated: false } | { text: string; interpolated: true };
+
+function readQuoted(source: string, start: number): QuotedString | null {
+  const quote = source.charAt(start);
+  if (quote !== "'" && quote !== '"' && quote !== '`') return null;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const char = source.charAt(index);
+    if (char === '\\') return null;
+    if (char === '\n' && quote !== '`') return null;
+    if (quote === '`' && char === '$' && source.charAt(index + 1) === '{') {
+      return { text: source.slice(start + 1, index), interpolated: true };
+    }
+    if (char === quote) return { text: source.slice(start + 1, index), end: index + 1, interpolated: false };
+  }
+  return null;
+}
+
+// The call text from `start`, cut at its closing parenthesis when that is near, with every run of
+// spaces folded to one, and shortened.
+function callText(source: string, start: number): string {
+  const window = source.slice(start, start + MAX_CALL_TEXT * 3);
+  let depth = 0;
+  let end = window.length;
+  for (let index = 0; index < window.length; index += 1) {
+    const char = window.charAt(index);
+    if (char === '(') depth += 1;
+    if (char === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        end = index + 1;
+        break;
+      }
+    }
+  }
+  const text = window.slice(0, end).replace(/\s+/gu, ' ').trim();
+  return text.length > MAX_CALL_TEXT ? `${text.slice(0, MAX_CALL_TEXT - 3)}...` : text;
+}
+
+// A call usabl found in a file: an import() or require() of a fixed path, one whose path is built
+// at run time, or an import.meta.glob call.
+type LoaderCall =
+  | { kind: 'literal'; path: string }
+  | { kind: 'built'; text: string; prefix: string | null }
+  | { kind: 'glob'; text: string; patterns: string[] | null };
+
+// The first argument of the import() or require() whose opening parenthesis is at `open`.
+function readDynamicCall(source: string, start: number, open: number): LoaderCall {
+  const text = callText(source, start);
+  const at = skipBlank(source, open + 1);
+  const quoted = readQuoted(source, at);
+  if (quoted === null) return { kind: 'built', text, prefix: null };
+  if (quoted.interpolated) return { kind: 'built', text, prefix: quoted.text };
+  const after = source.charAt(skipBlank(source, quoted.end));
+  // A string followed by anything other than the end of the argument, such as + name, is a path
+  // built at run time. Only its fixed start would be known, and usabl does not read past a string.
+  if (after === ')' || after === ',') return { kind: 'literal', path: quoted.text };
+  return { kind: 'built', text, prefix: null };
+}
+
+// The patterns of the import.meta.glob call that starts at `start`: one string or a list of
+// strings. Null when the argument is anything else, or when an options object sets `base`, which
+// moves where relative patterns start.
+function readGlobCall(source: string, start: number, nameEnd: number): LoaderCall {
+  const text = callText(source, start);
+  let at = skipBlank(source, nameEnd);
+  // A type argument, such as import.meta.glob<Module>('./x/*.ts').
+  if (source.charAt(at) === '<') {
+    const close = source.indexOf('>', at);
+    if (close === -1) return { kind: 'glob', text, patterns: null };
+    at = skipBlank(source, close + 1);
+  }
+  if (source.charAt(at) !== '(') return { kind: 'glob', text, patterns: null };
+  at = skipBlank(source, at + 1);
+  const patterns: string[] = [];
+  const readOne = (from: number): number | null => {
+    const quoted = readQuoted(source, from);
+    if (quoted === null || quoted.interpolated) return null;
+    patterns.push(quoted.text);
+    return skipBlank(source, quoted.end);
+  };
+  if (source.charAt(at) === '[') {
+    at = skipBlank(source, at + 1);
+    for (;;) {
+      if (source.charAt(at) === ']') break;
+      const next = readOne(at);
+      if (next === null) return { kind: 'glob', text, patterns: null };
+      if (source.charAt(next) === ',') {
+        at = skipBlank(source, next + 1);
+        continue;
+      }
+      if (source.charAt(next) !== ']') return { kind: 'glob', text, patterns: null };
+      at = next;
+      break;
+    }
+    at = skipBlank(source, at + 1);
+  } else {
+    const next = readOne(at);
+    if (next === null) return { kind: 'glob', text, patterns: null };
+    at = next;
+  }
+  if (source.charAt(at) === ')') return { kind: 'glob', text, patterns };
+  if (source.charAt(at) !== ',') return { kind: 'glob', text, patterns: null };
+  const close = source.indexOf(')', at);
+  const options = source.slice(at, close === -1 ? source.length : close);
+  return { kind: 'glob', text, patterns: /\bbase\s*:/u.test(options) ? null : patterns };
+}
+
+function findLoaderCalls(source: string): LoaderCall[] {
+  const calls: LoaderCall[] = [];
+  for (const match of source.matchAll(GLOB_CALL_RE)) {
+    calls.push(readGlobCall(source, match.index, match.index + match[0].length));
+  }
+  for (const match of source.matchAll(DYNAMIC_CALL_RE)) {
+    calls.push(readDynamicCall(source, match.index, match.index + match[0].length - 1));
+  }
+  return calls;
+}
+
+// A path the start of a loader names, written relative to the repository root: a relative path
+// from the importer's folder, a path through a configured alias, or a path under a baseUrl. An
+// empty list means a package. Null means usabl cannot tell where it points, so it may be any file.
+function resolveLoaderPaths(
+  importer: string,
+  text: string,
+  aliases: AliasConfig,
+  baseUrlDirs: readonly string[],
+  form: 'glob' | 'prefix',
+): string[] | null {
+  if (text.startsWith('./') || text.startsWith('../')) {
+    return [path.normalize(path.join(path.dirname(importer), text))];
+  }
+  // The start can still become ./, ../, @/, ~/, or /, so it may point anywhere.
+  if (text === '' || text === '.' || text === '..' || text === '@' || text === '~' || text.startsWith('/')) {
+    return null;
+  }
+  const throughAlias = resolveAliasSpecifierEachWay(text, aliases);
+  if (throughAlias.length > 0) return throughAlias;
+  if (isAliasLikeSpecifier(text)) return null;
+  const underBaseUrl = baseUrlDirs.map((dir) => path.normalize(path.join(dir, text)));
+  // A glob pattern must be relative, rooted, or an alias. A bare one is an alias usabl did not
+  // read, unless a baseUrl explains it. A bare path start is a package or a path under a baseUrl.
+  if (form === 'glob') return underBaseUrl.length > 0 ? underBaseUrl : null;
+  return underBaseUrl;
+}
+
+// A pattern the repository's glob matcher reads the same way Vite does. One with syntax the
+// matcher does not read, such as a ? or a character class, could match files the matcher misses.
+function readableGlob(pattern: string): boolean {
+  if (UNSUPPORTED_GLOB_CHARACTERS.some((character) => pattern.includes(character))) return false;
+  return braceRangeIn(pattern) === null && expandBraces(pattern) !== null;
+}
+
+function globEntry(
+  importer: string,
+  call: Extract<LoaderCall, { kind: 'glob' }>,
+  aliases: AliasConfig,
+  baseUrlDirs: readonly string[],
+): UnresolvableImport {
+  const entry = (patterns: string[] | null): UnresolvableImport => ({
+    importer,
+    specifier: call.text,
+    kind: 'glob-import',
+    patterns: patterns === null ? null : [...new Set(patterns)].sort(),
+  });
+  if (call.patterns === null) return entry(null);
+  const resolved: string[] = [];
+  // A negative pattern only takes files away, so leaving it out can only name more files.
+  for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
+    const paths = resolveLoaderPaths(importer, pattern, aliases, baseUrlDirs, 'glob');
+    if (paths === null || !paths.every(readableGlob)) return entry(null);
+    resolved.push(...paths);
+  }
+  return entry(resolved);
+}
+
+// Null when the fixed start names a package, which loads no file of the app.
+function dynamicEntry(
+  importer: string,
+  call: Extract<LoaderCall, { kind: 'built' }>,
+  aliases: AliasConfig,
+  baseUrlDirs: readonly string[],
+): UnresolvableImport | null {
+  const prefixes = call.prefix === null ? null : resolveLoaderPaths(importer, call.prefix, aliases, baseUrlDirs, 'prefix');
+  if (prefixes !== null && prefixes.length === 0) return null;
+  return {
+    importer,
+    specifier: call.text,
+    kind: 'dynamic-import',
+    prefixes: prefixes === null ? null : [...new Set(prefixes)].sort(),
+  };
+}
+
+/**
+ * The loads in one file that usabl cannot follow, as `unresolvable` entries: every
+ * import.meta.glob call, and every import() or require() whose path is built at run time.
+ */
+function loaderEntries(
+  importer: string,
+  calls: readonly LoaderCall[],
+  aliases: AliasConfig,
+  baseUrlDirs: readonly string[],
+): UnresolvableImport[] {
+  const entries: UnresolvableImport[] = [];
+  for (const call of calls) {
+    if (call.kind === 'glob') entries.push(globEntry(importer, call, aliases, baseUrlDirs));
+    if (call.kind === 'built') {
+      const entry = dynamicEntry(importer, call, aliases, baseUrlDirs);
+      if (entry !== null) entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+/**
+ * Whether an import usabl could not follow may load a file. A glob or a dynamic import may load
+ * every file its patterns or its fixed start cover, and any file when usabl could not read them.
+ * A baseUrl import may load each file it resolves to. Any other unresolved import may load a file
+ * whose name its last segment names, so `@/tests/Dashboard` names `src/tests/Dashboard.tsx`.
+ */
+export function importMayLoad(entry: UnresolvableImport, file: string): boolean {
+  if (entry.kind === 'glob-import') {
+    return entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file));
+  }
+  if (entry.kind === 'dynamic-import') {
+    return entry.prefixes === null || entry.prefixes.some((prefix) => file.startsWith(prefix));
+  }
+  if (entry.kind === 'base-url') {
+    return entry.candidates.includes(file);
+  }
+  return importLastSegments(entry.specifier).includes(importName(file));
+}
+
+// The name an import would use for a file: its name without the extension, or the folder name for
+// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
+function importName(file: string): string {
+  const segments = file.split('/');
+  const base = segments[segments.length - 1] ?? '';
+  const stem = base.replace(/\.[^.]*$/u, '');
+  if (stem === 'index' && segments.length > 1) {
+    return segments[segments.length - 2] ?? stem;
+  }
+  return stem;
+}
+
+// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
+// `@/tests/Dashboard.js` both name a file called Dashboard.
+function importLastSegments(specifier: string): string[] {
+  const last = specifier.split('/').pop() ?? '';
+  return [last, last.replace(/\.[^.]*$/u, '')];
 }
 
 /**
@@ -141,7 +504,14 @@ async function resolveTypeScriptName(fs: FsGlob, filePath: string): Promise<Reso
 async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<Resolution> {
   if (hasKnownExtension(filePath)) {
     if ((await fs.readFile(filePath)) !== null) return { file: filePath };
-    return resolveTypeScriptName(fs, filePath);
+    const typeScriptName = await resolveTypeScriptName(fs, filePath);
+    // A name such as ./Widget.spec or ./Button.styles has a dot but no module extension. When no
+    // file has that exact name, the bundler and the compiler add an extension, as they do for a
+    // name with no dot, so the suffixes below are tried too.
+    const extension = path.extname(filePath);
+    if (typeScriptName !== null || EXTENSIONS.includes(extension) || extension in TYPESCRIPT_NAMES) {
+      return typeScriptName;
+    }
   }
   // File tier before index tier (the bundler prefers a file over a directory index). Within a tier,
   // exactly one hit resolves; more than one is ambiguous, so disclose rather than pick.
@@ -218,11 +588,44 @@ function pushUniqueUnresolvable(list: UnresolvableImport[], entry: UnresolvableI
   }
 }
 
+// A reader that reads each path once. One graph probes the same candidate paths from many files,
+// and the tree does not change while it is built.
+function readOnce(fs: FsGlob): FsGlob {
+  const cache = new Map<string, Promise<string | null>>();
+  return {
+    readFile: (file) => {
+      let read = cache.get(file);
+      if (read === undefined) {
+        read = fs.readFile(file);
+        cache.set(file, read);
+      }
+      return read;
+    },
+    glob: (patterns) => fs.glob(patterns),
+  };
+}
+
+// The files a bare import resolves to under each baseUrl folder, sorted. Empty when none does,
+// which means the import names a package.
+async function baseUrlCandidates(fs: FsGlob, specifier: string, baseUrlDirs: readonly string[]): Promise<string[]> {
+  const found = new Set<string>();
+  for (const dir of baseUrlDirs) {
+    const base = path.normalize(path.join(dir, specifier));
+    if (base === '..' || base.startsWith('../')) continue;
+    for (const target of edgeTargets(await resolveFileAtPath(fs, base))) found.add(target);
+  }
+  return [...found].sort();
+}
+
 export async function buildImportGraph(
-  fs: FsGlob,
+  rawFs: FsGlob,
   entryFiles: string[],
   aliasConfig?: AliasConfig,
+  options: ImportGraphOptions = {},
 ): Promise<ImportGraphView> {
+  const fs = readOnce(rawFs);
+  const complete = options.complete === true;
+  const baseUrlDirs = complete ? (options.baseUrlDirs ?? []) : [];
   const edges = new Map<string, string[]>();
   const visited = new Set<string>();
   const queue = [...entryFiles];
@@ -242,8 +645,12 @@ export async function buildImportGraph(
     }
 
     const fileEdges = edges.get(file) ?? [];
-    for (const specifier of extractSpecifiers(source)) {
-      if (isAliasLikeSpecifier(specifier)) {
+    const calls = findLoaderCalls(source);
+    for (const entry of loaderEntries(file, calls, aliases, baseUrlDirs)) pushUniqueUnresolvable(unresolvable, entry);
+    for (const specifier of complete ? extractEverySpecifier(source, calls) : extractSpecifiers(source)) {
+      // The complete reading also follows a bare import that a configured alias maps, whatever its
+      // prefix, as the bundler does.
+      if (isAliasLikeSpecifier(specifier) || (complete && !isRelativeSpecifier(specifier) && resolveAliasSpecifierEachWay(specifier, aliases).length > 0)) {
         const { targets, disclosure } = await resolveAliasImport(fs, file, specifier, aliases);
         if (disclosure !== null) pushUniqueUnresolvable(unresolvable, disclosure);
         for (const target of targets) {
@@ -254,7 +661,12 @@ export async function buildImportGraph(
       }
 
       if (!isRelativeSpecifier(specifier)) {
-        // Bare package imports are not app-surface files, so they are ignored.
+        // A bare import names a package, which is not an app file, so it is ignored. The complete
+        // reading records one that a baseUrl resolves to a file in the repository.
+        if (baseUrlDirs.length > 0) {
+          const candidates = await baseUrlCandidates(fs, specifier, baseUrlDirs);
+          if (candidates.length > 0) pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'base-url', candidates });
+        }
         continue;
       }
 
@@ -296,6 +708,7 @@ export async function inspectDirectImports(
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
+  for (const entry of loaderEntries(file, findLoaderCalls(source), aliases, [])) pushUniqueUnresolvable(unresolvable, entry);
 
   for (const specifier of extractSpecifiers(source)) {
     if (isAliasLikeSpecifier(specifier)) {

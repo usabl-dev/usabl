@@ -2,11 +2,41 @@
  * Formats import-graph unresolvable entries into human-readable discovery detail.
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
-import type { UnresolvableImport } from './import-graph.js';
+import { importMayLoad, type UnresolvableImport } from './import-graph.js';
 
 const MAX_DETAIL_LINES = 3;
 
+/**
+ * One load usabl cannot follow, as a clause that names the file that holds it, what it does, and
+ * which files it may load. Null for an import that did not resolve, which formatUnresolvableImport
+ * describes.
+ */
+export function describeLoad(entry: UnresolvableImport): string | null {
+  if (entry.kind === 'glob-import') {
+    const which = entry.patterns === null ? 'and usabl could not read its patterns, so it may load any file' : `which loads every file that matches ${entry.patterns.join(', ')}`;
+    return `${entry.importer} loads files with ${entry.specifier}, ${which}`;
+  }
+  if (entry.kind === 'dynamic-import') {
+    const which =
+      entry.prefixes === null
+        ? 'and usabl cannot tell where that path points, so it may load any file'
+        : `so it may load any file under ${entry.prefixes.join(', ')}`;
+    return `${entry.importer} loads a module with ${entry.specifier}, whose path is built when the code runs, ${which}`;
+  }
+  if (entry.kind === 'base-url') {
+    return (
+      `${entry.importer} imports '${entry.specifier}', which the tsconfig baseUrl resolves to ${entry.candidates.join(', ')}, ` +
+      'and usabl cannot tell whether the bundler reads baseUrl'
+    );
+  }
+  return null;
+}
+
 export function formatUnresolvableImport(entry: UnresolvableImport): string {
+  const load = describeLoad(entry);
+  if (load !== null) {
+    return load;
+  }
   if (entry.kind === 'alias-unconfigured') {
     return `could not resolve '${entry.specifier}' in ${entry.importer}: no alias mapping found in tsconfig or vite config`;
   }
@@ -39,32 +69,14 @@ function aliasConflictText(entry: Extract<UnresolvableImport, { kind: 'alias-con
   return `in ${entry.importer}: ${aliasConfigConflictReason(entry)}`;
 }
 
-// The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
-function importName(file: string): string {
-  const segments = file.split('/');
-  const base = segments[segments.length - 1] ?? '';
-  const stem = base.replace(/\.[^.]*$/u, '');
-  if (stem === 'index' && segments.length > 1) {
-    return segments[segments.length - 2] ?? stem;
-  }
-  return stem;
-}
-
-// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
-// `@/tests/Dashboard.js` both name a file called Dashboard.
-function importLastSegments(specifier: string): string[] {
-  const last = specifier.split('/').pop() ?? '';
-  return [last, last.replace(/\.[^.]*$/u, '')];
-}
-
 /**
- * The imports usabl could not resolve whose last segment names this file. Any of them may be the
- * import that loads it, so "no screen reaches it" is a guess while one stands.
+ * The imports usabl could not follow that may load this file: one that did not resolve and whose
+ * last segment names it, or a glob, a dynamic import, or a baseUrl import that covers it (see
+ * importMayLoad). Any of them may be the import that loads it, so "no screen reaches it" is a
+ * guess while one stands.
  */
 export function unresolvedImportsNaming(file: string, unresolvable: readonly UnresolvableImport[]): UnresolvableImport[] {
-  const name = importName(file);
-  return unresolvable.filter((entry) => importLastSegments(entry.specifier).includes(name));
+  return unresolvable.filter((entry) => importMayLoad(entry, file));
 }
 
 /**

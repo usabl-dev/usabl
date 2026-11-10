@@ -405,6 +405,29 @@ async function loadAliasConfigFrom(fs: FsGlob, tsconfigDir: string, viteDir: str
 }
 
 /**
+ * The folders a bare import resolves under through a tsconfig baseUrl, sorted, for the app a file
+ * belongs to: from the nearest tsconfig at or above the file and from the repository root
+ * tsconfig, as loadAppAliasConfig reads them. A baseUrl is read from the nearest config in an
+ * extends chain that sets it, relative to that config. A folder outside the repository is left out.
+ * Empty when no config sets one.
+ */
+export async function loadBaseUrlDirs(fs: FsGlob, fromFile: string): Promise<string[]> {
+  const { tsconfigDir } = await aliasConfigDirs(fs, fromFile);
+  const found = new Set<string>();
+  for (const dir of [...new Set([tsconfigDir, ''])]) {
+    for (const candidate of TSCONFIG_CANDIDATES) {
+      const chain = await readTsconfigChain(fs, under(dir, candidate), new Set());
+      const layer = chain.find((entry) => typeof entry.compilerOptions['baseUrl'] === 'string');
+      if (layer === undefined) continue;
+      const baseDir = path.normalize(path.join(layer.dir, layer.compilerOptions['baseUrl'] as string)).replace(/\/+$/u, '');
+      if (baseDir === '..' || baseDir.startsWith('../') || baseDir.startsWith('/')) continue;
+      found.add(baseDir === '' ? '.' : baseDir);
+    }
+  }
+  return [...found].sort();
+}
+
+/**
  * The aliases of the app a file belongs to. The app's set comes from the nearest tsconfig and the
  * nearest Vite config at or above the file, found on their own. When either sits below the
  * repository root, the root tsconfig and Vite config are read as a second set, as usabl read them

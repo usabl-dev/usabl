@@ -253,4 +253,86 @@ describe('buildImportGraph', () => {
     expect(graph.visited.has('src/A.tsx')).toBe(true);
     expect(graph.visited.has('src/B.tsx')).toBe(true);
   });
+
+  it('resolves a name with a dot but no module extension by adding one', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import { Widget } from './Widget.spec';\nimport { styles } from './Page.styles';`,
+      'src/Widget.spec.tsx': `export const Widget = 1;`,
+      'src/Page.styles.ts': `export const styles = 1;`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/Widget.spec.tsx', 'src/Page.styles.ts']);
+    expect(graph.unresolvable).toEqual([]);
+  });
+});
+
+describe('loads the import graph cannot follow', () => {
+  const graphOf = (source: string, options = {}) =>
+    buildImportGraph(fsOf({ 'src/pages/Page.tsx': source, 'src/tests/Widget.tsx': '' }), ['src/pages/Page.tsx'], undefined, options);
+
+  it('records an import.meta.glob call with its patterns resolved from the importer folder', async () => {
+    const graph = await graphOf("const a = import.meta.glob(['../tests/*.tsx', './*.tsx', '!./skip.tsx'], { eager: true });");
+    expect(graph.unresolvable).toEqual([
+      {
+        importer: 'src/pages/Page.tsx',
+        specifier: "import.meta.glob(['../tests/*.tsx', './*.tsx', '!./skip.tsx'], { eager: true })",
+        kind: 'glob-import',
+        patterns: ['src/pages/*.tsx', 'src/tests/*.tsx'],
+      },
+    ]);
+  });
+
+  it('records a glob call it cannot read as one that may load any file', async () => {
+    for (const source of [
+      'const a = import.meta.glob(PATTERNS);',
+      "const a = import.meta.glob('./x?.tsx');",
+      "const a = import.meta.glob('./*.tsx', { base: '../tests' });",
+      "const a = import.meta.globEager(`./${dir}/*.tsx`);",
+    ]) {
+      const graph = await graphOf(source);
+      expect(graph.unresolvable.map((entry) => (entry.kind === 'glob-import' ? entry.patterns : 'other')), source).toEqual([null]);
+    }
+  });
+
+  it('records a dynamic import or require whose path is built at run time, with its fixed start', async () => {
+    const graph = await graphOf(
+      'const a = import(`../tests/${name}`);\nconst b = require(name);\nconst c = import(/* webpackChunkName: "x" */ `./${name}.tsx`);',
+    );
+    expect(graph.unresolvable.map((entry) => (entry.kind === 'dynamic-import' ? entry.prefixes : 'other'))).toEqual([
+      ['src/tests/'],
+      null,
+      ['src/pages/'],
+    ]);
+  });
+
+  it('leaves out a dynamic import whose fixed start names a package, and follows a fixed path', async () => {
+    const graph = await graphOf("const a = import(`@patternfly/react-icons/dist/esm/icons/${name}`);\nconst b = import('../tests/Widget', {});");
+    expect(graph.unresolvable).toEqual([]);
+    expect(graph.get('src/pages/Page.tsx')).toEqual([]);
+    const complete = await graphOf("const b = import('../tests/Widget', {});", { complete: true });
+    expect(complete.get('src/pages/Page.tsx')).toEqual(['src/tests/Widget.tsx']);
+  });
+
+  it('reads imports across lines, re-exports, side effects, and require in the complete reading', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': "import {\n  A,\n  B,\n} from './A';\nexport * from './B';\nimport './C';\nconst d = require('./D');\n",
+      'src/A.tsx': '',
+      'src/B.tsx': '',
+      'src/C.tsx': '',
+      'src/D.tsx': '',
+    });
+    expect((await buildImportGraph(fs, ['src/Page.tsx'])).get('src/Page.tsx')).toEqual([]);
+    const complete = await buildImportGraph(fs, ['src/Page.tsx'], undefined, { complete: true });
+    expect([...complete.get('src/Page.tsx')].sort()).toEqual(['src/A.tsx', 'src/B.tsx', 'src/C.tsx', 'src/D.tsx']);
+  });
+
+  it('records a bare import that a baseUrl resolves to a file in the complete reading only', async () => {
+    const fs = fsOf({ 'src/Page.tsx': "import { W } from 'tests/Widget';\nimport React from 'react';", 'src/tests/Widget.tsx': '' });
+    expect((await buildImportGraph(fs, ['src/Page.tsx'])).unresolvable).toEqual([]);
+    const complete = await buildImportGraph(fs, ['src/Page.tsx'], undefined, { complete: true, baseUrlDirs: ['src'] });
+    expect(complete.get('src/Page.tsx')).toEqual([]);
+    expect(complete.unresolvable).toEqual([
+      { importer: 'src/Page.tsx', specifier: 'tests/Widget', kind: 'base-url', candidates: ['src/tests/Widget.tsx'] },
+    ]);
+  });
 });
