@@ -83,6 +83,7 @@ describe('usabl help', () => {
         'serve-build',
         'session',
         'stop-hook',
+        'verify',
       ].sort(),
     );
   });

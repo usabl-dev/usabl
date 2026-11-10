@@ -214,6 +214,10 @@ export function barrierLines(
 /** The verdicts the contract names. Anything else a Result carries is unrecognized. */
 const KNOWN_VERDICTS: readonly string[] = ['verified', 'regression', 'not_covered', 'approval_required'];
 
+function isKnownVerdict(verdict: unknown): boolean {
+  return typeof verdict === 'string' && KNOWN_VERDICTS.includes(verdict);
+}
+
 /** The opening of a message for a run whose state usabl does not recognize. */
 export interface UnrecognizedRunLine {
   // The verdict word and the exit code, checked to be a whole number. Never the carried verdict.
@@ -233,10 +237,22 @@ export interface UnrecognizedRunLine {
  * idle. A failed run is left to its own handling, because the stop hook fails open on exit 4 by
  * a recorded decision. The carried verdict is never printed: an unrecognized one is named with a
  * fixed word.
+ *
+ * The stop hook fails open only on a failed run with no verdict. It passes includeFailedRuns, so a
+ * verdict usabl does not recognize is named as one on exit 4 too, and the hook blocks on it.
  */
-export function unrecognizedRunLine(result: Result): UnrecognizedRunLine | null {
+export function unrecognizedRunLine(
+  result: Result,
+  options: { includeFailedRuns?: boolean } = {},
+): UnrecognizedRunLine | null {
   if (result.exitCode === 4) {
-    return null;
+    if (options.includeFailedRuns !== true || result.verdict === null || isKnownVerdict(result.verdict)) {
+      return null;
+    }
+    return {
+      word: formatVerdictWord({ ...describeVerdict(result), word: 'UNRECOGNIZED VERDICT' }),
+      meaning: 'usabl does not recognize the verdict this run reported, so the run proved nothing about this change.',
+    };
   }
   if (result.verdict === null) {
     if (result.coverage?.nothingToCheck === true) {
@@ -247,7 +263,7 @@ export function unrecognizedRunLine(result: Result): UnrecognizedRunLine | null 
       meaning: 'usabl did not reach a verdict for this change, so the run proved nothing about it.',
     };
   }
-  if (typeof result.verdict === 'string' && KNOWN_VERDICTS.includes(result.verdict)) {
+  if (isKnownVerdict(result.verdict)) {
     return null;
   }
   return {

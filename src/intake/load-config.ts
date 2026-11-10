@@ -34,6 +34,20 @@ export async function loadConfig(
     }
     throw error;
   }
+  return parseConfigText(raw, warn);
+}
+
+/**
+ * Parse config text that was already read, with the same checks and warnings as loadConfig. The
+ * Stop hook reads the bytes itself, compares them with the last commit, and parses only the bytes
+ * it compared, so the file is never read twice.
+ */
+export function parseConfigText(
+  raw: string,
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+): UsablConfig {
   const config = parseUsablConfig(raw);
   // A configured URL with a query or a fragment loads, and the operator is told where it is
   // printed. Once per process for each field and url: the dev-server plugin loads the config on

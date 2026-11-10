@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeStopHookRunnerPorts, runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
+import { committedConfigBytes } from '../support/config-bytes.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -86,6 +87,7 @@ async function stop(sessionId: string, options: { uid?: number; env?: Record<str
     stderrWrite: async (text: string) => {
       stderr.push(text);
     },
+    readConfigBytes: async () => committedConfigBytes(),
     loadConfig: async () => config,
     buildDeps: async () => makeFakeDeps({ headContents: { 'usabl.config.json': 'committed config' } }),
     runEngine: async () => {

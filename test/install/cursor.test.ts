@@ -55,9 +55,15 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('CURSOR assistant contents', () => {
+  it('the current rule says accessibility barriers', () => {
+    const rule = buildCursorRuleContents(DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(rule).toContain('- Treat usabl findings as the source of truth for machine-checkable accessibility barriers.\n');
+    expect(rule).not.toContain('machine-checkable barriers');
+  });
+
   it('declares the /usabl-check command and pins the advisory self-check command', () => {
     expect(CURSOR_COMMAND_PATH).toBe('.cursor/commands/usabl-check.md');
-    expect(CURSOR_COMMAND_CONTENTS).toContain('npx usabl check --self-check');
+    expect(CURSOR_COMMAND_CONTENTS).toContain('npm exec --no -- usabl check --self-check');
     expect(CURSOR_RULE_CONTENTS).toContain('globs: src/**/*.{tsx,jsx,css}');
     expect(CURSOR_RULE_CONTENTS).toContain('/usabl-check');
   });
@@ -87,7 +93,7 @@ describe('CURSOR assistant contents', () => {
 
   it('starts the rule with the task brief', () => {
     const body = CURSOR_RULE_CONTENTS.split('# usabl accessibility workflow\n')[1] ?? '';
-    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+    expect(body.trimStart().startsWith('Before you start a task, run `npm exec --no -- usabl brief --json --files <paths>`')).toBe(
       true,
     );
     expect(body).toContain('the files the task will edit');
@@ -111,8 +117,9 @@ describe('CURSOR assistant contents', () => {
     expect(CURSOR_COMMAND_CONTENTS).toContain('gate');
   });
 
-  it('stop script calls npx usabl stop-hook --cursor', () => {
-    expect(CURSOR_STOP_SCRIPT).toContain('npx usabl stop-hook --cursor');
+  it('stop script calls npm exec --no -- usabl stop-hook --cursor', () => {
+    expect(CURSOR_STOP_SCRIPT).toContain('npm exec --no -- usabl stop-hook --cursor');
+    expect(CURSOR_STOP_SCRIPT).not.toContain('npx');
     expect(CURSOR_STOP_SCRIPT).toContain('#!/usr/bin/env bash');
   });
 });
