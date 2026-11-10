@@ -49,7 +49,16 @@ import {
   type CiPlan,
   type GateWorkflowState,
 } from './ci.js';
-import { branchFor, branchNamedBy, branchReport, filesFirstStep, GATE_BRANCHED, type BranchedWorkflow } from './workflow-branch.js';
+import {
+  branchAgreementStep,
+  branchFor,
+  branchNamedBy,
+  branchReport,
+  DOCS_GATE_BRANCHED,
+  filesFirstStep,
+  GATE_BRANCHED,
+  type BranchedWorkflow,
+} from './workflow-branch.js';
 
 export const USABL_HISTORY_WORKFLOW_PATH = '.github/workflows/usabl-history.yml';
 
@@ -284,6 +293,9 @@ export const HISTORY_BRANCHED: BranchedWorkflow = {
   draftFor: historyWorkflow,
 };
 
+/** Every workflow usabl writes, in the order the agreement step names them. */
+export const USABL_WORKFLOWS: readonly BranchedWorkflow[] = [GATE_BRANCHED, DOCS_GATE_BRANCHED, HISTORY_BRANCHED];
+
 /** The branch a history workflow names in its trigger, or null when it is not a plain name. */
 export function historyBranchOf(raw: string): string | null {
   return branchNamedBy(raw, HISTORY_BRANCHED);
@@ -334,6 +346,8 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
 
   const setupSteps = appGateSetupSteps(app);
   setupSteps.push(...branchFacts.steps);
+  const agreement = await branchAgreementStep(fs, USABL_WORKFLOWS);
+  if (agreement !== null) setupSteps.push(agreement);
   // The history scan starts the app with npm run dev. Without that script it has nothing to start.
   if (history.result.action !== 'refused' && !(await hasDevScript(fs))) {
     setupSteps.push(

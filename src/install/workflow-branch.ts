@@ -6,6 +6,7 @@
  * A branch already in usabl's own file is kept on a re-run, so after install the file on disk is
  * the source of truth for which branch the workflow runs on.
  */
+import type { InstallFs } from './index.js';
 import {
   classifyBranchedWorkflow,
   docsGateWorkflowFor,
@@ -123,6 +124,25 @@ export function branchReport(outcomes: readonly BranchOutcome[], defaultBranch: 
     );
   }
   return { notes, steps };
+}
+
+/**
+ * The step printed when the usabl workflows on disk name different branches, or null when they
+ * agree. Each file present is read for the branch its trigger names; a file whose trigger usabl
+ * cannot read is left out. usabl does not rewrite a file to make them agree.
+ */
+export async function branchAgreementStep(fs: InstallFs, workflows: readonly BranchedWorkflow[]): Promise<string | null> {
+  const named: Array<{ path: string; branch: string }> = [];
+  for (const workflow of workflows) {
+    const branch = branchNamedBy(await fs.readFile(workflow.path), workflow);
+    if (branch !== null) named.push({ path: workflow.path, branch });
+  }
+  if (new Set(named.map((entry) => entry.branch)).size <= 1) return null;
+  const each = joinList(
+    named.map((entry) => `${entry.path} names ${entry.branch}`),
+    true,
+  );
+  return `The usabl workflows name different branches: ${each}. Each one must name your default branch, or one of them runs on the wrong branch. usabl does not change a file to make them agree. Edit the branch name in each file that is wrong, then run this command again.`;
 }
 
 /**

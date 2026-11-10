@@ -18,7 +18,8 @@ import {
   planWorkflow,
 } from './ci.js';
 import { filesOnDefaultBranch, findDefaultBranch, NO_GIT, presentFiles, ROUTES_PATH, type InstallGit } from './repo-git.js';
-import { branchFor, branchReport, DOCS_GATE_BRANCHED, filesFirstStep } from './workflow-branch.js';
+import { branchAgreementStep, branchFor, branchReport, DOCS_GATE_BRANCHED, filesFirstStep } from './workflow-branch.js';
+import { USABL_WORKFLOWS } from './history-ci.js';
 
 export async function installDocsCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD, git: InstallGit = NO_GIT): Promise<InstallResult> {
   const defaultBranch = await findDefaultBranch(git);
@@ -34,6 +35,8 @@ export async function installDocsCi(fs: InstallFs, pin: EnginePin = NO_BUILD_REC
   const branchFacts = branchReport([{ workflow: DOCS_GATE_BRANCHED, branch, action: docsGate.result.action }], defaultBranch);
 
   const setupSteps = [...DOCS_GATE_SETUP_STEPS, ...branchFacts.steps];
+  const agreement = await branchAgreementStep(fs, USABL_WORKFLOWS);
+  if (agreement !== null) setupSteps.push(agreement);
   const judgeFiles = await presentFiles(fs, [CONFIG_PATH, DOCS_MANIFEST_PATH], [ROUTES_PATH]);
   if (!(await filesOnDefaultBranch(fs, git, judgeFiles))) {
     setupSteps.push(filesFirstStep(defaultBranch, judgeFiles, 'the workflow'));
