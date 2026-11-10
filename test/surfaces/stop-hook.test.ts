@@ -1021,11 +1021,22 @@ describe('evaluateStopDecision on a verdict it does not recognize', () => {
     expect(outsideFrame(decision.message)).not.toContain(PAYLOAD);
   });
 
-  it('still allows a failed run, which fails open by decision', () => {
+  it('blocks a verdict it does not recognize on exit 4 too, as the threat model says', () => {
+    // Only a failed run with no verdict fails open. A verdict usabl does not recognize is not a
+    // crash the operator needs to escape, whatever its exit code.
     const decision = evaluateStopDecision(
       baseResult({ verdict: 'mystery' as unknown as Result['verdict'], exitCode: 4, summary: 'crash' }),
       { stopHookActive: false },
     );
+    expect(decision.block).toBe(true);
+    expect(decision.message.startsWith('UNRECOGNIZED VERDICT (exit 4): NOT verified. ')).toBe(true);
+    expect(outsideFrame(decision.message)).not.toContain('mystery');
+  });
+
+  it('still allows a failed run with no verdict, which fails open by decision', () => {
+    const decision = evaluateStopDecision(baseResult({ verdict: null, exitCode: 4, summary: 'crash' }), {
+      stopHookActive: false,
+    });
     expect(decision.block).toBe(false);
     expect(decision.message.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
   });

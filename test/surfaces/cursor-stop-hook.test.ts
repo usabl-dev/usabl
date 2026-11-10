@@ -73,7 +73,8 @@ function makePorts(overrides: {
   const fs = new MemoryRunnerFs();
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const deps = makeFakeDeps();
+  // The config is committed and unchanged, as the config bytes below say, so the guard is clean.
+  const deps = makeFakeDeps({ files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } });
 
   return {
     fs,

@@ -685,10 +685,13 @@ export async function runStopHook(
       await saveReceipt(ports.fs, result.receipt);
     }
 
-    const ctx: HookContext =
-      pinNotice === null
-        ? { stopHookActive: input.stopHookActive }
-        : { stopHookActive: input.stopHookActive, sessionDriftChecked: pinNotice.driftChecked };
+    // The hook's own guard result travels with the decision, so diverged policy blocks even on a
+    // run that crashed and carried no paths of its own.
+    const ctx: HookContext = {
+      stopHookActive: input.stopHookActive,
+      guardDivergedPaths: dirtyGuardedPaths,
+      ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
+    };
     const decision = ports.evaluateDecision(result, ctx, config);
     if (decision.block) {
       await emitProtocolBlock(ports, decision.message, options);

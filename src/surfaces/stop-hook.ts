@@ -24,6 +24,9 @@ export interface HookContext {
   // pin store refused. An allow that would otherwise read as a pass then says so on its first
   // line. Absent means the comparison ran or had nothing to compare yet.
   sessionDriftChecked?: boolean;
+  // The guarded files the hook's own guard found diverged before the run. A run that crashed
+  // carries none of its own, so the hook passes what it found. Absent means none.
+  guardDivergedPaths?: string[];
 }
 
 // The note an allow line carries when the session drift comparison did not run.
@@ -263,6 +266,57 @@ export function formatStoredReceiptAllow(
   });
 }
 
+/**
+ * The guarded files the guard found diverged on a run that reached no blocking verdict, sorted and
+ * without repeats. A run with no verdict (a crash, a run where every screen was unseen, or an idle
+ * run) counts the paths it carries and the ones the hook's own guard found before the run, because
+ * a crash carries none of its own. A verified run is the gate's answer, and the gate already
+ * weighed the guard on that run, so only the paths it carries count. A list that is not a list
+ * adds none.
+ */
+function divergedGuardedPaths(result: Result, ctx: HookContext): string[] {
+  if (result.verdict !== null && result.verdict !== 'verified') {
+    return [];
+  }
+  const carried: unknown = result.dirtyGuardedPaths;
+  const fromResult = Array.isArray(carried) ? carried.map(String) : [];
+  const fromHook = result.verdict === null ? (ctx.guardDivergedPaths ?? []).map(scrubString) : [];
+  return [...new Set([...fromResult, ...fromHook])].sort();
+}
+
+/**
+ * The message for a run that reached no blocking verdict while guarded policy diverged: a
+ * verified run, an idle run, or a failed run. run() refuses a run where every screen was unseen
+ * with exit 4 and no verdict, and the guard still reported the diverged files on it, so the hook
+ * holds the stop for approval whatever the exit code. The verdict line is the run's own, the
+ * guarded files go inside the frame, and the block lets one continuation through like every other.
+ */
+function divergedPolicyDecision(result: Result, diverged: string[], continuation: boolean): StopDecision {
+  const verdict = describeVerdict(result);
+  const opening =
+    `${formatVerdictWord(verdict)}: NOT verified. ` +
+    (continuation ? 'usabl let this stop through without blocking again (continuation already active). ' : '') +
+    `Guarded policy files changed, so this change needs approval whatever the run found. The run said: ${verdict.meaning}`;
+  const steps = continuation ? CONTINUATION_STEPS : BLOCK_STEPS;
+  const scaffold = [opening, steps.approvalOnly];
+  const pieces = [summaryPiece(result)];
+  const guarded = guardedFileLines({ ...result, dirtyGuardedPaths: diverged });
+  scaffold.push(...guarded.scaffold);
+  if (guarded.piece !== null) {
+    pieces.push(guarded.piece);
+  }
+  return {
+    block: !continuation,
+    message: assembleBoundedMessage({
+      scaffold,
+      keep: scaffold.length,
+      pieces,
+      keepPieces: pieces.length,
+      frame: frameUntrustedBlock,
+    }),
+  };
+}
+
 export function evaluateStopDecision(
   result: Result,
   ctx: HookContext,
@@ -270,6 +324,13 @@ export function evaluateStopDecision(
 ): StopDecision {
   const safe = scrubResult(result);
   const passNote = ctx.sessionDriftChecked === false ? DRIFT_NOT_CHECKED : undefined;
+
+  // Diverged guarded policy blocks whatever the exit code. The blocking verdicts carry it in their
+  // own message, and an unrecognized verdict blocks below, so this catches every other state.
+  const diverged = divergedGuardedPaths(safe, ctx);
+  if (diverged.length > 0) {
+    return divergedPolicyDecision(safe, diverged, ctx.stopHookActive);
+  }
 
   if (safe.verdict === 'verified') {
     const sourceTree = safe.receipt?.sourceTree;
@@ -298,7 +359,7 @@ export function evaluateStopDecision(
     };
   }
 
-  if (safe.exitCode === 4) {
+  if (safe.exitCode === 4 && safe.verdict === null) {
     // A failed run proves nothing, and the hook fails open: it does not block. The line says
     // both, so the protocol decision and its limit are read together. It never says "verified"
     // in any form, so a model skimming the first word cannot mistake it for a pass.
@@ -329,7 +390,7 @@ export function evaluateStopDecision(
     };
   }
 
-  const unrecognized = unrecognizedRunLine(safe);
+  const unrecognized = unrecognizedRunLine(safe, { includeFailedRuns: true });
   if (unrecognized !== null) {
     // A verdict usabl does not recognize, or a null verdict on a run that was neither idle nor a
     // crash, can only be composed outside run(). It is not evidence that the change is clean, so
