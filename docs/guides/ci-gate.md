@@ -13,8 +13,9 @@ Run it from your app's root, after `usabl init` has written `usabl.config.json`:
 npx usabl install --ci
 ```
 
-It writes a file only when it is absent. It never overwrites a workflow you edited; it says
-where the file differs and stops with exit 2.
+It writes a file when it is absent, or fills the pin when the file is this version's
+unedited draft. It never overwrites a workflow you edited; it says where the file differs
+and stops with exit 2.
 
 ## What it fills in for you
 
@@ -33,9 +34,8 @@ blocks. The same is true of a commit that cannot be fetched from `usabl-dev/usab
 closed, never open.
 
 `install --ci` never moves a pin someone already chose. If the workflow is the usabl draft
-pinned to another commit, it reports that commit and changes nothing. If the workflow is
-the earlier usabl draft with the placeholder, and this build has a commit, it fills the pin
-in.
+pinned to another commit, it reports that commit and changes nothing. It writes a file when
+it is absent, or fills the pin when the file is this version's unedited draft.
 
 **The default branch.** The history workflow runs on pushes to your default branch. The
 command reads its name from git (`refs/remotes/origin/HEAD`, which a clone sets) and says
