@@ -262,16 +262,38 @@
 
 ### Fixed
 
-- Setup and discovery read truer for a new team. git runs with `LC_ALL=C`, so a missing
-  policy file at a ref reads as absent under any locale, where a translated git error crashed the
-  run; the missing-ref message builds its fetch example from the ref instead of assuming `main`.
-  The import graph follows `./Child.js` to `Child.ts` (and `.jsx`, `.mjs`, `.cjs` to their
-  TypeScript names) at every depth. Path aliases come from the app folder of the router file at
-  check time, as `init` reads them, and a tsconfig `extends` chain and single-file `paths`
-  entries are read. Two router paths that give one screen id, such as `/a-b` and `/a/b`, are set
-  aside as gaps instead of stopping the run, and `init` refuses that draft. `init` drafts every
-  Vite config name as wide blast, names workspace packages from the root `workspaces` list, names
-  the apps `--app` leaves out, and says when it could not read the exported Vite config at all.
+- Setup and discovery read truer for a new team. usabl's git reader runs with `LC_ALL=C`, so a
+  missing policy file at a ref reads as absent under any locale, where a translated git error
+  crashed the run; the missing-ref message builds its fetch example from the ref instead of
+  assuming `main`. The import graph follows `./Child.js` to `Child.ts` (and `.jsx`, `.mjs`,
+  `.cjs` to their TypeScript names) at every depth. A tsconfig `extends` chain and single-file
+  `paths` entries are read. Two router paths that give one screen id, such as `/a-b` and `/a/b`,
+  are set aside instead of stopping the run: a wide-blast change records each as a `skipped`
+  gap, and a narrow change, which never reaches a route read from the router, reports the changed
+  file as an `unresolved` gap. `init` refuses that draft. `init` drafts every Vite config name as
+  wide blast, names workspace packages from the root `workspaces` list, names the apps `--app`
+  leaves out, and says when it could not read the exported Vite config at all.
+
+- Path aliases for check are read from the nearest tsconfig and the nearest Vite config at or
+  above the router file, found on their own, and from the repository root configs as before. An
+  import the two sets map to different places links every file found and is disclosed in
+  `coverage.discoveryNotes`, printed as discovery notes. Gate effect: a change to a file that a
+  screen imports through a root alias maps to that screen again, where an app folder that held
+  only a Vite config or only a tsconfig dropped the other config and left the screen unchecked.
+  More screens can be checked when the two sets disagree.
+
+- `usabl drift routes` counts routes set aside because their path gives a refused or shared
+  screen id. A sidecar that names them reports no removal, and one that omits them reports them
+  as added. Gate effect: none on check; drift exits 1 where it said "No drift detected" for
+  routes that are never scanned, and exits 0 where it reported false removals.
+
+- The `init` refusal for route paths that give one screen id says to write `usabl.config.json`
+  and `usabl.routes.json` by hand and to check them with `usabl drift routes`, where it said to
+  run `init` again, which refused again. Gate effect: none.
+
+- `usabl init --app` refuses, with exit 2, a folder whose real path through symbolic links is
+  outside the repository, and writes nothing. Gate effect: none on check; such a draft would
+  have read files the repository does not hold.
 
 - Terminal and report output. The discovery detail of an unplaced file lists the import that
   names the file first and labels each group, so an unrelated file no longer reads as if it held
@@ -1165,8 +1187,9 @@
   as approval required, where it used to say idle and let the stop through. `usabl doctor`
   reports it as drifted. A documentation-only repository still loads when its
   `usabl.docs.json` loads and names at least one page, read from the same place as the config.
-  A manifest with no pages, or one that does not load, no longer counts. Scripts that read
-  exit 0 from such a config now see 4.
+  A manifest with no pages, or one that does not load, no longer counts. Gate effect: such a
+  config fails as a config error, and the Stop hook blocks, where each read every run as idle.
+  Scripts that read exit 0 from such a config now see 4.
 
 - Flow requirements now read each step at its own time. A flow waits for the page to settle
   after each `click` or `activate` step, which costs at least 2 seconds per step and up to 6, and

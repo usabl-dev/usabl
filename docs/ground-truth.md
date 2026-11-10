@@ -449,6 +449,7 @@ export interface Coverage {
   gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
   excludedFiles?: ExcludedFile[]; // disclosure only: test-folder files no screen imports
+  discoveryNotes?: DiscoveryNote[]; // disclosure only: what screen discovery had to assume
 }
 
 // A changed file that matches uiFileGlobs but that the planner left out on purpose. Today that is
@@ -457,6 +458,15 @@ export interface Coverage {
 export interface ExcludedFile {
   ref: string;    // repository path
   reason: string; // why it was left out, and what would make it count
+}
+
+// What screen discovery had to assume, about one file. Today that is an alias import that the
+// app configs and the repository root configs map to different places, which usabl follows both
+// ways when a changed file is reached through it. Not a gap: the gate never reads it. Absent and
+// empty both mean nothing to disclose.
+export interface DiscoveryNote {
+  ref: string;    // repository path of the importing file
+  reason: string; // what was assumed, and what would remove the doubt
 }
 
 export interface Receipt {
@@ -1648,17 +1658,25 @@ An import with an extension loads the file of that name when it exists. When it 
 graph. So `./Child.js` beside `Child.ts` links `Child.ts`. When both `.ts` and `.tsx` exist, the
 import links both and discloses the ambiguity, as above.
 
-An `@/` or `~/` import resolves through the path aliases of the app folder: the first folder at
-or above the router file that holds a `tsconfig.json`, a `tsconfig.app.json`, or a Vite config,
-or the repository root when none below it does. Those are the configs the app's compiler and
-bundler read, and `init` reads the same ones. In a monorepo the root configs belong to no app, so
-they are not read for an app in `packages/admin`. A tsconfig `extends` chain is followed through
-relative paths, nearest config first: `paths` comes whole from the nearest config that sets it,
-and its targets are read from the nearest `baseUrl`, or from the config that sets `paths` when no
-config sets one. An extends that names a package, such as `@tsconfig/node20`, is not read,
-because it resolves through `node_modules`. A `paths` entry with no wildcard, such as
-`"@/theme": ["src/styles/theme.ts"]`, maps that one specifier and matches before a wildcard. An
-alias usabl does not read leaves its import unresolved, which is disclosed, never a silent pass. One case is not disclosed: an extension outside
+An `@/` or `~/` import resolves through two sets of path aliases. usabl finds two folders on
+their own: the nearest folder at or above the router file that holds a `tsconfig.json` or a
+`tsconfig.app.json`, and the nearest one that holds a Vite config. Each is the repository root
+when no folder below it holds one. The tsconfig and the Vite config in those folders give the
+app's set. When either folder is below the root, the root `tsconfig.json`, `tsconfig.app.json`,
+and Vite config give a second set, read as they were before usabl looked in app folders, so
+aliases are never read from fewer places. usabl cannot run the build to learn which set the app
+uses. An import that the two sets map to different places resolves at each, every file found is
+linked, and coverage discloses it in `discoveryNotes`, printed as discovery notes that do not
+block. Within one set, a Vite alias comes first, in the order the config declares it, because
+the bundler applies it before anything else, so a Vite wildcard alias wins over a tsconfig entry
+for the same prefix. tsconfig `paths` fill in the prefixes Vite does not set. A tsconfig
+`extends` chain is followed through relative paths, nearest config first: `paths` comes whole
+from the nearest config that sets it, and its targets are read from the nearest `baseUrl`, or
+from the config that sets `paths` when no config sets one. An extends that names a package, such
+as `@tsconfig/node20`, is not read, because it resolves through `node_modules`. A `paths` entry
+with no wildcard, such as `"@/theme": ["src/styles/theme.ts"]`, maps that one specifier, and
+among the tsconfig entries it matches before a wildcard. An alias usabl does not read leaves its
+import unresolved, which is disclosed, never a silent pass. One case is not disclosed: an extension outside
 the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
 with that extension is not seen and the file usabl did find is attributed.
 
@@ -4035,8 +4053,10 @@ in [Reading routes out of router source](#reading-routes-out-of-router-source). 
 `wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
 `src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config (any of `vite.config.ts`, `.js`, `.mts`, `.mjs`, `.cts`, or `.cjs`), and
 the CSS files under `src/` exist in the app folder, because a change to any of them can reach
-every screen. Path aliases come from the `tsconfig.json`, `tsconfig.app.json`, and Vite config in
-the app folder, the configs that app's compiler and bundler read.
+every screen. To attribute a route import written through an alias, `init` reads the
+`tsconfig.json`, `tsconfig.app.json`, and Vite config in the app folder only. A route whose
+import goes through an alias set anywhere else stays unattributed, which `init` counts in its
+report; it does not guess the entry file.
 
 **Which app `init` drafts.** `usabl init --app <dir>` drafts the app in that folder, written
 relative to the repository root, such as `usabl init --app packages/web`. A folder outside the
@@ -4767,7 +4787,11 @@ before the idle return, because a docs page can be scanned in a run where no app
 The router fallback joins the segments of a path with `-`, so two paths can give one id: `/a-b`
 and `/a/b` both give `a-b`. Neither route is named. Both are set aside like a route whose derived
 id fails the grammar, so a wide-blast change records each as a `skipped` gap, and every other
-route still runs. `usabl drift routes` still counts every route set aside as a route the router
+route still runs. Only a wide-blast change names them. A narrow change, one whose files match no
+wide-blast glob, maps a changed file to screens through route entry files, and a route read from
+the router has none, set aside or not. So, unless a surface lists it, the changed file maps to no
+screen and is reported as an `unresolved` gap that names the file, and the routes set aside are
+not mentioned. `usabl drift routes` still counts every route set aside as a route the router
 declares: a sidecar that names it reports no removal, and a sidecar that omits it reports it as
 added, so drift never says "No drift detected" for a route check never scans. `usabl init` refuses the whole draft in that case, names the file and line of
 each route that shares an id, and says to write `usabl.config.json` and `usabl.routes.json` by
