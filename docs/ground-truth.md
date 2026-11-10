@@ -2936,8 +2936,13 @@ disclosure only: the gate never reads it, the Result reader refuses a malformed 
 summary and the comment show it in one line.
 
 **The history workflow.** `usabl install --ci` also writes `.github/workflows/usabl-history.yml`,
-the default-branch workflow that feeds the debt history (section 9). It runs on a push to main,
-once a day, and by hand, one run at a time. It builds the engine with the same `usabl-engine` job
+the default-branch workflow that feeds the debt history (section 9). It runs on a push to the
+default branch, once a day, and by hand, one run at a time. The installer reads the default branch
+from `refs/remotes/origin/HEAD` in the app's clone and writes it, quoted, into the `push` trigger
+and the `history-scan` job's `if:`; the report names it. A name with any character outside
+letters, digits, and `. _ - /`, or no such ref, means not found: the installer writes main and
+prints a step to change it on those two lines. A re-run keeps the branch its own file already
+names. The text below says main for that branch. It builds the engine with the same `usabl-engine` job
 as the gate, and each later job fetches the archive and the record with usabl's own fetcher,
 checks the archive against `engine_digest`, and checks the unpacked tree before each engine run. Its
 `history-scan` job checks out main, reads `appBaseUrl` from main's `usabl.config.json`, starts

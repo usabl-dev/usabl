@@ -145,7 +145,9 @@ describe('the steps after install --ci', () => {
   it('puts the config-first step before commit when git cannot show the config on the default branch', async () => {
     const result = await installCi(memoryFs(READY_APP), FILLED, NO_GIT);
 
-    expect(steps(result.message)).toEqual([`1. ${configFirst(null, false)}`, COMMIT.replace('1.', '2.'), branchRule(3), openPr(4)]);
+    // With no default branch to read, the history workflow names main and a step says to check it.
+    expect(steps(result.message)[0]).toMatch(/^1\. Check the branch name\. /);
+    expect(steps(result.message).slice(1)).toEqual([`2. ${configFirst(null, false)}`, COMMIT.replace('1.', '3.'), branchRule(4), openPr(5)]);
   });
 
   it('puts the config-first step in when the default branch holds other config bytes, or none', async () => {

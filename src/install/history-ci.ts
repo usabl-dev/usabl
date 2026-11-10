@@ -25,11 +25,20 @@ import type { InstallFs, InstallResult } from './index.js';
 import { ARTIFACT_MAX_BYTES, ENGINE_CHECK, fetchArtifactStep } from './artifact-fetch.js';
 import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
 import { CONFIG_PATH, hasDevScript, readAppOrigin } from './app-origin.js';
-import { configOnDefaultBranch, findDefaultBranch, NO_GIT, ROUTES_PATH, type DefaultBranch, type InstallGit } from './repo-git.js';
+import {
+  configOnDefaultBranch,
+  findDefaultBranch,
+  isSafeBranchName,
+  NO_GIT,
+  ROUTES_PATH,
+  type DefaultBranch,
+  type InstallGit,
+} from './repo-git.js';
 import {
   appGateNotes,
   appGateSetupSteps,
   applyWorkflowPlan,
+  classifyWorkflow,
   composeCiReport,
   ENGINE_JOB,
   engineRefFor,
@@ -51,11 +60,20 @@ const HISTORY_SCAN_ENGINE_UNPACK = `${UNPACK_ENGINE_IN_TEMP}
           mkdir "\${GITHUB_WORKSPACE}/../usabl"
           tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
 
-export const USABL_HISTORY_WORKFLOW = `name: usabl-history
+/**
+ * The history workflow for an app whose default branch is `branch`. The name goes into the trigger
+ * and into the scan job's `if:`, so only a plain name is taken: letters, digits, and . _ - /. It is
+ * written quoted, so YAML reads it as text even when it looks like a number.
+ */
+export function historyWorkflow(branch: string): string {
+  if (!isSafeBranchName(branch)) {
+    throw new Error('the history workflow branch must be letters, digits, and . _ - / only');
+  }
+  return `name: usabl-history
 
 on:
   push:
-    branches: [main]
+    branches: ["${branch}"]
   schedule:
     # A second scan of an unchanged main confirms a fix without waiting for the next merge.
     - cron: "17 6 * * *"
@@ -81,7 +99,7 @@ ${ENGINE_JOB}
   history-scan:
     # Starts the application from main and scans every screen. It runs application code, so it
     # never gets write access. It writes the record to a file and nothing to git.
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/${branch}'
     needs: usabl-engine
     runs-on: ubuntu-latest
     permissions:
@@ -252,13 +270,81 @@ ${ENGINE_CHECK}
           echo "could not push the history record after 3 attempts"
           exit 1
 `;
+}
 
-export async function planHistoryCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, USABL_HISTORY_WORKFLOW, engineRef);
+/** The history workflow for an app whose default branch is main. */
+export const USABL_HISTORY_WORKFLOW = historyWorkflow('main');
+
+// The trigger line, as historyWorkflow writes it. A file that names its branch any other way is not
+// usabl's own file.
+const TRIGGER_LINE = /^ {4}branches: \["([^"]*)"\]$/;
+
+/** The branch a history workflow names in its trigger, or null when it is not a plain name. */
+export function historyBranchOf(raw: string): string | null {
+  for (const line of raw.split('\n')) {
+    const match = TRIGGER_LINE.exec(line);
+    if (match !== null) {
+      const name = match[1] ?? '';
+      return isSafeBranchName(name) ? name : null;
+    }
+  }
+  return null;
+}
+
+// The one-based lines that hold the branch name, for the steps that say where to change it.
+function branchLines(draft: string): [number, number] {
+  const lines = draft.split('\n');
+  return [
+    lines.findIndex((line) => TRIGGER_LINE.test(line)) + 1,
+    lines.findIndex((line) => line.startsWith("    if: github.ref == 'refs/heads/")) + 1,
+  ];
+}
+
+/**
+ * The branch the history plan uses. A file on disk that is usabl's own draft for some branch, pinned
+ * or not, keeps that branch, so a re-run recognises its own file even when git now names another
+ * branch or none, and a name the person put in by hand is never moved. Otherwise it is the default
+ * branch git names, or main when git names none.
+ */
+export function historyBranchFor(raw: string | null, defaultBranch: DefaultBranch): string {
+  const fallback = defaultBranch.kind === 'found' ? defaultBranch.name : 'main';
+  if (raw === null) return fallback;
+  const named = historyBranchOf(raw);
+  if (named === null) return fallback;
+  return classifyWorkflow(raw, historyWorkflow(named)) === 'drifted' ? fallback : named;
+}
+
+export async function planHistoryCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, historyWorkflow(branch), engineRef);
+}
+
+// What the report says about the branch the history workflow runs on: a note for the branch it
+// wrote, or a step when that branch may be wrong.
+function branchReport(
+  action: 'written' | 'already-wired' | 'refused',
+  branch: string,
+  defaultBranch: DefaultBranch,
+): { note?: string; step?: string } {
+  if (action === 'refused') return {};
+  const [trigger, scan] = branchLines(historyWorkflow(branch));
+  if (defaultBranch.kind === 'found') {
+    if (branch === defaultBranch.name) {
+      return action === 'written' ? { note: `${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to ${branch}, the default branch git records for origin.` } : {};
+    }
+    return {
+      step: `${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to ${branch}, but the default branch git records for origin is ${defaultBranch.name}. Put ${defaultBranch.name} in place of ${branch} on lines ${trigger} and ${scan}, or the history scan never runs.`,
+    };
+  }
+  if (action === 'written' && branch === 'main') {
+    return {
+      step: `Check the branch name. usabl could not find your default branch, because ${defaultBranch.reason}. So ${USABL_HISTORY_WORKFLOW_PATH} runs on pushes to main. If your default branch has another name, put it in place of main on lines ${trigger} and ${scan}.`,
+    };
+  }
+  return {};
 }
 
 const HISTORY_NOTES = [
-  `${USABL_HISTORY_WORKFLOW_PATH} scans main after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed accessibility barrier closes its slot in the accepted debt on its own.`,
+  `${USABL_HISTORY_WORKFLOW_PATH} scans the default branch after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed accessibility barrier closes its slot in the accepted debt on its own.`,
   "Its history-append job needs contents: write, the one permission tracking needs. It runs no application code. To keep that write on the history branch only, add a ruleset for usabl/history that blocks force pushes and deletion. If you cannot grant the permission, leave this file out: every run then says tracking is off and keeps today's behavior.",
 ];
 
@@ -284,9 +370,13 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
   const app = await readAppOrigin(fs);
   const defaultBranch = await findDefaultBranch(git);
   const gate = await applyWorkflowPlan(fs, await planCi(fs, engineRef), pin, USABL_GATE_WORKFLOW, 'gate workflow');
-  const history = await applyWorkflowPlan(fs, await planHistoryCi(fs, engineRef), pin, USABL_HISTORY_WORKFLOW, 'history workflow');
+  const branch = historyBranchFor(await fs.readFile(USABL_HISTORY_WORKFLOW_PATH), defaultBranch);
+  const historyDraft = historyWorkflow(branch);
+  const history = await applyWorkflowPlan(fs, await planHistoryCi(fs, engineRef, branch), pin, historyDraft, 'history workflow');
+  const branchFacts = branchReport(history.result.action, branch, defaultBranch);
 
   const setupSteps = appGateSetupSteps(app);
+  if (branchFacts.step !== undefined) setupSteps.push(branchFacts.step);
   // The history scan starts the app with npm run dev. Without that script it has nothing to start.
   if (history.result.action !== 'refused' && !(await hasDevScript(fs))) {
     setupSteps.push(
@@ -300,6 +390,7 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD,
   const notes = [
     ...(gate.result.action === 'written' ? appGateNotes(app) : []),
     ...(history.result.action === 'written' ? HISTORY_NOTES : []),
+    ...(branchFacts.note === undefined ? [] : [branchFacts.note]),
   ];
   return composeCiReport({ applied: [gate, history], pin, notes, setupSteps });
 }

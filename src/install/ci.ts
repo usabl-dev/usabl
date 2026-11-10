@@ -1282,7 +1282,7 @@ export function countDraftEngineRefLines(draft: string): number {
 
 // The recognizer is draft-relative: it compares the on-disk file against a specific draft,
 // so the app gate and the docs gate share one implementation and each passes its own draft.
-function classifyWorkflow(raw: string | null, draft: string): GateWorkflowState {
+export function classifyWorkflow(raw: string | null, draft: string): GateWorkflowState {
   // Recognition never fails toward success. Only a workflow that matches the draft line for
   // line, differing solely at the engine-ref lines and only to the same real 40-character
   // commit SHA, reads as wired. Everything less confident lands on missing, unpinned, or
