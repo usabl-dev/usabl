@@ -256,12 +256,15 @@ describe('block selectors match blocks, not their BEM children', () => {
     }
   });
 
-  it('pf-toast-live-region flags the contained alert too while the open modal hides the app root', async () => {
+  it('pf-toast-live-region judges the alerts in the app root by their live region while the open modal hides the root', async () => {
+    // PatternFly hides the app root on purpose while its modal is open, and the live region works
+    // again when the modal closes. So the contained alert passes and only the loose one fails, for
+    // the reason it fails with the modal closed.
     const page = await openFixture();
     try {
       const drafts = await toastDrafts(liveContext(page));
-      expect(drafts).toHaveLength(2);
-      expect(drafts.filter((draft) => draft.why.includes('hidden from assistive technology'))).toHaveLength(2);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ confidence: 'fail', why: 'No polite or assertive live region reaches the alert.' });
     } finally {
       await page.close();
     }

@@ -246,3 +246,6 @@ export const effectiveLiveValue = resolver.effectiveLiveValue;
  * rule the announcement capture applies. See the resolver for the aria-hidden values that count.
  */
 export const hiddenInChain = resolver.hiddenInChain;
+
+/** Whether an element's role and aria-modal attributes make it an ARIA modal dialog. */
+export const ariaModalDialog = resolver.ariaModalDialog;
