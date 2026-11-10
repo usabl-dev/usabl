@@ -201,6 +201,42 @@ describe('an unapproved requirement', () => {
     expect(output.map((d) => d.rule)).toEqual(['voicing/silent-change', 'intake:content-title']);
   });
 
+  it('shows an unapproved voice requirement as preview, even when its obligation class is promoted', async () => {
+    const voice: Requirement = {
+      id: 'delete-row-announces',
+      kind: 'voice',
+      surface: SCREEN.id,
+      description: 'Deleting a row announces the deletion',
+      approved: false,
+      assertion: {
+        type: 'voice',
+        steps: [{ do: 'click', selector: '[data-row="a"] button[aria-label="Delete"]' }],
+        obligations: [{ class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true }],
+      },
+    };
+    // The delete button keeps focus and nothing reaches a live region, so the voice check misses.
+    const silent = () =>
+      makeFakePage({
+        currentUrl: async () => SCREEN.url,
+        activeNode: async () => ({ name: 'Delete', role: 'button', states: {} }),
+      });
+    const config = testConfig({ promotedObligations: ['live-polite'] });
+    const voiceRun = (requirement: Requirement) =>
+      runProviders(mapRequirementsToProviders(bundleOf(requirement)), { page: silent(), screen: SCREEN, config }, ['live']);
+
+    // Approved, the promoted class blocks.
+    const approved = await voiceRun({ ...voice, approved: true });
+    expect(approved.drafts.some((d) => d.evidenceClass === 'deterministic' && d.confidence === 'fail')).toBe(true);
+    expect(gateOn(approved.drafts).verdict).toBe('regression');
+
+    // Unapproved, the same misses are preview, and the verdict does not move.
+    const shown = await voiceRun(voice);
+    expect(shown.gaps).toEqual([]);
+    expect(shown.drafts.length).toBeGreaterThan(0);
+    expect(shown.drafts.every((d) => d.evidenceClass === 'preview')).toBe(true);
+    expect(gateOn(shown.drafts).verdict).toBe('verified');
+  });
+
   it('leaves an approved requirement provider exactly as it was', () => {
     const provider: Provider = { id: 'x', layer: 'y', capabilities: ['live'], run: async () => [] };
     expect(shownUntilApproved({ ...content, approved: true }, provider)).toBe(provider);
