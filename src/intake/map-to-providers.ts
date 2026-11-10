@@ -188,6 +188,70 @@ function flowHeardBeforeDraft(
   };
 }
 
+// The focused control is named with the expected text, but focus did not change during the flow,
+// or what had focus before it could not be read. Focus an earlier check left there is not evidence
+// of anything the flow's steps did, so this is a gap, never a pass and never a fail.
+function flowFocusUnchangedDraft(
+  requirement: Requirement,
+  node: AxNode | null,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+  readBefore: boolean,
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: `Whether the flow's steps make users hear "${expectedAnnouncement}" is unknown.`,
+    why: readBefore
+      ? "The focused control is named with the expected text, but focus was already on that control before the flow ran, with the same name, and no step announced the text. Its name is not evidence of anything the flow's steps did."
+      : "The focused control is named with the expected text, but what had focus could not be read before the flow ran, so usabl cannot tell whether the flow's steps moved focus there.",
+    fix: 'Write the flow so its own steps move focus to that control or announce the text, or check this flow by hand with a screen reader.',
+    evidence: evidenceFromNode(node, readBefore ? { expectedAnnouncement, announcements, focusUnchanged: true } : { expectedAnnouncement, announcements, focusBeforeUnreadable: true }),
+    confidence: 'unverified',
+  };
+}
+
+// What had focus: its DOM backend node id and its trimmed accessible name. Null when a read failed.
+interface FocusMark {
+  nodeId: number | null;
+  name: string;
+}
+
+async function focusedNodeIdOrUnknown(page: Page): Promise<number | null | undefined> {
+  try {
+    return await page.focusedNodeId();
+  } catch {
+    return undefined;
+  }
+}
+
+function focusMark(nodeId: number | null | undefined, node: AxNode | null): FocusMark | null {
+  return nodeId === undefined ? null : { nodeId, name: node?.name?.trim() ?? '' };
+}
+
+async function readFocusMark(page: Page): Promise<FocusMark | null> {
+  const nodeId = await focusedNodeIdOrUnknown(page);
+  try {
+    return focusMark(nodeId, await page.activeNode());
+  } catch {
+    return null;
+  }
+}
+
+// Whether the flow's steps changed what has focus: another node, or the same node with another
+// name. Unknown, when either read failed, is not a change.
+function focusChanged(before: FocusMark | null, after: FocusMark | null): boolean {
+  if (before === null || after === null) return false;
+  return before.nodeId !== after.nodeId || before.name !== after.name;
+}
+
 function hasText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -417,6 +481,9 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
         : 'the page did not go quiet before the flow started, so speech an earlier check started could be counted as the flow\'s own. The flow ran none of its steps.',
     );
   }
+  // What had focus before the first step. The focused control's name counts as the flow's evidence
+  // only when the flow's steps changed the focused node or its name.
+  const focusBefore = assertion.expectedAnnouncement === undefined ? null : await readFocusMark(page);
   for (const [index, step] of assertion.steps.entries()) {
     const action = isActionStep(step);
     if (action) {
@@ -450,11 +517,16 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   const expectedAnnouncement = assertion.expectedAnnouncement;
 
   const node = await page.activeNode();
+  const focusAfter = focusMark(await focusedNodeIdOrUnknown(page), node);
   if (drainFailures.length > 0) {
     throw drainFailures[0];
   }
   const drain = unionOfDrains(drains);
-  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain, drainBefore?.texts ?? []);
+  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain, {
+    textsBefore: drainBefore?.texts ?? [],
+    focusBefore,
+    focusMoved: focusChanged(focusBefore, focusAfter),
+  });
   // The rule stays quiet only where it would repeat the flow's own draft for the same step. A flow
   // that fails says its last step was not heard, so the rule emits nothing for that step: a second
   // draft would be a second finding for one accessibility barrier. A flow gap about an undecidable
@@ -470,18 +542,28 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   return own;
 }
 
+// What the flow knows about the page before its first step. None of it passes the flow.
+interface FlowStart {
+  // The texts of the drain taken before the first step. They never pass the flow and never fail it.
+  textsBefore: readonly string[];
+  // What had focus before the first step, or null when it could not be read.
+  focusBefore: FocusMark | null;
+  // Whether the flow's steps changed what has focus.
+  focusMoved: boolean;
+}
+
 async function flowVerdict(
   page: Page,
   requirement: Requirement,
   expectedAnnouncement: string,
   node: AxNode | null,
   drain: AnnouncementDrain,
-  // The texts of the drain taken before the first step. They never pass the flow and never fail it.
-  textsBefore: readonly string[],
+  before: FlowStart,
 ): Promise<Draft[]> {
   const announcements = drain.texts;
   const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
-  if (heardOnFocus) {
+  // The focused control's name counts only when the flow's steps changed what has focus.
+  if (heardOnFocus && before.focusMoved) {
     return [];
   }
   // The focused control's name does not depend on the drain. Past this point the answer does,
@@ -499,12 +581,18 @@ async function flowVerdict(
     return [];
   }
 
+  if (heardOnFocus) {
+    return [
+      flowFocusUnchangedDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements, before.focusBefore !== null),
+    ];
+  }
+
   const unreadable = await page.activeFocusUnreadable();
   if (unreadable !== null) {
     return [flowUnreadableDraft(requirement, await page.activePath(), expectedAnnouncement, announcements, unreadable)];
   }
 
-  if (textsBefore.some((text) => trimEqual(text, expectedAnnouncement))) {
+  if (before.textsBefore.some((text) => trimEqual(text, expectedAnnouncement))) {
     return [flowHeardBeforeDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements)];
   }
 

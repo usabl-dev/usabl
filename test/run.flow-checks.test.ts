@@ -163,6 +163,15 @@ describe('a flow requirement with a step the driver cannot run', () => {
     expect(r.verdict).toBe('not_covered');
   });
 
+  it('is a gap, not a pass, when a step leaves focus where an earlier check put it', async () => {
+    // Escape runs, but changes nothing. Focus stays on the control the earlier check renamed
+    // "Saved", so its name is not evidence of anything the flow did.
+    const { page, earlier } = savedFocusPage();
+    const r = await run(depsFor(page, [earlier, ...flowProviders([{ do: 'press', key: 'Escape' }])]), config);
+    expect(r.findings.filter((f) => f.rule === 'intake:save-announces').map((f) => f.confidence)).toEqual(['unverified']);
+    expect(r.verdict).not.toBe('verified');
+  });
+
   it('still passes the same flow with its selector written', async () => {
     const live: string[] = [];
     const r = await run(depsFor(savePage(live, true), flowProviders([{ do: 'click', selector: '#save' }])), config);

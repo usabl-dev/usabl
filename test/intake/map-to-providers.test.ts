@@ -465,15 +465,23 @@ describe('mapRequirementsToProviders', () => {
       expectedAnnouncement: 'Saved',
     });
     const provider = mapRequirementsToProviders(bundle)[0];
+    // Focus starts on the body and the Tab moves it to the control, so the name is the flow's own.
+    let tabbed = false;
     const context = await makeContext({
       page: makeFakePage({
-        tab: vi.fn(async () => {}),
+        tab: vi.fn(async () => {
+          tabbed = true;
+        }),
         press: vi.fn(async () => {}),
-        activeNode: vi.fn(async () => ({
-          name: '  Saved ',
-          role: 'status',
-          states: {},
-        })),
+        activeNode: vi.fn(async () =>
+          tabbed
+            ? {
+                name: '  Saved ',
+                role: 'status',
+                states: {},
+              }
+            : null,
+        ),
         drainAnnouncements: vi.fn(async () => []),
       }),
     });
@@ -537,6 +545,82 @@ describe('mapRequirementsToProviders', () => {
     });
 
     await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
+  describe('focus that was already there before the flow is not evidence', () => {
+    // A page whose focus is scripted: the node id and name before the flow, and what each step does.
+    function focusPage(start: { id: number | null; name: string | null }, step: (focus: { id: number | null; name: string | null }) => void) {
+      const focus = { ...start };
+      const node = (): AxNode | null => (focus.name === null ? null : { name: focus.name, role: 'button', states: {} });
+      return makeFakePage({
+        tab: vi.fn(async () => step(focus)),
+        press: vi.fn(async () => step(focus)),
+        click: vi.fn(async () => step(focus)),
+        focusedNodeId: vi.fn(async () => focus.id),
+        activeNode: vi.fn(async () => node()),
+        activePath: vi.fn(async () => (focus.id === null ? 'body' : `#node-${focus.id}`)),
+      });
+    }
+
+    it('is a gap when a press of Shift leaves focus on the control an earlier check focused, named with the text', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press', key: 'Shift' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({ page: focusPage({ id: 7, name: 'Saved' }, () => {}) });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '#node-7' });
+      expect(drafts[0]?.why).toContain('focus was already on that control before the flow ran');
+      expect(drafts[0]?.evidence.extra).toMatchObject({ expectedAnnouncement: 'Saved', focusUnchanged: true });
+    });
+
+    it('passes a flow that moves focus to a control with the expected name', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const page = focusPage({ id: 3, name: 'Cancel' }, (focus) => Object.assign(focus, { id: 7, name: 'Saved' }));
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('passes a flow whose step changes the focused control\'s name to the expected text', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const page = focusPage({ id: 3, name: 'Save' }, (focus) => Object.assign(focus, { name: 'Saved' }));
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('still passes on the expected text in a step\'s announcement, wherever focus is', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const drains = [[], ['Saved']];
+      const page = makeFakePage({
+        ...focusPage({ id: 7, name: 'Saved' }, () => {}),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      });
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('is a gap when focus could not be read before the flow, so whether it moved is unknown', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      let reads = 0;
+      const page = makeFakePage({
+        ...focusPage({ id: 7, name: 'Saved' }, () => {}),
+        focusedNodeId: vi.fn(async () => {
+          reads += 1;
+          if (reads === 1) throw new Error('DOM.describeNode failed');
+          return 7;
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(await makeContext({ page })));
+
+      expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain('could not be read before the flow ran');
+    });
   });
 
   describe('before its first step, the flow waits for the page to go quiet', () => {
@@ -716,9 +800,14 @@ describe('mapRequirementsToProviders', () => {
 
     it('still passes when the focused control itself says the text', async () => {
       const provider = mapRequirementsToProviders(bundle)[0];
+      // The Tab moves focus from the body to the control, so its name is the flow's own evidence.
+      let tabbed = false;
       const context = await makeContext({
         page: makeFakePage({
-          activeNode: vi.fn(async () => axNode('Saved')),
+          tab: vi.fn(async () => {
+            tabbed = true;
+          }),
+          activeNode: vi.fn(async () => (tabbed ? axNode('Saved') : null)),
           drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'closed-shadow-modal' as const })),
         }),
       });
