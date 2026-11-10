@@ -262,6 +262,24 @@
 
 ### Fixed
 
+- A change to a test file that a screen can load is now checked, or is a gap, where it passed as
+  nothing to check. A test file is a file under `uiFileGlobs` named like a test (`*.test.*`,
+  `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
+  before any check, even when a screen imported it or a surface listed it, and a file in a test
+  folder was excluded whenever no route closure reached it, which with router fallback routes was
+  always. Now a test file is a UI file when a surface lists it, a route closure reaches it, or any
+  file outside the tests imports it, directly or through other files; usabl builds a wider import
+  graph from every file outside the tests for this, only when a changed test file needs it. It is
+  an `unresolved` gap when a load usabl cannot follow may reach it: an unresolved import that names
+  it, an `import.meta.glob` pattern that matches it, an `import()` or `require()` whose path is
+  built at run time and may point to it, or a bare import a tsconfig `baseUrl` resolves to it.
+  The import graph also follows a name like `./Widget.spec` to `Widget.spec.tsx`. A change to a
+  test file that nothing outside the tests imports, and that no such load can reach, stays nothing
+  to check, and is now listed as excluded with a reason for a file named like a test too. The pull
+  request comment and the Stop hook now list excluded files, as `usabl check` does, and an idle run
+  that excluded files says so on both. `usabl baseline` and `usabl docs --all` place test files by
+  the same rule, so a test file a load usabl cannot follow may reach is a gap there too.
+
 - Setup and discovery read truer for a new team. usabl's git reader runs with `LC_ALL=C`, so a
   missing policy file at a ref reads as absent under any locale, where a translated git error
   crashed the run; the missing-ref message builds its fetch example from the ref instead of
