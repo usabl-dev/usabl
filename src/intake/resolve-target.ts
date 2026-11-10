@@ -13,11 +13,11 @@
  * match may only be out of reach. The document query cannot see every element that has a role
  * either: a role set through ElementInternals, an element in a closed shadow root, or a candidate
  * whose accessibility read came back empty. So the count is checked against the whole
- * accessibility tree of the page, and when the two disagree, or the tree cannot be read, this unit
- * cannot tell. The caller decides what each case means for its check. This unit never decides a
+ * accessibility tree of the page, and when the two disagree, or the tree has more nodes than usabl
+ * reads, this unit cannot tell. The caller decides what each case means for its check. This unit never decides a
  * verdict.
  */
-import type { AxNode, AxTreeNode, Page, RoleTarget, TargetRole } from '../contracts/index.js';
+import type { AxNode, AxTreeNode, DesignAxTreeRead, Page, RoleTarget, TargetRole } from '../contracts/index.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 
 // The elements that can carry each role, by tag or by role attribute. A role attribute can hold
@@ -67,8 +67,12 @@ export interface RoleSearch {
 
 // Why the search cannot tell whether its matches are all the matches. 'tree-differs': the whole
 // accessibility tree has another number of elements with this role and name than the document
-// search read. 'tree-unreadable': the tree was larger than usabl reads, in time or in nodes.
-export type CannotTellReason = 'tree-differs' | 'tree-unreadable';
+// search read. 'tree-over-limit': the tree has more nodes than DESIGN_AX_TREE_NODE_LIMIT.
+export type CannotTellReason = 'tree-differs' | 'tree-over-limit';
+
+// Where a search gets the page's whole accessibility tree. The design checks share one read per
+// page state, so each check is handed the read rather than asking the page again.
+export type DesignTreeSource = () => Promise<DesignAxTreeRead>;
 
 export type TargetResolution =
   | { kind: 'one'; match: TargetMatch }
@@ -110,18 +114,27 @@ export async function findByRole(page: Page, role: TargetRole): Promise<RoleSear
 
 /**
  * The nodes of the page's whole accessibility tree that assistive technology perceives with a
- * role, or null when the tree could not be read. The browser builds the tree from every role
- * source, closed shadow roots included. It does not cover child frames, which countEverywhere does.
+ * role, or null when the tree has more nodes than usabl reads. The browser builds the tree from
+ * every role source, closed shadow roots included. It does not cover child frames, which
+ * countEverywhere does.
  */
-export async function perceivedWithRole(page: Page, role: TargetRole): Promise<AxTreeNode[] | null> {
-  const tree = await page.fullAxTree();
+export async function perceivedWithRole(
+  page: Page,
+  role: TargetRole,
+  readTree: DesignTreeSource = () => page.designAxTree(),
+): Promise<AxTreeNode[] | null> {
+  const tree = await readTree();
   if (tree.kind !== 'tree') {
     return null;
   }
   return tree.nodes.filter((node) => !node.ignored && roleMatches(role, node.role));
 }
 
-export async function resolveTarget(page: Page, target: RoleTarget): Promise<TargetResolution> {
+export async function resolveTarget(
+  page: Page,
+  target: RoleTarget,
+  readTree: DesignTreeSource = () => page.designAxTree(),
+): Promise<TargetResolution> {
   const search = await findByRole(page, target.role);
   const named = search.matches.filter((match) => sameName(match.node.name, target.name));
   if (named.length > 1) {
@@ -130,9 +143,9 @@ export async function resolveTarget(page: Page, target: RoleTarget): Promise<Tar
   if (search.outOfReach > 0) {
     return { kind: 'out-of-reach', found: named.length, outOfReach: search.outOfReach };
   }
-  const perceived = await perceivedWithRole(page, target.role);
+  const perceived = await perceivedWithRole(page, target.role, readTree);
   if (perceived === null) {
-    return { kind: 'cannot-tell', reason: 'tree-unreadable', found: named.length, inTree: null };
+    return { kind: 'cannot-tell', reason: 'tree-over-limit', found: named.length, inTree: null };
   }
   const inTree = perceived.filter((node) => sameName(node.name, target.name)).length;
   // The tree sees every element with the role and name. When it has two, there are two elements,

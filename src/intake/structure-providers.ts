@@ -11,6 +11,7 @@
 import type {
   AxNode,
   BoxLimit,
+  DesignAxTreeRead,
   Draft,
   FocusOrderAssertion,
   FocusUnreadable,
@@ -19,14 +20,41 @@ import type {
   NameAssertion,
   Page,
   Provider,
+  ProviderContext,
   Requirement,
   RoleTarget,
   TargetRole,
   TargetSizeAssertion,
 } from '../contracts/index.js';
+import { DESIGN_AX_TREE_NODE_LIMIT } from '../deps/ax-tree.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
-import { findByRole, perceivedWithRole, resolveTarget, sameName, type TargetResolution } from './resolve-target.js';
+import {
+  findByRole,
+  perceivedWithRole,
+  resolveTarget,
+  sameName,
+  type DesignTreeSource,
+  type TargetResolution,
+} from './resolve-target.js';
+
+// One accessibility tree read per page state, shared by every design check of one provider pass.
+// The pass hands each provider the same context. The providers that run between two design checks
+// only read the page: a provider that changes it is marked mutatesPageState and runs after every
+// one that is not, and the keyboard walk runs before the requirement providers. The focus order
+// check presses Tab, so it drops the read when it ends, and the next check reads the page again.
+const sharedTrees = new WeakMap<ProviderContext, Promise<DesignAxTreeRead>>();
+
+function sharedTree(ctx: ProviderContext): DesignTreeSource {
+  return () => {
+    let read = sharedTrees.get(ctx);
+    if (read === undefined) {
+      read = ctx.page.designAxTree();
+      sharedTrees.set(ctx, read);
+    }
+    return read;
+  };
+}
 
 /** The layer of each design check, one per kind, as the content and flow checks have. */
 export const DESIGN_CHECK_LAYERS = {
@@ -87,6 +115,11 @@ const OUT_OF_REACH_FIX =
 
 const CANNOT_TELL_FIX =
   'Check this requirement by hand. An element in a closed shadow root, a role set by script through ElementInternals, or a page that changed while usabl read it can hide a second match from the document search.';
+
+// The start of the reason for a tree with more nodes than a design check reads. Each use ends it.
+const TREE_OVER_LIMIT = `The page's accessibility tree has more than ${DESIGN_AX_TREE_NODE_LIMIT} nodes, the most usabl reads for a design check,`;
+
+const TREE_OVER_LIMIT_FIX = `Check this requirement by hand, or check a smaller screen, such as one page of a long list. usabl reads at most ${DESIGN_AX_TREE_NODE_LIMIT} accessibility tree nodes for a design check.`;
 
 interface DraftFields {
   elementPath: string;
@@ -151,17 +184,21 @@ function refusedDraft(
     });
   }
   if (resolution.kind === 'cannot-tell') {
-    const why =
-      resolution.reason === 'tree-unreadable'
-        ? `The page's accessibility tree is larger than usabl reads, so it cannot make sure that no other ${ROLE_WORD[target.role]} is named "${target.name}", and it does not guess.`
-        : `The page's accessibility tree has ${counted(resolution.inTree ?? 0, target.role)} named "${target.name}", and usabl found ${resolution.found} it can read in the page document, so it cannot tell which element the design means, and it does not guess.`;
+    const overLimit = resolution.reason === 'tree-over-limit';
+    const why = overLimit
+      ? `${TREE_OVER_LIMIT} so it cannot make sure that no other ${ROLE_WORD[target.role]} is named "${target.name}", and it does not guess.`
+      : `The page's accessibility tree has ${counted(resolution.inTree ?? 0, target.role)} named "${target.name}", and usabl found ${resolution.found} it can read in the page document, so it cannot tell which element the design means, and it does not guess.`;
     return draft(requirement, kind, 'unverified', {
       elementPath: SCREEN_PATH,
       node: null,
       whatUserExperiences: `Whether ${question} is unknown.`,
       why,
-      fix: CANNOT_TELL_FIX,
-      extra: { found: resolution.found, inTree: resolution.inTree },
+      fix: overLimit ? TREE_OVER_LIMIT_FIX : CANNOT_TELL_FIX,
+      extra: {
+        found: resolution.found,
+        inTree: resolution.inTree,
+        ...(overLimit ? { nodeLimit: DESIGN_AX_TREE_NODE_LIMIT } : {}),
+      },
     });
   }
   return draft(requirement, kind, 'unverified', {
@@ -174,9 +211,9 @@ function refusedDraft(
   });
 }
 
-async function checkName(requirement: Requirement, assertion: NameAssertion, page: Page): Promise<Draft[]> {
+async function checkName(requirement: Requirement, assertion: NameAssertion, page: Page, tree: DesignTreeSource): Promise<Draft[]> {
   const target = assertion.target;
-  const found = await resolveTarget(page, target);
+  const found = await resolveTarget(page, target, tree);
   if (found.kind === 'one') {
     return [];
   }
@@ -199,9 +236,14 @@ function headingLevel(node: AxNode): number | null {
   return typeof level === 'number' && Number.isInteger(level) && level >= 1 && level <= 6 ? level : null;
 }
 
-async function checkHeading(requirement: Requirement, assertion: HeadingAssertion, page: Page): Promise<Draft[]> {
+async function checkHeading(
+  requirement: Requirement,
+  assertion: HeadingAssertion,
+  page: Page,
+  tree: DesignTreeSource,
+): Promise<Draft[]> {
   const target: RoleTarget = { role: 'heading', name: assertion.name };
-  const found = await resolveTarget(page, target);
+  const found = await resolveTarget(page, target, tree);
   if (found.kind === 'none') {
     return [
       draft(requirement, 'heading', 'fail', {
@@ -249,7 +291,12 @@ function isLandmark(role: LandmarkAssertion['role'], node: { name: string | null
   return role !== 'region' && role !== 'form' ? true : (node.name ?? '').trim() !== '';
 }
 
-async function checkLandmark(requirement: Requirement, assertion: LandmarkAssertion, page: Page): Promise<Draft[]> {
+async function checkLandmark(
+  requirement: Requirement,
+  assertion: LandmarkAssertion,
+  page: Page,
+  tree: DesignTreeSource,
+): Promise<Draft[]> {
   const role = assertion.role;
   const missing = (namedPart: string): Draft =>
     draft(requirement, 'landmark', 'fail', {
@@ -262,7 +309,7 @@ async function checkLandmark(requirement: Requirement, assertion: LandmarkAssert
 
   if (assertion.name !== undefined) {
     const target: RoleTarget = { role, name: assertion.name };
-    const found = await resolveTarget(page, target);
+    const found = await resolveTarget(page, target, tree);
     if (found.kind === 'one') {
       return [];
     }
@@ -291,17 +338,26 @@ async function checkLandmark(requirement: Requirement, assertion: LandmarkAssert
   }
   // The document search found none. The whole accessibility tree also sees closed shadow roots and
   // roles set by script, so a landmark there is unknown, not missing.
-  const perceived = await perceivedWithRole(page, role);
-  if (perceived === null || perceived.some((node) => isLandmark(role, node))) {
+  const perceived = await perceivedWithRole(page, role, tree);
+  if (perceived === null) {
     return [
       draft(requirement, 'landmark', 'unverified', {
         elementPath: SCREEN_PATH,
         node: null,
         whatUserExperiences: `Whether the screen has a ${ROLE_WORD[role]} is unknown.`,
-        why:
-          perceived === null
-            ? `usabl found none in the page document, and the page's accessibility tree is larger than usabl reads, so it cannot make sure there is none.`
-            : `usabl found none in the page document, but the page's accessibility tree has one it cannot read there.`,
+        why: `usabl found none in the page document. ${TREE_OVER_LIMIT} so it cannot make sure there is none.`,
+        fix: TREE_OVER_LIMIT_FIX,
+        extra: { nodeLimit: DESIGN_AX_TREE_NODE_LIMIT },
+      }),
+    ];
+  }
+  if (perceived.some((node) => isLandmark(role, node))) {
+    return [
+      draft(requirement, 'landmark', 'unverified', {
+        elementPath: SCREEN_PATH,
+        node: null,
+        whatUserExperiences: `Whether the screen has a ${ROLE_WORD[role]} is unknown.`,
+        why: `usabl found none in the page document, but the page's accessibility tree has one it cannot read there.`,
         fix: CANNOT_TELL_FIX,
       }),
     ];
@@ -488,11 +544,16 @@ function shownSize(pixels: number): number {
   return Math.floor(pixels * 10) / 10;
 }
 
-async function checkTargetSize(requirement: Requirement, assertion: TargetSizeAssertion, page: Page): Promise<Draft[]> {
+async function checkTargetSize(
+  requirement: Requirement,
+  assertion: TargetSizeAssertion,
+  page: Page,
+  tree: DesignTreeSource,
+): Promise<Draft[]> {
   const target = assertion.target;
   const min = assertion.minCssPx;
   const question = `the ${named(target)} is at least ${min} CSS pixels`;
-  const found = await resolveTarget(page, target);
+  const found = await resolveTarget(page, target, tree);
   if (found.kind === 'none') {
     // The name check reports a missing element. Here there is nothing to measure.
     return [
@@ -570,19 +631,26 @@ function isDesignKind(type: Requirement['assertion']['type']): type is DesignKin
   return Object.hasOwn(DESIGN_CHECK_LAYERS, type);
 }
 
-async function runCheck(requirement: Requirement, page: Page): Promise<Draft[]> {
+async function runCheck(requirement: Requirement, ctx: ProviderContext): Promise<Draft[]> {
   const assertion = requirement.assertion;
+  const page = ctx.page;
+  const tree = sharedTree(ctx);
   switch (assertion.type) {
     case 'name':
-      return checkName(requirement, assertion, page);
+      return checkName(requirement, assertion, page, tree);
     case 'heading':
-      return checkHeading(requirement, assertion, page);
+      return checkHeading(requirement, assertion, page, tree);
     case 'landmark':
-      return checkLandmark(requirement, assertion, page);
+      return checkLandmark(requirement, assertion, page, tree);
     case 'focus-order':
-      return checkFocusOrder(requirement, assertion, page);
+      try {
+        return await checkFocusOrder(requirement, assertion, page);
+      } finally {
+        // The walk pressed Tab, so the page may no longer be the one the shared read saw.
+        sharedTrees.delete(ctx);
+      }
     case 'target-size':
-      return checkTargetSize(requirement, assertion, page);
+      return checkTargetSize(requirement, assertion, page, tree);
     default:
       return [];
   }
@@ -609,7 +677,7 @@ export function designCheckProvider(requirement: Requirement): Provider | null {
       if (ctx.screen.id !== requirement.surface) {
         return [];
       }
-      return runCheck(requirement, ctx.page);
+      return runCheck(requirement, ctx);
     },
   };
 }

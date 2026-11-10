@@ -54,9 +54,8 @@ const headingPage = () =>
     queryAll: async () => [{ selector: 'h1' }],
     axAt: async () => axNode('Clusters'),
     countEverywhere: async () => 1,
-    fullAxTree: async () => ({
+    designAxTree: async () => ({
       kind: 'tree',
-      documentNodeId: null,
       nodes: [{ nodeId: 1, parentId: null, role: 'heading', name: 'Clusters', ignored: false, states: {}, busy: false, controls: [] }],
     }),
   });

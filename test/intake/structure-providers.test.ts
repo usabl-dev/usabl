@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AxNode, AxTreeNode, BoxLimit, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
+import type { AxNode, AxTreeNode, BoxLimit, Draft, ElementRef, Page, Provider, Requirement } from '../../src/contracts/index.js';
+import { DESIGN_AX_TREE_NODE_LIMIT } from '../../src/deps/ax-tree.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { designCheckProvider } from '../../src/intake/structure-providers.js';
+import { runProviders } from '../../src/providers/index.js';
 import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'users', url: 'http://127.0.0.1/users' };
@@ -26,7 +28,7 @@ function pageWith(nodes: Record<string, AxNode>, overrides: Partial<Page> = {}):
     queryAll: async () => refs,
     axAt: async (s: string) => nodes[s] ?? null,
     countEverywhere: async () => refs.length,
-    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf(Object.values(nodes)) }),
+    designAxTree: async () => ({ kind: 'tree', nodes: treeOf(Object.values(nodes)) }),
     ...overrides,
   });
 }
@@ -120,7 +122,7 @@ describe('name requirement', () => {
     // A second Refresh button in a closed shadow root: the tree has it, the document query does not.
     const page = pageWith(
       { '#r': button('Refresh') },
-      { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh'), button('Refresh')]) }) },
+      { designAxTree: async () => ({ kind: 'tree', nodes: treeOf([button('Refresh'), button('Refresh')]) }) },
     );
     const drafts = await run(r, page);
     expect(drafts).toHaveLength(1);
@@ -131,7 +133,7 @@ describe('name requirement', () => {
   it('is unconfirmed, never a fail, when the tree has the element and the document search does not', async () => {
     const page = pageWith(
       {},
-      { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh')]) }) },
+      { designAxTree: async () => ({ kind: 'tree', nodes: treeOf([button('Refresh')]) }) },
     );
     const drafts = await run(r, page);
     expect(drafts).toHaveLength(1);
@@ -141,11 +143,66 @@ describe('name requirement', () => {
     );
   });
 
-  it('is unconfirmed when the accessibility tree cannot be read', async () => {
-    const page = pageWith({ '#r': button('Refresh') }, { fullAxTree: async () => ({ kind: 'over-budget', limit: 'time' }) });
+  it('is unconfirmed, and names the limit, when the accessibility tree has more nodes than usabl reads', async () => {
+    const page = pageWith(
+      { '#r': button('Refresh') },
+      { designAxTree: async () => ({ kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT }) },
+    );
     const drafts = await run(r, page);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toBe(
+      `The page's accessibility tree has more than ${DESIGN_AX_TREE_NODE_LIMIT} nodes, the most usabl reads for a design check, so it cannot make sure that no other button is named "Refresh", and it does not guess.`,
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ nodeLimit: DESIGN_AX_TREE_NODE_LIMIT });
+    expect(drafts[0]?.fix).toContain(`usabl reads at most ${DESIGN_AX_TREE_NODE_LIMIT} accessibility tree nodes`);
+  });
+});
+
+describe('the accessibility tree the design checks read', () => {
+  const nameReq = (id: string, name: string): Requirement => ({ ...req({ type: 'name', target: { role: 'button', name } }), id });
+  const providersOf = (requirements: Requirement[]): Provider[] =>
+    requirements.map((r) => {
+      const provider = designCheckProvider(r);
+      if (provider === null) throw new Error('no provider');
+      return provider;
+    });
+
+  it('is read once per page state, however many requirements check that screen', async () => {
+    const designAxTree = vi.fn(async () => ({ kind: 'tree' as const, nodes: treeOf([button('Refresh'), button('Save')]) }));
+    const page = pageWith({ '#r': button('Refresh'), '#s': button('Save') }, { designAxTree });
+    const result = await runProviders(
+      providersOf([nameReq('r-refresh', 'Refresh'), nameReq('r-save', 'Save'), req({ type: 'landmark', role: 'main' })]),
+      { page, screen: SCREEN, config: testConfig() },
+      ['live'],
+    );
+    expect(result.gaps).toEqual([]);
+    expect(designAxTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('is read again after the focus order walk, because the walk changes the page', async () => {
+    const designAxTree = vi.fn(async () => ({ kind: 'tree' as const, nodes: treeOf([button('Refresh')]) }));
+    const page = tabbingPage(['Refresh'], {
+      queryAll: async () => [{ selector: '#r' }],
+      axAt: async () => button('Refresh'),
+      countEverywhere: async () => 1,
+      designAxTree,
+    });
+    const result = await runProviders(
+      providersOf([nameReq('r-before', 'Refresh'), req({ type: 'focus-order', sequence: ['Refresh'] }), nameReq('r-after', 'Refresh')]),
+      { page, screen: SCREEN, config: testConfig() },
+      ['live'],
+    );
+    expect(result.gaps).toEqual([]);
+    expect(result.drafts).toEqual([]);
+    expect(designAxTree).toHaveBeenCalledTimes(2);
+  });
+
+  it('is never the read the silent change rule makes, which has a time budget', async () => {
+    const fullAxTree = vi.fn(async () => ({ kind: 'over-budget' as const, limit: 'time' as const }));
+    const page = pageWith({ '#r': button('Refresh') }, { fullAxTree });
+    expect(await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), page)).toEqual([]);
+    expect(fullAxTree).not.toHaveBeenCalled();
   });
 });
 
@@ -220,10 +277,20 @@ describe('landmark requirement', () => {
 
   it('is unconfirmed, never a fail, when only the accessibility tree has the landmark', async () => {
     const main: AxNode = { name: null, role: 'main', states: {} };
-    const page = pageWith({}, { fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([main]) }) });
+    const page = pageWith({}, { designAxTree: async () => ({ kind: 'tree', nodes: treeOf([main]) }) });
     const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed, never a fail, and names the limit, when the tree has more nodes than usabl reads', async () => {
+    const page = pageWith({}, { designAxTree: async () => ({ kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT }) });
+    const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toBe(
+      `usabl found none in the page document. The page's accessibility tree has more than ${DESIGN_AX_TREE_NODE_LIMIT} nodes, the most usabl reads for a design check, so it cannot make sure there is none.`,
+    );
   });
 });
 

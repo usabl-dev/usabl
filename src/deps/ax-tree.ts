@@ -1,10 +1,11 @@
 /**
- * Reads the whole accessibility tree of the main frame over CDP, for the silent change rule.
- * The browser computes the tree from the flat tree, so open shadow roots are in it and no page
- * script world takes part. This unit keeps only what a change is judged on. It never reads a
- * value, and a read past its budget is reported as over budget, never as a tree.
+ * Reads the whole accessibility tree of the main frame over CDP, for the silent change rule and
+ * for the design checks. The browser computes the tree from the flat tree, so open shadow roots
+ * are in it and no page script world takes part. This unit keeps only what a change is judged on.
+ * It never reads a value, and a read past its budget is reported as over budget, never as a tree.
+ * The design checks read the same tree with a node limit and no time budget.
  */
-import type { AxTreeNode, AxTreeRead } from '../contracts/index.js';
+import type { AxTreeNode, AxTreeRead, DesignAxTreeRead } from '../contracts/index.js';
 
 /** The most time one tree read may take, the sort reads included, before it is not a tree. */
 export const AX_TREE_TIME_BUDGET_MS = 500;
@@ -253,4 +254,27 @@ export async function readFullAxTree(send: CdpSend, now: () => number = Date.now
     }
   }
   return { kind: 'tree', documentNodeId: tree.documentNodeId, nodes: tree.nodes };
+}
+
+/**
+ * The most nodes the browser may return for one design check read before it is not a tree.
+ * Measured in Chromium, the largest fixture page returns 172 nodes and the app screens measured for
+ * the silent change rule return 179 to 300. The limit is far above both, so a long real page is
+ * still read, and it still bounds the work of one read.
+ */
+export const DESIGN_AX_TREE_NODE_LIMIT = 20000;
+
+/**
+ * One read of the whole tree for the design checks. A design check decides a gate input, so no
+ * clock may decide it: there is no timer and no time budget, only a node count. It reads no sort
+ * state, which no design check uses, so it makes exactly one browser call. The nodes it keeps are
+ * the ones the silent change rule keeps, from the same conversion.
+ */
+export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead> {
+  const result = await send('Accessibility.getFullAXTree');
+  const rawNodes = getProp(result, 'nodes');
+  if (Array.isArray(rawNodes) && rawNodes.length > DESIGN_AX_TREE_NODE_LIMIT) {
+    return { kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT };
+  }
+  return { kind: 'tree', nodes: axTreeFromCdp(result).nodes };
 }

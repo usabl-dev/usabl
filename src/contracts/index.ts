@@ -732,6 +732,10 @@ export interface AxTreeNode {
 export type AxTreeRead =
   | { kind: 'tree'; documentNodeId: number | null; nodes: AxTreeNode[] }
   | { kind: 'over-budget'; limit: 'time' | 'nodes' };
+// What one read of the whole accessibility tree for the design checks returned. The read has no
+// time limit, so its result never depends on how fast the machine is. A tree with more nodes than
+// `limit` is not read, and a check that needs it cannot tell, and says so.
+export type DesignAxTreeRead = { kind: 'tree'; nodes: AxTreeNode[] } | { kind: 'over-limit'; limit: number };
 export interface ElementRef {
   selector: string;
 }
@@ -967,6 +971,9 @@ export interface Page {
   // Accessibility.getFullAXTree. It covers open shadow roots, because the browser builds the tree
   // from the flat tree, and it does not cover child frames. See AxTreeRead for the budget.
   fullAxTree(): Promise<AxTreeRead>;
+  // The same tree, read for the design checks: one Accessibility.getFullAXTree call, bounded by a
+  // node count only, with no timer and no sort state read. See DesignAxTreeRead.
+  designAxTree(): Promise<DesignAxTreeRead>;
   axAt(selector: string): Promise<AxNode | null>;
   // The accessibility node of the first element innerSelector matches inside the open shadow root
   // of the first element hostSelector matches in the document. A web component's inner control,

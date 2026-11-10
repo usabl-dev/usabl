@@ -4322,13 +4322,24 @@ of the page's whole accessibility tree that are not ignored and have the role an
 browser builds that tree from every role source, so it also sees an element in a closed shadow
 root, a role set by script through ElementInternals, and a candidate whose own read came back
 empty. When the tree has two or more, the answer is more than one match. When its count differs
-from the document search, or the tree is larger than usabl reads, usabl cannot tell. The search
+from the document search, or the tree has more than 20000 nodes, usabl cannot tell. The search
 gives one of five answers: one match, no match, more than one match, some candidates out of reach,
 or cannot tell. Only "one match" is used as the element. Two matches is never resolved by picking
 the first: a wrong guess is reported as unknown, never as a finding or a pass. A landmark
 requirement with no name that the document search does not find is unknown, not missing, when the
-tree has a landmark of that role or cannot be read. The tree does not cover child frames; the
-frame count above does.
+tree has a landmark of that role or has more than 20000 nodes. The tree does not cover child
+frames; the frame count above does.
+
+**How the tree is read.** The design checks read the whole tree with one
+`Accessibility.getFullAXTree` call. The read has no time limit and no timer, so no clock decides a
+design check. Its only bound is the node count: a tree with more than 20000 nodes is not read, and
+each check that needs it is needs review with a reason that names the limit. Measured in Chromium,
+the largest fixture page returns 172 nodes, and the `usabl-app` screens measured for the silent
+change rule return 179 to 300. The read keeps the same nodes as the silent change rule's read but
+reads no sort state, which no design check uses. It is read once per page state: every design
+check on a screen shares one read, and the focus order check, which presses Tab, drops it when it
+ends, so the next check reads the page again. The silent change rule keeps its own read, with its
+500 ms and 5000 node budget.
 
 **What each check reports.** A check that passes returns no draft. Each failure and each unknown
 is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-heading`,
@@ -4338,7 +4349,7 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 |---|---|---|
 | `name` | No element has that role and name | More than one does, a candidate is out of reach, or usabl cannot tell |
 | `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
-| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree cannot be read |
+| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
 | `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
 | `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, its size cannot be read, or it has a shape usabl does not measure (below) |
 

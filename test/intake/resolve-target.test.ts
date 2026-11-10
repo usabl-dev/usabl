@@ -19,7 +19,7 @@ function pageWith(nodes: Record<string, AxNode | null>, everywhere?: number, hid
     queryAll: async () => refs,
     axAt: async (selector: string) => nodes[selector] ?? null,
     countEverywhere: async () => everywhere ?? refs.length,
-    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([...Object.values(nodes), ...hiddenFromQuery]) }),
+    designAxTree: async () => ({ kind: 'tree', nodes: treeOf([...Object.values(nodes), ...hiddenFromQuery]) }),
   });
 }
 
@@ -123,7 +123,7 @@ describe('resolveTarget', () => {
       queryAll: async () => refs,
       axAt: async (selector: string) => (selector === '#a' ? button('Refresh') : null),
       countEverywhere: async () => 2,
-      fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: treeOf([button('Refresh'), button('Refresh')]) }),
+      designAxTree: async () => ({ kind: 'tree', nodes: treeOf([button('Refresh'), button('Refresh')]) }),
     });
     expect((await resolveTarget(page, { role: 'button', name: 'Refresh' })).kind).toBe('many');
   });
@@ -143,7 +143,7 @@ describe('resolveTarget', () => {
       queryAll: async () => [{ selector: '#a' }],
       axAt: async () => button('Refresh'),
       countEverywhere: async () => 1,
-      fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),
+      designAxTree: async () => ({ kind: 'tree', nodes: [] }),
     });
     expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
       kind: 'cannot-tell',
@@ -153,19 +153,32 @@ describe('resolveTarget', () => {
     });
   });
 
-  it('cannot tell when the tree is larger than usabl reads', async () => {
+  it('cannot tell when the tree has more nodes than usabl reads', async () => {
     const page = makeFakePage({
       queryAll: async () => [{ selector: '#a' }],
       axAt: async () => button('Refresh'),
       countEverywhere: async () => 1,
-      fullAxTree: async () => ({ kind: 'over-budget', limit: 'nodes' }),
+      designAxTree: async () => ({ kind: 'over-limit', limit: 20000 }),
     });
     expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
       kind: 'cannot-tell',
-      reason: 'tree-unreadable',
+      reason: 'tree-over-limit',
       found: 1,
       inTree: null,
     });
+  });
+
+  it('reads the tree from the source it is given, so callers can share one read', async () => {
+    const designAxTree = vi.fn(async () => ({ kind: 'tree' as const, nodes: [] }));
+    const page = makeFakePage({
+      queryAll: async () => [{ selector: '#a' }],
+      axAt: async () => button('Refresh'),
+      countEverywhere: async () => 1,
+      designAxTree,
+    });
+    const shared = Promise.resolve({ kind: 'tree' as const, nodes: treeOf([button('Refresh')]) });
+    expect((await resolveTarget(page, { role: 'button', name: 'Refresh' }, () => shared)).kind).toBe('one');
+    expect(designAxTree).not.toHaveBeenCalled();
   });
 
   it('does not count a node the tree ignores', async () => {
@@ -173,9 +186,8 @@ describe('resolveTarget', () => {
       queryAll: async () => [{ selector: '#a' }, { selector: '#hidden' }],
       axAt: async (selector: string) => (selector === '#a' ? button('Refresh') : null),
       countEverywhere: async () => 2,
-      fullAxTree: async () => ({
+      designAxTree: async () => ({
         kind: 'tree',
-        documentNodeId: null,
         nodes: [
           ...treeOf([button('Refresh')]),
           { nodeId: 9, parentId: null, role: 'button', name: null, ignored: true, states: {}, busy: false, controls: [] },

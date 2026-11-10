@@ -92,9 +92,10 @@ Once approved, each check gives one of these:
 - **Needs review**, when usabl cannot tell. For example: two buttons have the same name, so usabl
   cannot pick one; a candidate sits in a shadow root or a frame that usabl cannot read; the page's
   accessibility tree has an element with the name that the document search could not read, such as
-  one in a closed shadow root; the focus walk was cut short, for example by a control that moves
-  focus away when it gets it; or no button has the name, so its size cannot be measured. usabl
-  never guesses. A run with a needs review finding is not verified.
+  one in a closed shadow root; the page's accessibility tree has more than 20000 nodes, the most
+  usabl reads for a design check; the focus walk was cut short, for example by a control that
+  moves focus away when it gets it; or no button has the name, so its size cannot be measured.
+  usabl never guesses. A run with a needs review finding is not verified.
 
 The target size check measures the border box of a control laid out in one box. These shapes are
 needs review, with the reason, because the box can be larger than the area a pointer can hit: a

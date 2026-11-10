@@ -5,8 +5,8 @@
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import { readFullAxTree } from './ax-tree.js';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import { readDesignAxTree, readFullAxTree } from './ax-tree.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -2602,6 +2602,9 @@ function wrapPage(
     },
     async fullAxTree(): Promise<AxTreeRead> {
       return readFullAxTree((method, params) => cdp.send(method as never, params as never));
+    },
+    async designAxTree(): Promise<DesignAxTreeRead> {
+      return readDesignAxTree((method, params) => cdp.send(method as never, params as never));
     },
     async activeModalDialogs(): Promise<string[]> {
       const paths = await callInWorld(cdp, READ_WORLD, 'read the modal dialogs that hold focus', ACTIVE_MODAL_DIALOGS_FUNCTION);
