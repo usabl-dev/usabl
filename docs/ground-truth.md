@@ -2784,15 +2784,19 @@ Five bindings are compared on re-verification, plus the waiver end below:
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
   source). A change to any shipped engine file moves this hash, so a receipt minted by
   one engine build cannot re-verify under a tampered or upgraded engine.
-- `scannerVersions`: the axe-core, Playwright, and Chromium versions that decided the
-  verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
+- `scannerVersions`: the axe-core, Playwright, and Chromium versions the run scanned with.
+  `verifyReceipt` compares these too, so a swapped or upgraded scanner
   invalidates the receipt. The package versions come from each package's `package.json`.
-  The Chromium version is what the browser at Playwright's Chromium path prints for
-  `--version` (for example `151.0.7922.34`), so it holds for Playwright's download, a custom
-  `PLAYWRIGHT_BROWSERS_PATH`, and a system Chromium placed where Playwright looks. When the
-  browser prints none, it is the revision in the name of the folder closest to the
-  executable (`revision-1234` from `chromium-1234`). A version that still cannot be read is
-  `unknown`. Such a run carries a not-covered gap (ref `scanner versions`) that names the fix,
+  The Chromium version is that of Playwright's headless shell (`chrome-headless-shell`),
+  because a run launches Chromium headless with no channel and Playwright starts the headless
+  shell for that, not the full browser `chromium.executablePath()` names. usabl finds the
+  headless shell beside the full browser (same browsers folder, same revision, Playwright's
+  layout), checks the file exists, and binds what it prints for `--version` (for example
+  `151.0.7922.34`). This holds for Playwright's download and a custom
+  `PLAYWRIGHT_BROWSERS_PATH`. When the headless shell prints none, it is the revision in the
+  name of its folder (`revision-1234` from `chromium_headless_shell-1234`), a form no real
+  version has. When the headless shell cannot be found, or neither read gives a value, the
+  version is `unknown`; the full browser's version is never bound in its place. Such a run carries a not-covered gap (ref `scanner versions`) that names the fix,
   mints no receipt, and `usabl doctor` reports the browser as drifted with the same fix. An
   unreadable version never matches on verify, on either side.
   When an optional commercial engine is on, `scannerVersions.engines` maps its id to the

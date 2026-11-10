@@ -40,8 +40,45 @@ export function versionFromBrowserOutput(output: string): string | null {
 }
 
 // The folder Playwright installs a Chromium build in: chromium-1234, or, on a platform with its own
-// build, chromium_<platform>_special-1234. Older Playwright releases used an underscore.
-const BROWSER_FOLDER = /^chromium(?:_[a-z0-9.-]+_special)?[-_](\d+)$/i;
+// build, chromium_<platform>_special-1234. The headless shell's folder is the same with
+// chromium_headless_shell in front. Older Playwright releases used an underscore before the number.
+const BROWSER_FOLDER = /^chromium(?:_headless_shell)?(?:_[a-z0-9._-]+_special)?[-_](\d+)$/i;
+const FULL_BROWSER_FOLDER = /^chromium(?:_[a-z0-9._-]+_special)?-\d+$/i;
+
+// Where the headless shell's executable sits inside its folder, keyed by the folder the full
+// browser's executable sits in. This is Playwright's own layout for each platform it ships.
+const HEADLESS_SHELL_FILES: Readonly<Record<string, readonly string[]>> = {
+  "chrome-linux64": ["chrome-headless-shell-linux64", "chrome-headless-shell"],
+  "chrome-linux": ["chrome-linux", "headless_shell"],
+  "chrome-mac-x64": ["chrome-headless-shell-mac-x64", "chrome-headless-shell"],
+  "chrome-mac-arm64": ["chrome-headless-shell-mac-arm64", "chrome-headless-shell"],
+  "chrome-win64": ["chrome-headless-shell-win64", "chrome-headless-shell.exe"],
+};
+
+/**
+ * The path of the headless shell that Playwright installs beside the full browser at this path, or
+ * null when the path is not in Playwright's layout. A headless launch with no channel starts the
+ * headless shell, not the full browser that `chromium.executablePath()` names. Playwright gives the
+ * shell's path only through an internal module, so it is derived here from the same browsers
+ * folder, the same revision, and Playwright's file layout. The caller checks that the file exists.
+ */
+export function headlessShellPathFor(fullBrowserPath: string): string | null {
+  const separator = fullBrowserPath.includes("\\") && !fullBrowserPath.includes("/") ? "\\" : "/";
+  const segments = fullBrowserPath.split(/[\\/]+/);
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    const folder = segments[index] ?? "";
+    if (!FULL_BROWSER_FOLDER.test(folder)) {
+      continue;
+    }
+    const inner = HEADLESS_SHELL_FILES[segments[index + 1] ?? ""];
+    if (inner === undefined) {
+      return null;
+    }
+    const shellFolder = `chromium_headless_shell${folder.slice("chromium".length)}`;
+    return [...segments.slice(0, index), shellFolder, ...inner].join(separator);
+  }
+  return null;
+}
 
 /**
  * The revision named by the browser folder in an executable path, or null. It reads the folder
@@ -107,54 +144,69 @@ export function makeCachedVersionRunner(
 }
 
 export interface ChromiumVersionPorts {
-  // Where Playwright looks for its Chromium. It honors PLAYWRIGHT_BROWSERS_PATH.
+  // Where Playwright looks for its full Chromium. It honors PLAYWRIGHT_BROWSERS_PATH. The headless
+  // shell the run launches is found beside it.
   executablePath: () => string;
+  isFile: (path: string) => Promise<boolean>;
   runVersion: (executablePath: string) => Promise<string | null>;
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 const REAL_PORTS: ChromiumVersionPorts = {
   executablePath: () => chromium.executablePath(),
+  isFile,
   runVersion: makeCachedVersionRunner(runBrowserVersion),
 };
 
 /**
- * The Chromium version, read in this order:
+ * The version of the Chromium that scans. A run launches Chromium headless with no channel, and
+ * Playwright starts its headless shell for that, so the headless shell is what is read, in this
+ * order:
  *
- * 1. What the browser at Playwright's Chromium path prints for --version. This is the browser's own
- *    word, so it is right for Playwright's download, for a custom PLAYWRIGHT_BROWSERS_PATH, and for
- *    a system Chromium placed where Playwright looks, whose path says nothing about its version.
- * 2. The revision in the name of the folder Playwright installed it in, when the browser gives no
- *    version (Chrome on Windows prints none, and an install with only the headless shell has no
- *    browser at this path).
- * 3. UNREADABLE_SCANNER_VERSION.
- *
- * Limit: Playwright launches its headless shell for a headless run, from a sibling folder with the
- * same revision. Playwright's own builds of the two always share a version, so the read stands for
- * both. A setup that puts a different browser only in the headless shell folder is not seen here.
+ * 1. What the headless shell prints for --version. This is the binary's own word, so it is right
+ *    for Playwright's download and for a custom PLAYWRIGHT_BROWSERS_PATH, and it changes when the
+ *    binary in that folder is replaced.
+ * 2. The revision in the name of the headless shell's folder, as `revision-<number>`, when the
+ *    binary prints no version (Chrome on Windows prints none). It never looks like a real version.
+ * 3. UNREADABLE_SCANNER_VERSION, when the headless shell cannot be found. The full browser's version
+ *    is never used in its place: that binary does not scan in a headless run.
  */
 export async function readChromiumVersion(ports: ChromiumVersionPorts = REAL_PORTS): Promise<string> {
-  let executablePath: string;
+  let fullBrowserPath: string;
   try {
-    executablePath = ports.executablePath();
+    fullBrowserPath = ports.executablePath();
   } catch {
     return UNREADABLE_SCANNER_VERSION;
   }
-  if (typeof executablePath !== "string" || executablePath.length === 0) {
+  if (typeof fullBrowserPath !== "string" || fullBrowserPath.length === 0) {
     return UNREADABLE_SCANNER_VERSION;
   }
-  const output = await ports.runVersion(executablePath);
+  const shellPath = headlessShellPathFor(fullBrowserPath);
+  if (shellPath === null || !(await ports.isFile(shellPath))) {
+    return UNREADABLE_SCANNER_VERSION;
+  }
+  const output = await ports.runVersion(shellPath);
   const version = output === null ? null : versionFromBrowserOutput(output);
   if (version !== null) {
     return version;
   }
-  return revisionFromBrowserPath(executablePath) ?? UNREADABLE_SCANNER_VERSION;
+  return revisionFromBrowserPath(shellPath) ?? UNREADABLE_SCANNER_VERSION;
 }
 
 /** The core scanner versions a receipt binds. Optional engine versions are read elsewhere. */
-export async function readScannerVersions(): Promise<{ axeCore: string; playwright: string; chromium: string }> {
+export async function readScannerVersions(
+  ports: ChromiumVersionPorts = REAL_PORTS,
+): Promise<{ axeCore: string; playwright: string; chromium: string }> {
   return {
     axeCore: readDependencyVersion("axe-core"),
     playwright: readDependencyVersion("playwright"),
-    chromium: await readChromiumVersion(),
+    chromium: await readChromiumVersion(ports),
   };
 }

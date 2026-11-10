@@ -98,10 +98,10 @@ export function scannerVersionFix(names: readonly string[]): string {
   }
   if (names.includes("Chromium")) {
     steps.push(
-      'For Chromium, run "npx playwright install chromium" from your app root. If PLAYWRIGHT_BROWSERS_PATH ' +
-        "points Playwright at a browser you placed there yourself, such as a system Chromium, make sure that " +
-        "browser prints its version when run with --version, or keep the folder name Playwright gives it, " +
-        "such as chromium-1234.",
+      'For Chromium, run "npx playwright install chromium" from your app root. It installs the headless ' +
+        "shell that scans, beside the full browser. If PLAYWRIGHT_BROWSERS_PATH points Playwright at browsers " +
+        "you placed there yourself, keep Playwright's folder names, such as chromium_headless_shell-1234, and " +
+        "make sure the headless shell prints its version when run with --version.",
     );
   }
   return steps.join(" ");

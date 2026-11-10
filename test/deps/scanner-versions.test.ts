@@ -1,8 +1,9 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  headlessShellPathFor,
   makeCachedVersionRunner,
   readChromiumVersion,
   readScannerVersions,
@@ -11,9 +12,9 @@ import {
   versionFromBrowserOutput,
 } from '../../src/deps/scanner-versions.js';
 
-// The receipt binds the Chromium version, so the read has to work on the setups teams run:
-// Playwright's own download, a custom PLAYWRIGHT_BROWSERS_PATH, and a system Chromium placed where
-// Playwright looks. Before this, the version came only from a pattern on the executable path.
+// The receipt binds the version of the Chromium that scans, so the read has to work on the setups
+// teams run: Playwright's own download and a custom PLAYWRIGHT_BROWSERS_PATH. A headless run starts
+// Playwright's headless shell, so that is the binary asked.
 
 describe('the Chromium version from the browser itself', () => {
   it('reads the version a Chromium build prints for --version', () => {
@@ -63,68 +64,131 @@ describe('the Chromium revision from the folder Playwright installed it in', () 
   });
 });
 
-describe('readChromiumVersion', () => {
-  it('reads a system Chromium by asking it, whatever its path says', async () => {
-    const version = await readChromiumVersion({
-      executablePath: () => '/opt/browsers/chromium-1234/chrome-linux64/chrome',
-      runVersion: async () => 'Chromium 130.0.6723.58 built for a distribution\n',
-    });
-    expect(version).toBe('130.0.6723.58');
+describe('the headless shell beside the full browser', () => {
+  // A headless run with no channel launches Playwright's headless shell, from its own folder with
+  // the same revision. chromium.executablePath() names the full browser, which does not scan.
+  it('finds the headless shell for each platform Playwright ships', () => {
+    expect(headlessShellPathFor('/home/u/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome')).toBe(
+      '/home/u/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell',
+    );
+    expect(headlessShellPathFor('/opt/pw/chromium-1234/chrome-linux/chrome')).toBe(
+      '/opt/pw/chromium_headless_shell-1234/chrome-linux/headless_shell',
+    );
+    expect(
+      headlessShellPathFor(
+        '/Users/u/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      ),
+    ).toBe(
+      '/Users/u/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell',
+    );
+    expect(
+      headlessShellPathFor('C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1234\\chrome-win64\\chrome.exe'),
+    ).toBe(
+      'C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1234\\chrome-headless-shell-win64\\chrome-headless-shell.exe',
+    );
+    expect(headlessShellPathFor('/opt/pw/chromium_ubuntu20.04_x64_special-1234/chrome-linux/chrome')).toBe(
+      '/opt/pw/chromium_headless_shell_ubuntu20.04_x64_special-1234/chrome-linux/headless_shell',
+    );
   });
 
-  it('falls back to the folder revision when the browser does not answer', async () => {
+  it('reads the browser folder closest to the executable, not a custom path that looks like one', () => {
+    expect(headlessShellPathFor('/srv/chromium-2024/browsers/chromium-1234/chrome-linux64/chrome')).toBe(
+      '/srv/chromium-2024/browsers/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell',
+    );
+  });
+
+  it('finds nothing outside Playwright layout', () => {
+    expect(headlessShellPathFor('/usr/bin/chromium')).toBeNull();
+    expect(headlessShellPathFor('/opt/pw/chromium-1234/some-other-layout/chrome')).toBeNull();
+    expect(headlessShellPathFor('')).toBeNull();
+  });
+});
+
+const FULL = '/opt/browsers/chromium-1234/chrome-linux64/chrome';
+const SHELL = '/opt/browsers/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell';
+
+describe('readChromiumVersion', () => {
+  it('reads the headless shell that scans, not the full browser Playwright names', async () => {
+    // The two folders hold different builds: the full browser was upgraded, the shell was not.
+    const asked: string[] = [];
+    const version = await readChromiumVersion({
+      executablePath: () => FULL,
+      isFile: async (path) => path === FULL || path === SHELL,
+      runVersion: async (path) => {
+        asked.push(path);
+        return path === SHELL ? 'Google Chrome for Testing 151.0.7922.34\n' : 'Chromium 156.0.8078.73\n';
+      },
+    });
+    expect(version).toBe('151.0.7922.34');
+    expect(asked).toEqual([SHELL]);
+  });
+
+  it('falls back to the headless shell folder revision when the shell prints no version', async () => {
     const version = await readChromiumVersion({
       executablePath: () => '/srv/chromium_2024/browsers/chromium-1234/chrome-linux64/chrome',
+      isFile: async () => true,
       runVersion: async () => null,
     });
     expect(version).toBe('revision-1234');
   });
 
+  it('is unknown when the headless shell is missing, even though the full browser answers', async () => {
+    const asked: string[] = [];
+    const version = await readChromiumVersion({
+      executablePath: () => FULL,
+      isFile: async (path) => path === FULL,
+      runVersion: async (path) => {
+        asked.push(path);
+        return 'Google Chrome for Testing 151.0.7922.34\n';
+      },
+    });
+    expect(version).toBe('unknown');
+    expect(asked).toEqual([]);
+  });
+
   it('is unknown when neither the browser nor its path gives a version', async () => {
     await expect(
-      readChromiumVersion({ executablePath: () => '/usr/bin/chromium', runVersion: async () => 'no version here' }),
+      readChromiumVersion({
+        executablePath: () => '/usr/bin/chromium',
+        isFile: async () => true,
+        runVersion: async () => 'Chromium 130.0.6723.58',
+      }),
     ).resolves.toBe('unknown');
-    await expect(readChromiumVersion({ executablePath: () => '', runVersion: async () => null })).resolves.toBe(
-      'unknown',
-    );
+    await expect(
+      readChromiumVersion({ executablePath: () => '', isFile: async () => true, runVersion: async () => null }),
+    ).resolves.toBe('unknown');
     await expect(
       readChromiumVersion({
         executablePath: () => {
           throw new Error('unsupported platform');
         },
+        isFile: async () => true,
         runVersion: async () => null,
       }),
     ).resolves.toBe('unknown');
   });
 
-  it.skipIf(process.platform === 'win32')('runs the browser at a custom browsers path with --version', async () => {
-    // A browsers folder laid out the way Playwright expects, holding a browser that is not
-    // Playwright's own: a stand-in for a system Chromium placed there by hand.
-    const root = await mkdtemp(join(tmpdir(), 'usabl-browsers-'));
-    try {
-      const folder = join(root, 'chromium-1234', 'chrome-linux64');
-      await mkdir(folder, { recursive: true });
-      const executable = join(folder, 'chrome');
-      await writeFile(
-        executable,
-        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Chromium 130.0.6723.58 built for a distribution"; fi\n',
-        'utf8',
-      );
-      await chmod(executable, 0o755);
+  it('asks the headless shell under a custom browsers path', async () => {
+    // With PLAYWRIGHT_BROWSERS_PATH=/srv/browsers, Playwright names the full browser there, and a
+    // headless run starts the shell from the sibling folder. The shell here is a hand-placed build.
+    const full = '/srv/browsers/chromium-1234/chrome-linux64/chrome';
+    const shell = '/srv/browsers/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell';
+    const asked: string[] = [];
+    await expect(
+      readChromiumVersion({
+        executablePath: () => full,
+        isFile: async (path) => path === shell,
+        runVersion: async (path) => {
+          asked.push(path);
+          return 'Chromium 130.0.6723.58 built for a distribution\n';
+        },
+      }),
+    ).resolves.toBe('130.0.6723.58');
+    expect(asked).toEqual([shell]);
+  });
 
-      await expect(runBrowserVersion(executable)).resolves.toContain('130.0.6723.58');
-      await expect(readChromiumVersion({ executablePath: () => executable, runVersion: runBrowserVersion })).resolves.toBe(
-        '130.0.6723.58',
-      );
-      // A path that does not exist gives no output, so the folder revision is used.
-      const missing = join(root, 'chromium-1243', 'chrome-linux64', 'chrome');
-      await expect(runBrowserVersion(missing)).resolves.toBeNull();
-      await expect(readChromiumVersion({ executablePath: () => missing, runVersion: runBrowserVersion })).resolves.toBe(
-        'revision-1243',
-      );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+  it('gets no output from a browser path that does not exist', async () => {
+    await expect(runBrowserVersion(join(tmpdir(), 'usabl-no-such-browser', 'chrome'))).resolves.toBeNull();
   });
 });
 

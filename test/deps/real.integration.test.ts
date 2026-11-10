@@ -15,7 +15,8 @@ import type {
 import { buildDeps } from '../../src/deps/build.js';
 import { gate, renderEvidenceOf } from '../../src/gate/index.js';
 import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
-import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
+import { LIVE_WORLD, adoptPage, launchScanBrowser, makeRealBrowserDriver } from '../../src/deps/real.js';
+import { readChromiumVersion } from '../../src/deps/scanner-versions.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { isGradientContrastReview } from '../../src/primitives/gradient-contrast.js';
@@ -1709,3 +1710,23 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1' || process.platform !== 'l
     });
   },
 );
+
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the Chromium version a receipt binds', () => {
+  it('is the version of the browser a run launches', async () => {
+    // A run launches through launchScanBrowser: headless, with no channel, so Playwright starts its
+    // headless shell. The version usabl binds must be that binary's version, not the full browser's.
+    let browser: Browser;
+    try {
+      browser = await launchScanBrowser({ chromiumSandbox: true });
+    } catch {
+      browser = await launchScanBrowser({ chromiumSandbox: false });
+    }
+    try {
+      const bound = await readChromiumVersion();
+      expect(bound).not.toBe('unknown');
+      expect(bound).toBe(browser.version());
+    } finally {
+      await browser.close();
+    }
+  });
+});

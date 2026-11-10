@@ -204,18 +204,27 @@ awareness.
   4.13.0, Playwright 1.62.1).
 - Record `scannerVersions` (axe-core, Playwright, Chromium) in the receipt so a scanner
   swap moves the fingerprint and fails `verifyReceipt`.
-- The Chromium version is what the browser at Playwright's Chromium path prints for
-  `--version`. That is right for Playwright's download, a custom `PLAYWRIGHT_BROWSERS_PATH`,
-  and a system Chromium placed where Playwright looks. When the browser prints no version
-  (Chrome on Windows, or an install with only the headless shell), the revision in the name of
-  the folder closest to the executable is used, such as `chromium-1234`. Before, the version was
-  only a pattern match anywhere on the path, so a system Chromium read as `unknown` and a
-  browsers path whose own name looked like a browser folder read a fixed wrong revision.
+- The bound Chromium version is the version of the binary that scans. A run launches Chromium
+  headless with no channel, so Playwright starts its headless shell (`chrome-headless-shell`,
+  in the `chromium_headless_shell-<revision>` folder), not the full browser that
+  `chromium.executablePath()` names. usabl finds the headless shell beside the full browser, in
+  the same browsers folder with the same revision and Playwright's file layout, checks that the
+  file exists, and binds what it prints for `--version`. So replacing the headless shell moves
+  the version, for Playwright's download and for a custom `PLAYWRIGHT_BROWSERS_PATH`. When the
+  headless shell prints no version (Chrome on Windows prints none), the revision in its folder
+  name is bound as `revision-1234`, a form no real version has. When the headless shell cannot be
+  found, the version is unreadable; the full browser's version is never bound in its place.
+  A browser placed at the full browser's path does not scan in a headless run, so it is not read.
+- Before, the version was the first `chromium-<number>` or `chromium_<number>` anywhere in the
+  full browser's path, read as `revision-<number>`. Playwright's download read its folder
+  revision. A different browser placed at that path read the same revision as the build it
+  replaced, a stable wrong value. A browsers path whose own name looked like a browser folder,
+  such as `/srv/chromium_2024/...`, read that fixed wrong revision. A platform build in a
+  `chromium_<platform>_special-<number>` folder, and a platform where `executablePath()` throws,
+  read `unknown`.
 - A version usabl still cannot read is never bound. The run carries a not-covered gap (ref
   `scanner versions`) that names the fix, mints no receipt, and `usabl doctor` reports the same
-  fix in its browser line. Limit: Playwright launches its headless shell from a sibling folder
-  with the same revision. Playwright's own builds of the two share a version, so the read
-  stands for both. A browser placed only in the headless shell folder is not seen.
+  fix in its browser line.
 - Dependabot bumps require explicit maintainer review for policy impact.
 
 - When an optional commercial engine is on, its installed package version is recorded in
