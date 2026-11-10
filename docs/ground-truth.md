@@ -4522,8 +4522,8 @@ Measured in Chromium,
 the largest fixture page returns 172 nodes, and the `usabl-app` screens measured for the silent
 change rule return 179 to 300. The read keeps the same nodes as the silent change rule's read but
 reads no sort state, which no design check uses. It is read once per page state: every design
-check on a screen shares one read, and the focus order check, which presses Tab, drops it when it
-ends, so the next check reads the page again. The silent change rule keeps its own read, with its
+check on a screen shares one read. The focus order check, which presses Tab, and the target size
+check, which scrolls, each drop it when they end, so the next check reads the page again. The silent change rule keeps its own read, with its
 500 ms and 5000 node budget.
 
 **What each check reports.** A check that passes returns no draft. Each failure and each unknown
@@ -4576,11 +4576,21 @@ the box it reads can be larger than the area a pointer can hit:
 - the element, or an element above it, is fixed or sticky, and the element reaches past the
   viewport;
 - the walk up passes 512 elements;
-- the hit test misses (below).
+- the scroll into view for the hit test (below) moves an element above whose overflow is hidden or
+  clip on that axis, or moves the window while the root or the body hides overflow on that axis.
+  A person cannot make that scroll, so what it shows is not what a pointer user meets. This counts
+  as the overflow limit. Each overflow value is read before the scroll, and a value usabl does not
+  know counts as hidden;
+- the hit test misses (below);
+- the box read again after the scroll into view differs from the first read in width or height by
+  more than 0.01 pixels, so the size that was measured may not be the size a person meets, for
+  example under a scroll-driven animation.
 
 The walk up follows the flat tree, through slots and out of shadow roots, and skips inline
 elements and elements with no box for overflow. A fixed element that escapes an ancestor that
-clips is still read as clipped, which only ever asks for review.
+clips is still read as clipped, which only ever asks for review. The box read and the check share
+one list of limit names (`src/primitives/box-limits.ts`), and the check asks for review whenever
+the read names any limit, even one it has no words for.
 
 The list above cannot name every shape, so a pass also needs a hit test, read last in the same
 browser function. usabl scrolls the control into view (centered, with instant scrolling), reads
@@ -4594,12 +4604,17 @@ does not take pointer events, or it is partly off the page. The real-browser tes
 large enough to pass: a clipping element that is itself scaled, or sits inside a scaled element
 (no named shape sees either); `content-visibility: auto` on a short element above; a control
 partly left of the page; `pointer-events: none`; and a control half covered by another element.
-They also hold that a plain button, a round one, one in a box that scrolls without cutting it off,
-and one far down a long page still pass. Before the function returns, it puts back the scroll position of the window and of each
-element on the walk up whose position changed. It has no timer and does not wait. The size it
-reports is the first read, before the scroll. So a pass means the box is large enough, no shape
-above holds, and all five points were hit. A control covered only at a corner still passes, and
-the check does not measure the spacing between targets.
+They also hold that a button below a scaled box that hides its overflow, shown only by the read's
+own scroll, is needs review, and that a plain button, a round one, one in a box that scrolls
+without cutting it off, and one far down a long page still pass. A button past the bottom of a box
+that scrolls is needs review already, through the overflow limit read before the scroll. Before
+the function returns, it puts back the scroll position of the window and of each element on the
+walk up whose position changed. It has no timer and does not wait. The size it reports is the
+first read, before the scroll. A pass proves that the box is large enough and that these five
+points land on the control. A cover or clip anywhere else, at a corner or between the points, is
+not seen, so such a control can still pass. The check does not measure the spacing between
+targets. A target size check drops the design checks' shared tree read when it ends, as the focus
+order check does, because page script can answer its scroll by changing the page.
 
 The check measures the control alone: a label that makes the real target larger, such as the
 label of a checkbox, is not counted, so a small checkbox can fail although its real target is

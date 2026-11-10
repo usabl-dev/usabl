@@ -44,17 +44,21 @@
   (it uses the keyboard walk's end rule), or the control to measure has a shape usabl does not
   measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
   `clip-path`, `clip`, or mask; an element above it hides or scrolls its overflow and the control
-  reaches past that element's edges; it is fixed or sticky and reaches past the viewport; or a hit
-  test misses. Target size passes only when the browser confirms, with the control scrolled into
-  view, that its center and the middle of each edge land on the control, so a covered control, one
-  that takes no pointer events, one partly off the page, and one inside a scaled clipping element
-  are needs review; every scroll position is put back. A control covered only at a corner still
-  passes, and the check measures the control alone, not a label that makes it larger. The tree
-  read has no time limit, only the node limit, so no clock decides a check; nothing in usabl
-  bounds a read that never returns, and in CI the job's time limit cancels it, which is never a
-  pass. The design checks on one screen share one read. Known limit: an element in a closed
-  shadow root inside a child frame is seen by neither count, so on a page with child frames a second match there can
-  go unseen. `checkPage` runs them too.
+  reaches past that element's edges; it is fixed or sticky and reaches past the viewport; the
+  scroll into view moves a box that hides its overflow, which a person cannot scroll; the control
+  changes size on that scroll; or a hit test misses. Target size passes only when the browser
+  confirms, with the control scrolled into view, that its center and the middle of each edge land
+  on the control, so a control covered at any of the five points, one that takes no pointer
+  events, one partly off the page, and one inside a scaled clipping element are needs review;
+  every scroll position is put back. A pass proves only those five points: a cover or clip
+  anywhere else, at a corner or between the points, is not seen. The check measures the control
+  alone, not a label that makes it larger, and a limit name it has no words for still asks for
+  review. The tree read has no time limit, only the node limit, so no clock decides a check;
+  nothing in usabl bounds a read that never returns, and in CI the job's time limit cancels it,
+  which is never a pass. The design checks on one screen share one read, read again after a focus
+  order or target size check. Known limit: an element in a closed shadow root inside a child frame
+  is seen by neither count, so on a page with child frames a second match there can go unseen.
+  `checkPage` runs them too.
 - `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
   identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
   it was first seen, its state, and its days open, from the floor file's first-parent history and

@@ -123,9 +123,17 @@ into view and asks the browser what is at five points of its box: the center, an
 each edge, just inside. If any point is not the control or something inside it, the check is
 needs review: something clips or covers part of the control, it does not take pointer events, or
 it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
-usabl puts every scroll position back afterwards. So a pass means the box is large enough and all
-five points were hit. A control covered only at a corner still passes, and the check does not
-measure the spacing between targets.
+usabl puts every scroll position back afterwards.
+
+Two more rules guard that scroll. If it moves a box that hides its overflow (`hidden` or `clip`),
+or moves the page while the page hides its overflow, the check is needs review: a person cannot
+make that scroll, so what it shows is not what they meet. If the control is a different size
+after the scroll than before, the check is needs review too, because the measured size may not be
+the size a person meets.
+
+A pass proves that the box is large enough and that these five points land on the control. A
+cover or clip anywhere else, at a corner or between the points, is not seen, so such a control can
+still pass. The check does not measure the spacing between targets.
 
 The check measures the control alone. A label that makes the real target larger is not counted,
 so a 16 pixel checkbox whose label a person can also click can fail a 24 pixel minimum. The
