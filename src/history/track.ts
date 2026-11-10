@@ -28,6 +28,7 @@
  */
 import type { EvidenceFloor, FloorEntry } from '../contracts/index.js';
 import { FLOOR_VERSION, identityKey } from '../primitives/identity.js';
+import { compareCodeUnits } from '../primitives/sortKey.js';
 import { floorHashOf, identityId, type HistoryRecord } from './record.js';
 
 export type TrackedState = 'open' | 'confirmed-fixed' | 'intermittent';
@@ -101,7 +102,8 @@ export function trackDebt(floor: EvidenceFloor, records: readonly HistoryRecord[
     .map((identity) => ({ ...identity.entry, count: identity.accepted }));
   const effective: EvidenceFloor =
     floor.scope === undefined ? { version: floor.version, entries } : { version: floor.version, scope: floor.scope, entries };
-  return { floor: effective, identities: identities.sort((a, b) => identityKey(a.entry).localeCompare(identityKey(b.entry))) };
+  // Code-unit order, so the identities read the same on every machine whatever its locale.
+  return { floor: effective, identities: identities.sort((a, b) => compareCodeUnits(identityKey(a.entry), identityKey(b.entry))) };
 }
 
 /**
