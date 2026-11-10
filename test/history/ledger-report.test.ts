@@ -209,6 +209,16 @@ describe('usabl debt ledger', () => {
     expect(overflow.text).toMatch(/The ledger did not run\./u);
   });
 
+  it('says the history is missing when the ledger has no rows, as the JSON does', async () => {
+    const outcome = await runLedger(fakeGit({ 0: floorOf([]) }), makeFakeHistory({}).writer, 'main');
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.text).toContain('No accessibility barrier has ever been in the floor on main.');
+    expect(outcome.text).toContain(
+      'There is no debt history at origin/usabl/history, so a fix main confirmed would not show in this ledger.',
+    );
+    expect(JSON.parse(outcome.json).history).toEqual({ kind: 'off', ref: 'origin/usabl/history', cause: 'no-history', detail: null });
+  });
+
   it('refuses plainly when no floor was ever committed or git cannot run there', async () => {
     const noFloor = await runLedger(fakeGit({}), historyWith(BASE), 'main');
     expect(noFloor.exitCode).toBe(2);

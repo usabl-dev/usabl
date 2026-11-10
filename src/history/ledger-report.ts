@@ -108,6 +108,15 @@ export function formatLedger(ledger: Ledger): string {
   lines.push('');
   if (ledger.rows.length === 0) {
     lines.push(`No accessibility barrier has ever been in the floor on ${ledger.trustedRef}.`);
+    // With no rows, no row carries the history note, so it is said here.
+    if (ledger.history.kind === 'off') {
+      lines.push(
+        ledger.history.cause === 'no-history'
+          ? `There is no debt history at ${ledger.history.ref}, so a fix main confirmed would not show in this ledger.`
+          : `The debt history at ${ledger.history.ref} could not be read (${ledger.history.detail ?? 'no reason given'}), ` +
+              'so a fix main confirmed would not show in this ledger.',
+      );
+    }
   } else {
     const header = ['Days open', 'State', 'First seen', 'Last change', 'Screen', 'Rule', 'Notes', 'Element'];
     const body = ledger.rows.map((row) => [
