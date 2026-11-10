@@ -266,10 +266,31 @@
   approval in CI, whether the pull request edits, adds, or deletes it. Before, `usabl enforce
   policy` listed each entry with a literal git pathspec, so a glob entry listed nothing and the
   check printed "no policy change". The local guard and the CI check now list each ref once with
-  `-z` and use one matcher, with Node's dot rule for wildcards. A file deleted locally under a
-  glob entry is now named in the local check, where the pattern text was named before. For a
-  clean tree with plain ASCII names, the receipt policy hash is unchanged. Gate effect: such a
-  change is `approval_required` in CI where it passed.
+  `-z` and select from those listings with the same matcher, with Node's dot rule for wildcards.
+  The local guard also adds what `fs.glob` finds on the working tree. A file deleted locally under
+  a glob entry is now named in the local check. Before, the pattern text was compared, read as
+  absent on both sides, and nothing was named. A dot-named file under a glob entry is not guarded,
+  in both places. For a clean tree with plain ASCII names, the receipt policy hash is unchanged.
+  Gate effect: such a change is `approval_required` in CI where it passed, and locally where a
+  deletion passed.
+
+- A `guardedPaths` entry written as `./src/gate/`, `src/gate//`, or `.` now guards what
+  `src/gate/` or the whole tree guards. Every entry is read in one canonical form: no leading
+  `./`, no repeated or trailing `/`, no `.` segment, and `.` alone for the whole tree. Before, the
+  entry was compared as written with git output, which never holds that form, so it matched
+  nothing: a change under `.` or `src/gate//` printed "no policy change" in CI, a file deleted
+  locally under any of them was not named, and `./src/gate/` refused every pull request with no
+  CODEOWNERS rule that could clear it. Gate effect: such a change is `approval_required` where it
+  passed, and an unrelated pull request passes the policy check where it was refused.
+
+- Config load refuses a brace range such as `{1..3}` or `{a..c}`, and a `\`, in every glob list,
+  and names the entry. For a range it says to list the alternatives with commas. Node's glob
+  expands a range and reads `\` as an escape, while usabl's matcher reads both as text, so a
+  guarded file that only a range named passed in CI with "no policy change". The guard also refuses
+  an entry it cannot match when it reads one in a trusted ref's config (a range, `?`, `[ ]`, `( )`,
+  `\`, a nested or unbalanced brace, a leading `/`, or a `..` that leaves the root), and names the
+  entry. Gate effect: a config with such a glob no longer loads; a trusted config with such an
+  entry gives no verdict (exit 4) where the policy check passed.
 
 - `usabl enforce policy` now reads code owners from the last `CODEOWNERS` rule that matches each
   changed guarded path. Before, any team, email, or owner-less line anywhere in the file refused
@@ -279,14 +300,46 @@
   the same words, so a repository whose guarded paths lack a user owner now reads as drifted
   there. Gate effect: the policy check can pass where an unrelated team line made it refuse.
 
+- A `CODEOWNERS` pattern whose last segment holds a wildcard no longer matches through a parent
+  folder, as GitHub documents: `docs/*` matches `docs/a.md` and not `docs/b/c.md`. Before, `src/*
+  @alice` after `/src/gate/ @org/gate-team` made alice the owner of `src/gate/index.ts`, and her
+  approval passed a change GitHub gives to the team. Where GitHub's documentation leaves a reading
+  open (an inner slash with no leading slash, a slash-free name with no trailing slash, or `?`)
+  and the readings disagree for a changed guarded path, the last match is unknown and the check
+  refuses that path. A wildcard before the last segment now refuses the whole file. `usabl doctor`
+  reports the same limits, and reads a workflow file whose last match is unknown as unknown. Gate
+  effect: the policy check refuses where it passed on the wrong owner's approval.
+
+- A `#` inside a `CODEOWNERS` pattern or owner, one that does not follow whitespace, now refuses
+  the whole file. Before, the line was cut at that `#`, so `/src/file#1.ts @org/team` read as an
+  ownerless rule for `/src/file`, and an earlier user rule stayed the last match. A `#` at the
+  start of a line or after whitespace is still a comment. Gate effect: the policy check refuses
+  where it passed.
+
+- `usabl enforce accessibility` exits 4 for a Result with no accessibility verdict and exit 0
+  unless the Result says nothing was to check. Before, it read that pair as idle and exited 0,
+  even when the changed UI files were never checked. Gate effect: the accessibility check blocks
+  where it passed; an idle run still passes.
+
 - The gate breaks ties between drafts at one identity, and the debt history orders its
   identities, by UTF-16 code units. Before, both used the machine's locale, which sorted
   differently on different machines and read two spellings of one accented letter as equal, so
-  the finding bytes could follow arrival order. Gate effect: none on a verdict; the finding that
-  stands for an identity can now be a different draft of the same identity.
+  the finding bytes could follow arrival order. `usabl debt` now prints its rows in code unit order
+  too, so `Zones` comes before `apps` on every machine. Gate effect: none on a verdict; the finding
+  that stands for an identity can now be a different draft of the same identity.
 
-- A floor entry with count 0 no longer yields a `fixed` finding. It accepts no barrier, so its
-  absence pays nothing down. Gate effect: such an entry no longer adds to the paid-down count.
+- A floor entry with count 0 no longer yields a `fixed` finding. It accepts no accessibility
+  barrier, so its absence pays nothing down. Such an entry is also no longer listed in
+  `floorUnconfirmed` when it is absent on a scanned screen without render confirmation. Gate
+  effect: such an entry no longer adds to the paid-down count; the verdict and the summary count
+  do not change.
+
+- `usabl doctor` reports a `guardedPaths` glob that matches no file yet as not checkable yet, and
+  says the first file added under it needs a `CODEOWNERS` rule. Before, policy scope read as wired,
+  while the policy check refused the pull request that added that file. When the guarded path
+  listing passes the read limit, the message now says the guarded glob lists too many files and to
+  start the entry with a folder name, not to edit `.gitignore`. The guard no longer runs
+  `git status` to list guarded files, which added nothing to the listing. Gate effect: none.
 
 - The Stop hook compares `usabl.config.json` with the last commit before it parses it. It finds
   the repository root first, so a stop in a subfolder reads the root config, the root receipt,
