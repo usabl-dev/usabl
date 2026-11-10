@@ -1,0 +1,357 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { AxNode, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
+import { makeFakePage } from '../../src/deps/fakes.js';
+import { designCheckProvider } from '../../src/intake/structure-providers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
+
+const SCREEN = { id: 'users', url: 'http://127.0.0.1/users' };
+
+function pageWith(nodes: Record<string, AxNode>, overrides: Partial<Page> = {}): Page {
+  const refs: ElementRef[] = Object.keys(nodes).map((selector) => ({ selector }));
+  return makeFakePage({
+    queryAll: async () => refs,
+    axAt: async (s: string) => nodes[s] ?? null,
+    countEverywhere: async () => refs.length,
+    ...overrides,
+  });
+}
+
+function req(assertion: Requirement['assertion']): Requirement {
+  return { id: `r-${assertion.type}`, kind: assertion.type, surface: 'users', description: 'd', assertion, approved: true };
+}
+
+async function run(r: Requirement, page: Page): Promise<Draft[]> {
+  const provider = designCheckProvider(r);
+  if (provider === null) throw new Error('no provider');
+  const output = await provider.run({ page, screen: SCREEN, config: testConfig() });
+  expect(gapsOf(output)).toEqual([]);
+  return draftsOf(output);
+}
+
+const button = (name: string | null): AxNode => ({ name, role: 'button', states: {} });
+
+describe('designCheckProvider', () => {
+  it('builds a provider for each design kind and none for the others', () => {
+    expect(designCheckProvider(req({ type: 'name', target: { role: 'button', name: 'R' } }))?.layer).toBe('intake-name');
+    expect(designCheckProvider(req({ type: 'heading', name: 'H', level: 1 }))?.layer).toBe('intake-heading');
+    expect(designCheckProvider(req({ type: 'landmark', role: 'main' }))?.layer).toBe('intake-landmark');
+    expect(designCheckProvider(req({ type: 'focus-order', sequence: ['A', 'B'] }))?.layer).toBe('intake-focus-order');
+    expect(
+      designCheckProvider(req({ type: 'target-size', target: { role: 'button', name: 'R' }, minCssPx: 24 }))?.layer,
+    ).toBe('intake-target-size');
+    expect(designCheckProvider(req({ type: 'content', selector: 'h1', expectedText: 'x' }))).toBeNull();
+    expect(designCheckProvider(req({ type: 'doc', artifact: 'alt-text-manifest' }))).toBeNull();
+  });
+
+  it('names the provider by the requirement id and asks only for a live page', () => {
+    const provider = designCheckProvider(req({ type: 'name', target: { role: 'button', name: 'R' } }));
+    expect(provider?.id).toBe('intake:r-name');
+    expect(provider?.capabilities).toEqual(['live']);
+  });
+
+  it('reports nothing on another surface and does not touch the page', async () => {
+    const queryAll = vi.fn(async () => [] as ElementRef[]);
+    const provider = designCheckProvider(req({ type: 'landmark', role: 'main' }));
+    const output = await provider!.run({ page: makeFakePage({ queryAll }), screen: { id: 'other', url: 'x' }, config: testConfig() });
+    expect(draftsOf(output)).toEqual([]);
+    expect(queryAll).not.toHaveBeenCalled();
+  });
+
+  it('emits drafts only, each a deterministic intake draft for its requirement', async () => {
+    const drafts = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({}));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:r-name',
+      layer: 'intake-name',
+      evidenceClass: 'deterministic',
+      screenId: 'users',
+      confidence: 'fail',
+    });
+    expect(Object.keys(drafts[0] ?? {})).not.toContain('verdict');
+    expect(Object.keys(drafts[0] ?? {})).not.toContain('status');
+  });
+});
+
+describe('name requirement', () => {
+  const r = req({ type: 'name', target: { role: 'button', name: 'Refresh' } });
+
+  it('passes when one element has the role and name', async () => {
+    expect(await run(r, pageWith({ '#r': button('Refresh') }))).toEqual([]);
+  });
+
+  it('fails with a plain message when no element has them', async () => {
+    const drafts = await run(r, pageWith({ '#r': button(null) }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.whatUserExperiences).toBe('There is no button named "Refresh" on this screen.');
+    expect(drafts[0]?.confidence).toBe('fail');
+  });
+
+  it('is unconfirmed, never a pass, when two elements have the name', async () => {
+    const drafts = await run(r, pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('2 buttons on this screen are named "Refresh"');
+  });
+
+  it('is unconfirmed, never a fail, when candidates sit where usabl cannot read them', async () => {
+    const page = pageWith({ '#d': button('Delete') }, { countEverywhere: async () => 2 });
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('shadow root or a frame');
+  });
+});
+
+describe('heading requirement', () => {
+  const r = req({ type: 'heading', name: 'Users', level: 1 });
+  const heading = (level: unknown): AxNode => ({ name: 'Users', role: 'heading', states: { level } });
+
+  it('passes at the right level', async () => {
+    expect(await run(r, pageWith({ '#h': heading(1) }))).toEqual([]);
+  });
+
+  it('fails at the wrong level and says both levels', async () => {
+    const drafts = await run(r, pageWith({ '#h': heading(2) }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.whatUserExperiences).toBe('The heading "Users" is level 2. The design says level 1.');
+    expect(drafts[0]?.elementPath).toBe('#h');
+    expect(drafts[0]?.evidence.extra).toEqual({ expectedLevel: 1, actualLevel: 2 });
+  });
+
+  it('fails when no heading has the name', async () => {
+    const drafts = await run(r, pageWith({ '#p': { name: 'Users', role: 'paragraph', states: {} } }));
+    expect(drafts[0]?.whatUserExperiences).toBe('There is no heading named "Users" on this screen.');
+    expect(drafts[0]?.confidence).toBe('fail');
+  });
+
+  it('is unconfirmed when the level cannot be read', async () => {
+    const drafts = await run(r, pageWith({ '#h': heading(undefined) }));
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed when two headings have the name, whatever their levels', async () => {
+    const drafts = await run(r, pageWith({ '#a': heading(1), '#b': heading(2) }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+});
+
+describe('landmark requirement', () => {
+  const nav: AxNode = { name: 'Primary', role: 'navigation', states: {} };
+
+  it('passes when the landmark exists and checks its name when one is given', async () => {
+    const page = pageWith({ '#n': nav });
+    expect(await run(req({ type: 'landmark', role: 'navigation' }), page)).toEqual([]);
+    expect(await run(req({ type: 'landmark', role: 'navigation', name: 'Primary' }), page)).toEqual([]);
+    const wrongName = await run(req({ type: 'landmark', role: 'navigation', name: 'Footer links' }), page);
+    expect(wrongName[0]?.whatUserExperiences).toBe('There is no navigation area named "Footer links" on this screen.');
+    const missing = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(missing[0]?.whatUserExperiences).toBe('There is no main content area on this screen.');
+  });
+
+  it('passes an unnamed landmark requirement when the role appears more than once', async () => {
+    const page = pageWith({ '#a': nav, '#b': { ...nav, name: 'Secondary' } });
+    expect(await run(req({ type: 'landmark', role: 'navigation' }), page)).toEqual([]);
+  });
+
+  it('counts a region or a form only when it has an accessible name', async () => {
+    const unnamed = pageWith({
+      '#r': { name: null, role: 'region', states: {} },
+      '#f': { name: '  ', role: 'form', states: {} },
+    });
+    expect(await run(req({ type: 'landmark', role: 'region' }), unnamed)).toHaveLength(1);
+    expect(await run(req({ type: 'landmark', role: 'form' }), unnamed)).toHaveLength(1);
+    const named = pageWith({ '#r': { name: 'Usage', role: 'region', states: {} } });
+    expect(await run(req({ type: 'landmark', role: 'region' }), named)).toEqual([]);
+  });
+
+  it('is unconfirmed when the landmark is missing and candidates sit out of reach', async () => {
+    const page = pageWith({}, { countEverywhere: async () => 1 });
+    const drafts = await run(req({ type: 'landmark', role: 'main' }), page);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+});
+
+// A page whose Tab order visits the given names, then reaches the body.
+function tabbingPage(names: Array<string | null>, overrides: Partial<Page> = {}): Page {
+  let cursor = -1;
+  return makeFakePage({
+    focusBody: async () => {
+      cursor = -1;
+    },
+    tab: async () => {
+      cursor += 1;
+    },
+    activeElementIs: async (sel: string) => sel === 'body' && cursor >= names.length,
+    activeNode: async () => {
+      if (cursor < 0 || cursor >= names.length) return null;
+      const name = names[cursor];
+      return name === null ? null : { name: name ?? null, role: 'button', states: {} };
+    },
+    activePath: async () => (cursor >= names.length ? 'body' : `#stop-${cursor}`),
+    ...overrides,
+  });
+}
+
+// Focus never returns to the body: it cycles through the same stops, like a focus trap.
+function cyclingPage(names: string[]): Page {
+  let cursor = -1;
+  const at = (): number => cursor % names.length;
+  return makeFakePage({
+    focusBody: async () => {
+      cursor = -1;
+    },
+    tab: async () => {
+      cursor += 1;
+    },
+    activeElementIs: async () => false,
+    activeNode: async () => (cursor >= 0 ? { name: names[at()] ?? null, role: 'button', states: {} } : null),
+    activePath: async () => `#trap-${at()}`,
+  });
+}
+
+describe('focus order requirement', () => {
+  const r = req({ type: 'focus-order', sequence: ['Create user', 'Refresh', 'Actions for alice'] });
+
+  it('passes when focus reaches the names in order, with other stops between', async () => {
+    const page = tabbingPage(['Skip to content', 'Create user', 'Refresh', 'Filter', 'Actions for alice']);
+    expect(await run(r, page)).toEqual([]);
+  });
+
+  it('fails and says which name focus never reached', async () => {
+    const drafts = await run(r, tabbingPage(['Actions for alice', 'Create user', '']));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('fail');
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Focus never reached "Refresh". The design puts it after "Create user". Focus went: Actions for alice, Create user, (no name).',
+    );
+  });
+
+  it('fails and says which names came in the wrong order', async () => {
+    const drafts = await run(r, tabbingPage(['Refresh', 'Create user', 'Actions for alice']));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Focus reached "Refresh" before "Create user". The design puts "Create user" first. Focus went: Refresh, Create user, Actions for alice.',
+    );
+  });
+
+  it('keeps a constant element path, so the finding has one identity from run to run', async () => {
+    const drafts = await run(r, tabbingPage(['Refresh', 'Create user']));
+    expect(drafts[0]?.elementPath).toBe('body');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ expected: r.assertion.type === 'focus-order' ? r.assertion.sequence : [] });
+  });
+
+  it('is unconfirmed when a listed name is on more than one focus stop', async () => {
+    const form = req({ type: 'focus-order', sequence: ['Name', 'Email', 'Submit'] });
+    const drafts = await run(form, tabbingPage(['Name', 'Submit', 'Email', 'Submit']));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('"Submit" is on 2 focus stops');
+  });
+
+  it('reads every stop of a focus trap, and judges the order it holds', async () => {
+    const dialog = req({ type: 'focus-order', sequence: ['Reject', 'Accept'] });
+    const wrong = await run(dialog, cyclingPage(['Accept', 'Reject']));
+    expect(wrong[0]?.whatUserExperiences).toContain('Focus reached "Accept" before "Reject"');
+    const right = await run(req({ type: 'focus-order', sequence: ['Accept', 'Reject'] }), cyclingPage(['Accept', 'Reject']));
+    expect(right).toEqual([]);
+  });
+
+  it('is unconfirmed when a focus stop cannot be read', async () => {
+    const drafts = await run(r, tabbingPage(['Create user', null, 'Refresh', 'Actions for alice']));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed when focus goes where usabl cannot read it', async () => {
+    const page = tabbingPage(['Create user', 'Refresh'], {
+      activeFocusUnreadable: async () => 'closed-shadow-root',
+    });
+    const drafts = await run(r, page);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed when the walk runs out of stops, never a pass', async () => {
+    let cursor = -1;
+    const tab = vi.fn(async () => {
+      cursor += 1;
+    });
+    const endless = makeFakePage({
+      focusBody: async () => {
+        cursor = -1;
+      },
+      tab,
+      activeElementIs: async () => false,
+      activeNode: async () => ({ name: cursor === 0 ? 'Create user' : `Item ${cursor}`, role: 'button', states: {} }),
+      activePath: async () => `#item-${cursor}`,
+    });
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Create user', 'Item 5'] }), endless);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(tab).toHaveBeenCalledTimes(200);
+  });
+
+  it('starts from the top of the page', async () => {
+    const focusBody = vi.fn(async () => {});
+    await run(r, tabbingPage(['Create user', 'Refresh', 'Actions for alice'], { focusBody }));
+    expect(focusBody).toHaveBeenCalledTimes(1);
+  });
+
+  it('needs the page as it loaded and does not say it changes the page', () => {
+    const provider = designCheckProvider(r);
+    expect(provider?.requiresPristinePage).toBe(true);
+    expect(provider?.mutatesPageState).toBeUndefined();
+  });
+});
+
+describe('target size requirement', () => {
+  const r = req({ type: 'target-size', target: { role: 'button', name: 'Refresh' }, minCssPx: 24 });
+
+  function sized(box: { width: number; height: number } | null): Page {
+    return pageWith({ '#r': button('Refresh') }, { boundingBox: async () => box });
+  }
+
+  it('passes at or above the minimum in both directions', async () => {
+    expect(await run(r, sized({ width: 24, height: 32 }))).toEqual([]);
+  });
+
+  it('fails below the minimum and names the size', async () => {
+    const drafts = await run(r, sized({ width: 16, height: 16 }));
+    expect(drafts[0]?.whatUserExperiences).toBe('"Refresh" is 16 by 16 CSS pixels. The design asks for at least 24.');
+    expect(drafts[0]?.elementPath).toBe('#r');
+  });
+
+  it('compares the measured size and never shows a failing size as the minimum', async () => {
+    const drafts = await run(r, sized({ width: 23.96, height: 30 }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ width: 23.96, height: 30 });
+    expect(drafts[0]?.whatUserExperiences).toBe('"Refresh" is 23.9 by 30 CSS pixels. The design asks for at least 24.');
+  });
+
+  it('is unconfirmed, never a fail, when the element is missing, so the name check reports the absence', async () => {
+    const drafts = await run(r, pageWith({}));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Whether the button named "Refresh" is at least 24 CSS pixels is unknown: no button on this screen has that name.',
+    );
+  });
+
+  it('is unconfirmed when two elements have the name', async () => {
+    const page = pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }, { boundingBox: async () => ({ width: 1, height: 1 }) });
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('is unconfirmed when the size cannot be read', async () => {
+    const drafts = await run(r, sized(null));
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('only reads the page and does not need it as it loaded', () => {
+    const provider = designCheckProvider(r);
+    expect(provider?.mutatesPageState).toBeUndefined();
+    expect(provider?.requiresPristinePage).toBeUndefined();
+  });
+});

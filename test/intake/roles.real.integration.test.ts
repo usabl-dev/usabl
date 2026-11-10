@@ -1,0 +1,125 @@
+/**
+ * The design checks in real Chromium. Each check finds its element by role and accessible name, so
+ * this file first proves what the accessibility tree reports for the elements designers annotate:
+ * the role strings, the heading levels, and the size the bounding box read returns. Then it proves
+ * that the role search reads every candidate on a plain page, and refuses on a page whose
+ * candidates sit inside a shadow root, because the docs claim both only because this test holds it.
+ */
+import { readFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { BrowserDriver, Page, TargetRole } from '../../src/contracts/index.js';
+import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { findByRole, resolveTarget, ROLE_CANDIDATES } from '../../src/intake/resolve-target.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
+
+const SHADOW_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shadow</title></head><body>
+  <main><h1>Users</h1><button type="button">Refresh</button><x-toolbar></x-toolbar></main>
+  <script>
+    customElements.define('x-toolbar', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: 'open' }).innerHTML = '<button type="button">Refresh</button>';
+      }
+    });
+  </script>
+</body></html>`;
+
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromium', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  let driver: BrowserDriver;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    driver = makeRealBrowserDriver();
+    const roles = await readFile(fileURLToPath(new URL('../../fixtures/live/roles.html', import.meta.url)), 'utf8');
+    server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(req.url?.startsWith('/shadow.html') ? SHADOW_PAGE : roles);
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('test server has no port');
+    }
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await driver.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  });
+
+  async function withPage<T>(path: string, use: (page: Page) => Promise<T>): Promise<T> {
+    const page = await driver.open(`${baseUrl}${path}`);
+    try {
+      await page.gotoReady();
+      return await use(page);
+    } finally {
+      await page.close();
+    }
+  }
+
+  it('reads the roles designers annotate, under the names the role search accepts', async () => {
+    await withPage('/roles.html', async (page) => {
+      const role = async (selector: string) => (await page.axAt(selector))?.role;
+      expect(await role('main')).toBe('main');
+      expect(await role('nav')).toBe('navigation');
+      expect(await role('header')).toBe('banner');
+      expect(await role('footer')).toBe('contentinfo');
+      expect(await role('aside')).toBe('complementary');
+      expect(await role('section')).toBe('region');
+      expect(await role('form')).toBe('form');
+      expect(await role('search')).toBe('search');
+      expect(await role('#refresh')).toBe('button');
+      expect(await role('a')).toBe('link');
+      expect(await role('input[type="checkbox"]')).toBe('checkbox');
+      expect(['img', 'image']).toContain(await role('img'));
+      expect(['textbox', 'searchbox']).toContain(await role('input[type="search"]'));
+      expect(await role('input[aria-label="Email"]')).toBe('textbox');
+    });
+  });
+
+  it('reads heading levels as whole numbers', async () => {
+    await withPage('/roles.html', async (page) => {
+      expect((await page.axAt('h1'))?.states['level']).toBe(1);
+      expect((await page.axAt('#h2'))?.states['level']).toBe(2);
+      expect((await page.axAt('[role="heading"]'))?.states['level']).toBe(3);
+    });
+  });
+
+  it('reads the laid-out size of an element in CSS pixels', async () => {
+    await withPage('/roles.html', async (page) => {
+      expect(await page.boundingBox('#refresh')).toEqual({ width: 32, height: 32 });
+      expect(await page.boundingBox('#tiny')).toEqual({ width: 16, height: 16 });
+      expect(await page.boundingBox('#nothing-here')).toBeNull();
+    });
+  });
+
+  it('reads every candidate of every role on a plain page, so nothing is out of reach', async () => {
+    await withPage('/roles.html', async (page) => {
+      for (const role of Object.keys(ROLE_CANDIDATES) as TargetRole[]) {
+        expect({ role, outOfReach: (await findByRole(page, role)).outOfReach }).toEqual({ role, outOfReach: 0 });
+      }
+      expect((await resolveTarget(page, { role: 'button', name: 'Refresh' })).kind).toBe('one');
+      expect((await resolveTarget(page, { role: 'img', name: 'Team photo' })).kind).toBe('one');
+      expect((await resolveTarget(page, { role: 'textbox', name: 'Filter users' })).kind).toBe('one');
+      expect((await resolveTarget(page, { role: 'navigation', name: 'Primary' })).kind).toBe('one');
+      expect((await resolveTarget(page, { role: 'heading', name: 'Pending' })).kind).toBe('one');
+      expect((await resolveTarget(page, { role: 'button', name: 'Delete' })).kind).toBe('none');
+    });
+  });
+
+  it('refuses to pick when a candidate sits in a shadow root it cannot read', async () => {
+    await withPage('/shadow.html', async (page) => {
+      expect(await resolveTarget(page, { role: 'button', name: 'Refresh' })).toEqual({
+        kind: 'out-of-reach',
+        found: 1,
+        outOfReach: 1,
+      });
+      // A role with no candidate in the shadow root is still read in full.
+      expect((await resolveTarget(page, { role: 'heading', name: 'Users' })).kind).toBe('one');
+    });
+  });
+});

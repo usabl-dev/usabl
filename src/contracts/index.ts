@@ -957,6 +957,10 @@ export interface Page {
   setZoom(percent: number): Promise<void>;
   setReducedMotion(enabled: boolean): Promise<void>;
   getComputedStyle(selector: string, property: string): Promise<string>;
+  // The rendered width and height, in CSS pixels, of the first element a selector matches in the
+  // document, as the browser lays it out. Read in an isolated world, so page script cannot answer
+  // for it. Null when nothing matches.
+  boundingBox(selector: string): Promise<{ width: number; height: number } | null>;
   screenshot(selector?: string): Promise<Buffer>;
   // Present only on a page opened by the judge's isolated browser: the distinct origins of the
   // requests it blocked since the page opened. A blocked script can remove the very control a

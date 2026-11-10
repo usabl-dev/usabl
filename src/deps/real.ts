@@ -763,6 +763,23 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   return getComputedStyle(element).getPropertyValue(cssProperty);
 }`;
 
+// The laid-out size of the first element a selector matches, in CSS pixels, or null. The box
+// includes transforms, so it is the size a pointer has to hit.
+const BOUNDING_BOX_FUNCTION = `function (query) {
+  const element = document.querySelector(query);
+  if (!(element instanceof Element)) {
+    return null;
+  }
+  const box = element.getBoundingClientRect();
+  return { width: box.width, height: box.height };
+}`;
+
+function readBoundingBox(value: unknown): { width: number; height: number } | null {
+  const width = readNumber(getProp(value, 'width'));
+  const height = readNumber(getProp(value, 'height'));
+  return width === null || height === null ? null : { width, height };
+}
+
 
 // The axe results the driver hands the axe provider. The mapping lives with the provider, so an
 // engine that returns axe-shaped results is read by the same code. Kept here under the names
@@ -2458,6 +2475,9 @@ function wrapPage(
     async getComputedStyle(selector: string, property: string): Promise<string> {
       const value = await callInWorld(cdp, READ_WORLD, 'read a computed style', COMPUTED_STYLE_FUNCTION, [selector, property]);
       return typeof value === 'string' ? value : '';
+    },
+    async boundingBox(selector: string): Promise<{ width: number; height: number } | null> {
+      return readBoundingBox(await callInWorld(cdp, READ_WORLD, 'read an element size', BOUNDING_BOX_FUNCTION, [selector]));
     },
     async screenshot(selector?: string): Promise<Buffer> {
       if (selector === undefined) {

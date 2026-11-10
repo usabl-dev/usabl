@@ -108,6 +108,11 @@ const INTAKE_PROVES: Readonly<Record<string, string>> = {
     'content requirement: the element the requirement names has the accessible text or name the requirement states.',
   'intake-flow': `flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region. ${SILENT_CHANGE_PROVES}`,
   voicing: `voice requirement: after each step the requirement lists, the focused control has a name and role, and the words each obligation requires are heard. Its findings are preview unless the trusted config promotes the obligation class. ${SILENT_CHANGE_PROVES}`,
+  'intake-name': 'name requirement: exactly one element on the screen has the role and accessible name the requirement states.',
+  'intake-heading': 'heading requirement: the one heading with the name the requirement states is at the level it states.',
+  'intake-landmark': 'landmark requirement: the screen has a landmark with the role, and the name when one is given, that the requirement states.',
+  'intake-focus-order': 'focus order requirement: Tab from the top of the screen as it loaded reaches the names the requirement lists, each on one stop, in that order.',
+  'intake-target-size': 'target size requirement: the one element with the role and name the requirement states is at least as wide and as high as the size it states, in CSS pixels.',
 };
 
 /** The sentence for one provider, or null when this table does not know it. */

@@ -32,6 +32,7 @@ import { ProviderRunFailed } from '../providers/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { isActionStep, makeSilentChangeWatch, type SilentChangeWatch } from '../voicing/silent-change.js';
 import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
+import { designCheckProvider } from './structure-providers.js';
 
 function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
@@ -681,6 +682,12 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
 
     if (requirement.assertion.type === 'flow') {
       providers.push(toFlowProvider(requirement, requirement.assertion));
+    }
+
+    // Name, heading, landmark, focus order, and target size checks, planned by the same rule.
+    const design = designCheckProvider(requirement);
+    if (design !== null) {
+      providers.push({ ...design, appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id) });
     }
   }
 

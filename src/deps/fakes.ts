@@ -112,6 +112,7 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     setZoom: async () => {},
     setReducedMotion: async () => {},
     getComputedStyle: notUsed('getComputedStyle'),
+    boundingBox: notUsed('boundingBox'),
     screenshot: notUsed('screenshot'),
     ...overrides,
   };
