@@ -24,10 +24,33 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <div id="dialog" role="dialog" aria-label="Settings" hidden><button type="button" id="inside">Inside</button></div>
 <button type="button" id="last">Last</button>
 <button type="button" id="jump">Jump</button>
+<button type="button" id="doc-handled">Handled by the document</button>
+<button type="button" id="open-lazy">Open the lazy dialog</button>
+<div id="lazy-dialog" role="dialog" aria-label="Lazy" hidden></div>
+<button type="button" id="sticky" aria-label="Sticky">S</button>
 </main>
 <script>
   document.getElementById('first').addEventListener('click', () => { document.body.dataset.clicked = 'yes'; });
   document.getElementById('jump').addEventListener('click', () => { document.getElementById('last').focus(); });
+  // A document listener in the capture phase runs before any listener on the element.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target.id === 'doc-handled') {
+      event.stopPropagation();
+      document.body.dataset.documentHandled = 'yes';
+    }
+  }, true);
+  // The dialog renders its content when it opens, so the content is new and its focus() works.
+  document.getElementById('open-lazy').addEventListener('click', () => {
+    const dialog = document.getElementById('lazy-dialog');
+    dialog.hidden = false;
+    dialog.innerHTML = '<button type="button" id="lazy-inside">OK</button>';
+    dialog.querySelector('button').focus();
+  });
+  // Puts the label back whenever something removes it, as a page that renders again would.
+  const sticky = document.getElementById('sticky');
+  new MutationObserver(() => {
+    if (!sticky.hasAttribute('aria-label')) sticky.setAttribute('aria-label', 'Sticky');
+  }).observe(sticky, { attributes: true });
 </script>
 </body></html>`;
 
@@ -145,6 +168,57 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('sensitivity edits in Chr
       await page.focusBody();
       for (let stop = 0; stop < 5; stop += 1) await page.tab();
       expect(await page.activeElementIs('#last')).toBe(true);
+    });
+  });
+
+  it('reads a markup change back after the scan, and sees one the page put back', async () => {
+    await withEdit({ selector: 'img[alt]', tree: { named: true } }, { kind: 'remove-attribute', names: ['alt'] }, async (_page, applied) => {
+      expect(await applied.check()).toEqual({ held: true, note: null });
+    });
+    await withEdit({ selector: '#sticky' }, { kind: 'remove-attribute', names: ['aria-label'] }, async (page, applied) => {
+      // The page's observer runs after the edit returns, then puts the label back.
+      expect(await page.getAttribute('#sticky', 'aria-label')).toBe('Sticky');
+      expect(await applied.check()).toEqual({ held: false, reason: 'the page put back an attribute the edit removed' });
+    });
+  });
+
+  it('counts a key a document listener acted on before the swallow, and says when no key was pressed', async () => {
+    await withEdit({ selector: '#first' }, { kind: 'swallow-key', key: 'Enter' }, async (page, applied) => {
+      expect(await applied.check()).toEqual({ held: true, note: 'the checks never pressed Enter on the changed element' });
+      await page.click('#first');
+      await page.press('Enter');
+      expect(await applied.check()).toEqual({ held: true, note: null });
+    });
+    await withEdit({ selector: '#doc-handled' }, { kind: 'swallow-key', key: 'Enter' }, async (page, applied) => {
+      await page.click('#doc-handled');
+      await page.press('Enter');
+      expect(await page.getAttribute('body', 'data-document-handled')).toBe('yes');
+      expect(await applied.check()).toEqual({
+        held: false,
+        reason: 'a Enter key aimed at the changed element reached the page before the edit could cancel it',
+      });
+    });
+  });
+
+  it('counts focus that reaches a dialog through content it renders on open', async () => {
+    await withEdit({ selector: '#lazy-dialog' }, { kind: 'ignore-focus-calls' }, async (page, applied) => {
+      expect(await applied.check()).toEqual({ held: true, note: null });
+      await page.click('#open-lazy');
+      expect(await page.activeElementWithin('#lazy-dialog')).toBe(true);
+      expect(await applied.check()).toEqual({
+        held: false,
+        reason: 'focus reached the changed element in a way the edit does not stop, such as an element added later',
+      });
+    });
+    // Focus by Tab and by a pointer press is not the page moving it, so the change still holds.
+    await withEdit({ selector: '#last' }, { kind: 'ignore-focus-calls' }, async (page, applied) => {
+      await page.focusBody();
+      for (let stop = 0; stop < 5; stop += 1) await page.tab();
+      expect(await page.activeElementIs('#last')).toBe(true);
+      await page.focusBody();
+      await page.click('#last');
+      expect(await page.activeElementIs('#last')).toBe(true);
+      expect(await applied.check()).toEqual({ held: true, note: null });
     });
   });
 

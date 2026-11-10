@@ -9,7 +9,15 @@ import type { JSHandle, Page as PwPage } from 'playwright';
 import type { Page } from '../../contracts/index.js';
 import { playwrightPageOf } from '../../providers/engines/shared.js';
 import type { Edit } from './catalog.js';
-import { applyEditInPage, locateInPage, type EditOutcome, type EditResultInPage, type MutationEditor } from './edits.js';
+import {
+  applyEditInPage,
+  checkEditInPage,
+  locateInPage,
+  type EditCheck,
+  type EditOutcome,
+  type EditResultInPage,
+  type MutationEditor,
+} from './edits.js';
 
 function isPlaywrightPage(value: unknown): value is PwPage {
   return typeof value === 'object' && value !== null && typeof Reflect.get(value, 'evaluateHandle') === 'function';
@@ -45,6 +53,13 @@ export function makeRealMutationEditor(): MutationEditor {
         edit: {
           async locate(paths: readonly string[]) {
             return handle.evaluate(locateInPage, [...paths]);
+          },
+          async check(): Promise<EditCheck> {
+            try {
+              return await handle.evaluate(checkEditInPage);
+            } catch (err) {
+              return { held: false, reason: `the change could not be read again: ${errorMessage(err)}` };
+            }
           },
           async release() {
             try {

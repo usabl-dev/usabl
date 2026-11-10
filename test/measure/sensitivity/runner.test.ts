@@ -10,6 +10,7 @@ import { makeCheckRunner } from '../../../src/providers/check-runner.js';
 import { makeStepRunner } from '../../../src/providers/keyboard-walk/steps.js';
 import { makeMutatingBrowser } from '../../../src/measure/sensitivity/browser.js';
 import type { CatalogEntry } from '../../../src/measure/sensitivity/catalog.js';
+import type { EditCheck } from '../../../src/measure/sensitivity/edits.js';
 import { makeFakeDom, makeFakeDomPage, makeFakeMutationEditor } from '../../../src/measure/sensitivity/fakes.js';
 import { measureCatalog, measureEntry, type SensitivityScreen } from '../../../src/measure/sensitivity/runner.js';
 import { testConfig } from '../../helpers.js';
@@ -81,7 +82,7 @@ interface Harness {
   pages: Page[];
 }
 
-function setup(providers: Provider[], options: { refuse?: string } = {}) {
+function setup(providers: Provider[], options: { refuse?: string; check?: EditCheck } = {}) {
   const harness: Harness = { opened: 0, closed: 0, pages: [] };
   const base: BrowserDriver = {
     async open(url) {
@@ -369,6 +370,31 @@ describe('measureEntry', () => {
       outcome: 'unreadable',
       reason: 'the mutation was not made: the page kept a text name the edit removed',
     });
+  });
+
+  it('is unreadable when the change did not hold through the scan, even if a rule fired', async () => {
+    const reason = 'the page put back an attribute the edit removed';
+    const quiet = setup([], { check: { held: false, reason } });
+    expect(await measureEntry(quiet.deps, entry(), SCREEN)).toEqual({
+      entry: 'button-name-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: [],
+      reason: `the change did not hold through the scan, so it proves nothing: ${reason}`,
+    });
+    const loud = setup([namesProvider()], { check: { held: false, reason } });
+    expect((await measureEntry(loud.deps, entry(), SCREEN)).outcome).toBe('unreadable');
+  });
+
+  it('says in a miss when the checks never pressed the key the edit cancels', async () => {
+    const note = 'the checks never pressed Enter on the changed element';
+    const { deps } = setup([], { check: { held: true, note } });
+    expect(await measureEntry(deps, entry({ expectedRules: [], noShippedRule: 'No rule.' }), SCREEN)).toMatchObject({
+      outcome: 'missed',
+      reason: `nothing new gated; ${note}; no shipped rule claims this defect`,
+    });
+    const caughtAnyway = setup([namesProvider()], { check: { held: true, note } });
+    expect(await measureEntry(caughtAnyway.deps, entry(), SCREEN)).toMatchObject({ outcome: 'caught', reason: null });
   });
 
   it('is unreadable when a capability is denied, because a denied provider is a gap', async () => {

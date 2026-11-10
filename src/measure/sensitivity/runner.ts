@@ -229,6 +229,12 @@ export async function measureEntry(
     if (alreadyThere) {
       return result(entry, screen, 'not applicable', [], 'the defect was already on this element before the edit');
     }
+    // Read the change back on the page the checks left, after the last provider. A change the page
+    // undid, or got around, means the checks may never have seen the defect.
+    const check = await record.edit.check();
+    if (!check.held) {
+      return result(entry, screen, 'unreadable', [], `the change did not hold through the scan, so it proves nothing: ${check.reason}`);
+    }
 
     const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
     const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);
@@ -302,7 +308,8 @@ export async function measureEntry(
       return result(entry, screen, 'preview only', rules, `only preview findings were new, and preview never gates: ${rules.join(', ')}`);
     }
 
-    return result(entry, screen, 'missed', [], `nothing new gated; ${expectedText(entry)}`);
+    const note = check.note === null ? '' : `${check.note}; `;
+    return result(entry, screen, 'missed', [], `nothing new gated; ${note}${expectedText(entry)}`);
   } finally {
     await armed.release();
   }

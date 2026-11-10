@@ -24,10 +24,20 @@ import type { Edit } from './catalog.js';
  */
 export type ElementPlace = 'target' | 'inside' | 'around' | 'elsewhere' | 'unresolved';
 
+/**
+ * What a second read of an edit found, on the page as the scan left it.
+ * - held: the change is still there. For a key edit, the note says when the checks never pressed
+ *   the key on the changed element, so a miss can say why.
+ * - not held: the change is gone, or the page got around it. The reason says how.
+ */
+export type EditCheck = { held: true; note: string | null } | { held: false; reason: string };
+
 /** An edit that took effect on the page. */
 export interface AppliedEdit {
   // Read on the page as it is now, after the scan. One place per path, in order.
   locate(paths: readonly string[]): Promise<ElementPlace[]>;
+  // Reads the change back on the page as it is now, after the scan.
+  check(): Promise<EditCheck>;
   // Lets go of what the edit holds on the page.
   release(): Promise<void>;
 }
@@ -39,22 +49,44 @@ export interface MutationEditor {
   apply(page: Page, targets: readonly string[], edit: Edit): Promise<EditOutcome>;
 }
 
-/** What the page function returns: whether the edit held, and the elements to locate against. */
+/**
+ * What the page function returns: whether the edit held, the elements to locate against, and a
+ * second read of the change for after the scan.
+ */
 export interface EditResultInPage {
   ok: boolean;
   reason: string | null;
   anchors: Element[];
+  check: () => EditCheck;
 }
 
 /**
  * Applies an edit in the page. Each target is a path from Page.queryAll, which is a selector in the
  * top document that names one element. A path that names no element, or more than one, fails the
  * edit. After the change it reads the change back, so an edit the page undid or refused fails too.
- * The reasons are engine words only, never page text.
+ *
+ * The result also holds a second read for after the scan. A markup edit reads its change back
+ * again. The two script edits count what they did: a key edit counts the keys aimed at the element
+ * that got past it, and a focus edit counts focus that reached the element in a way the edit does
+ * not stop. The reasons are engine words only, never page text.
  */
 export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditResultInPage {
   const NAME_ATTRIBUTES = ['aria-label', 'aria-labelledby', 'title', 'placeholder'];
-  const fail = (reason: string): EditResultInPage => ({ ok: false, reason, anchors: [] });
+  const fail = (reason: string): EditResultInPage => ({ ok: false, reason, anchors: [], check: () => ({ held: false, reason }) });
+  // Each second read returns why the change is gone, or null when it held.
+  const readBacks: Array<() => string | null> = [];
+  const notes: Array<() => string | null> = [];
+  const GONE = 'an element the edit changed is no longer on the page';
+  // Inclusive containment across open shadow roots.
+  const holdsFlat = (outer: Node, inner: Node | null): boolean => {
+    for (let current: Node | null = inner; current !== null; ) {
+      if (current === outer) {
+        return true;
+      }
+      current = current.parentNode instanceof ShadowRoot ? current.parentNode.host : current.parentNode;
+    }
+    return false;
+  };
 
   const elements: Element[] = [];
   for (const path of arg.targets) {
@@ -95,6 +127,10 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
         if (edit.names.some((name) => element.hasAttribute(name))) {
           return fail('the page kept an attribute the edit removed');
         }
+        readBacks.push(() => {
+          if (!element.isConnected) return GONE;
+          return edit.names.some((name) => element.hasAttribute(name)) ? 'the page put back an attribute the edit removed' : null;
+        });
         anchors.push(element);
         break;
       }
@@ -103,6 +139,10 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
         if (element.getAttribute(edit.name) !== edit.value) {
           return fail('the page did not keep the attribute the edit set');
         }
+        readBacks.push(() => {
+          if (!element.isConnected) return GONE;
+          return element.getAttribute(edit.name) !== edit.value ? 'the page changed back an attribute the edit set' : null;
+        });
         anchors.push(element);
         break;
       }
@@ -111,6 +151,10 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
         if (element.getAttribute('role') !== edit.role) {
           return fail('the page did not keep the role the edit set');
         }
+        readBacks.push(() => {
+          if (!element.isConnected) return GONE;
+          return element.getAttribute('role') !== edit.role ? 'the page changed back the role the edit set' : null;
+        });
         anchors.push(element);
         break;
       }
@@ -135,9 +179,15 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
             label.removeAttribute(name);
           }
         }
-        if ((element.textContent ?? '').trim() !== '' || NAME_ATTRIBUTES.some((name) => element.hasAttribute(name))) {
+        const hasTextName = (): boolean =>
+          (element.textContent ?? '').trim() !== '' || NAME_ATTRIBUTES.some((name) => element.hasAttribute(name));
+        if (hasTextName()) {
           return fail('the page kept a text name the edit removed');
         }
+        readBacks.push(() => {
+          if (!element.isConnected) return GONE;
+          return hasTextName() ? 'the page put back a text name the edit removed' : null;
+        });
         anchors.push(element);
         break;
       }
@@ -145,42 +195,140 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
         if (!(element instanceof HTMLElement || element instanceof SVGElement)) {
           return fail('the target cannot carry an inline style');
         }
+        const kept: Array<[string, string]> = [];
         for (const [property, value] of Object.entries(edit.styles)) {
           element.style.setProperty(property, value, 'important');
-          if (element.style.getPropertyValue(property) === '') {
+          const read = element.style.getPropertyValue(property);
+          if (read === '') {
             return fail('the page did not keep a style the edit set');
           }
+          kept.push([property, read]);
         }
+        const styled = element;
+        readBacks.push(() => {
+          if (!styled.isConnected) return GONE;
+          const changed = kept.some(
+            ([property, read]) => styled.style.getPropertyValue(property) !== read || styled.style.getPropertyPriority(property) !== 'important',
+          );
+          return changed ? 'the page changed a style the edit set' : null;
+        });
         anchors.push(element);
         break;
       }
       case 'remove-element': {
-        anchors.push(element.parentElement ?? document.documentElement);
+        const parent = element.parentElement ?? document.documentElement;
+        const tag = element.localName;
+        const alike = (): number => Array.from(parent.children).filter((child) => child.localName === tag).length;
+        anchors.push(parent);
         element.remove();
         if (element.isConnected) {
           return fail('the page kept an element the edit removed');
         }
+        const after = alike();
+        readBacks.push(() => {
+          if (element.isConnected) return 'the page put back an element the edit removed';
+          if (!parent.isConnected) return 'the element that held a removed one is no longer on the page';
+          // A page that renders again can put back a new element in place of the removed one.
+          return alike() > after ? 'the page put back an element like the one the edit removed' : null;
+        });
         break;
       }
       case 'swallow-key': {
         const key = edit.key;
+        // Key events aimed at the element, seen first on the window, and the ones that reached the
+        // swallow before any page listener had acted on them. Page listeners on the window and the
+        // document run before a listener on the element, so a key they act on got past the edit.
+        const aimed: Event[] = [];
+        const swallowed = new WeakSet<Event>();
+        let pressed = 0;
+        const isAimed = (event: Event): boolean =>
+          event instanceof KeyboardEvent && event.key === key && event.composedPath().includes(element);
+        const observe = (event: Event): void => {
+          if (isAimed(event)) {
+            aimed.push(event);
+            if (event.type === 'keydown') pressed += 1;
+          }
+        };
         const swallow = (event: Event): void => {
           if (event instanceof KeyboardEvent && event.key === key) {
+            if (!event.defaultPrevented) swallowed.add(event);
             event.preventDefault();
             event.stopImmediatePropagation();
           }
         };
         for (const type of ['keydown', 'keypress', 'keyup']) {
+          window.addEventListener(type, observe, { capture: true, passive: true });
           element.addEventListener(type, swallow, true);
         }
+        readBacks.push(() =>
+          aimed.some((event) => !swallowed.has(event))
+            ? `a ${key} key aimed at the changed element reached the page before the edit could cancel it`
+            : null,
+        );
+        notes.push(() => (pressed === 0 ? `the checks never pressed ${key} on the changed element` : null));
         anchors.push(element);
         break;
       }
       case 'ignore-focus-calls': {
         const nothing = (): void => undefined;
-        for (const node of [element, ...Array.from(element.querySelectorAll('*'))]) {
+        const stubbed = [element, ...Array.from(element.querySelectorAll('*'))];
+        for (const node of stubbed) {
           Object.defineProperty(node, 'focus', { configurable: true, writable: true, value: nothing });
         }
+        // Focus by the keyboard and by a pointer press still works, on purpose. Any other focus
+        // that lands inside the element means the page moved it without a stubbed focus() call,
+        // for example on an element it rendered after the edit, or with autofocus.
+        let tabbing = false;
+        let pressedOn: Node | null = null;
+        const clearLater = (clear: () => void): void => {
+          setTimeout(clear, 0);
+        };
+        window.addEventListener(
+          'keydown',
+          (event) => {
+            if (event.key === 'Tab') {
+              tabbing = true;
+              clearLater(() => {
+                tabbing = false;
+              });
+            }
+          },
+          { capture: true, passive: true },
+        );
+        window.addEventListener('keyup', () => {
+          tabbing = false;
+        }, { capture: true, passive: true });
+        window.addEventListener(
+          'mousedown',
+          (event) => {
+            const first = event.composedPath()[0];
+            pressedOn = first instanceof Node ? first : null;
+            clearLater(() => {
+              pressedOn = null;
+            });
+          },
+          { capture: true, passive: true },
+        );
+        window.addEventListener('click', () => {
+          pressedOn = null;
+        }, { capture: true, passive: true });
+        let reached = 0;
+        element.addEventListener(
+          'focusin',
+          (event) => {
+            const focused = event.composedPath()[0];
+            if (tabbing) return;
+            if (pressedOn !== null && focused instanceof Node && holdsFlat(focused, pressedOn)) return;
+            reached += 1;
+          },
+          true,
+        );
+        readBacks.push(() => {
+          if (stubbed.some((node) => (node as HTMLElement).focus !== nothing)) {
+            return 'the page replaced a focus() call the edit turned off';
+          }
+          return reached > 0 ? 'focus reached the changed element in a way the edit does not stop, such as an element added later' : null;
+        });
         anchors.push(element);
         break;
       }
@@ -188,7 +336,22 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
         return fail('the edit kind is not one the engine knows');
     }
   }
-  return { ok: true, reason: null, anchors };
+  const check = (): EditCheck => {
+    for (const readBack of readBacks) {
+      const reason = readBack();
+      if (reason !== null) {
+        return { held: false, reason };
+      }
+    }
+    const note = notes.map((read) => read()).find((text) => text !== null) ?? null;
+    return { held: true, note };
+  };
+  return { ok: true, reason: null, anchors, check };
+}
+
+/** The second read of an edit, in the page. A plain object, so it crosses back as JSON. */
+export function checkEditInPage(result: EditResultInPage): EditCheck {
+  return result.check();
 }
 
 /**

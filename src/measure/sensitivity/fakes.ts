@@ -7,7 +7,7 @@
 import type { AxNode, HostMarkup, Page } from '../../contracts/index.js';
 import { makeFakePage } from '../../deps/fakes.js';
 import type { Edit } from './catalog.js';
-import type { EditOutcome, ElementPlace, MutationEditor } from './edits.js';
+import type { EditCheck, EditOutcome, ElementPlace, MutationEditor } from './edits.js';
 
 export interface FakeElement {
   path: string;
@@ -119,9 +119,10 @@ function holds(dom: FakeDom, outer: string, inner: string): boolean {
 
 /**
  * A fake editor over fake DOM pages. `refuse` makes every edit fail with that reason, the way the
- * page function fails when the page does not keep a change.
+ * page function fails when the page does not keep a change. `check` is what the second read after
+ * the scan returns. Default: the change held, with no note.
  */
-export function makeFakeMutationEditor(options: { refuse?: string } = {}): MutationEditor {
+export function makeFakeMutationEditor(options: { refuse?: string; check?: EditCheck } = {}): MutationEditor {
   return {
     async apply(page: Page, targets: readonly string[], edit: Edit): Promise<EditOutcome> {
       const dom = fakeDomOf(page);
@@ -153,6 +154,9 @@ export function makeFakeMutationEditor(options: { refuse?: string } = {}): Mutat
               if (anchors.some((anchor) => holds(dom, path, anchor))) return 'around';
               return 'elsewhere';
             });
+          },
+          async check(): Promise<EditCheck> {
+            return options.check ?? { held: true, note: null };
           },
           async release() {},
         },
