@@ -432,7 +432,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // The import calls the Figma API. Its code is loaded here and nowhere else in the CLI, by a
     // dynamic import, so no check, gate, or hook path can reach it. It reads its own arguments.
     const { runImportCommand } = await import('./import/figma/cli.js');
-    const commandAt = argv.indexOf('import');
+    // The command word is removed where the parser read it. The first token with the same text
+    // could be a flag's value.
+    const commandAt = opts.commandIndex;
     const outcome = await runImportCommand(
       argv.filter((_, index) => index !== commandAt),
       process.env,

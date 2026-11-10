@@ -21,6 +21,10 @@ export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--claude-skill', 
 
 export interface CliOptions {
   command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
+  // Where in argv the parser read the command word. Absent when no word named a command, so the
+  // command is the default check. A command that reads its own arguments removes the word at this
+  // position, never the first token that has the same text, which could be a flag's value.
+  commandIndex?: number;
   staticOnly: boolean;
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
@@ -165,6 +169,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let verifySubcommand: string | null = null;
   let verifyApp = false;
   let screens: string[] | null = null;
+  let commandIndex: number | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -208,6 +213,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
         continue;
       }
       command = token;
+      commandIndex = index;
       if (command !== 'enforce') {
         enforceCheck = null;
       }
@@ -400,6 +406,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
 
   return {
     command,
+    ...(commandIndex === undefined ? {} : { commandIndex }),
     staticOnly,
     html,
     all,
