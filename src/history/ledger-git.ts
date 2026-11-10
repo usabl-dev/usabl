@@ -14,15 +14,26 @@ import { promisify } from 'node:util';
 import type { EvidenceFloor, HistoryReader } from '../contracts/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
-import type { FloorSnapshot, LedgerHistory, LedgerInput, LedgerRecord } from './ledger.js';
+import { identityKey } from '../primitives/identity.js';
+import type { FloorSnapshot, LedgerFloor, LedgerFloorEntry, LedgerHistory, LedgerInput, LedgerRecord } from './ledger.js';
 import { HistoryRefusedError, isHistoryFile, parseHistoryFile, type HistoryRecord } from './record.js';
 
 const execFileAsync = promisify(execFile);
 // The first-parent line of a long-lived branch is large, and so is a floor file.
 const MAX_BUFFER = 256 * 1024 * 1024;
+// Every floor version is held as a list of shared identity objects until the replay runs. This
+// bounds that list across all floor commits, so a huge history gives a plain refusal, not a crash.
+export const MAX_FLOOR_ENTRIES = 2_000_000;
 
 export const LEDGER_FLOOR_PATH = '.usabl-evidence.json';
 
+/** One git read printed more than the ledger reads. The ledger does not run. */
+export class LedgerLimitError extends Error {
+  constructor(readonly limitBytes: number) {
+    super(`one git read printed more than ${limitBytes} bytes`);
+    this.name = 'LedgerLimitError';
+  }
+}
 /** The git facts the ledger reads. */
 export interface LedgerGit {
   isRepository(): Promise<boolean>;
@@ -47,13 +58,21 @@ function splitZ(output: string): string[] {
   return output.split('\u0000').filter((piece) => piece.length > 0);
 }
 
-export function makeLedgerGit(options: { cwd?: string } = {}): LedgerGit {
+export function makeLedgerGit(options: { cwd?: string; maxBuffer?: number } = {}): LedgerGit {
   const cwd = options.cwd ?? process.cwd();
+  const maxBuffer = options.maxBuffer ?? MAX_BUFFER;
 
   async function git(args: string[]): Promise<string> {
-    // Replace refs are local and can show another history in place of the real one, so they are off.
-    const { stdout } = await execFileAsync('git', ['--no-replace-objects', ...args], { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER });
-    return stdout;
+    try {
+      // Replace refs are local and can show another history in place of the real one, so they are off.
+      const { stdout } = await execFileAsync('git', ['--no-replace-objects', ...args], { cwd, encoding: 'utf8', maxBuffer });
+      return stdout;
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+        throw new LedgerLimitError(maxBuffer);
+      }
+      throw err;
+    }
   }
 
   // git log honours the person's config even with a format string: log.showSignature prints a
@@ -108,7 +127,12 @@ export function makeLedgerGit(options: { cwd?: string } = {}): LedgerGit {
 
 export type LedgerSourcesRead =
   | { kind: 'read'; input: LedgerInput }
-  | { kind: 'refused'; reason: 'not-a-repository' | 'no-ref' | 'no-floor'; message: string };
+  | { kind: 'refused'; reason: 'not-a-repository' | 'no-ref' | 'no-floor' | 'too-large'; message: string };
+
+export interface LedgerReadOptions {
+  // The most floor entries held across all floor commits. Default MAX_FLOOR_ENTRIES.
+  maxFloorEntries?: number;
+}
 
 function parseFloorText(text: string): { floor: EvidenceFloor; unreadable: null } | { floor: null; unreadable: string } {
   let value: unknown;
@@ -155,7 +179,12 @@ async function readHistoryRecords(reader: HistoryReader): Promise<
  * cannot run at all: not a git repository, a ref that does not resolve, or a branch that never
  * committed a floor. Every other problem is carried into the input so the ledger can name it.
  */
-export async function readLedgerSources(git: LedgerGit, history: HistoryReader, trustedRef: string): Promise<LedgerSourcesRead> {
+export async function readLedgerSources(
+  git: LedgerGit,
+  history: HistoryReader,
+  trustedRef: string,
+  options: LedgerReadOptions = {},
+): Promise<LedgerSourcesRead> {
   if (!(await git.isRepository())) {
     return {
       kind: 'refused',
@@ -185,13 +214,47 @@ export async function readLedgerSources(git: LedgerGit, history: HistoryReader, 
   const line = await git.firstParentLine(head);
   const placed = new Map(line.map((entry, position) => [entry.commit, { ...entry, position }]));
 
+  // Each floor is cut down to what the replay needs as soon as it is read: its version, its scope,
+  // and its identities. An identity held by many floors is one shared object, and the parsed floor
+  // and its text are dropped, so memory grows with the identities, not with the floor's size.
+  const limit = options.maxFloorEntries ?? MAX_FLOOR_ENTRIES;
+  const shared = new Map<string, LedgerFloorEntry>();
+  let held = 0;
   const snapshots: FloorSnapshot[] = [];
   for (const commit of changing) {
     const at = placed.get(commit);
     if (at === undefined) continue;
     const text = await git.readFile(commit, LEDGER_FLOOR_PATH);
     const parsed = text === null ? { floor: null, unreadable: null } : parseFloorText(text);
-    snapshots.push({ commit, date: at.date, position: at.position, floor: parsed.floor, unreadable: parsed.unreadable });
+    let floor: LedgerFloor | null = null;
+    if (parsed.floor !== null) {
+      held += parsed.floor.entries.length;
+      if (held > limit) {
+        return {
+          kind: 'refused',
+          reason: 'too-large',
+          message:
+            `The floor history of ${trustedRef} holds more than ${limit} floor entries across its floor commits, ` +
+            'more than the ledger reads at once. The ledger did not run. Name a ref with less floor history with ' +
+            '--trusted-ref, or run it in a full clone if this one is shallow.',
+        };
+      }
+      const entries = parsed.floor.entries.map((entry) => {
+        const key = JSON.stringify([identityKey(entry), entry.identityBasis]);
+        const known = shared.get(key);
+        if (known !== undefined) return known;
+        const slim: LedgerFloorEntry = {
+          screenId: entry.screenId,
+          rule: entry.rule,
+          elementKey: entry.elementKey,
+          identityBasis: entry.identityBasis,
+        };
+        shared.set(key, slim);
+        return slim;
+      });
+      floor = parsed.floor.scope === 'partial' ? { version: parsed.floor.version, scope: 'partial', entries } : { version: parsed.floor.version, entries };
+    }
+    snapshots.push({ commit, date: at.date, position: at.position, floor, unreadable: parsed.unreadable });
   }
 
   const read = await readHistoryRecords(history);

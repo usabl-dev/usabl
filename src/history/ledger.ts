@@ -16,7 +16,7 @@
  * This is measurement only. It mints no verdict and no receipt, and no verdict path imports it.
  * Pure, and it reads no clock: the same snapshots and records always give the same ledger.
  */
-import type { EvidenceFloor, FloorEntry, IdentityBasis } from '../contracts/index.js';
+import type { FloorEntry, IdentityBasis } from '../contracts/index.js';
 import { identityKey } from '../primitives/identity.js';
 import { identityId, type HistoryRecord } from './record.js';
 
@@ -30,6 +30,16 @@ export interface LedgerPoint {
   date: string;
 }
 
+/** A floor entry as the replay needs it: the identity and nothing else. */
+export type LedgerFloorEntry = Pick<FloorEntry, 'screenId' | 'rule' | 'elementKey' | 'identityBasis'>;
+
+/** What the replay needs from one floor version. An EvidenceFloor is one too. */
+export interface LedgerFloor {
+  version: number;
+  scope?: 'partial';
+  entries: readonly LedgerFloorEntry[];
+}
+
 /** The floor file at one commit on the trusted branch's first-parent line that changed it. */
 export interface FloorSnapshot {
   commit: string;
@@ -37,7 +47,7 @@ export interface FloorSnapshot {
   // The commit's place on the first-parent line, oldest first. Orders snapshots and records.
   position: number;
   // The floor as committed there, or null when the file is absent there or could not be read.
-  floor: EvidenceFloor | null;
+  floor: LedgerFloor | null;
   // Why the file could not be read there, or null. It names the field, never its value.
   unreadable: string | null;
 }
@@ -211,7 +221,7 @@ export class LedgerInvariantError extends Error {
 interface RowState {
   key: string;
   id: string;
-  entry: FloorEntry;
+  entry: LedgerFloorEntry;
   inFloor: boolean;
   spans: OpenSpan[];
   firstSeenAtFirstBaseline: boolean;
@@ -322,7 +332,7 @@ export function buildLedger(input: LedgerInput): Ledger {
   // The identities that a record the ledger could not place in time observes.
   const unplacedSlots = new Set<string>();
 
-  function rowFor(entry: FloorEntry): RowState {
+  function rowFor(entry: LedgerFloorEntry): RowState {
     const key = identityKey(entry);
     const known = rows.get(key);
     if (known !== undefined) {

@@ -14,6 +14,7 @@ import { appendRecord } from '../../src/history/append.js';
 import { makeHistoryGit } from '../../src/history/git.js';
 import { buildLedger } from '../../src/history/ledger.js';
 import { makeLedgerGit, readLedgerSources } from '../../src/history/ledger-git.js';
+import { runLedger } from '../../src/history/ledger-report.js';
 import { serializeRecord } from '../../src/history/record.js';
 import { dialogAt, entryFor, floorOf, fullScreen, recordOf, rowButton } from './helpers.js';
 
@@ -168,6 +169,13 @@ describe('the ledger sources in a real repository', () => {
     const ledger = buildLedger(read.input);
     expect(ledger.headDate).toBe(dayAt(27));
     expect(ledger.rows.find((row) => row.rule === N.rule)?.daysOpen).toBe(21);
+  });
+
+  it('names the output limit when one git read is larger than it', async () => {
+    const outcome = await runLedger(makeLedgerGit({ cwd: repo, maxBuffer: 64 }), makeHistoryGit({ cwd: repo, ref: 'usabl/history' }), 'main');
+    expect(outcome.exitCode).toBe(4);
+    expect(outcome.text).toMatch(/more than 64 bytes/u);
+    expect(outcome.text).toMatch(/The ledger did not run\./u);
   });
 
   it('says when the history branch is missing', async () => {

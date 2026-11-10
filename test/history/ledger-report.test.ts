@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { EvidenceFloor, FloorEntry } from '../../src/contracts/index.js';
-import type { LedgerGit } from '../../src/history/ledger-git.js';
+import { LedgerLimitError, readLedgerSources, type LedgerGit } from '../../src/history/ledger-git.js';
 import { runLedger } from '../../src/history/ledger-report.js';
 import { serializeRecord } from '../../src/history/record.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
@@ -176,6 +176,37 @@ describe('usabl debt ledger', () => {
       mayBeLess: true,
       mayBeLessReasons: ['no-usable-history'],
     });
+  });
+
+  it('keeps only what the replay needs from each floor, one object per identity', async () => {
+    const read = await readLedgerSources(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main');
+    if (read.kind !== 'read') throw new Error(read.message);
+    const [first, second] = read.input.snapshots;
+    for (const entry of first?.floor?.entries ?? []) {
+      expect(Object.keys(entry).sort()).toEqual(['elementKey', 'identityBasis', 'rule', 'screenId']);
+    }
+    // The same identity in two floors is held once.
+    const openIn = (snapshot: typeof first) => snapshot?.floor?.entries.find((entry) => entry.rule === OPEN.rule);
+    expect(openIn(second)).toBe(openIn(first));
+  });
+
+  it('refuses plainly when the floor history is larger than it reads, and says what to do', async () => {
+    const outcome = await runLedger(fakeGit({ 0: BASE, 20: LATER }), historyWith(BASE), 'main', { maxFloorEntries: 4 });
+    expect(outcome.exitCode).toBe(4);
+    expect(outcome.text).toBe(
+      'usabl debt ledger: The floor history of main holds more than 4 floor entries across its floor commits, ' +
+        'more than the ledger reads at once. The ledger did not run. Name a ref with less floor history with ' +
+        '--trusted-ref, or run it in a full clone if this one is shallow.',
+    );
+
+    const overflow = await runLedger(
+      fakeGit({ 0: BASE }, { readFile: async () => Promise.reject(new LedgerLimitError(256 * 1024 * 1024)) }),
+      historyWith(BASE),
+      'main',
+    );
+    expect(overflow.exitCode).toBe(4);
+    expect(overflow.text).toMatch(/more than 256 MiB/u);
+    expect(overflow.text).toMatch(/The ledger did not run\./u);
   });
 
   it('refuses plainly when no floor was ever committed or git cannot run there', async () => {

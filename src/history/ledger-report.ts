@@ -12,7 +12,7 @@
 import type { HistoryReader } from '../contracts/index.js';
 import { scrubOutboundData, scrubString } from '../surfaces/scrub.js';
 import { buildLedger, LedgerInvariantError, type Ledger, type LedgerRow, type LedgerState, type LedgerStateTotals } from './ledger.js';
-import { readLedgerSources, type LedgerGit } from './ledger-git.js';
+import { LedgerLimitError, readLedgerSources, type LedgerGit, type LedgerReadOptions } from './ledger-git.js';
 
 export interface LedgerCommandOutcome {
   exitCode: 0 | 2 | 4;
@@ -158,6 +158,11 @@ export function formatLedger(ledger: Ledger): string {
   return lines.join('\n');
 }
 
+function sizeOf(bytes: number): string {
+  const MIB = 1024 * 1024;
+  return bytes >= MIB && bytes % MIB === 0 ? `${bytes / MIB} MiB` : plural(bytes, 'byte', 'bytes');
+}
+
 function refusal(exitCode: 2 | 4, message: string): LedgerCommandOutcome {
   const text = scrubString(`usabl debt ledger: ${message}`);
   return { exitCode, text, json: JSON.stringify({ error: text }, null, 2) };
@@ -168,15 +173,27 @@ function refusal(exitCode: 2 | 4, message: string): LedgerCommandOutcome {
  * counted to the commit the ref names, and projects it. It reads no clock. Exit 0 when it ran. Exit 2 when no floor was ever
  * committed, and 4 when git could not run there or could not read the history.
  */
-export async function runLedger(git: LedgerGit, history: HistoryReader, trustedRef: string): Promise<LedgerCommandOutcome> {
+export async function runLedger(
+  git: LedgerGit,
+  history: HistoryReader,
+  trustedRef: string,
+  options: LedgerReadOptions = {},
+): Promise<LedgerCommandOutcome> {
   let ledger: Ledger;
   try {
-    const read = await readLedgerSources(git, history, trustedRef);
+    const read = await readLedgerSources(git, history, trustedRef, options);
     if (read.kind === 'refused') {
       return refusal(read.reason === 'no-floor' ? 2 : 4, read.message);
     }
     ledger = buildLedger(read.input);
   } catch (err) {
+    if (err instanceof LedgerLimitError) {
+      return refusal(
+        4,
+        `One git read of the history of ${trustedRef} printed more than ${sizeOf(err.limitBytes)}, more than the ledger reads. ` +
+          'The ledger did not run. Name a ref with less floor history with --trusted-ref, or run it in a full clone if this one is shallow.',
+      );
+    }
     if (err instanceof LedgerInvariantError) {
       return refusal(
         4,
