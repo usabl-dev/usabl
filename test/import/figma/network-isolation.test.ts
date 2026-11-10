@@ -55,7 +55,7 @@ const ALLOWED_NETWORK_EDGES = new Set(['src/cli.ts -> src/import/figma/cli.ts', 
 // file in this repository.
 const ALLOWED_UNREAD_LOADS = new Set([
   'src/providers/engines/shared.ts: import(packageName)',
-  'src/deps/build.ts: require(`${packageName}/package.json`)',
+  'src/deps/scanner-versions.ts: require(`${packageName}/package.json`)',
 ]);
 
 type ImportKind = 'static' | 'dynamic';
