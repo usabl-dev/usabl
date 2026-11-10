@@ -29,7 +29,7 @@ When the record has no such commit, the pin stays the placeholder
 tree with uncommitted or untracked changes. The command says which, and names the line to
 edit in each file. A release cannot ship that way: `prepublishOnly` fails unless the record
 holds a full commit SHA and `clean: true`. Until the line holds a commit, the engine checkout fails and the gate
-blocks. The same is true of a commit that is not on `usabl-dev/usabl`: the gate fails
+blocks. The same is true of a commit that cannot be fetched from `usabl-dev/usabl`: the gate fails
 closed, never open.
 
 `install --ci` never moves a pin someone already chose. If the workflow is the usabl draft

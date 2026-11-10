@@ -1064,7 +1064,7 @@ export function engineRefFor(pin: EnginePin): string | null {
 
 /** The fact the report states when the engine is pinned to this build's commit. */
 function pinNote(pin: EnginePin & { kind: 'filled' }): string {
-  return `The engine is pinned to usabl-dev/usabl commit ${pin.sha}, the commit this usabl ${pin.version} was built from. That commit must be on usabl-dev/usabl. If it is not, the usabl-engine job fails and the gate blocks.`;
+  return `The engine is pinned to usabl-dev/usabl commit ${pin.sha}, the commit this usabl ${pin.version} was built from. If that commit cannot be fetched from usabl-dev/usabl, the usabl-engine job fails and the gate blocks.`;
 }
 
 /** The step the report lists when files still hold the placeholder: why, and the line in each. */

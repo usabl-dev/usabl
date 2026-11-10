@@ -2840,7 +2840,7 @@ uncommitted change and no untracked file). The package carries the file. `instal
 commit as the engine ref only when it is a full 40-character lowercase SHA and the tree was
 clean. Otherwise the ref is the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel, the report says why,
 and it names the line to edit in each file. Nothing reads the network. A sentinel, or a commit
-that is not on `usabl-dev/usabl`, makes the engine checkout fail, so the gate blocks. Each
+that cannot be fetched from `usabl-dev/usabl`, makes the engine checkout fail, so the gate blocks. Each
 workflow file is written when absent, left alone when identical, filled in when it is the
 unedited sentinel draft and the build has a commit, left alone with its commit named when it is
 the draft pinned to another commit, and refused when anything else differs. `usabl doctor`

@@ -927,7 +927,7 @@ What runs where, and what each job holds:
   commit SHA from a clean tree. Otherwise it writes the sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`,
   which the operator replaces with a full commit SHA. Either way the engine that judges a pull
   request is code the operator installed or chose, never the pull request's. The pin can only
-  fail closed: the sentinel, or a commit that is not on `usabl-dev/usabl`, fails the checkout and
+  fail closed: the sentinel, or a commit that cannot be fetched from `usabl-dev/usabl`, fails the checkout and
   blocks the gate. The installer reads no network to find a commit, and it never moves a pin the
   operator already set.
   The engine repository is public, so the checkout needs no token. The job builds the engine,

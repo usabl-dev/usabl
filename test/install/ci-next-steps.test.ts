@@ -75,6 +75,7 @@ describe('the steps after install --ci', () => {
     expect(steps(result.message)).toEqual([COMMIT, branchRule(2), openPr(3)]);
     // The facts that are not steps are still said once, before the steps.
     expect(result.message).toContain(`commit ${SHA}`);
+    expect(result.message).toContain('If that commit cannot be fetched from usabl-dev/usabl, the usabl-engine job fails and the gate blocks.');
     expect(result.message).toContain('http://127.0.0.1:9000');
     expect(result.message).toContain('needs no secret');
     expect(result.message).toContain('not evidence');

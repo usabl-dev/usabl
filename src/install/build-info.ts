@@ -4,8 +4,8 @@
  * commit the build came from, and whether the tree was clean. The pin is a security value, so only
  * a full 40-character lowercase commit SHA from a clean tree counts. A missing record, a build
  * outside git, a dirty tree, or a record usabl cannot read keeps the placeholder and says why.
- * Nothing here reads the network: the commit is what this build says it is, and a commit that is
- * not on usabl-dev/usabl makes the engine checkout fail, which blocks the gate.
+ * Nothing here reads the network: the commit is what this build says it is, and a commit
+ * that cannot be fetched from usabl-dev/usabl makes the engine checkout fail, which blocks the gate.
  */
 import { readFile } from 'node:fs/promises';
 
