@@ -45,7 +45,8 @@ import {
 // The pass hands each provider the same context. The providers that run between two design checks
 // only read the page: a provider that changes it is marked mutatesPageState and runs after every
 // one that is not, and the keyboard walk runs before the requirement providers. The focus order
-// check presses Tab, so it drops the read when it ends, and the next check reads the page again.
+// check presses Tab, and the target size check scrolls, so each drops the read when it ends, and
+// the next check reads the page again.
 const sharedTrees = new WeakMap<ProviderContext, Promise<DesignAxTreeRead>>();
 
 function sharedTree(ctx: ProviderContext): DesignTreeSource {
@@ -775,7 +776,13 @@ async function runCheck(requirement: Requirement, ctx: ProviderContext): Promise
         sharedTrees.delete(ctx);
       }
     case 'target-size':
-      return checkTargetSize(requirement, assertion, page, tree);
+      try {
+        return await checkTargetSize(requirement, assertion, page, tree);
+      } finally {
+        // The box read scrolls the control into view and back, and page script can answer that
+        // scroll by changing the page, so the next check reads the page again.
+        sharedTrees.delete(ctx);
+      }
     default:
       return [];
   }

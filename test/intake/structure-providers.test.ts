@@ -235,6 +235,22 @@ describe('the accessibility tree the design checks read', () => {
     expect(designAxTree).toHaveBeenCalledTimes(2);
   });
 
+  it('is read again after a target size check, because its scroll can make page script change the page', async () => {
+    const designAxTree = vi.fn(async () => ({ kind: 'tree' as const, nodes: treeOf([button('Refresh')]) }));
+    const page = pageWith(
+      { '#r': button('Refresh') },
+      { designAxTree, boundingBox: async () => ({ width: 44, height: 44, fragments: 1, unmeasurable: [] }) },
+    );
+    const result = await runProviders(
+      providersOf([req({ type: 'target-size', target: { role: 'button', name: 'Refresh' }, minCssPx: 24 }), nameReq('r-after', 'Refresh')]),
+      { page, screen: SCREEN, config: testConfig() },
+      ['live'],
+    );
+    expect(result.gaps).toEqual([]);
+    expect(result.drafts).toEqual([]);
+    expect(designAxTree).toHaveBeenCalledTimes(2);
+  });
+
   it('is never the read the silent change rule makes, which has a time budget', async () => {
     const fullAxTree = vi.fn(async () => ({ kind: 'over-budget' as const, limit: 'time' as const }));
     const page = pageWith({ '#r': button('Refresh') }, { fullAxTree });
