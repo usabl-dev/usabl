@@ -24,7 +24,8 @@
 import type { InstallFs, InstallResult } from './index.js';
 import { ARTIFACT_MAX_BYTES, ENGINE_CHECK, fetchArtifactStep } from './artifact-fetch.js';
 import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
-import { hasDevScript, readAppOrigin } from './app-origin.js';
+import { CONFIG_PATH, hasDevScript, readAppOrigin } from './app-origin.js';
+import { configOnDefaultBranch, findDefaultBranch, NO_GIT, ROUTES_PATH, type DefaultBranch, type InstallGit } from './repo-git.js';
 import {
   appGateNotes,
   appGateSetupSteps,
@@ -261,15 +262,27 @@ const HISTORY_NOTES = [
   "Its history-append job needs contents: write, the one permission tracking needs. It runs no application code. To keep that write on the history branch only, add a ruleset for usabl/history that blocks force pushes and deletion. If you cannot grant the permission, leave this file out: every run then says tracking is off and keeps today's behavior.",
 ];
 
+// The judge reads usabl.config.json, and usabl.routes.json when the app uses it, at the base commit
+// of each pull request. So they must be on the default branch before the pull request that adds the
+// workflows, or that pull request cannot pass.
+function configFirstStep(branch: DefaultBranch, withRoutes: boolean): string {
+  const target = branch.kind === 'found' ? branch.name : 'your default branch';
+  return withRoutes
+    ? `Merge ${CONFIG_PATH} and ${ROUTES_PATH} to ${target} first, in their own pull request. The judge reads them at the base commit of each pull request, so a pull request that adds them together with the workflows cannot pass.`
+    : `Merge ${CONFIG_PATH} to ${target} first, in its own pull request. The judge reads it at the base commit of each pull request, so a pull request that adds it together with the workflows cannot pass.`;
+}
+
 /**
  * `usabl install --ci`: the pull request gate and the default-branch history workflow. Each file is
  * planned on its own, so a hand-tuned gate does not stop the history workflow from being written,
  * and the run exits 2 when either one was refused. pin is the engine pin from this usabl's build
- * record. Both files get the same one, and with no commit both keep the placeholder.
+ * record. Both files get the same one, and with no commit both keep the placeholder. git reads the
+ * app's repository, only locally; a git that cannot answer leaves every step it could have settled in.
  */
-export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
+export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD, git: InstallGit = NO_GIT): Promise<InstallResult> {
   const engineRef = engineRefFor(pin);
   const app = await readAppOrigin(fs);
+  const defaultBranch = await findDefaultBranch(git);
   const gate = await applyWorkflowPlan(fs, await planCi(fs, engineRef), pin, USABL_GATE_WORKFLOW, 'gate workflow');
   const history = await applyWorkflowPlan(fs, await planHistoryCi(fs, engineRef), pin, USABL_HISTORY_WORKFLOW, 'history workflow');
 
@@ -279,6 +292,10 @@ export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD)
     setupSteps.push(
       `Add a "dev" script to package.json that starts your dev server. The history workflow runs "npm run dev -- --host <host> --port <port>" with the host and port of appBaseUrl, and package.json has no "dev" script. Or leave ${USABL_HISTORY_WORKFLOW_PATH} out: every run then says tracking is off.`,
     );
+  }
+  // Printed unless git shows the default branch already holds the same config bytes.
+  if (!(await configOnDefaultBranch(fs, git))) {
+    setupSteps.push(configFirstStep(defaultBranch, (await fs.readFile(ROUTES_PATH)) !== null));
   }
   const notes = [
     ...(gate.result.action === 'written' ? appGateNotes(app) : []),

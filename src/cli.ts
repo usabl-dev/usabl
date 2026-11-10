@@ -51,6 +51,7 @@ import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor
 import { engineRefFor, planDocsCi, writeDocsCi } from './install/ci.js';
 import { installCi } from './install/history-ci.js';
 import { readEnginePin } from './install/build-info.js';
+import { gitRunner } from './install/repo-git.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
@@ -287,7 +288,7 @@ async function runInstall(opts: CliOptions): Promise<number> {
     result = await writeDocsCi(installFs, await planDocsCi(installFs, engineRefFor(pin)), pin);
   } else {
     // The pull request gate and the default-branch history workflow that turns on debt tracking.
-    result = await installCi(installFs, await readEnginePin());
+    result = await installCi(installFs, await readEnginePin(), gitRunner(process.cwd()));
   }
 
   // Exit 0 (written or already wired) goes to stdout; a refusal (exit 2) goes to stderr,

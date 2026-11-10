@@ -59,12 +59,19 @@ looked.
 The command ends with a numbered list of the steps still needed. When the pin is filled,
 `appBaseUrl` can be read, and `package.json` has a `dev` script, the list is:
 
-1. Review and commit the two workflow files.
-2. Add the branch rule. `usabl install --branch-rule` prints the `CODEOWNERS` lines and
+1. Merge `usabl.config.json` (and `usabl.routes.json` when you use it) to your default
+   branch first, in their own pull request. The judge reads them at the base commit of each
+   pull request, so a pull request that adds them together with the workflows cannot pass.
+2. Review and commit the two workflow files.
+3. Add the branch rule. `usabl install --branch-rule` prints the `CODEOWNERS` lines and
    the branch setting, then checks them when you run it again.
-3. Open a pull request.
+4. Open a pull request.
 
-Each thing the run could not settle adds one step in front: pin the engine, run
+The command leaves out step 1 only when git shows that your default branch already holds
+the same bytes of those files as your working tree. When it cannot find the default branch,
+or git cannot answer, it prints the step.
+
+Each other thing the run could not settle adds one step in front: pin the engine, run
 `usabl init` and set `appBaseUrl`, or add a `dev` script for the history scan.
 
 The branch rule matters. Any pull request runs the workflow as that pull request changed

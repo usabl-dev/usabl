@@ -2848,7 +2848,11 @@ still reads a workflow that holds the sentinel as not wired. The report lists th
 each file, then the facts once, then the steps still needed: pin the engine (only with the
 sentinel), run `usabl init` or fix `appBaseUrl` (only when `usabl.config.json` has no loopback
 http `appBaseUrl` with a port), add a `dev` script (`install --ci` only, when `package.json` has
-none), and, when a file was written, commit, add the branch rule, and open a pull request. Before
+none), merge `usabl.config.json` (and `usabl.routes.json` when the working tree has one) to the
+default branch first in their own pull request (`install --ci` only, unless git shows that
+`refs/remotes/origin/<default branch>` already holds the same bytes; the judge reads them at the
+base commit, so a pull request that adds them with the workflows cannot pass), and, when a file
+was written, commit, add the branch rule, and open a pull request. Before
 init, the report reads the port from a `--port` in the `dev` script, `server.port` in the Vite
 config, or `devServer.port` in the webpack dev config (a literal, a module-level binding to one,
 or `process.env.NAME || <literal>`), and otherwise lists every place it looked. No workflow takes
