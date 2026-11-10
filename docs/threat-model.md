@@ -926,7 +926,10 @@ that still match the trusted ref) or a run where every screen was unseen.
 session. They cannot continue, cannot easily recover, and may disable the hook
 entirely. That is a worse integrity outcome than an honest unverified allow.
 
-**Decision:** keep fail-open with disclosure.
+**Decision:** keep fail-open with disclosure. The disclosure reaches the person: in Claude
+Code, an allow that carries a notice writes the notice as a `systemMessage`, which Claude Code
+shows, because it does not show the stderr of a Stop hook that exits 0. Cursor shows the
+notice only in its hook output log, not in the chat.
 
 - `evaluateStopDecision` allows when `exitCode === 4`, the verdict is null, and no guarded
   file diverged. Diverged guarded policy blocks whatever the exit code: the hook counts the

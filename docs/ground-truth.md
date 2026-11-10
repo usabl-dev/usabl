@@ -2910,7 +2910,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - A repository with no commits yet has no HEAD, so it counts as HEAD without a config.
   Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
   `loop_count` above 0), marked NOT verified, as every other block does.
-- Unreadable input or an internal error: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- Unreadable input or an internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
+- Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
+  does not show the stderr of a Stop hook that exits 0, and sends its plain stdout to the debug
+  log. So in the Claude protocol, an allow that carries a notice also writes one JSON object to
+  stdout, `{"systemMessage": "..."}`, with the same text stderr gets, and Claude Code shows that
+  field to the person. That covers every "NOT verified" allow, the "not configured" and "outside
+  a work tree" allows, a run that failed or had nothing to check, the pin notices, the "NOT
+  saved" receipt notice, and the invalid input message. Carried values in it are scrubbed and
+  framed as on stderr. A VERIFIED allow with no notice writes nothing to stdout. A block is sent
+  as before, as one decision object, and its notices follow on stderr. Cursor's stop hook
+  answer has no field for the person: usabl answers `{}` and writes the notice to stderr, which
+  Cursor does not show in the chat. It is in Cursor's hook output log (the Hooks output
+  channel), which a person has to open.
 - Diverged guarded policy on a run with no verdict: block, whatever the exit code. `run()`
   ends a run where every screen was unseen with no verdict and exit 4, and the guard still
   reported the diverged files on it. The hook counts those and the ones its own guard found

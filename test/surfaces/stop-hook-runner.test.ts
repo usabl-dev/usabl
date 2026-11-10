@@ -599,6 +599,8 @@ describe('stop-hook-runner fast path and session pins', () => {
     const stderr = h.stderr.join('');
     expect(h.engineRuns()).toBe(0);
     expect(stderr.startsWith('VERIFIED (exit 0, stored receipt, not re-scanned): this result comes from a stored receipt')).toBe(true);
+    // A verified fast allow with no notice writes nothing to stdout.
+    expect(h.stdout.join('')).toBe('');
     expect(h.pins.files.get(pinName)).toBeDefined();
     // Nothing was compared on a first stop, so the line does not say the pins matched.
     expect(stderr).not.toContain('match the session pins');
@@ -636,6 +638,9 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(notice).toBeGreaterThan(stderr.indexOf('[END UNTRUSTED TEXT]'));
     expect(stderr).toContain('pin fix: remove the directory.');
     expect(stderr.trimEnd().endsWith('[END UNTRUSTED TEXT]')).toBe(true);
+    // Claude Code does not show that stderr, so the same text goes to the person as a systemMessage.
+    const payload = JSON.parse(h.stdout.join('').trim()) as { systemMessage?: string };
+    expect(payload.systemMessage).toBe(stderr.trimEnd());
     expect(h.pins.writes).toEqual([]);
   });
 

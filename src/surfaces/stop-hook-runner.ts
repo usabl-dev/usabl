@@ -173,12 +173,6 @@ async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<vo
   await ports.stderrWrite(text.endsWith('\n') ? text : `${text}\n`);
 }
 
-async function writePinNotice(ports: StopHookRunnerPorts, notice: PinNotice | null): Promise<void> {
-  if (notice !== null) {
-    await writeStderr(ports, notice.message);
-  }
-}
-
 // Cursor stdin carries loop_count so we can detect re-entry. Claude stdin carries
 // stop_hook_active as a boolean. This parser reads both shapes into the shared input type.
 function parseCursorStopInput(raw: unknown): StopHookInput {
@@ -603,13 +597,45 @@ async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, opt
   }
 }
 
-// Protocol-aware allow emitter. Claude emits nothing to stdout (stderr only).
-// Cursor must emit {} so the hook protocol response is valid JSON.
-async function emitProtocolAllow(ports: StopHookRunnerPorts, message: string, options: StopHookOptions): Promise<void> {
-  await writeStderr(ports, message);
+/** What an allow says, in the order it is written. */
+interface AllowText {
+  // The decision line and what follows it in one message.
+  message: string;
+  // Notices written after the decision line: a receipt that was not saved, pins that were not used.
+  notices?: string[];
+  // True only for a VERIFIED line. A verified allow with no notice is the one allow a person does
+  // not need to see.
+  verified?: boolean;
+}
+
+/**
+ * Protocol-aware allow emitter. Every line goes to stderr, as before. Cursor must also get {} on
+ * stdout so the hook response is valid JSON. Claude Code does not show the stderr of a Stop hook
+ * that exits 0, and sends its plain stdout to the debug log, so an allow that carries a notice
+ * also writes one JSON object with a systemMessage field, which Claude Code shows to the person.
+ * The text is the same text stderr gets, so its carried values are already scrubbed and framed.
+ */
+async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, options: StopHookOptions): Promise<void> {
+  const lines = [text.message, ...(text.notices ?? [])];
+  for (const line of lines) {
+    await writeStderr(ports, line);
+  }
   if (options.cursorMode) {
     await emitCursorAllow(ports);
+    return;
   }
+  if (text.verified === true && lines.length === 1) {
+    return;
+  }
+  await emitSystemMessage(ports, lines.join('\n'));
+}
+
+async function emitSystemMessage(ports: StopHookRunnerPorts, text: string): Promise<void> {
+  await ports.stdoutWrite(JSON.stringify({ systemMessage: text }) + '\n');
+}
+
+function pinNotices(notice: PinNotice | null): string[] {
+  return notice === null ? [] : [notice.message];
 }
 
 /**
@@ -624,7 +650,7 @@ async function emitConfigBlock(
   error: string | null,
 ): Promise<void> {
   if (input.stopHookActive) {
-    await emitProtocolAllow(ports, configBlockMessage(problem, true, error), options);
+    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error) }, options);
     return;
   }
   await emitProtocolBlock(ports, configBlockMessage(problem, false, error), options);
@@ -640,7 +666,7 @@ export async function runStopHook(
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
-      await emitProtocolAllow(ports, 'NOT verified - BYPASS consumed for this stop only.', options);
+      await emitProtocolAllow(ports, { message: 'NOT verified - BYPASS consumed for this stop only.' }, options);
       return 0;
     }
 
@@ -650,7 +676,7 @@ export async function runStopHook(
       throw new Error(step.reason);
     }
     if (step.kind === 'outside-work-tree') {
-      await emitProtocolAllow(ports, outsideWorkTreeMessage(ports.cwd()), options);
+      await emitProtocolAllow(ports, { message: outsideWorkTreeMessage(ports.cwd()) }, options);
       return 0;
     }
     if (step.kind === 'not-configured') {
@@ -660,16 +686,17 @@ export async function runStopHook(
       const earlier = await earlierSessionPins(ports, input);
       if (earlier.status === 'found') {
         if (input.stopHookActive) {
-          await emitProtocolAllow(ports, driftMessage([CONFIG_FILE], true), options);
+          await emitProtocolAllow(ports, { message: driftMessage([CONFIG_FILE], true) }, options);
           return 0;
         }
         await emitProtocolBlock(ports, driftMessage([CONFIG_FILE], false), options);
         return 0;
       }
-      await emitProtocolAllow(ports, NOT_CONFIGURED_MESSAGE, options);
-      if (earlier.status === 'refused') {
-        await writePinNotice(ports, pinsRefused(earlier));
-      }
+      await emitProtocolAllow(
+        ports,
+        { message: NOT_CONFIGURED_MESSAGE, notices: earlier.status === 'refused' ? [pinsRefused(earlier).message] : [] },
+        options,
+      );
       return 0;
     }
     if (step.kind === 'block') {
@@ -727,7 +754,7 @@ export async function runStopHook(
             if (input.stopHookActive) {
               // Allow one continuation while active to avoid recursive stop-hook loops.
               // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-              await emitProtocolAllow(ports, driftMessage(drift, true), options);
+              await emitProtocolAllow(ports, { message: driftMessage(drift, true) }, options);
               return 0;
             }
             // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
@@ -750,8 +777,11 @@ export async function runStopHook(
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
       });
       if (receiptCheck.verified) {
-        await emitProtocolAllow(ports, receiptCheck.details, options);
-        await writePinNotice(ports, pinNotice);
+        await emitProtocolAllow(
+          ports,
+          { message: receiptCheck.details, notices: pinNotices(pinNotice), verified: true },
+          options,
+        );
         return 0;
       }
     }
@@ -774,15 +804,20 @@ export async function runStopHook(
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
+    const notices = [...(receiptNotice === null ? [] : [receiptNotice]), ...pinNotices(pinNotice)];
     if (decision.block) {
+      // A block is sent as before. The notices follow it on stderr.
       await emitProtocolBlock(ports, decision.message, options);
-    } else {
-      await emitProtocolAllow(ports, decision.message, options);
+      for (const notice of notices) {
+        await writeStderr(ports, notice);
+      }
+      return 0;
     }
-    if (receiptNotice !== null) {
-      await writeStderr(ports, receiptNotice);
-    }
-    await writePinNotice(ports, pinNotice);
+    await emitProtocolAllow(
+      ports,
+      { message: decision.message, notices, verified: result.verdict === 'verified' && decision.message.startsWith('VERIFIED') },
+      options,
+    );
     return 0;
   } catch (err) {
     const message = errorMessage(err);
@@ -790,17 +825,19 @@ export async function runStopHook(
     // The error text can carry a path or a value from the repository, so it goes inside the frame.
     await emitProtocolAllow(
       ports,
-      framedMessage(
-        [
-          'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
-            'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-          'Next: run usabl check, or check the change by hand, before you call this change accessible.',
-        ],
-        [`error: ${message}`],
-      ),
+      {
+        message: framedMessage(
+          [
+            'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
+              'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
+            'Next: run usabl check, or check the change by hand, before you call this change accessible.',
+          ],
+          [`error: ${message}`],
+        ),
+        notices: pinNotices(pinNotice),
+      },
       options,
     );
-    await writePinNotice(ports, pinNotice);
     return 0;
   } finally {
     if (deps !== null) {
@@ -820,12 +857,7 @@ export async function runStopHookFromStdin(
     const input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
     return runStopHook(input, ports, options);
   } catch {
-    if (options.cursorMode) {
-      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
-      await emitCursorAllow(ports);
-    } else {
-      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
-    }
+    await emitProtocolAllow(ports, { message: 'NOT verified - invalid stop hook input JSON.' }, options);
     return 0;
   }
 }
