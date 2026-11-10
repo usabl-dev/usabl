@@ -23,7 +23,7 @@ import { workflowTriggerBranch } from '../install/repo-git.js';
 import { classifyDocsGateWorkflow, USABL_DOCS_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { DOCS_GATE_BRANCHED, GATE_BRANCHED, earlierDraftPin, type BranchedWorkflow } from '../install/workflow-branch.js';
 import { HISTORY_BRANCHED } from '../install/history-ci.js';
-import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
+import { compileCodeownersPattern, readCodeownersLine, type CodeownersMatch } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -44,7 +44,9 @@ import {
 } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
-import { buildGuardedSet } from '../trust/guard.js';
+import { readCodeownersLimits } from '../surfaces/policy-enforce.js';
+import { readGuardedEntries, readWideNotice, type GuardedEntry } from '../trust/guard.js';
+import { operatorText } from '../intake/config-error.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 import { collectEngineReports, formatEngineReports } from './engines.js';
 import type { InstalledPackage } from '../providers/engines/shared.js';
@@ -153,6 +155,10 @@ export interface DoctorDeps {
   // Finds an installed engine package the way the run's dynamic import would, without loading it.
   // Injected so tests never depend on what node_modules holds. Defaults to a read of node_modules.
   probeEnginePackage?: (packageName: string) => Promise<InstalledPackage>;
+  // The files in the last commit under a path ('' is the whole tree). The CLI passes a git listing.
+  // Without it, doctor reads the working tree, and says a literal guarded entry guards nothing
+  // only when no file is there either.
+  headFiles?: (prefix: string) => Promise<string[]>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -942,7 +948,7 @@ function isValidOwner(token: string): boolean {
 interface CodeownersRule {
   pattern: string;
   owners: string[];
-  match: (path: string) => boolean;
+  state: (path: string) => CodeownersMatch;
   // The extensions for which it matches every workflow file a pull request could add.
   everyNewWorkflow: ReadonlySet<WorkflowExtension>;
   // The extensions for which it could match some workflow file a pull request could add.
@@ -986,7 +992,7 @@ function matchesSomeNewWorkflow(pattern: string, ext: WorkflowExtension): boolea
     return false;
   }
   const directory = compileCodeownersPattern(`/${segments.slice(0, -1).join('/')}/`);
-  return directory.ok && directory.match(`${WORKFLOWS_DIR}/x`) && nameCouldBeWorkflow(name, ext);
+  return directory.ok && directory.state(`${WORKFLOWS_DIR}/x`) === 'match' && nameCouldBeWorkflow(name, ext);
 }
 
 // Why a rule does not give what it matches an owner, or null when it does.
@@ -1024,11 +1030,20 @@ async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<
   }
   const rules: CodeownersRule[] = [];
   for (const line of raw.split('\n')) {
-    const trimmed = line.replace(/#.*$/, '').trim();
-    if (trimmed.length === 0) {
+    // The same line reader the policy check uses, so both read the same rules.
+    const read = readCodeownersLine(line);
+    if (read.kind === 'blank') {
       continue;
     }
-    const [pattern = '', ...owners] = trimmed.split(/\s+/);
+    if (read.kind === 'refused') {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${read.message}, so usabl cannot confirm .github/workflows/ has an owner. Put a space before an inline comment, or check it by hand.`,
+      };
+    }
+    const { pattern, owners } = read;
     const compiled = compileCodeownersPattern(pattern);
     if (!compiled.ok) {
       return {
@@ -1038,17 +1053,34 @@ async function collectWorkflowOwners(deps: DoctorDeps, branch: string): Promise<
         nextStep: `${CODEOWNERS_PATH} uses the pattern ${pattern}, which usabl cannot evaluate (${compiled.reason}), so it cannot confirm .github/workflows/ has an owner. Check it by hand.`,
       };
     }
-    const every = WORKFLOW_EXTENSIONS.filter((ext) => matchesEveryNewWorkflow(compiled.match, ext));
-    const some = WORKFLOW_EXTENSIONS.filter((ext) => every.includes(ext) || matchesSomeNewWorkflow(pattern, ext));
-    rules.push({ pattern, owners, match: compiled.match, everyNewWorkflow: new Set(every), someNewWorkflow: new Set(some) });
+    const every = WORKFLOW_EXTENSIONS.filter((ext) =>
+      matchesEveryNewWorkflow((path) => compiled.state(path) === 'match', ext),
+    );
+    // A rule that may match a new workflow file under one reading of its pattern could take
+    // ownership away from it, so it counts as able to match one.
+    const some = WORKFLOW_EXTENSIONS.filter(
+      (ext) =>
+        every.includes(ext) ||
+        matchesSomeNewWorkflow(pattern, ext) ||
+        !matchesEveryNewWorkflow((path) => compiled.state(path) === 'none', ext),
+    );
+    rules.push({ pattern, owners, state: compiled.state, everyNewWorkflow: new Set(every), someNewWorkflow: new Set(some) });
   }
 
   // Every workflow file present, by its last matching rule.
   const present = await deps.fs.glob(WORKFLOW_EXTENSIONS.map((ext) => `${WORKFLOWS_DIR}/*.${ext}`));
   for (const file of [...present].sort()) {
-    const rule = rules.filter((candidate) => candidate.match(file)).pop();
+    const rule = rules.filter((candidate) => candidate.state(file) !== 'none').pop();
     if (rule === undefined) {
       return missing(`${CODEOWNERS_PATH} gives ${file} no owner`);
+    }
+    if (rule.state(file) === 'unknown') {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${CODEOWNERS_PATH} has the rule "${rule.pattern}", and GitHub's documentation does not say whether it matches ${file}, so usabl cannot confirm which rule owns that workflow. Check it by hand, or write the rule with a leading slash.`,
+      };
     }
     const problem = ownerProblem(rule);
     if (problem !== null) {
@@ -1099,14 +1131,13 @@ function codeownersOwnedPaths(raw: string): CodeownersPatterns {
   const reconcilable: string[] = [];
   const unreconcilable: string[] = [];
   for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+    // The policy check's line reader. A line it refuses refuses the whole file, which the code
+    // owner limits below report in the policy check's words, so it is skipped here.
+    const read = readCodeownersLine(line);
+    if (read.kind !== 'rule') {
       continue;
     }
-    const token = trimmed.split(/\s+/)[0];
-    if (token === undefined) {
-      continue;
-    }
+    const token = read.pattern;
     const hasGlob = /[*?[\]]/.test(token);
     // A separator at the start or middle anchors the pattern to the repo root (gitignore rule). A
     // token with no separator matches its name at any depth, which a plain prefix cannot express.
@@ -1121,12 +1152,62 @@ function codeownersOwnedPaths(raw: string): CodeownersPatterns {
 }
 
 // A CODEOWNERS path is covered when the guarded set contains it or an ancestor directory of it, so
-// any change under the owned path is one usabl also treats as a policy change.
+// any change under the owned path is one usabl also treats as a policy change. The guarded paths
+// are in the guard's canonical form; the empty string is the whole tree.
 function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): boolean {
-  return guardedSet.some((guarded) => {
-    const g = normalizePolicyPath(guarded);
-    return codeownersPath === g || codeownersPath.startsWith(`${g}/`);
-  });
+  return guardedSet.some((g) => g === '' || codeownersPath === g || codeownersPath.startsWith(`${g}/`));
+}
+
+// The paths a change under each guarded entry can touch: the files present and, for a literal
+// entry, the entry itself or a new file in its folder. The code owner limits are read for these.
+// A glob entry with no file present has no path to read them for, so it is returned on its own:
+// usabl cannot name the first file a pull request adds there, and cannot check its owner yet.
+// A literal guardedPaths entry with no file in the last commit (or, without git, on disk) guards
+// nothing today, which is how a typo, a wrong case, or a look-alike letter shows.
+async function guardedPathSamples(
+  deps: DoctorDeps,
+  entries: GuardedEntry[],
+  configured: ReadonlySet<string>,
+): Promise<{ samples: string[]; globsWithNoFile: string[]; literalsWithNoFile: string[] }> {
+  const samples: string[] = [];
+  const globsWithNoFile: string[] = [];
+  const globsWithFile = new Set<string>();
+  const literalsWithNoFile: string[] = [];
+  for (const entry of entries) {
+    const prefix = entry.path;
+    const present = await deps.fs.glob(prefix === '' ? ['**'] : [prefix, `${prefix}/**`]);
+    samples.push(...present);
+    if (!entry.glob) {
+      const folder =
+        prefix === '' || entry.text.endsWith('/') || present.some((path) => path.startsWith(`${prefix}/`));
+      samples.push(folder ? `${prefix === '' ? '' : `${prefix}/`}new-file` : prefix);
+      if (configured.has(entry.text) && entry.readWide === null && (await committedFiles(deps, prefix, present)).length === 0) {
+        literalsWithNoFile.push(entry.text);
+      }
+    } else if (present.length === 0) {
+      globsWithNoFile.push(entry.text);
+    } else {
+      globsWithFile.add(entry.text);
+    }
+  }
+  // A brace entry has one reading per expansion. It matches no file only when no expansion does.
+  return {
+    samples,
+    globsWithNoFile: [...new Set(globsWithNoFile)].filter((text) => !globsWithFile.has(text)),
+    literalsWithNoFile,
+  };
+}
+
+// The files under a literal entry in the last commit, or on disk when git cannot say.
+async function committedFiles(deps: DoctorDeps, prefix: string, present: string[]): Promise<string[]> {
+  if (deps.headFiles === undefined) {
+    return present;
+  }
+  try {
+    return (await deps.headFiles(prefix)).filter((path) => prefix === '' || path === prefix || path.startsWith(`${prefix}/`));
+  } catch {
+    return present;
+  }
 }
 
 // Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
@@ -1157,14 +1238,35 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
       // empty here so the always-guarded ledgers still reconcile.
     }
   }
-  const guardedSet = buildGuardedSet({ guardedPaths });
+  // The guard's own reading of each entry, so doctor compares what the guard guards.
+  const entries = readGuardedEntries({ guardedPaths });
+  const guardedSet = entries.map((entry) => entry.path);
   const { reconcilable, unreconcilable } = codeownersOwnedPaths(codeownersRaw);
   const uncovered = [...new Set(reconcilable)].filter(
     (path) => !isPolicyPathCovered(path, guardedSet),
   );
   const unverifiable = [...new Set(unreconcilable)];
-  if (uncovered.length > 0 || unverifiable.length > 0) {
-    const parts: string[] = [];
+  // The limits of `usabl enforce policy`, in its own words, so a scope doctor reads as wired is
+  // one the policy check can pass.
+  const { samples, globsWithNoFile, literalsWithNoFile } = await guardedPathSamples(deps, entries, new Set(guardedPaths));
+  const ownerLimits = readCodeownersLimits(codeownersRaw, samples);
+  const limits = ownerLimits.ok ? ownerLimits.reasons : [ownerLimits.message];
+  const notCheckableYet =
+    globsWithNoFile.length === 0
+      ? null
+      : `These guardedPaths globs match no file yet: ${globsWithNoFile.join(', ')}. usabl cannot check their code owners, so this is not checkable yet. The first file added under each needs a CODEOWNERS rule that names a @user login, or usabl enforce policy refuses the pull request that adds it.`;
+  // Entries the guard reads wide, and literal entries that name nothing, are drift: the guard
+  // guards more, or nothing, where the entry meant something else.
+  const entryProblems = [
+    ...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice)),
+    ...(literalsWithNoFile.length === 0
+      ? []
+      : [
+          `These guardedPaths entries match no file, so each guards nothing today: ${literalsWithNoFile.map((entry) => `"${operatorText(entry)}"`).join(', ')}. Check the spelling, the letter case, and look-alike letters, and name a file or folder that exists.`,
+        ]),
+  ];
+  if (uncovered.length > 0 || unverifiable.length > 0 || limits.length > 0 || entryProblems.length > 0) {
+    const parts: string[] = [...entryProblems];
     if (uncovered.length > 0) {
       parts.push(
         `CODEOWNERS gates ${uncovered.join(', ')}, but guardedPaths does not, so a change there reads as "no policy change" while GitHub still requires an owner. Add ${uncovered.join(', ')} to guardedPaths in ${deps.configPath}.`,
@@ -1175,12 +1277,23 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
         `CODEOWNERS uses pattern(s) usabl cannot reconcile against a guarded prefix (${unverifiable.join(', ')}); confirm guardedPaths covers what they own, since usabl cannot prove it.`,
       );
     }
+    if (limits.length > 0) {
+      parts.push(
+        `usabl enforce policy cannot pass a change to a guarded path here: ${limits.join('; ')}. Make the last rule that matches each guarded path name @user logins.`,
+      );
+    }
+    if (notCheckableYet !== null) {
+      parts.push(notCheckableYet);
+    }
     return {
       id: 'policy-scope',
       label: POLICY_SCOPE_LABEL,
       state: 'drifted',
       nextStep: parts.join(' '),
     };
+  }
+  if (notCheckableYet !== null) {
+    return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'unknown', nextStep: notCheckableYet };
   }
   return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'wired', nextStep: '' };
 }

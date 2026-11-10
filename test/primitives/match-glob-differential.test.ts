@@ -82,3 +82,68 @@ describe('matchGlob agrees with real Node glob', () => {
     });
   }
 });
+
+/**
+ * The guard matches a guardedPaths glob with Node's dot rule, so the files it lists at a git ref
+ * are the files Node's glob lists on the working tree. Dot-named files and folders are where the
+ * two rules differ, so this tree holds both.
+ */
+describe('matchGlob with the dot rule agrees with real Node glob', () => {
+  const DOT_FILES = [
+    'policy/rules.json',
+    'policy/.dot.json',
+    'policy/sub/b.json',
+    'policy/.hidden/a.json',
+    '.github/workflows/gate.yml',
+    '.github/workflows/.keep',
+    'a/.b/c/d.json',
+    'a/x/c/d.json',
+  ];
+  const DOT_PATTERNS = [
+    'policy/*.json',
+    'policy/**',
+    'policy/**/*.json',
+    '**/*.json',
+    '.github/workflows/*',
+    '.github/*/*.yml',
+    'a/**/c/*.json',
+    'policy/{rules,sub}.json',
+    'policy/{rules,sub}/**',
+    '*',
+  ];
+  let dotDir = '';
+  let dotFiles: string[] = [];
+
+  beforeAll(async () => {
+    dotDir = await mkdtemp(join(tmpdir(), 'usabl-glob-dot-'));
+    for (const file of DOT_FILES) {
+      const full = join(dotDir, file);
+      await mkdir(join(full, '..'), { recursive: true });
+      await writeFile(full, '');
+    }
+    dotFiles = DOT_FILES;
+  });
+
+  afterAll(async () => {
+    await rm(dotDir, { recursive: true, force: true });
+  });
+
+  for (const pattern of DOT_PATTERNS) {
+    it(`matches exactly the Node glob result for ${pattern}`, async () => {
+      const discovered: string[] = [];
+      for await (const entry of glob(pattern, { cwd: dotDir, withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          discovered.push(relative(dotDir, resolve(entry.parentPath, entry.name)));
+        }
+      }
+      for (const file of dotFiles) {
+        expect(matchGlob(pattern, file, { dot: false }), `${pattern} against ${file}`).toBe(discovered.includes(file));
+      }
+    });
+  }
+
+  it('keeps the default rule, which matches dot names', () => {
+    expect(matchGlob('policy/*.json', 'policy/.dot.json')).toBe(true);
+    expect(matchGlob('policy/*.json', 'policy/.dot.json', { dot: false })).toBe(false);
+  });
+});

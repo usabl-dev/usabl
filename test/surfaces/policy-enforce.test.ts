@@ -10,6 +10,7 @@ import {
   parseGithubReviews,
   parsePullRequestEvent,
   parseResultJson,
+  parseResultText,
   type PolicyEnforceDeps,
   type PolicyReview,
 } from '../../src/surfaces/policy-enforce.js';
@@ -60,6 +61,46 @@ describe('enforceAccessibility', () => {
         .exitCode,
     ).toBe(4);
   });
+
+  const noVerdict = (nothingToCheck: boolean, over: Partial<Result> = {}): Result =>
+    result({
+      verdict: null,
+      exitCode: 0,
+      accessibilityVerdict: null,
+      accessibilityExitCode: 0,
+      coverage: { changedFiles: ['src/App.tsx'], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck },
+      ...over,
+    });
+
+  it('passes an idle run, where nothing was to check', () => {
+    const outcome = enforceAccessibility(noVerdict(true));
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.message).toContain('idle');
+  });
+
+  it('does not read no verdict with exit 0 as idle when something was to check', () => {
+    // The engine writes no verdict with exit 0 only when no UI file changed. A Result that says a
+    // UI file changed and still carries no verdict proved nothing, so it must block, the way the
+    // pull request comment and the Stop hook read it.
+    const outcome = enforceAccessibility(noVerdict(false));
+
+    expect(outcome.exitCode).toBe(4);
+    expect(outcome.message).not.toContain('idle');
+    expect(outcome.message).toContain('no verdict');
+  });
+
+  it('blocks the same Result read from a document, as CI reads it', () => {
+    const document = JSON.stringify(noVerdict(false));
+
+    expect(enforceAccessibility(parseResultText(document)).exitCode).toBe(4);
+  });
+
+  it('keeps an approval hold over an idle scan as idle on the accessibility side', () => {
+    const outcome = enforceAccessibility(noVerdict(true, { verdict: 'approval_required', exitCode: 2 }));
+
+    expect(outcome.exitCode).toBe(0);
+  });
 });
 
 describe('enforcePolicy', () => {
@@ -87,15 +128,15 @@ describe('enforcePolicy', () => {
     const table = (ref: string): Record<string, string | null> => (ref === 'origin/main' ? trusted : head);
     return {
       show: async (ref, path) => table(ref)[path] ?? null,
-      lsFiles: async (ref, prefix) => {
-        const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+      lsFilesUnder: async (ref, prefixes) => {
+        const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));
         return Object.keys(table(ref))
           .filter((path) => {
             const value = table(ref)[path];
             if (value === null) {
               return false;
             }
-            return path === normalized || path.startsWith(`${normalized}/`);
+            return bases.some((base) => base === '' || path === base || path.startsWith(`${base}/`));
           })
           .sort();
       },
@@ -252,7 +293,7 @@ describe('enforcePolicy', () => {
             shown.push(`${ref}:${path}`);
             return git.show(ref, path);
           },
-          lsFiles: (ref, prefix) => git.lsFiles(ref, prefix),
+          lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
         },
       }),
     );
@@ -313,6 +354,237 @@ describe('enforcePolicy', () => {
     );
   });
 
+  describe('code owners by the last matching rule', () => {
+    const aliceApproved = async (): Promise<PolicyReview[]> => [
+      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+    ];
+
+    it('passes when a team line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ @usabl-dev/docs\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
+    it('passes when a later user line replaces an earlier team line', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '* @usabl-dev/everyone\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('passes when an email line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ docs@example.com\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('passes when an owner-less line matches no diverged guarded path', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\ndocs/generated/\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(0);
+    });
+
+    it('still refuses when the last matching rule names a team', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n.usabl-evidence.json @usabl-dev/owners\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({
+        exitCode: 2,
+        message:
+          'the last CODEOWNERS rule that matches .usabl-evidence.json names a team or an email, and usabl enforce policy accepts approval only from a user login',
+      });
+    });
+
+    it('still refuses when the last matching rule names a user and a team', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice @usabl-dev/owners\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('still refuses when the last matching rule names an email', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n*.json owners@example.com\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('still refuses when the last matching rule names no owner', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\n/.usabl-evidence.json\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out).toEqual({
+        exitCode: 2,
+        message: 'the last CODEOWNERS rule that matches .usabl-evidence.json names no owner',
+      });
+    });
+
+    // A gate change, with the guarded folder owned by a team and a later wildcard rule for its
+    // parent folder. GitHub documents that docs/* does not match nested files, so the last match
+    // for src/gate/index.ts is the team rule, and alice's approval cannot clear it.
+    const gateChange = (codeowners: string): Parameters<typeof policyGit>[0] => ({
+      codeowners,
+      trusted: { 'usabl.config.json': '{"guardedPaths":["src/gate/"]}', 'src/gate/index.ts': 'gate\n' },
+      head: {
+        'usabl.config.json': '{"guardedPaths":["src/gate/"]}',
+        '.usabl-evidence.json': '{"version":1,"entries":[]}',
+        'src/gate/index.ts': 'changed gate\n',
+      },
+    });
+
+    it('refuses when a later wildcard rule for a parent folder does not reach the team-owned file', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: gateChange('/src/gate/ @org/gate-team\nsrc/* @alice\n'), listReviews: aliceApproved }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/gate/index.ts');
+      expect(out.message).toContain('names a team or an email');
+    });
+
+    it('refuses when the last rule that could match uses a form GitHub does not document for that path', async () => {
+      // A slash-free name with no trailing slash, such as `gate`, may or may not own the files
+      // in a folder of that name. GitHub's examples do not settle it, so the last match is unknown.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: gateChange('/src/gate/ @alice\ngate @bob\n'),
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc' },
+          ],
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/gate/index.ts');
+      expect(out.message).toContain('gate');
+      expect(out.message).toContain('cannot tell');
+    });
+
+    it('refuses when a later slash-free wildcard rule may own a folder whose name it matches', async () => {
+      // GitHub's documentation does not say whether *.js owns src/lib.js/index.ts. gitignore says
+      // it does, and then the team owns the file, so alice's approval cannot clear it.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: {
+            codeowners: '/src/ @alice\n*.js @org/js\n',
+            trusted: { 'usabl.config.json': '{"guardedPaths":["src/"]}', 'src/lib.js/index.ts': 'one\n' },
+            head: {
+              'usabl.config.json': '{"guardedPaths":["src/"]}',
+              '.usabl-evidence.json': '{"version":1,"entries":[]}',
+              'src/lib.js/index.ts': 'changed\n',
+            },
+          },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('src/lib.js/index.ts');
+      expect(out.message).toContain('cannot tell');
+    });
+
+    it('passes when the form GitHub does not document comes before the last match', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: gateChange('gate @bob\n/src/gate/ @alice\n'), listReviews: aliceApproved }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
+    const hashChange = (codeowners: string): Parameters<typeof policyGit>[0] => ({
+      codeowners,
+      trusted: { 'usabl.config.json': '{"guardedPaths":["src/"]}', 'src/file#1.ts': 'one\n' },
+      head: {
+        'usabl.config.json': '{"guardedPaths":["src/"]}',
+        '.usabl-evidence.json': '{"version":1,"entries":[]}',
+        'src/file#1.ts': 'changed\n',
+      },
+    });
+
+    it('refuses the whole file when a # sits inside a pattern', async () => {
+      // Cutting the line at that # would read `/src/file` with no owner, which matches nothing, and
+      // leave `/src/ @alice` as the last match. GitHub may read the # as part of the pattern.
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: hashChange('/src/ @alice\n/src/file#1.ts @org/team\n'), listReviews: aliceApproved }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('#');
+      expect(out.message).toContain('/src/file#1.ts');
+    });
+
+    it('reads a # after whitespace as a comment, as in GitHub\'s example', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({ gitOver: hashChange('*.js @bob\n/src/ @alice #This is an inline comment.\n'), listReviews: aliceApproved }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
+
+    it('still refuses the whole file on a pattern it cannot parse, even after a matching user line', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice\ndocs/**/*.md @usabl-dev/docs\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('docs/**/*.md');
+    });
+
+    it('still refuses the whole file on an owner that is not a user, a team, or an email', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: 'docs/ alice\n.usabl-evidence.json @alice\n' },
+          listReviews: aliceApproved,
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('alice');
+      expect(out.message).toContain('not a @user login, an @org/team, or an email');
+    });
+  });
+
   it('fails closed and names a CODEOWNERS pattern it cannot interpret', async () => {
     const out = await enforcePolicy(
       policyResult,
@@ -357,10 +629,10 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       pr: { authorLogin: over.author ?? 'eparenti', headSha: head },
       git: {
         show: async (ref, path) => table(ref)[path] ?? null,
-        lsFiles: async (ref, prefix) => {
-          const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+        lsFilesUnder: async (ref, prefixes) => {
+          const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));
           return Object.keys(table(ref))
-            .filter((path) => path === normalized || path.startsWith(`${normalized}/`))
+            .filter((path) => bases.some((base) => base === '' || path === base || path.startsWith(`${base}/`)))
             .sort();
         },
       },

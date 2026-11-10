@@ -627,6 +627,7 @@ export interface GitReader {
   diffNameOnly(ref: string): Promise<string[]>; // merge-base..HEAD changed files
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
+  lsFilesUnder(ref: string, prefixes: string[]): Promise<string[]>; // one -z listing; '' is the whole tree
   headRef(): Promise<string>;
 }
 
@@ -2446,6 +2447,10 @@ deterministic evidence, then the PatternFly why/fix when both axe and the rulepa
 the same control. Evidence class outranks layer because only deterministic evidence gates,
 so a preview Draft must never be the survivor that represents a deterministic barrier.
 Ranking by class first also makes the choice independent of the order Drafts arrived in.
+The later tie-breaks (element path, layer name, and the rest of the Draft) compare UTF-16 code
+units, never the machine's locale. A locale compare sorts "a" before "B", where code units put
+"B" first, and it reads two spellings of one accented letter as equal, which would leave the
+choice to arrival order. The tracked identities of the debt history are ordered the same way.
 
 Only deterministic Drafts are counted against the floor, because only deterministic Drafts
 are what `usabl baseline` counted when it wrote the floor.
@@ -2511,6 +2516,10 @@ renders again it comes back as a new finding. It blocks a later change only when
 coverage reaches the screen, and that change may be one that did not touch the content. It never reads as a pass of that accessibility barrier for good. Point
 `reachedWhen` at an element of the content itself, not the shell, so a screen whose content did
 not mount never holds its signal.
+
+A floor entry with count 0 accepts no accessibility barrier, so its absence pays nothing down: it
+is never claimed `fixed`, it is not listed in `floorUnconfirmed`, and an accessibility barrier seen
+there is `new`.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -2926,6 +2935,110 @@ waivers, and rules are read via `git show <ref>:<path>` from the trusted base, n
 from the PR working tree. Combined with CODEOWNERS + branch protection (when the host allows it), a PR author
 cannot influence what policy they are judged against.
 
+`usabl enforce policy` lists the PR head and the trusted ref once each, with `-z`, and selects
+the guarded files with the same matcher the local guard uses (see "Guarded path matching"). For
+each guarded file that differs, the owners come from the last `CODEOWNERS` rule that matches it.
+The check refuses a path no rule matches, a path whose last rule names no owner, and a path whose
+last rule names an org team or an email, because usabl cannot resolve team membership or match
+an email to a login. It refuses the whole file on a pattern it cannot parse (`**`, `!`, `[ ]`,
+`\`, or a wildcard before the last segment), on an owner that is not a `@user`, an `@org/team`, or
+an email, and on a `#` inside a pattern or owner (one that does not follow whitespace), because
+GitHub may read such a line another way, so the last match is unknown. A `#` at the start of a
+line or after whitespace starts a comment. A team or email line that is not the last match for a
+changed guarded path does not block. Every other path needs an approval of the current head from
+one of its users who is not the author. `usabl doctor` reports the same limits in the same words
+under policy scope.
+
+For the forms GitHub's CODEOWNERS documentation shows, a pattern matches the way the
+documentation says, and a test holds every documented example usabl supports. A leading slash
+anchors at the root, a slash-free pattern matches at any depth, and a trailing slash owns
+everything under the folder. A wildcard in the last segment of a pattern with a slash does not
+match through a parent folder: `docs/*` matches `docs/a.md` and not `docs/b/c.md`. A form the
+documentation does not show is read every way it could be read, and the check refuses a path when
+those readings disagree for it and that rule could be its last match. The open readings are: a
+pattern with an inner slash and no leading slash (`src/gate/`) may anchor at the root or not; a
+slash-free pattern with no trailing slash, a name (`gate`) or a wildcard (`*.js`), may or may not
+own a folder whose name it matches, such as `src/lib.js/`; and `?` may be a wildcard or a literal.
+The refusal names the pattern. Doctor reads a present workflow file whose last match is unknown as
+unknown. The policy check and doctor read each line with one line reader.
+
+### Guarded path matching
+
+Every `guardedPaths` entry is first read in one canonical form, the form git prints a path in. A
+leading `./` and every `.` segment are dropped, repeated `/` are collapsed, a trailing `/` is
+dropped, a `..` segment takes away the segment before it, and `.` alone is the whole tree. So
+`./src/gate/`, `src/gate//`, and `src/gate` guard the same files. Every later step reads that
+form. Nothing compares the raw entry text with git output.
+
+A brace group is expanded before anything else, as Node's glob does, and each expansion is put
+through the canonical form and the matcher on its own. So a `.` or `..` inside a brace alternative
+is read as the path it names: `{.,b}/y.json` guards `y.json` and `b/y.json`, and
+`{policy,b/..}/rules.json` guards `policy/rules.json` and `rules.json`.
+
+The guard never throws because of what an entry says, and never guards less because it cannot
+read one. An expansion in a form the matcher cannot evaluate the way Node's glob does is read wide:
+a brace range such as `{1..3}` or `{a..c}`, `?`, `[ ]`, `( )`, a `\` escape, or a nested or
+unbalanced brace guards the literal folder above the first segment the matcher cannot evaluate, so
+`policy/rule{1..3}.json` guards `policy/`. An expansion with no such folder guards the whole tree:
+one that starts with `/`, one with a `..` that leaves the root, and one with a `..` anywhere after
+a wildcard, since a wildcard can stand for any number of folders and a later `..` can climb above
+any of them, so `policy/*/../../x.json` guards the whole tree. The same reading is used at the
+trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's approval,
+and the pull request that repairs the entry can merge with one. `usabl enforce policy` names each
+entry read this way, in every outcome, and says how to write it; `usabl doctor` does too. A local
+run has no field for that sentence, so its Result names only the changed files.
+
+Config load refuses every form the guard can only read wide, so a new config never holds one. It
+refuses the glob forms above in every glob list and says to list the alternatives of a range with
+commas. In `guardedPaths` it also refuses an entry that starts with `/` (and shows the same path
+without it), one with a `..` that leaves the root, one with a `..` after a wildcard, and one with a
+`.` or `..` segment inside a brace alternative, and says how to write each. Entries that loaded and
+worked before still load and read in canonical form: `./src/gate/`, `src/gate//`, `.`, and
+`a/../b` outside braces and before any wildcard. An older config, or a trusted ref's config, can
+hold a refused form, and the guard reads it wide as above. An empty entry is the whole tree.
+
+The `requirements` value names a folder, and the requirements loader accepts any folder name, such
+as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
+glob rule applies to them. A `guardedPaths` entry with the same text as `requirements` is read both
+ways, as that path and as a glob, and the guard guards what either reading matches, so
+`requirements: "policy/*"` with `guardedPaths: ["policy/*"]` guards `policy/rule1.json`.
+
+Config load refuses a `guardedPaths` entry with white space at the start or end, and shows the
+entry in quotes. The limit that remains: an entry that is a valid path but names nothing, such as
+a typo, a wrong letter case, or a look-alike letter, guards nothing, in CI and locally. `usabl
+doctor` is where it shows: it reports a literal entry that matches no file in the last commit as
+guarding nothing today.
+
+One matcher selects the guarded files from a list of paths. A literal entry matches itself and
+every file under it, as a folder; the whole tree matches every file. A glob entry (one that holds
+`*` or a brace group) matches the files it names and every file under a folder it names, with
+Node's dot rule: a wildcard does not match a name that starts with a dot, as `fs.glob` does. A dot
+written in the pattern still matches. So a dot-named file under a glob entry, such as
+`policy/.override.json` under `policy/*.json`, is not guarded, locally or in CI. Under a literal
+entry a dot-named file is guarded, because git lists it.
+
+The two places select from different lists:
+
+- `usabl enforce policy` lists the trusted ref and the PR head once each with
+  `git ls-tree -r -z`, and the matcher selects from those two listings. It reads no working tree.
+- The local guard lists the trusted ref and HEAD the same way and selects with the same matcher.
+  It then adds, as found, what `fs.glob` finds on the working tree for each entry and for
+  everything under it. That adds files on disk that no commit holds, such as a new untracked file
+  under a guarded folder. The HEAD listing holds a file deleted locally, so that file is still
+  compared.
+
+For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
+mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
+selects on the working tree. For a literal folder the matcher also selects the dot-named files
+under it, which `fs.glob` skips.
+
+A literal entry that matches nothing is compared as its own canonical path, so a guarded file
+absent everywhere is still checked. A glob entry is never compared as a path, and neither is the
+whole tree. A glob entry that starts with a wildcard, such as `**/x.json`, lists the whole tree at
+each ref. If that listing passes the read limit, the run stops with no verdict and says to start
+the entry with a folder name. For a clean tree in a repository whose names are plain ASCII, the
+policy hash in a receipt is the same as before this matcher.
+
 ### Config-guards-itself
 
 Check the config file's own integrity against the anchor before trusting its contents
@@ -3212,7 +3325,10 @@ lines.
 - Comment: `usabl comment` reads a Result from stdin and prints the PR comment Markdown.
 - Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref` read
   Result JSON from stdin. They project CI status. They never call the gate and never mint a
-  verdict. GitHub stays out of `run()`.
+  verdict. GitHub stays out of `run()`. `enforce accessibility` exits 0 on no accessibility
+  verdict only when the Result also says nothing was to check (`coverage.nothingToCheck` is
+  exactly true), which is the idle run. No verdict with exit 0 on any other Result exits 4 with
+  "accessibility: no verdict", the way the comment and the Stop hook read it.
 - Both read the Result as a document someone else wrote, so both check the whole document against
   the Result contract before they use any of it: every list is a list, every count is a whole
   number, every enum value is one of its values, and every nested object has the fields the
@@ -3265,6 +3381,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
     fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
     commit" step inside the untrusted frame. It does not block.
+  - The guard or the session pin computation fails for any other reason, such as a git listing
+    past the read limit: the hook cannot tell whether guarded policy changed, so it blocks with
+    "NOT verified - approval required: usabl could not tell whether guarded policy files changed,
+    because the guard failed ..." and the error's first line inside the untrusted frame, as it
+    blocks for diverged guarded files. Before, such a failure fell to the internal error allow
+    below.
+  - Reading or checking the stored receipt fails: the receipt only offers a fast allow, so the
+    hook drops the fast path and runs the full check, and the decision is the run's.
   - Neither HEAD nor the working tree has the config, but this session already recorded pins for
     this repository root: an earlier stop read a committed config, so the config was removed and
     committed during the session. That is drift, and the stop goes through the drift block, with

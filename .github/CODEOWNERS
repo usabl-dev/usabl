@@ -20,6 +20,11 @@
 # untrusted-manifest overlay. A change here can weaken the trust boundary.
 /src/run.ts          @eparenti
 
+# The verdict rules outside the gate folder: the verdict precedence and exit codes,
+# and the CI approval decision for guarded paths. Both are in guardedPaths too.
+/src/coverage/completeness.ts    @eparenti
+/src/surfaces/policy-enforce.ts  @eparenti
+
 # Engine configuration and the CI workflows that run the gate. A workflow edit
 # could disable enforcement, so an owner reviews these too.
 /usabl.config.json   @eparenti

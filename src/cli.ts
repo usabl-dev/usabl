@@ -116,7 +116,10 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     const outcome = await enforcePolicy(result, {
       trustedRef: opts.trustedRef,
       pr,
-      git: { show: (ref, path) => git.show(ref, path), lsFiles: (ref, prefix) => git.lsFiles(ref, prefix) },
+      git: {
+        show: (ref, path) => git.show(ref, path),
+        lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
+      },
       listReviews: () => listPullReviews(pr.number),
     });
     process.stdout.write(`${outcome.message}\n`);
@@ -718,6 +721,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // The same read "usabl check" binds into a receipt, so doctor reports what the run would see.
       readScannerVersions,
       probeChromiumSandbox: () => probeChromiumSandbox(),
+      // Read-only: a git listing of the last commit, so doctor can say a guarded entry names nothing.
+      headFiles: (prefix) => makeGitReader().lsFilesUnder('HEAD', [prefix]),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
       sessionFile: {
         ignoreState: (path) => gitIgnoreState(process.cwd(), path),

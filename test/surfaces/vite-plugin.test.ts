@@ -1665,6 +1665,7 @@ function makeDeps(): Deps {
       diffNameOnly: async () => [],
       lsTree: async () => ({}),
       lsFiles: async () => [],
+      lsFilesUnder: async () => [],
       headRef: async () => 'HEAD',
     },
     fs: {

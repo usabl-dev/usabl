@@ -14,7 +14,7 @@ import { everyScannableFile, EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { computePolicyHash } from '../evidence/receipt.js';
 import { run } from '../run.js';
-import { buildGuardedSet, expandGuardedSet } from '../trust/guard.js';
+import { expandConfigGuardedSet } from '../trust/guard.js';
 import { buildRecord, HISTORY_BRANCH, type HistoryRecord } from './record.js';
 
 // The floor run() uses when there is none, so a record of a run with no floor carries the same
@@ -66,7 +66,7 @@ export async function recordMainScan(
     return refused(4, `${EVIDENCE_FLOOR_PATH} could not be read.`, result);
   }
 
-  const guarded = await expandGuardedSet(deps, buildGuardedSet(config));
+  const guarded = await expandConfigGuardedSet(deps, config);
   const [commit, sourceTree, policyHash] = await Promise.all([
     deps.git.headRef(),
     deps.git.writeTree(),
