@@ -2253,7 +2253,7 @@ usabl.routes.json      <span class="c">// the route manifest</span></code></pre>
     <figcaption style="color:var(--on-night-2)"><b style="color:var(--on-night)">Fig. 14</b> Splitting the jobs separates the untrusted execution from the trusted decision. Job 2 runs pull request code, so it is fenced to the <code>pull_request</code> event and holds no secret. Job 3 judges the built output with the engine from the pinned commit, in a sandboxed browser that may reach only the trusted origins. Job 5 decides policy from base code only. Job 6 exists because of a GitHub behaviour that turns a skipped job into a green check.</figcaption>
   </figure>
 
-  <p>All actions in the generated workflow are pinned to commit SHAs, and <code>usabl install --ci</code> deliberately writes the placeholder <code>PIN_TO_A_TRUSTED_USABL_COMMIT</code> rather than a floating tag. An operator has to replace it with a real 40 character SHA. The tool refuses to make the insecure choice easy.</p>
+  <p>All actions in the generated workflow are pinned to commit SHAs, and so is the engine. <code>usabl install --ci</code> writes the commit its own build came from, read from <code>dist/build-info.json</code>, and only when that is a full 40 character SHA from a clean tree, never a floating tag or branch. Without one it writes the placeholder <code>PIN_TO_A_TRUSTED_USABL_COMMIT</code>, says why, and names the line to edit. A placeholder, or a commit that is not on <code>usabl-dev/usabl</code>, fails the engine checkout, so a wrong pin blocks the gate instead of opening it.</p>
 
   <h3>Session pins</h3>
 
