@@ -847,6 +847,17 @@ describe('loadConfig', () => {
     expect(warnings).toHaveLength(2);
   });
 
+  // A path given with --config that does not exist was told to "pass --config <path>", which it
+  // already did. The message now says to check that path.
+  it('tells a missing --config file to check the path, not to pass --config', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'other.json');
+    const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
+    expect(message).toContain(`${path} not found`);
+    expect(message).toContain('Check the path given to --config');
+    expect(message).not.toContain('or pass --config <path>');
+  });
+
   // A config with no UI globs reads no change as a UI change, so every run said nothing to check
   // and exited 0, which reads like a pass on a run that looked at nothing.
   it('refuses empty uiFileGlobs when there is no docs manifest', async () => {

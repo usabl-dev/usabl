@@ -439,7 +439,7 @@ function refusedRun(result: Result): BaselineOutcome | null {
       wrote: false,
       message: [
         'refused: no UI files matched uiFileGlobs for baseline.',
-        'set uiFileGlobs in usabl.config.json to match your UI source files, such as',
+        'set uiFileGlobs in usabl.config.json, or in the file --config names, to match your UI source files, such as',
         'src/**/*.tsx, then run usabl baseline again.',
       ].join('\n'),
       entryCount: 0,

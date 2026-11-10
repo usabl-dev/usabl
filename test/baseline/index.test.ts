@@ -495,6 +495,18 @@ describe('runBaseline', () => {
     expect(result.message).toContain('usabl baseline again');
   });
 
+  // A run with --config reads another file, so naming only usabl.config.json sent the reader to
+  // the wrong file.
+  it('names the file --config gives as well, when no UI files match', async () => {
+    const config: UsablConfig = testConfig({ uiFileGlobs: ['src/**/*.tsx'] });
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ README: '# docs\n' }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+    const result = await runBaseline(deps, config, new MemoryBaselineFs());
+    expect(result.message).toContain('or in the file --config names');
+  });
+
   it('refuses with exit 3 and writes nothing when the run reports a coverage gap', async () => {
     const config = testConfig();
     const deps = makeFakeDeps({

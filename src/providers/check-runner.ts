@@ -83,10 +83,13 @@ function urlFix(screen: { id: string; url: string }, config: UsablConfig): strin
 // Why a screen did not open. Nothing listening at the address is the first failure a new user
 // meets, because the app's dev server is not running yet, so that case names the fix.
 function openFailureReason(screen: { id: string; url: string }, config: UsablConfig, message: string): string {
-  if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/.test(message)) {
+  const refused = /(?:net::)?ERR_CONNECTION_REFUSED|ECONNREFUSED/.exec(message);
+  if (refused !== null) {
+    // The browser's message repeats the url and adds a call log. The reason names the url once
+    // and keeps only the browser's error code.
     return (
       `screen failed to open: nothing answered at ${screen.url}. Start the app (for example its dev server), ` +
-      `${urlFix(screen, config)} ${message}`
+      `${urlFix(screen, config)} The browser said ${refused[0]}.`
     );
   }
   return `screen failed to open: ${message}`;

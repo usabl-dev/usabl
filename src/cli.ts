@@ -78,8 +78,10 @@ import { formatBrief } from './output/brief.js';
 // carry a query, so it is never printed and never leaves the process.
 const warnedConfigUrls = new Set<string>();
 
+const DEFAULT_CONFIG_PATH = 'usabl.config.json';
+
 export async function loadConfig(
-  path = 'usabl.config.json',
+  path = DEFAULT_CONFIG_PATH,
   warn: (line: string) => void = (line) => {
     process.stderr.write(`${line}\n`);
   },
@@ -93,8 +95,14 @@ export async function loadConfig(
     raw = await readFile(path, 'utf8');
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
-      // The first error a new user meets. Name the command that writes the file.
-      throw new Error(`${path} not found. Run "usabl init" to draft it, or pass --config <path>.`);
+      // The first error a new user meets. Name the command that writes the file. A path other than
+      // the default came from --config, so telling that reader to pass --config would repeat what
+      // they did.
+      throw new Error(
+        path === DEFAULT_CONFIG_PATH
+          ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
+          : `${scrubString(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`,
+      );
     }
     throw error;
   }

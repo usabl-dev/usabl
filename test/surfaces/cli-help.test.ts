@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main } from '../../src/cli.js';
-import { CLI_COMMANDS } from '../../src/surfaces/cli-commands.js';
+import { CLI_COMMANDS, preflightCli } from '../../src/surfaces/cli-commands.js';
 import { INSTALL_TARGET_FLAGS } from '../../src/surfaces/cli.js';
 
 describe('usabl help', () => {
@@ -136,6 +136,28 @@ describe('usabl help', () => {
     for (const flag of INSTALL_TARGET_FLAGS) {
       expect(install?.flags.map((entry) => entry.name)).toContain(flag);
     }
+  });
+
+  // The check above proves a flag is described somewhere, not that it is described for the command
+  // that reads it. This one runs every flag through every command: a command takes exactly the
+  // flags its table entry lists and refuses every other one, by name, so a flag that is ignored by a
+  // command, such as --app given to check, is refused instead of read as working.
+  it('accepts each flag on exactly the commands whose table lists it', () => {
+    const takesValue = new Map<string, boolean>();
+    for (const command of CLI_COMMANDS) {
+      for (const flag of command.flags) takesValue.set(flag.name, takesValue.get(flag.name) === true || flag.value !== undefined);
+    }
+    for (const command of CLI_COMMANDS.filter((entry) => entry.name !== 'help')) {
+      const listed = new Set(command.flags.map((flag) => flag.name));
+      for (const [flag, valued] of takesValue) {
+        if (flag === '--help' || flag === '-h') continue;
+        const outcome = preflightCli([command.name, flag, ...(valued ? ['x'] : [])]);
+        const refusedForFlag = outcome !== null && outcome.kind === 'refuse' && outcome.message.includes(`does not take ${flag}`);
+        expect(refusedForFlag, `${command.name} ${flag}: listed ${String(listed.has(flag))}`).toBe(!listed.has(flag));
+      }
+    }
+    const check = preflightCli(['check', '--app', 'packages/web']);
+    expect(check?.kind === 'refuse' ? check.message : '').toContain('check does not take --app');
   });
 
   it('refuses a flag the command does not take and names the help command', async () => {
