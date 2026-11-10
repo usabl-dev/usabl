@@ -4366,7 +4366,7 @@ then gate the scan with the real `gate()` against an empty floor. Load the page 
 edit after readiness and before the transcript walk and every provider, scan it, and gate it
 against a floor of what the clean scan found. Each finding the gate calls `new` and deterministic
 is located on the mutated page, through every draft the gate collapsed into it, against the
-elements the edit changed. The outcome, in this order:
+elements the edit changed.
 
 A new finding is dropped when every draft behind it has a rule and element path the clean scan
 already reported: that is a finding the page already had, moved to a new identity because the edit
@@ -4383,12 +4383,10 @@ The outcome, in this order:
   finding from an expected rule was already on a target element in the clean scan, so the defect
   was there before the edit.
 - `unreadable`: the scans cannot say. Either scan had a coverage gap, including a screen marked
-  unseen. The edit was not made. The change did not hold through the scan: a markup change was gone
-  at the second read, a key aimed at the element got past the swallow, or focus reached the element
-  in a way the edit does not stop. The gate did not verify the mutated scan, and no new finding
-  explains it. Every new gating finding is `unverified`. Or the only definite new findings are away
-  from the change, for an entry not reported on the screen: the two loads differ, so they prove
-  nothing about the defect.
+  unseen. The edit was not made, or did not take hold when it was read back at once. The gate did
+  not verify the mutated scan, and no new finding explains it. Every new gating finding is
+  `unverified`. Or the only definite new findings are away from the change, for an entry not
+  reported on the screen: the two loads differ, so they prove nothing about the defect.
 - `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
   it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
@@ -4398,6 +4396,14 @@ The outcome, in this order:
 - `preview only`: nothing new gates, and a preview finding is new.
 - `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
   the reason says so.
+
+The second read comes last. It finds that the change did not hold through the scan when a markup
+change is gone, a key aimed at the element got past the swallow, or focus reached the element in a
+way the edit does not stop. Then `caught` and `caught by another rule` stand, because a new definite
+failure, where the entry says it reports, was measured while the defect was there.
+The row's reason notes that the change did not hold to the end of the scan, and why. Every other
+outcome becomes `unreadable` with that reason, because a miss or a preview finding then proves
+nothing: the checks may never have seen the defect.
 
 **Two levels.** Level 1 runs each entry on its own fixture page, served on loopback from strings
 in `level1.ts`, with no app and no config. The flow and voice pages bring their own requirements.
@@ -4428,13 +4434,14 @@ the stop hook, the overlay, the CI judge, the pull request comment, checkPage, o
 imports reaches it, and nothing on those paths reads the attestation.
 `test/measure/sensitivity/isolation.test.ts` pins both.
 
-**Level 1, measured.** On the fixture pages the catalog caught 24 of the 27 defects it could
+**Level 1, measured.** On the fixture pages the catalog caught 25 of the 28 defects it could
 make and read. Two were missed: `control-out-of-tab-order` (a visible button with `tabindex="-1"`;
 no shipped rule reports a control Tab never reaches) and `menu-does-not-open-on-enter` (the menu
 probe opens a menu with a click, so no check presses Enter on the toggle). `voice-live-region-broken`
 was preview only, as voice findings are until a class is promoted. `menu-toggle-state-removed` was
-unreadable: the menu probe clicks the toggle, the fixture's script sets `aria-expanded` again, and
-the second read finds the change gone. `test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
+caught by `pf-kebab-expanded-state`, and its row notes that the change did not hold to the end of
+the scan: the menu probe clicks the toggle, and the fixture's script sets `aria-expanded` again.
+`test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
 
 **Limits.** A catch on the fixture pages is a catch on that markup. On a team's app, a mutation
 can land on an element where it creates no accessibility barrier for users, for example a live

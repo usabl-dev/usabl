@@ -43,15 +43,15 @@ Add `--json` to print the whole attestation instead of the summary.
 The command writes `.usabl/sensitivity.json` and prints a short summary, for example:
 
 ```text
-On the fixture pages: caught 24 of 27 catalog defects.
-  caught 24, caught by another rule 0, missed 2, preview only 1, not applicable 0, unreadable 1
+On the fixture pages: caught 25 of 28 catalog defects.
+  caught 25, caught by another rule 0, missed 2, preview only 1, not applicable 0, unreadable 0
   Missed:
     control-out-of-tab-order on sensitivity-basic. Expected: no shipped rule. ...
 ```
 
 The file holds the engine and scanner versions, the catalog hash, the date, and one row per defect
 and screen: the outcome, the rules that reported it, and the reason for any outcome other than
-caught. It also lists every shipped rule the catalog does not exercise, with the reason. The command
+caught. A caught row has a reason only when the change did not hold to the end of the scan. It also lists every shipped rule the catalog does not exercise, with the reason. The command
 exits 0 whenever it ran and wrote the file, even when defects were missed. It exits 4 only when it
 could not run, and 2 when a flag or the config is wrong.
 
@@ -73,18 +73,25 @@ could not run, and 2 when a flag or the config is wrong.
   table defect, or the defect was already on the element before the change.
 - **unreadable**: the scans cannot say either way. One of these happened:
   - one of the two scans had a coverage gap, or the screen was not seen;
-  - the change could not be made;
-  - the change did not hold through the scan: the page put it back, a key got to the page before
-    the change could cancel it, or focus reached the element in a way the change does not stop;
+  - the change could not be made, or did not take hold when it was read back at once;
+  - the change did not hold through the scan, and nothing was caught: see below;
   - the gate did not verify the changed scan, and no new finding explains why;
   - every new finding that would block is one the checks could not confirm;
   - the only new findings are away from the change, so the page differed between its two loads;
   - on your app, the design requirements could not be loaded, for the flow and voice defects.
 
+After the scan, the change is read back a second time. It did not hold through the scan when the
+page put it back, a key got to the page before the change could cancel it, or focus reached the
+element in a way the change does not stop. Then a **caught** or **caught by another rule** result
+stands, because the new definite failure was found where the rule reports it, while the defect was
+there.
+Its reason says the change did not hold to the end of the scan, and why. Any other result becomes
+**unreadable**, because a miss then proves nothing: the checks may never have seen the defect.
+
 Two more rules keep old findings out. A finding the page already had is not new, even when the
 change moved it to a new name. And only a definite failure counts as a catch.
 
-"Caught 24 of 27" counts only the defects that were made and read. Not applicable and unreadable
+"Caught 25 of 28" counts only the defects that were made and read. Not applicable and unreadable
 rows are listed, never counted as caught. A level where nothing could be made and read is reported
 as measuring nothing, not as a pass.
 
@@ -99,10 +106,10 @@ On the fixture pages, two defects are missed:
 
 `voice-live-region-broken` is preview only, as expected for voice findings today.
 
-`menu-toggle-state-removed` is unreadable. The change removes `aria-expanded` from the menu toggle,
-and a rule reports it. Then the menu probe clicks the toggle, and the page's own script sets
-`aria-expanded` again. By the end of the scan the change is gone, so the measurement cannot say
-whether the checks saw the defect.
+`menu-toggle-state-removed` is caught. The change removes `aria-expanded` from the menu toggle, and
+`pf-kebab-expanded-state` reports it. Then the menu probe clicks the toggle, and the page's own
+script sets `aria-expanded` again. By the end of the scan the change is gone, so the row's reason
+says so. The catch stands, because the rule reported the defect while it was there.
 
 ## Limits
 
