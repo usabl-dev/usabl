@@ -65,6 +65,16 @@ export default defineConfig({
     expect(config.mappings).toContainEqual({ prefix: '@/', target: 'src/' });
   });
 
+  it('reads a vite resolve.alias key that is not quoted', async () => {
+    const config = await loadAliasConfig(
+      fsOf({ 'vite.config.ts': "export default { resolve: { alias: { tests: './src/tests', $lib: '/src/lib' } } };" }),
+    );
+    expect(config.mappings).toEqual([
+      { prefix: 'tests/', target: 'src/tests/' },
+      { prefix: '$lib/', target: 'src/lib/' },
+    ]);
+  });
+
   it('reads vite resolve.alias array form', async () => {
     const config = await loadAliasConfig(
       fsOf({

@@ -5,6 +5,7 @@
  * `unresolvable` records incomplete graph evidence, not a coverage gap by itself.
  */
 // Use POSIX paths so coverage keys stay stable across operating systems.
+import { builtinModules } from 'node:module';
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
 import { braceRangeIn, expandBraces, matchGlob, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
@@ -62,6 +63,19 @@ export type UnresolvableImport =
       // may load any file whose path starts with one of them. Null when the path has no fixed
       // start usabl can resolve, which means the call may load any file.
       prefixes: string[] | null;
+      // A bare fixed start that no package explains, such as `tests/` in import(`tests/${name}`).
+      // It may be an alias usabl did not read, so the call may load any file a path segment of
+      // which starts with it. Absent when there is none.
+      nameStarts?: string[];
+    }
+  | {
+      importer: string;
+      specifier: string;
+      // A bare import that no package explains: a `#` specifier, which package.json "imports"
+      // maps, or a name no package.json usabl reads declares and that is not a Node.js built-in
+      // module. It may be an alias usabl did not read, so it may load a file its last segment
+      // names. Recorded only by the complete reading.
+      kind: 'bare-unknown';
     }
   | {
       importer: string;
@@ -90,6 +104,9 @@ export interface ImportGraphOptions {
   complete?: boolean;
   // The folders bare imports resolve under, from the tsconfig baseUrl. Read only when complete.
   baseUrlDirs?: readonly string[];
+  // The package names a bare import may name (see declaredPackageNames). Read only when complete.
+  // When given, a bare import no package explains is recorded as `bare-unknown`.
+  declaredPackages?: readonly string[];
 }
 
 export interface ImportGraphView {
@@ -311,6 +328,60 @@ function findLoaderCalls(source: string): LoaderCall[] {
   return calls;
 }
 
+// What the graph knows when it reads a load: the aliases, the baseUrl folders, and, in the
+// complete reading, the package names a bare import may name. `packages` is null in the default
+// reading, where every bare name is read as a package, as it always was.
+interface LoadContext {
+  aliases: AliasConfig;
+  baseUrlDirs: readonly string[];
+  packages: ReadonlySet<string> | null;
+}
+
+const BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
+
+// The package name of a bare specifier: its first segment, or its first two for a scoped name.
+function packageNameOf(specifier: string): string {
+  const segments = specifier.split('/');
+  return segments.slice(0, specifier.startsWith('@') ? 2 : 1).join('/');
+}
+
+function isBuiltinModule(name: string): boolean {
+  return name.startsWith('node:') || BUILTIN_MODULES.has(name);
+}
+
+/**
+ * Whether no package explains a bare import, so it may load a file of the app through a loader
+ * usabl did not read: a `#` specifier, which package.json "imports" maps and which is never an npm
+ * package, or a name that is neither a Node.js built-in module nor a package a package.json usabl
+ * reads declares. Always false in the default reading.
+ */
+function unexplainedBare(specifier: string, packages: ReadonlySet<string> | null): boolean {
+  if (packages === null) return false;
+  if (specifier.startsWith('#')) return true;
+  const name = packageNameOf(specifier);
+  return !isBuiltinModule(name) && !packages.has(name);
+}
+
+// Whether the fixed start of a bare path names a whole package that explains it, such as
+// `@patternfly/react-icons/dist/` for a declared @patternfly/react-icons. A start that ends inside
+// the package name, such as `@patternfly/` or `te`, may still become any name.
+function startNamesKnownPackage(start: string, packages: ReadonlySet<string> | null): boolean {
+  if (packages === null) return true;
+  const segments = start.split('/');
+  const nameSegments = start.startsWith('@') ? 2 : 1;
+  if (segments.length <= nameSegments) return false;
+  const name = segments.slice(0, nameSegments).join('/');
+  return !start.startsWith('#') && (isBuiltinModule(name) || packages.has(name));
+}
+
+// Whether a loader's start is bare: not relative, not rooted, not one that can still become either,
+// and not an alias usabl reads or an alias-like start.
+function isBareStart(text: string, aliases: AliasConfig): boolean {
+  if (text.startsWith('./') || text.startsWith('../') || text.startsWith('/')) return false;
+  if (text === '' || text === '.' || text === '..' || text === '@' || text === '~') return false;
+  return resolveAliasSpecifierEachWay(text, aliases).length === 0 && !isAliasLikeSpecifier(text);
+}
+
 // A path the start of a loader names, written relative to the repository root: a relative path
 // from the importer's folder, a path through a configured alias, or a path under a baseUrl. An
 // empty list means a package. Null means usabl cannot tell where it points, so it may be any file.
@@ -345,12 +416,8 @@ function readableGlob(pattern: string): boolean {
   return braceRangeIn(pattern) === null && expandBraces(pattern) !== null;
 }
 
-function globEntry(
-  importer: string,
-  call: Extract<LoaderCall, { kind: 'glob' }>,
-  aliases: AliasConfig,
-  baseUrlDirs: readonly string[],
-): UnresolvableImport {
+function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
+  const { aliases, baseUrlDirs } = context;
   const entry = (patterns: string[] | null): UnresolvableImport => ({
     importer,
     specifier: call.text,
@@ -368,20 +435,27 @@ function globEntry(
   return entry(resolved);
 }
 
-// Null when the fixed start names a package, which loads no file of the app.
-function dynamicEntry(
-  importer: string,
-  call: Extract<LoaderCall, { kind: 'built' }>,
-  aliases: AliasConfig,
-  baseUrlDirs: readonly string[],
-): UnresolvableImport | null {
-  const prefixes = call.prefix === null ? null : resolveLoaderPaths(importer, call.prefix, aliases, baseUrlDirs, 'prefix');
-  if (prefixes !== null && prefixes.length === 0) return null;
+// Null when the fixed start names a package, which loads no file of the app. A bare start that no
+// package explains may be an alias usabl did not read, so it names files by name, the way an
+// unresolved import does: `tests/${name}` may load any file in a folder named tests.
+function dynamicEntry(importer: string, call: Extract<LoaderCall, { kind: 'built' }>, context: LoadContext): UnresolvableImport | null {
+  const { aliases, baseUrlDirs, packages } = context;
+  if (call.prefix === null) {
+    return { importer, specifier: call.text, kind: 'dynamic-import', prefixes: null };
+  }
+  const prefixes = resolveLoaderPaths(importer, call.prefix, aliases, baseUrlDirs, 'prefix');
+  const nameStart = call.prefix.replace(/^#/u, '');
+  const byName = prefixes !== null && isBareStart(call.prefix, aliases) && !startNamesKnownPackage(call.prefix, packages);
+  if (byName && nameStart === '') {
+    return { importer, specifier: call.text, kind: 'dynamic-import', prefixes: null };
+  }
+  if (prefixes !== null && prefixes.length === 0 && !byName) return null;
   return {
     importer,
     specifier: call.text,
     kind: 'dynamic-import',
     prefixes: prefixes === null ? null : [...new Set(prefixes)].sort(),
+    ...(byName ? { nameStarts: [nameStart] } : {}),
   };
 }
 
@@ -389,21 +463,21 @@ function dynamicEntry(
  * The loads in one file that usabl cannot follow, as `unresolvable` entries: every
  * import.meta.glob call, and every import() or require() whose path is built at run time.
  */
-function loaderEntries(
-  importer: string,
-  calls: readonly LoaderCall[],
-  aliases: AliasConfig,
-  baseUrlDirs: readonly string[],
-): UnresolvableImport[] {
+function loaderEntries(importer: string, calls: readonly LoaderCall[], context: LoadContext): UnresolvableImport[] {
   const entries: UnresolvableImport[] = [];
   for (const call of calls) {
-    if (call.kind === 'glob') entries.push(globEntry(importer, call, aliases, baseUrlDirs));
+    if (call.kind === 'glob') entries.push(globEntry(importer, call, context));
     if (call.kind === 'built') {
-      const entry = dynamicEntry(importer, call, aliases, baseUrlDirs);
+      const entry = dynamicEntry(importer, call, context);
       if (entry !== null) entries.push(entry);
     }
   }
   return entries;
+}
+
+// Whether a path segment of a file starts with `start`: `tests/` names src/tests/Widget.tsx.
+function pathHasSegmentStart(file: string, start: string): boolean {
+  return `/${file}`.includes(`/${start}`);
 }
 
 /**
@@ -417,7 +491,11 @@ export function importMayLoad(entry: UnresolvableImport, file: string): boolean 
     return entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file));
   }
   if (entry.kind === 'dynamic-import') {
-    return entry.prefixes === null || entry.prefixes.some((prefix) => file.startsWith(prefix));
+    return (
+      entry.prefixes === null ||
+      entry.prefixes.some((prefix) => file.startsWith(prefix)) ||
+      (entry.nameStarts ?? []).some((start) => pathHasSegmentStart(file, start))
+    );
   }
   if (entry.kind === 'base-url') {
     return entry.candidates.includes(file);
@@ -631,6 +709,8 @@ export async function buildImportGraph(
   const queue = [...entryFiles];
   const unresolvable: UnresolvableImport[] = [];
   const aliases = aliasConfig ?? NO_ALIASES;
+  const packages = complete && options.declaredPackages !== undefined ? new Set(options.declaredPackages) : null;
+  const context: LoadContext = { aliases, baseUrlDirs, packages };
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -646,7 +726,7 @@ export async function buildImportGraph(
 
     const fileEdges = edges.get(file) ?? [];
     const calls = findLoaderCalls(source);
-    for (const entry of loaderEntries(file, calls, aliases, baseUrlDirs)) pushUniqueUnresolvable(unresolvable, entry);
+    for (const entry of loaderEntries(file, calls, context)) pushUniqueUnresolvable(unresolvable, entry);
     for (const specifier of complete ? extractEverySpecifier(source, calls) : extractSpecifiers(source)) {
       // The complete reading also follows a bare import that a configured alias maps, whatever its
       // prefix, as the bundler does.
@@ -662,10 +742,13 @@ export async function buildImportGraph(
 
       if (!isRelativeSpecifier(specifier)) {
         // A bare import names a package, which is not an app file, so it is ignored. The complete
-        // reading records one that a baseUrl resolves to a file in the repository.
-        if (baseUrlDirs.length > 0) {
-          const candidates = await baseUrlCandidates(fs, specifier, baseUrlDirs);
-          if (candidates.length > 0) pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'base-url', candidates });
+        // reading records one that a baseUrl resolves to a file in the repository, and one that no
+        // package explains.
+        const candidates = baseUrlDirs.length > 0 ? await baseUrlCandidates(fs, specifier, baseUrlDirs) : [];
+        if (candidates.length > 0) {
+          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'base-url', candidates });
+        } else if (unexplainedBare(specifier, packages)) {
+          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'bare-unknown' });
         }
         continue;
       }
@@ -708,7 +791,9 @@ export async function inspectDirectImports(
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
-  for (const entry of loaderEntries(file, findLoaderCalls(source), aliases, [])) pushUniqueUnresolvable(unresolvable, entry);
+  for (const entry of loaderEntries(file, findLoaderCalls(source), { aliases, baseUrlDirs: [], packages: null })) {
+    pushUniqueUnresolvable(unresolvable, entry);
+  }
 
   for (const specifier of extractSpecifiers(source)) {
     if (isAliasLikeSpecifier(specifier)) {

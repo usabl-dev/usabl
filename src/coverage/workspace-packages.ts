@@ -361,6 +361,41 @@ export async function workspacePackageDirs(fs: FsGlob): Promise<string[]> {
   }
 }
 
+/**
+ * The package names the app can import by a bare name, sorted: every name declared in the
+ * dependency fields of a package.json on the climb from each place the config points into (the
+ * router file, the folder of each uiFileGlobs pattern, and each surface file) to the repository
+ * root, and the name and dependencies of every workspace package the root lists. A package.json
+ * that is missing or cannot be read adds none, so an import of a package it would declare is not
+ * explained by it.
+ */
+export async function declaredPackageNames(fs: FsGlob, config: UsablConfig): Promise<string[]> {
+  const anchors = [
+    path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
+    ...config.uiFileGlobs.map((glob) => staticPrefix(glob.replace(/^\/+/u, ''))),
+    ...config.surfaces.flatMap((surface) => surface.files.map((file) => path.dirname(file.replace(/^\/+/u, '')))),
+  ];
+  const dirs = new Set<string>(['']);
+  for (const anchor of anchors) {
+    const inside = insideRepository(anchor === '' ? '.' : anchor);
+    if (inside === null) continue;
+    let dir = inside === '.' ? '' : inside.replace(/\/+$/u, '');
+    while (dir !== '') {
+      dirs.add(dir);
+      const parent = path.dirname(dir);
+      dir = parent === '.' ? '' : parent;
+    }
+  }
+  for (const dir of await workspacePackageDirs(fs)) dirs.add(dir);
+  const names = new Set<string>();
+  for (const dir of [...dirs].sort()) {
+    const manifest = await readManifest((file) => fs.readFile(file), dir);
+    if (manifest.name !== null) names.add(manifest.name);
+    for (const dependency of manifest.dependencies ?? []) names.add(dependency);
+  }
+  return [...names].sort();
+}
+
 /** Reads a file at the trusted ref, or null when that ref has no such file. */
 export type TrustedRead = (file: string) => Promise<string | null>;
 

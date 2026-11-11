@@ -326,6 +326,24 @@ describe('loads the import graph cannot follow', () => {
     expect([...complete.get('src/Page.tsx')].sort()).toEqual(['src/A.tsx', 'src/B.tsx', 'src/C.tsx', 'src/D.tsx']);
   });
 
+  it('records a bare import that no package explains in the complete reading only', async () => {
+    const fs = fsOf({
+      'src/Page.tsx':
+        "import React from 'react';\nimport { Icon } from '@patternfly/react-icons/dist/esm/icons/x';\nimport path from 'node:path';\n" +
+        "import { join } from 'path';\nimport { W } from 'tests/Widget';\nimport { H } from '#tests/Helper';\nimport { S } from '@acme/shared';",
+    });
+    expect((await buildImportGraph(fs, ['src/Page.tsx'])).unresolvable).toEqual([]);
+    const complete = await buildImportGraph(fs, ['src/Page.tsx'], undefined, {
+      complete: true,
+      declaredPackages: ['@patternfly/react-icons', 'react'],
+    });
+    expect(complete.unresolvable).toEqual([
+      { importer: 'src/Page.tsx', specifier: 'tests/Widget', kind: 'bare-unknown' },
+      { importer: 'src/Page.tsx', specifier: '#tests/Helper', kind: 'bare-unknown' },
+      { importer: 'src/Page.tsx', specifier: '@acme/shared', kind: 'bare-unknown' },
+    ]);
+  });
+
   it('records a bare import that a baseUrl resolves to a file in the complete reading only', async () => {
     const fs = fsOf({ 'src/Page.tsx': "import { W } from 'tests/Widget';\nimport React from 'react';", 'src/tests/Widget.tsx': '' });
     expect((await buildImportGraph(fs, ['src/Page.tsx'])).unresolvable).toEqual([]);

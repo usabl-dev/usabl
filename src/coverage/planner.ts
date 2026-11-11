@@ -255,9 +255,8 @@ export async function computeCoverage(
     if (unreached.length > 0) {
       const placements = await placeTestFiles(
         fs,
-        config.uiFileGlobs,
+        config,
         attributedRoutes.map((route) => route.entryFile),
-        config.discovery.routerFile,
         aliasConfig,
         unreached,
       );

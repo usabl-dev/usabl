@@ -18,9 +18,10 @@
  * A loader usabl does not know, such as a bundler plugin, a virtual module, or a path string built
  * far from the import, can still load a test file with no trace. The ground truth states that limit.
  */
-import type { FsGlob } from '../contracts/index.js';
+import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import type { AliasConfig } from './alias-config.js';
 import { loadBaseUrlDirs } from './alias-config.js';
+import { declaredPackageNames } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
 
@@ -111,14 +112,17 @@ function sortedUnique(files: Iterable<string>): string[] {
  */
 export async function placeTestFiles(
   fs: FsGlob,
-  uiFileGlobs: readonly string[],
+  config: UsablConfig,
   routeEntries: readonly string[],
-  routerFile: string,
   aliases: AliasConfig,
   files: readonly string[],
 ): Promise<Map<string, TestFilePlacement>> {
-  const listed = sortedUnique(await fs.glob([...uiFileGlobs]));
-  const options = { complete: true, baseUrlDirs: await loadBaseUrlDirs(fs, routerFile) };
+  const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
+  const options = {
+    complete: true,
+    baseUrlDirs: await loadBaseUrlDirs(fs, config.discovery.routerFile),
+    declaredPackages: await declaredPackageNames(fs, config),
+  };
   const entries = sortedUnique([...listed.filter((file) => !isTestFile(file)), ...routeEntries]);
   const loaded = await buildImportGraph(fs, entries, aliases, options);
 

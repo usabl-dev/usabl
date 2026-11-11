@@ -17,11 +17,21 @@ export function describeLoad(entry: UnresolvableImport): string | null {
     return `${entry.importer} loads files with ${entry.specifier}, ${which}`;
   }
   if (entry.kind === 'dynamic-import') {
+    const under = entry.prefixes === null ? [] : entry.prefixes.map((prefix) => `under ${prefix}`);
+    const named = (entry.nameStarts ?? []).map(
+      (start) => `whose path holds a folder or name that starts with ${start}, since no package explains that start and usabl may not read the alias that does`,
+    );
     const which =
       entry.prefixes === null
         ? 'and usabl cannot tell where that path points, so it may load any file'
-        : `so it may load any file under ${entry.prefixes.join(', ')}`;
+        : `so it may load any file ${[...under, ...named].join(', or any file ')}`;
     return `${entry.importer} loads a module with ${entry.specifier}, whose path is built when the code runs, ${which}`;
+  }
+  if (entry.kind === 'bare-unknown') {
+    const why = entry.specifier.startsWith('#')
+      ? 'a package.json "imports" entry maps it, which usabl does not read'
+      : 'no package.json usabl reads declares that package, and no alias usabl reads maps it, so it may be an alias usabl did not read';
+    return `${entry.importer} imports '${entry.specifier}', and ${why}`;
   }
   if (entry.kind === 'base-url') {
     return (

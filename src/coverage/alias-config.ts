@@ -186,15 +186,16 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
     return mappings;
   }
 
-  // Object form: alias: { '@': './src', ... } or path.resolve(__dirname, './src')
+  // Object form: alias: { '@': './src', ... } or path.resolve(__dirname, './src'). A key may be
+  // quoted or a plain name, such as tests: './src/tests'.
   const objectBlock = raw2.match(/alias\s*:\s*\{([^}]+)\}/);
   if (objectBlock?.[1] !== undefined) {
     const entries = objectBlock[1].matchAll(
-      /['"`]([^'"`]+)['"`]\s*:\s*((?:path\.resolve\([^)]+\)|['"`][^'"`]*['"`]|[^,}\n]+))/g,
+      /(?:['"`]([^'"`]+)['"`]|(?<![\w$.])([A-Za-z_$][\w$]*))\s*:\s*((?:path\.resolve\([^)]+\)|['"`][^'"`]*['"`]|[^,}\n]+))/g,
     );
     for (const match of entries) {
-      const find = match[1];
-      const replacement = match[2];
+      const find = match[1] ?? match[2];
+      const replacement = match[3];
       if (typeof find !== 'string' || typeof replacement !== 'string') {
         continue;
       }
@@ -405,17 +406,19 @@ async function loadAliasConfigFrom(fs: FsGlob, tsconfigDir: string, viteDir: str
 }
 
 /**
- * The folders a bare import resolves under through a tsconfig baseUrl, sorted, for the app a file
- * belongs to: from the nearest tsconfig at or above the file and from the repository root
- * tsconfig, as loadAppAliasConfig reads them. A baseUrl is read from the nearest config in an
+ * The folders a bare import resolves under through a tsconfig or jsconfig baseUrl, sorted, for the
+ * app a file belongs to: from the folder of the nearest tsconfig at or above the file and from the
+ * repository root, as loadAppAliasConfig reads them. A baseUrl is read from the nearest config in an
  * extends chain that sets it, relative to that config. A folder outside the repository is left out.
  * Empty when no config sets one.
  */
 export async function loadBaseUrlDirs(fs: FsGlob, fromFile: string): Promise<string[]> {
   const { tsconfigDir } = await aliasConfigDirs(fs, fromFile);
   const found = new Set<string>();
+  // A JavaScript project sets baseUrl in jsconfig.json, which Create React App and the compiler
+  // read the same way.
   for (const dir of [...new Set([tsconfigDir, ''])]) {
-    for (const candidate of TSCONFIG_CANDIDATES) {
+    for (const candidate of [...TSCONFIG_CANDIDATES, 'jsconfig.json']) {
       const chain = await readTsconfigChain(fs, under(dir, candidate), new Set());
       const layer = chain.find((entry) => typeof entry.compilerOptions['baseUrl'] === 'string');
       if (layer === undefined) continue;
