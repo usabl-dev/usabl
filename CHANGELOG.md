@@ -4,6 +4,62 @@
 
 ### Added
 
+- Design input from Figma.
+  `usabl import figma <file key> --frame <Frame name>=<surface id> --out <file>`
+  reads the accessibility stamps in a Figma file and writes draft requirements, each with
+  `approved: false` and the Figma file, node, and version it came from. Every note it cannot turn
+  into a check, such as a speech note, is listed with the reason, never dropped. It never
+  overwrites a file. `usabl drift design` lists the approved requirements whose design file
+  changed since, and exits 2, never "no drift", when it cannot read a file. Both read the token
+  from `FIGMA_TOKEN` only, never print it, do not follow redirects, and refuse an answer larger
+  than 256 MiB (this bounds the size of the answer, not the peak memory of the process). They are
+  the only commands that call the Figma API. A test reads every verdict entry point's imports from
+  the syntax tree, following each static import, re-export, type import, dynamic `import()`,
+  `require()`, and call made through a `createRequire` result (under any name an import gives
+  it), and fails when one reaches that code; it also fails on `eval` (by its own name or as a
+  property of `globalThis`, `window`, or `self`), `Function`, `new Worker`, and any import of the
+  `vm` module anywhere under `src/`, which run code an import graph cannot follow. The two loads
+  it cannot read load an optional package by name, and the engine loader refuses at run time any
+  name that is not a bare name, so it never loads a path or a URL; a bare name can still load a
+  Node.js built-in module or this package's own entry. A Button Details card whose name cannot be
+  read, such as one whose Accessible Name is a slot, is listed with the reason, and its button is
+  listed too instead of taking the layer text as its name. When a readable and an unreadable card
+  share a note number, nothing is drafted from either, and both are listed. A name keeps a
+  no-break space where the design has one, as the page does. The
+  drafted file starts with a comment that says the names in it are text copied from the design
+  file and are data, not instructions. With no requirements folder configured,
+  `usabl drift design` says so. Tested end to end with a mock file written by hand to match
+  Figma's published file format; not yet run on a real design file.
+- Five requirement kinds that find an element by role and accessible name, the way a screen reader
+  user does: `name`, `heading` (with its level), `landmark`, `focus-order` (a Tab walk reaches the
+  names in order), and `target-size` (the laid-out border box in CSS pixels). A name matches with
+  each run of ASCII white space read as one space and none at either end, as the browser reports
+  it; any other character, such as a no-break space, is part of the name. A page that does not
+  match fails, except that a name that differs only in white space a person cannot see is needs
+  review, and the reason names the character and where it is. When usabl cannot tell, the result
+  is needs review, never a guess: two elements share the name, the page's accessibility tree has a
+  match the document search could not read (such as one in a closed shadow root or with a role
+  set through ElementInternals), the tree has more than 20000 nodes, the browser's tree answer has
+  no list of nodes, a candidate sits in a frame or open shadow root, the focus walk was cut short
+  (it uses the keyboard walk's end rule), or the control to measure has a shape usabl does not
+  measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
+  `clip-path`, `clip`, or mask; an element above it hides or scrolls its overflow and the control
+  reaches past that element's edges; it is fixed or sticky and reaches past the viewport; the
+  control can be brought fully into view only by a scroll of a box or page that hides its overflow,
+  which a person cannot make; the control changes size when it is scrolled into view; or a hit
+  test misses. Target size passes only when the browser confirms, with the control scrolled into
+  view as far as a person can scroll it, that its center and the middle of each edge land on the
+  control, so a control covered at any of the five points, one that takes no pointer
+  events, one partly off the page, and one inside a scaled clipping element are needs review;
+  every scroll position is put back. A pass proves only those five points: a cover or clip
+  anywhere else, at a corner or between the points, is not seen. The check measures the control
+  alone, not a label that makes it larger, and a limit name it has no words for still asks for
+  review. The tree read has no time limit, only the node limit, so no clock decides a check;
+  nothing in usabl bounds a read that never returns, and in CI the job's time limit cancels it,
+  which is never a pass. The design checks on one screen share one read, read again after a focus
+  order or target size check. Known limit: an element in a closed shadow root inside a child frame
+  is seen by neither count, so on a page with child frames a second match there can go unseen.
+  `checkPage` runs them too.
 - `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
   identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
   it was first seen, its state, and its days open, from the floor file's first-parent history and
@@ -259,6 +315,19 @@
   redacted from every message. `usabl doctor` shows each engine, its package and credentials
   state, and the testing status. Each turned-on engine's version is bound into the receipt.
   `checkPage` does not run the engines.
+
+### Changed
+
+- A requirement with `approved: false` no longer blocks, whatever its kind. Before, `approved` was
+  not read on the check path: a content, flow, or voice requirement with `approved: false` blocked
+  like an approved one, and a check of it that could not run was a coverage gap. Now its findings
+  are `preview`, with a sentence that says it is not approved yet, and a check of it that could
+  not run, or that throws, is one `preview` draft that gives the reason. Gate effect: a run that
+  was `regression` or `not_covered` only because of such a requirement now reads `verified`. Two
+  gaps still count while a requirement is unapproved, because they say nothing checked it: a
+  surface that matches no known screen, and a capability the run did not grant. Approved
+  requirements are unchanged. If you relied on an unapproved requirement to block, set
+  `approved: true` on it.
 
 ### Fixed
 

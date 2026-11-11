@@ -98,6 +98,7 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     // Nor an accessibility tree. The empty tree never changes on its own, so two reads around an
     // action compare equal unless a test scripts a change.
     fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),
+    designAxTree: async () => ({ kind: 'tree', nodes: [] }),
     axAt: async () => null,
     // A fake page has no shadow roots and no markup, so neither read finds an element.
     axInShadowRoot: async () => null,
@@ -114,6 +115,7 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     setZoom: async () => {},
     setReducedMotion: async () => {},
     getComputedStyle: notUsed('getComputedStyle'),
+    boundingBox: notUsed('boundingBox'),
     screenshot: notUsed('screenshot'),
     ...overrides,
   };

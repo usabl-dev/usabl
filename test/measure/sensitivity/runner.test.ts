@@ -298,7 +298,7 @@ describe('measureEntry', () => {
     const { deps, harness } = setup([namesProvider()]);
     expect(await measureEntry(deps, entry({ needs: { requirement: 'flow' } }), SCREEN)).toMatchObject({
       outcome: 'not applicable',
-      reason: 'no flow requirement with an expected announcement names this screen',
+      reason: 'no approved flow requirement with an expected announcement names this screen',
     });
     expect(await measureEntry(deps, entry({ needs: { profile: 'docs' } }), SCREEN)).toMatchObject({
       outcome: 'not applicable',
@@ -340,6 +340,44 @@ describe('measureEntry', () => {
       ],
     };
     expect((await measureEntry({ ...deps, requirements }, entry({ needs: { requirement: 'flow' } }), SCREEN)).outcome).toBe('caught');
+  });
+
+  it('skips a flow or voice requirement that is not approved, because it can only give preview drafts', async () => {
+    const { deps, harness } = setup([namesProvider()]);
+    const requirements: RequirementBundle = {
+      version: 1,
+      requirements: [
+        {
+          id: 'save',
+          kind: 'flow',
+          surface: 'basic',
+          description: 'Saving announces it.',
+          approved: false,
+          assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+        },
+        {
+          id: 'save-voice',
+          kind: 'voice',
+          surface: 'basic',
+          description: 'Saving is heard.',
+          approved: false,
+          assertion: {
+            type: 'voice',
+            steps: [{ do: 'click', selector: '#save' }],
+            obligations: [{ afterStep: 0, class: 'live-polite', requiredTokens: ['saved'], mustAnnounce: true }],
+          },
+        },
+      ],
+    };
+    expect(await measureEntry({ ...deps, requirements }, entry({ needs: { requirement: 'flow' } }), SCREEN)).toMatchObject({
+      outcome: 'not applicable',
+      reason: 'no approved flow requirement with an expected announcement names this screen',
+    });
+    expect(await measureEntry({ ...deps, requirements }, entry({ needs: { requirement: 'voice' } }), SCREEN)).toMatchObject({
+      outcome: 'not applicable',
+      reason: 'no approved voice requirement that must hear a live region names this screen',
+    });
+    expect(harness.opened).toBe(0);
   });
 
   it('is unreadable when the clean scan has a coverage gap', async () => {
