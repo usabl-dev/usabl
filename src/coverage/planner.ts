@@ -8,7 +8,7 @@ import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
 import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
-import { excludedTestFileReason, isTestFile, placeTestFiles, testFileGapReason } from './test-files.js';
+import { excludedTestFileReason, isTestFile, loadedTestFileNote, placeTestFiles, testFileGapReason } from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { packageSourceFiles, type TrustedRead, workspaceDependencyFiles, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
@@ -247,6 +247,9 @@ export async function computeCoverage(
   const outsideTestFiles = listedFiles.filter((file) => isTestFile(file) && !globbedSet.has(file));
   const workspaceTests = outsideTestFiles.length === 0 ? [] : await workspaceDependencyFiles(fs, config, outsideTestFiles, trustedRead);
   const reachedTestFiles = new Set<string>();
+  // For a test file that counts as a UI file only because the wider graph found an importer
+  // outside the tests, what its gap says if no screen takes it.
+  const loadedTestFileNotes = new Map<string, string>();
   const testFileGaps: CoverageGap[] = [];
   const workspaceTestGaps: CoverageGap[] = [];
   const excludedFiles: ExcludedFile[] = [];
@@ -280,6 +283,7 @@ export async function computeCoverage(
         const placement = placements.get(file) ?? { state: 'none' };
         if (placement.state === 'loaded') {
           reachedTestFiles.add(file);
+          loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers));
         } else if (placement.state === 'maybe') {
           testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads) });
         } else {
@@ -473,7 +477,7 @@ export async function computeCoverage(
       gaps.push({
         ref: file,
         state: 'unresolved',
-        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited),
+        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited, loadedTestFileNotes.get(file)),
       });
     }
   }

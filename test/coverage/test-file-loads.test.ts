@@ -118,6 +118,36 @@ describe('an importer outside uiFileGlobs that the config names', () => {
   });
 });
 
+describe('a test file that only files no route reaches import', () => {
+  it('is a gap whose reason names those importers', async () => {
+    const fixture = 'src/tests/fixtures/data.ts';
+    const coverage = await coverageOf(
+      '',
+      {
+        'package.json': PACKAGE_JSON,
+        [fixture]: 'export const rows = [];\n',
+        'src/Button.stories.tsx': "import { rows } from './tests/fixtures/data';\n",
+        'src/mocks/handlers.ts': "import { rows } from '../tests/fixtures/data';\n",
+      },
+      fixture,
+    );
+    expectGap(coverage, fixture);
+    const reason = coverage.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/^This UI file is not in any route closure/);
+    expect(reason).toContain('src/Button.stories.tsx, src/mocks/handlers.ts');
+    expect(reason).toContain('no route closure reaches');
+  });
+
+  it('names the file outside the tests at the start of a chain through a test helper', async () => {
+    const coverage = await coverageOf(
+      '',
+      { 'package.json': PACKAGE_JSON, 'src/Orphan.tsx': "import { helper } from './tests/helper';\n", 'src/tests/helper.ts': "export * from './Widget';\n" },
+    );
+    expect(coverage.gaps[0]?.reason).toContain('src/Orphan.tsx');
+    expect(coverage.gaps[0]?.reason).not.toContain('src/tests/helper.ts import');
+  });
+});
+
 describe('a load read as narrowly as its text allows', () => {
   const helper = 'src/tests/helper.ts';
   const helperTree = { 'package.json': PACKAGE_JSON, [helper]: 'export const helper = 1;\n' };

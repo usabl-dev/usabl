@@ -79,9 +79,26 @@ export function testFileGapReason(file: string, loads: readonly UnresolvableImpo
   );
 }
 
+/**
+ * The sentence a test file's unplaced gap adds when the file counts as a UI file only because files
+ * outside the tests that no route closure reaches import it, such as a story, a setup file, or a
+ * mock. It says who imports the file, so a reader can tell test support from a screen.
+ */
+export function loadedTestFileNote(file: string, importers: readonly string[]): string {
+  const who = importers.length === 0 ? 'files outside the tests' : importers.join(', ');
+  return (
+    `It ${kindOf(file)}, and usabl counts it as a UI file because ${who} import it, but no route closure reaches ` +
+    `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, such as stories, setup files, ` +
+    'or mocks, this gap stays until they are named like a test or sit in a test folder. If a screen renders this file, ' +
+    'list it in the files of a surface in usabl.config.json.'
+  );
+}
+
 export type TestFilePlacement =
   // A file that is not a test file imports it, so it is a UI file.
-  | { state: 'loaded' }
+  // `importers` are the files outside the tests that import it, directly or through test files,
+  // sorted.
+  | { state: 'loaded'; importers: string[] }
   // A load usabl cannot follow may reach it.
   | { state: 'maybe'; loads: UnresolvableImport[] }
   // Nothing usabl found loads it.
@@ -98,6 +115,28 @@ function reachable(graph: ImportGraphView, starts: Iterable<string>): Set<string
     queue.push(...graph.get(current));
   }
   return seen;
+}
+
+// The files outside the tests that import `file`, directly or through test files only, sorted. The
+// walk goes back along the graph's edges and stops at each file that is not a test file.
+function importersOutsideTests(graph: ImportGraphView, file: string): string[] {
+  const importersOf = new Map<string, string[]>();
+  for (const from of [...graph.visited].sort()) {
+    for (const to of graph.get(from)) importersOf.set(to, [...(importersOf.get(to) ?? []), from]);
+  }
+  const found = new Set<string>();
+  const seen = new Set<string>([file]);
+  const queue = [file];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const importer of importersOf.get(current) ?? []) {
+      if (seen.has(importer)) continue;
+      seen.add(importer);
+      if (isTestFile(importer)) queue.push(importer);
+      else found.add(importer);
+    }
+  }
+  return [...found].sort();
 }
 
 function entryKey(entry: UnresolvableImport): string {
@@ -178,7 +217,7 @@ export async function placeTestFiles(
   const placements = new Map<string, TestFilePlacement>();
   for (const file of sortedUnique(files)) {
     if (loaded.visited.has(file)) {
-      placements.set(file, { state: 'loaded' });
+      placements.set(file, { state: 'loaded', importers: importersOutsideTests(loaded, file) });
       continue;
     }
     const by = loads.filter((entry) => reachedBy.get(entryKey(entry))?.has(file) === true);

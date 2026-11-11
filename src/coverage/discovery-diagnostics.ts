@@ -161,14 +161,17 @@ export function buildUnresolvedReason(
   file: string,
   unresolvable: UnresolvableImport[],
   visitedFiles: ReadonlySet<string>,
+  // Said in place of the usual fix, such as who imports a test file that counts as a UI file.
+  note?: string,
 ): string {
   // No "changed": baseline passes every UI file here, changed or not.
   const base = 'This UI file is not in any route closure, wide-blast glob, or manual surface mapping';
   const details = selectDiscoveryDetails(file, unresolvable, visitedFiles);
+  const fix = note ?? UNPLACED_FILE_FIX;
   // The fix goes before the detail. Surfaces bound a printed reason, and the detail is the part
   // that can run long, so it is the part a bound may cut.
   if (details.length === 0) {
-    return `${base}. ${UNPLACED_FILE_FIX}`;
+    return `${base}. ${fix}`;
   }
-  return `${base}. ${UNPLACED_FILE_FIX} Discovery detail: ${details.join('. ')}`;
+  return `${base}. ${fix} Discovery detail: ${details.join('. ')}`;
 }
