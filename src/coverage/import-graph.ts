@@ -9,6 +9,7 @@ import { builtinModules } from 'node:module';
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
 import { braceRangeIn, expandBraces, matchGlob, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { commentRanges, syntaxForFile } from '../primitives/source-ast.js';
 import {
   type AliasConfig,
   isAliasLikeSpecifier,
@@ -52,6 +53,13 @@ export type UnresolvableImport =
       // The patterns, written relative to the repository root, sorted. Null when usabl could not
       // read them, which means the call may load any file.
       patterns: string[] | null;
+      // Why the patterns are null: the argument is not a string or a list of strings, the
+      // options set `base`, or a pattern starts in a way usabl cannot resolve. Absent otherwise.
+      unread?: 'argument' | 'base' | 'start';
+      // The patterns, as written, that hold syntax the glob matcher does not evaluate, such as a
+      // character class. Each is read as every file in the folder above that syntax, sorted.
+      // Absent when there is none.
+      widened?: string[];
     }
   | {
       importer: string;
@@ -107,6 +115,9 @@ export interface ImportGraphOptions {
   // The package names a bare import may name (see declaredPackageNames). Read only when complete.
   // When given, a bare import no package explains is recorded as `bare-unknown`.
   declaredPackages?: readonly string[];
+  // The Vite root: the folder of the nearest Vite config, '' for the repository root. A glob
+  // pattern that starts with / is read from it, as Vite reads it. Read only when complete.
+  viteRoot?: string;
 }
 
 export interface ImportGraphView {
@@ -253,7 +264,8 @@ function callText(source: string, start: number): string {
 type LoaderCall =
   | { kind: 'literal'; path: string }
   | { kind: 'built'; text: string; prefix: string | null }
-  | { kind: 'glob'; text: string; patterns: string[] | null };
+  // `base` is set when the patterns are null because the options set base.
+  | { kind: 'glob'; text: string; patterns: string[] | null; base?: true };
 
 // The first argument of the import() or require() whose opening parenthesis is at `open`.
 function readDynamicCall(source: string, start: number, open: number): LoaderCall {
@@ -314,7 +326,7 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
   if (source.charAt(at) !== ',') return { kind: 'glob', text, patterns: null };
   const close = source.indexOf(')', at);
   const options = source.slice(at, close === -1 ? source.length : close);
-  return { kind: 'glob', text, patterns: /\bbase\s*:/u.test(options) ? null : patterns };
+  return /\bbase\s*:/u.test(options) ? { kind: 'glob', text, patterns: null, base: true } : { kind: 'glob', text, patterns };
 }
 
 // A webpack require.context(folder, recursive, pattern) call. It loads files under the folder, so
@@ -331,18 +343,32 @@ function readContextCall(source: string, start: number, open: number): LoaderCal
 
 const CONTEXT_CALL_RE = /(?<![\w$.])require\s*\.\s*context\s*\(/g;
 
-function findLoaderCalls(source: string): LoaderCall[] {
-  const calls: LoaderCall[] = [];
+// A call and the offset where it starts.
+type FoundCall = LoaderCall & { at: number };
+
+function findLoaderCalls(source: string): FoundCall[] {
+  const calls: FoundCall[] = [];
   for (const match of source.matchAll(GLOB_CALL_RE)) {
-    calls.push(readGlobCall(source, match.index, match.index + match[0].length));
+    calls.push({ ...readGlobCall(source, match.index, match.index + match[0].length), at: match.index });
   }
   for (const match of source.matchAll(DYNAMIC_CALL_RE)) {
-    calls.push(readDynamicCall(source, match.index, match.index + match[0].length - 1));
+    calls.push({ ...readDynamicCall(source, match.index, match.index + match[0].length - 1), at: match.index });
   }
   for (const match of source.matchAll(CONTEXT_CALL_RE)) {
-    calls.push(readContextCall(source, match.index, match.index + match[0].length - 1));
+    calls.push({ ...readContextCall(source, match.index, match.index + match[0].length - 1), at: match.index });
   }
   return calls;
+}
+
+// The loader calls of a file outside its comments. The file is parsed to find the comments, so a
+// string that holds comment marks, such as "http://", never hides a call. A file that does not parse,
+// such as a .vue file, keeps every call: when in doubt, the call counts.
+function findLoaderCallsInCode(source: string, file: string): FoundCall[] {
+  const calls = findLoaderCalls(source);
+  if (calls.length === 0) return calls;
+  const comments = commentRanges(source, syntaxForFile(file));
+  if (comments === null) return calls;
+  return calls.filter((call) => !comments.some((comment) => call.at >= comment.start && call.at < comment.end));
 }
 
 // What the graph knows when it reads a load: the aliases, the baseUrl folders, and, in the
@@ -352,6 +378,9 @@ interface LoadContext {
   aliases: AliasConfig;
   baseUrlDirs: readonly string[];
   packages: ReadonlySet<string> | null;
+  // The folder a glob pattern that starts with / is read from, '' for the repository root. Null
+  // when not known, so such a pattern may load any file.
+  viteRoot: string | null;
 }
 
 const BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
@@ -433,23 +462,53 @@ function readableGlob(pattern: string): boolean {
   return braceRangeIn(pattern) === null && expandBraces(pattern) !== null;
 }
 
+// The folder above the first segment of a pattern that holds glob syntax, as a pattern for every
+// file in it: src/pages/** for src/pages/[id]/*.tsx. Every file the pattern can match is in it.
+function folderAbove(pattern: string): string {
+  const segments: string[] = [];
+  for (const segment of pattern.split('/')) {
+    if (/[*?[\](){}!]/u.test(segment)) break;
+    segments.push(segment);
+  }
+  return segments.length === 0 ? '**' : `${segments.join('/')}/**`;
+}
+
 function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
-  const { aliases, baseUrlDirs } = context;
-  const entry = (patterns: string[] | null): UnresolvableImport => ({
+  const { aliases, baseUrlDirs, viteRoot } = context;
+  const open = (unread: 'argument' | 'base' | 'start'): UnresolvableImport => ({
     importer,
     specifier: call.text,
     kind: 'glob-import',
-    patterns: patterns === null ? null : [...new Set(patterns)].sort(),
+    patterns: null,
+    unread,
   });
-  if (call.patterns === null) return entry(null);
+  if (call.patterns === null) return open(call.base === true ? 'base' : 'argument');
   const resolved: string[] = [];
+  const widened: string[] = [];
   // A negative pattern only takes files away, so leaving it out can only name more files.
   for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
-    const paths = resolveLoaderPaths(importer, pattern, aliases, baseUrlDirs, 'glob');
-    if (paths === null || !paths.every(readableGlob)) return entry(null);
-    resolved.push(...paths);
+    // Vite reads a pattern that starts with / from its root.
+    const paths =
+      pattern.startsWith('/') && viteRoot !== null
+        ? [path.normalize(path.join(viteRoot === '' ? '.' : viteRoot, pattern.slice(1)))]
+        : resolveLoaderPaths(importer, pattern, aliases, baseUrlDirs, 'glob');
+    if (paths === null) return open('start');
+    for (const resolvedPath of paths) {
+      if (readableGlob(resolvedPath)) {
+        resolved.push(resolvedPath);
+      } else {
+        resolved.push(folderAbove(resolvedPath));
+        widened.push(pattern);
+      }
+    }
   }
-  return entry(resolved);
+  return {
+    importer,
+    specifier: call.text,
+    kind: 'glob-import',
+    patterns: [...new Set(resolved)].sort(),
+    ...(widened.length === 0 ? {} : { widened: [...new Set(widened)].sort() }),
+  };
 }
 
 // Null when the fixed start names a package, which loads no file of the app. A bare start that no
@@ -727,7 +786,8 @@ export async function buildImportGraph(
   const unresolvable: UnresolvableImport[] = [];
   const aliases = aliasConfig ?? NO_ALIASES;
   const packages = complete && options.declaredPackages !== undefined ? new Set(options.declaredPackages) : null;
-  const context: LoadContext = { aliases, baseUrlDirs, packages };
+  const viteRoot = complete ? (options.viteRoot ?? null) : null;
+  const context: LoadContext = { aliases, baseUrlDirs, packages, viteRoot };
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -742,7 +802,7 @@ export async function buildImportGraph(
     }
 
     const fileEdges = edges.get(file) ?? [];
-    const calls = findLoaderCalls(source);
+    const calls = findLoaderCallsInCode(source, file);
     for (const entry of loaderEntries(file, calls, context)) pushUniqueUnresolvable(unresolvable, entry);
     for (const specifier of complete ? extractEverySpecifier(source, calls) : extractSpecifiers(source)) {
       // The complete reading also follows a bare import that a configured alias maps, whatever its
@@ -808,7 +868,7 @@ export async function inspectDirectImports(
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
-  for (const entry of loaderEntries(file, findLoaderCalls(source), { aliases, baseUrlDirs: [], packages: null })) {
+  for (const entry of loaderEntries(file, findLoaderCallsInCode(source, file), { aliases, baseUrlDirs: [], packages: null, viteRoot: null })) {
     pushUniqueUnresolvable(unresolvable, entry);
   }
 

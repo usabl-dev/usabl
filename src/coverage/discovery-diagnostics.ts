@@ -6,6 +6,25 @@ import { importMayLoad, type UnresolvableImport } from './import-graph.js';
 
 const MAX_DETAIL_LINES = 3;
 
+// What usabl read of a glob call and which files it may load, in words that say what is true.
+function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>): string {
+  if (entry.patterns === null) {
+    if (entry.unread === 'base') {
+      return 'and its options set base, which moves where its patterns start and which usabl does not read, so it may load any file';
+    }
+    if (entry.unread === 'start') {
+      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading / with no Vite root), so it may load any file';
+    }
+    return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
+  }
+  const matches = `which loads every file that matches ${entry.patterns.join(', ')}`;
+  if (entry.widened === undefined) return matches;
+  return (
+    `${matches}. usabl does not evaluate the syntax in ${entry.widened.join(', ')}, ` +
+    'so for each of those it counts every file in the folder above that syntax'
+  );
+}
+
 /**
  * One load usabl cannot follow, as a clause that names the file that holds it, what it does, and
  * which files it may load. Null for an import that did not resolve, which formatUnresolvableImport
@@ -13,8 +32,7 @@ const MAX_DETAIL_LINES = 3;
  */
 export function describeLoad(entry: UnresolvableImport): string | null {
   if (entry.kind === 'glob-import') {
-    const which = entry.patterns === null ? 'and usabl could not read its patterns, so it may load any file' : `which loads every file that matches ${entry.patterns.join(', ')}`;
-    return `${entry.importer} loads files with ${entry.specifier}, ${which}`;
+    return `${entry.importer} loads files with ${entry.specifier}, ${globWhich(entry)}`;
   }
   if (entry.kind === 'dynamic-import') {
     const under = entry.prefixes === null ? [] : entry.prefixes.map((prefix) => `under ${prefix}`);

@@ -20,7 +20,7 @@
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import type { AliasConfig } from './alias-config.js';
-import { loadBaseUrlDirs } from './alias-config.js';
+import { aliasConfigDirs, loadBaseUrlDirs } from './alias-config.js';
 import { declaredPackageNames } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
@@ -67,11 +67,15 @@ function describeImport(entry: UnresolvableImport): string {
  */
 export function testFileGapReason(file: string, loads: readonly UnresolvableImport[]): string {
   const clauses = [...new Set(loads.map(describeImport))].sort();
+  const importers = [...new Set(loads.map((entry) => entry.importer))].sort().join(', ');
+  // The fix usually belongs in the importer: a loader whose pattern or path start covers a test
+  // folder makes every change there a gap, and a test helper has no screen to list it on.
   return (
     `This file ${kindOf(file)}, and no file outside the tests imports it in a way usabl can follow. But ` +
     `${clauses.join('; ')}. This file may be one of the files loaded that way, or be imported by one of them. ` +
-    'So usabl cannot tell whether a screen renders it, and did not check it. To fix it, list the file in the ' +
-    'files of a surface in usabl.config.json, or load it with a plain import that usabl can resolve.'
+    `So usabl cannot tell whether a screen renders it, and did not check it. To fix it, change the load in ${importers} ` +
+    'so its pattern or path start does not cover test folders, or make it a plain import that usabl can resolve. ' +
+    'If a screen does render this file, list the file in the files of a surface in usabl.config.json.'
   );
 }
 
@@ -125,6 +129,8 @@ export async function placeTestFiles(
     complete: true,
     baseUrlDirs: await loadBaseUrlDirs(fs, config.discovery.routerFile),
     declaredPackages: await declaredPackageNames(fs, config),
+    // The folder of the nearest Vite config at or above the router file, or the repository root.
+    viteRoot: (await aliasConfigDirs(fs, config.discovery.routerFile)).viteDir,
   };
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
   // files under uiFileGlobs that are not test files, the route entry files, the router file, the

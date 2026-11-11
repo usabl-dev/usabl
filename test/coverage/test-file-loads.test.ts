@@ -118,6 +118,44 @@ describe('an importer outside uiFileGlobs that the config names', () => {
   });
 });
 
+describe('a load read as narrowly as its text allows', () => {
+  const helper = 'src/tests/helper.ts';
+  const helperTree = { 'package.json': PACKAGE_JSON, [helper]: 'export const helper = 1;\n' };
+  const of = (body: string, extra: Record<string, string> = {}): Promise<Coverage> => coverageOf(body, { ...helperTree, ...extra }, helper);
+
+  it('resolves a rooted glob from the Vite root, so a glob of pages does not cover a test helper', async () => {
+    expectExcluded(await of("const pages = import.meta.glob('/src/pages/**/*.tsx');"), helper);
+    expectExcluded(await of("const pages = import.meta.glob('/pages/**/*.tsx');", { 'src/vite.config.ts': 'export default {};' }), helper);
+  });
+
+  it('is a gap when a rooted glob covers the test file', async () => {
+    const coverage = await of("const all = import.meta.glob('/src/tests/*.ts');", { 'vite.config.ts': 'export default {};' });
+    expectGap(coverage, helper);
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/*.ts');
+  });
+
+  it('reads a pattern it cannot evaluate as the folder above that syntax', async () => {
+    expectExcluded(await of("const pages = import.meta.glob('./pages/[id]/*.tsx');"), helper);
+    const coverage = await of("const all = import.meta.glob('./tests/[a-z]*.ts');");
+    expectGap(coverage, helper);
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/');
+  });
+
+  it('skips a load inside a comment', async () => {
+    expectExcluded(await of("// const all = import.meta.glob('./tests/*.ts');\n/* require(name) */"), helper);
+  });
+
+  it('still reads a load after a string that holds comment marks', async () => {
+    expectGap(await of('const url = "http://example.test/a/*b";\nconst all = import.meta.glob(PATTERN);'), helper);
+  });
+
+  it('still makes every test file a gap for require of a variable, and says where to change it', async () => {
+    const coverage = await of('export const load = (name: string) => require(name);');
+    expectGap(coverage, helper);
+    expect(coverage.gaps[0]?.reason).toContain('change the load in src/ClustersPage.tsx');
+  });
+});
+
 describe('a webpack require.context call', () => {
   it('is a gap when its folder holds the test file', async () => {
     const coverage = await coverageOf("const ctx = require.context('./tests', true, /\\.tsx$/);", { 'package.json': PACKAGE_JSON });
