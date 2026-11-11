@@ -580,11 +580,28 @@ function differential(input: GateInput): Differential {
 
   return {
     findings: sortBy(applyWaivers(findings, input.waivers, input.now), findingKey),
-    staleIdentities: sortBy(staleIdentities, (s) => `${s.screenId}|${s.rule}`),
+    staleIdentities: [...staleIdentities].sort(byHeadroom),
     // Sorted by the whole identity, so no two entries tie and the per-screen sums below always add
     // in the same order, even where a sum is past the range a number holds exactly.
     unconfirmed: sortBy(unconfirmed, (u) => identityKey(u)),
   };
+}
+
+/**
+ * A total order over headroom entries. The screen and rule key comes first, so entries that differ
+ * there keep the order they always had. Two entries on one screen under one rule (different
+ * elements) used to tie and keep the order they arrived in, so the list moved with input order.
+ * Every field decides now, strings by code unit and counts by value, so only entries equal on every
+ * field can tie, and those are interchangeable.
+ */
+function byHeadroom(a: FloorHeadroom, b: FloorHeadroom): number {
+  return (
+    compareCodeUnits(`${a.screenId}|${a.rule}`, `${b.screenId}|${b.rule}`) ||
+    compareCodeUnits(a.screenId, b.screenId) ||
+    compareCodeUnits(a.rule, b.rule) ||
+    a.recorded - b.recorded ||
+    a.observed - b.observed
+  );
 }
 
 /**
