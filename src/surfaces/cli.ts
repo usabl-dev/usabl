@@ -23,6 +23,10 @@ export interface CliOptions {
   // The command name as typed. CLI_COMMANDS in ./cli-commands.ts lists every command usabl knows;
   // a name it does not list is refused before any command runs.
   command: string;
+  // Where in argv the parser read the command word. Absent when no word named a command, so the
+  // command is the default check. A command that reads its own arguments removes the word at this
+  // position, never the first token that has the same text, which could be a flag's value.
+  commandIndex?: number;
   staticOnly: boolean;
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
@@ -50,7 +54,7 @@ export interface CliOptions {
   // Floor-prune-only: also remove absent floor entries this run cannot confirm were fixed, because
   // nothing shows their part of the page rendered. Every other command ignores this.
   unconfirmed: boolean;
-  driftSubcommand: 'routes' | null;
+  driftSubcommand: 'routes' | 'design' | null;
   // `usabl history record` scans main and writes a record to --out; `usabl history append <file>`
   // adds that record to the local history branch. Every other command ignores these three.
   historySubcommand: 'record' | 'append' | null;
@@ -79,8 +83,18 @@ export interface CliOptions {
   screens: string[] | null;
 }
 
-// The value flags of serve-build and extract-build. Those commands parse their own arguments.
-const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set(['--dir', '--host', '--port', '--archive', '--into']);
+// The value flags of serve-build, extract-build, and import. Those commands parse their own
+// arguments.
+const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '--dir',
+  '--host',
+  '--port',
+  '--archive',
+  '--into',
+  '--frame',
+  '--owner',
+  '--min-target',
+]);
 
 function isFlag(value: string): boolean {
   return value.startsWith('-');
@@ -139,7 +153,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let floorSubcommand: 'prune' | null = null;
   let partial = false;
   let unconfirmed = false;
-  let driftSubcommand: 'routes' | null = null;
+  let driftSubcommand: 'routes' | 'design' | null = null;
   let historySubcommand: 'record' | 'append' | null = null;
   let historyFile: string | null = null;
   let outPath: string | null = null;
@@ -157,6 +171,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let verifySubcommand: string | null = null;
   let verifyApp = false;
   let screens: string[] | null = null;
+  let commandIndex: number | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -173,8 +188,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
         floorSubcommand = 'prune';
         continue;
       }
-      if (command === 'drift' && token === 'routes') {
-        driftSubcommand = 'routes';
+      if (command === 'drift' && (token === 'routes' || token === 'design')) {
+        driftSubcommand = token;
+        continue;
+      }
+      if (command === 'import') {
+        // `usabl import figma <file key>`: the import command reads its own words, so a file key
+        // is never taken for a command name.
         continue;
       }
       if (command === 'history' && historySubcommand === null && (token === 'record' || token === 'append')) {
@@ -195,6 +215,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
         continue;
       }
       command = token;
+      commandIndex = index;
       if (command !== 'enforce') {
         enforceCheck = null;
       }
@@ -387,6 +408,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
 
   return {
     command,
+    ...(commandIndex === undefined ? {} : { commandIndex }),
     staticOnly,
     html,
     all,

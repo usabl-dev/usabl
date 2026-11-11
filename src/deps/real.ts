@@ -5,8 +5,9 @@
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import { readFullAxTree } from './ax-tree.js';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import { readDesignAxTree, readFullAxTree } from './ax-tree.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -824,6 +825,237 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   }
   return getComputedStyle(element).getPropertyValue(cssProperty);
 }`;
+
+
+// The laid-out box of the first element a selector matches, in CSS pixels, or null. The box
+// includes transforms. It also says how many boxes the element is laid out in, and each reason the
+// box may not be the area a pointer can hit (see BoxLimit). The walk up follows the flat tree,
+// through slots and out of shadow roots, and stops at 512 elements; a deeper element reads as
+// clipped, which only ever asks for review. Each check fails closed: a value it cannot read counts.
+// A fixed element can escape an ancestor that clips; it is still read as clipped. Last, a hit test
+// scrolls the element into view and asks the browser what is at five points of its box. The size
+// and fragments returned are always those of the first read, before any scroll. Exported for tests.
+export const BOUNDING_BOX_FUNCTION = `function (query) {
+  const element = document.querySelector(query);
+  if (!(element instanceof Element)) {
+    return null;
+  }
+  const box = element.getBoundingClientRect();
+  const fragments = element.getClientRects().length;
+  const parentOf = (node) => {
+    if (node.assignedSlot) {
+      return node.assignedSlot;
+    }
+    if (node.parentElement) {
+      return node.parentElement;
+    }
+    const root = node.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  const epsilon = 0.01;
+  const zero = (value) => Math.abs(value) < 1e-9;
+  // A transform turns or slants the element unless it is a translate, a scale, or both.
+  const turnsOrSlants = (transform) => {
+    if (transform === 'none' || transform === '') {
+      return false;
+    }
+    const flat = /^matrix\\(([^)]*)\\)$/.exec(transform);
+    if (flat !== null) {
+      const m = flat[1].split(',').map(Number);
+      return m.length !== 6 || m.some((value) => !Number.isFinite(value)) || !zero(m[1]) || !zero(m[2]);
+    }
+    const deep = /^matrix3d\\(([^)]*)\\)$/.exec(transform);
+    if (deep !== null) {
+      const m = deep[1].split(',').map(Number);
+      if (m.length !== 16 || m.some((value) => !Number.isFinite(value))) {
+        return true;
+      }
+      // Only a 2D scale and translate written as a 3D matrix is measured.
+      return ![1, 2, 3, 4, 6, 7, 8, 9, 11].every((index) => zero(m[index])) || !zero(m[10] - 1) || !zero(m[15] - 1);
+    }
+    return true;
+  };
+  const rotates = (rotate) => !(rotate === 'none' || rotate === '' || /^0(deg|rad|grad|turn)?$/.test(rotate));
+  const hides = (value) => value === 'hidden' || value === 'clip';
+  const limits = new Set();
+  const root = document.documentElement;
+  let pinned = false;
+  let depth = 0;
+  for (let node = element; node !== null; node = parentOf(node), depth += 1) {
+    if (depth >= 512) {
+      limits.add('overflow-clipped');
+      break;
+    }
+    const style = getComputedStyle(node);
+    if (turnsOrSlants(style.transform) || rotates(style.rotate)) {
+      limits.add('rotated-or-skewed');
+    }
+    if ((style.clipPath !== 'none' && style.clipPath !== '') || (style.clip !== 'auto' && style.clip !== '')) {
+      limits.add('clip-path');
+    }
+    const mask = style.maskImage || style.webkitMaskImage || 'none';
+    if (mask !== 'none') {
+      limits.add('mask');
+    }
+    if (style.position === 'fixed' || style.position === 'sticky') {
+      pinned = true;
+    }
+    // Overflow is about the elements above. It and paint containment do not apply to an inline box
+    // or to an element with no box.
+    if (node === element || style.display === 'inline' || style.display === 'contents') {
+      continue;
+    }
+    const viewportScroller = node === root || node === document.body;
+    const clipsAxis = (value) => (viewportScroller ? hides(value) : value !== 'visible');
+    const paint = /\\b(paint|strict|content)\\b/.test(style.contain);
+    const clipsX = paint || clipsAxis(style.overflowX);
+    const clipsY = paint || clipsAxis(style.overflowY);
+    if (!clipsX && !clipsY) {
+      continue;
+    }
+    const outer = node.getBoundingClientRect();
+    const left = outer.left + node.clientLeft;
+    const top = outer.top + node.clientTop;
+    const right = left + node.clientWidth;
+    const bottom = top + node.clientHeight;
+    if (clipsX && (box.left < left - epsilon || box.right > right + epsilon)) {
+      limits.add('overflow-clipped');
+    }
+    if (clipsY && (box.top < top - epsilon || box.bottom > bottom + epsilon)) {
+      limits.add('overflow-clipped');
+    }
+  }
+  if (pinned) {
+    const width = root.clientWidth;
+    const height = root.clientHeight;
+    if (box.left < -epsilon || box.top < -epsilon || box.right > width + epsilon || box.bottom > height + epsilon) {
+      limits.add('outside-viewport');
+    }
+  }
+  // The hit test. The limits above name shapes the box read cannot stand for; this asks the browser
+  // directly. The element is scrolled into view, its box is read again, and the browser is asked
+  // which element is at the center and at the middle of each edge, 1 CSS pixel in. Edge middles,
+  // not corners, so a round or pill-shaped control is not flagged. A point is a hit only when the
+  // answer is the element or an element inside it; null (outside the viewport) is a miss. Any
+  // error is a miss. Every scroll position the scroll changed is put back before the function
+  // returns, and nothing here waits.
+  //
+  // scrollIntoView also scrolls a box whose overflow is hidden or clip, which a person cannot
+  // scroll: it has no scroll bar and takes no wheel. So the control is first brought fully into
+  // view with the least scroll (nearest), which moves a box only when the control is not fully
+  // inside that box's scrollport. If that scroll moved a box, or the window, on an axis where the
+  // overflow is hidden, a person could not bring the control into view, and it counts as clipped.
+  // The centered scroll that follows is not judged this way, and any axis it moves that a person
+  // cannot scroll is put back before the points are read (below). The overflow of each box
+  // is read before any scroll, and a value that is not one usabl knows counts as hidden.
+  const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
+  const saved = [];
+  for (let node = parentOf(element); node !== null; node = parentOf(node)) {
+    const style = getComputedStyle(node);
+    saved.push([node, node.scrollLeft, node.scrollTop, scrollable(style.overflowX), scrollable(style.overflowY)]);
+  }
+  // The window scrolls the viewport, which takes its overflow from the root or, failing that, the
+  // body. Either one hiding an axis counts.
+  const rootStyle = getComputedStyle(root);
+  const bodyStyle = document.body === null ? null : getComputedStyle(document.body);
+  const windowScrollsX = scrollable(rootStyle.overflowX) && (bodyStyle === null || scrollable(bodyStyle.overflowX));
+  const windowScrollsY = scrollable(rootStyle.overflowY) && (bodyStyle === null || scrollable(bodyStyle.overflowY));
+  const windowX = window.scrollX;
+  const windowY = window.scrollY;
+  const movedHidden = () => {
+    for (const [node, left, top, scrollsX, scrollsY] of saved) {
+      if ((node.scrollLeft !== left && !scrollsX) || (node.scrollTop !== top && !scrollsY)) {
+        return true;
+      }
+    }
+    return (window.scrollX !== windowX && !windowScrollsX) || (window.scrollY !== windowY && !windowScrollsY);
+  };
+  let missed = false;
+  let resized = false;
+  try {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    if (movedHidden()) {
+      limits.add('overflow-clipped');
+    }
+    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    // The centered scroll may also move a box, or the window, on an axis a person cannot scroll.
+    // Something that does not scroll with the control, such as a sticky footer or a fixed panel,
+    // could then no longer cover it. So each such axis goes back to where it was before any scroll,
+    // and the points are read only at a position a person can bring the control to.
+    for (const [node, left, top, scrollsX, scrollsY] of saved) {
+      const x = scrollsX ? node.scrollLeft : left;
+      const y = scrollsY ? node.scrollTop : top;
+      if (node.scrollLeft !== x || node.scrollTop !== y) {
+        node.scrollTo({ left: x, top: y, behavior: 'instant' });
+      }
+    }
+    const reachX = windowScrollsX ? window.scrollX : windowX;
+    const reachY = windowScrollsY ? window.scrollY : windowY;
+    if (window.scrollX !== reachX || window.scrollY !== reachY) {
+      window.scrollTo({ left: reachX, top: reachY, behavior: 'instant' });
+    }
+    const seen = element.getBoundingClientRect();
+    // The size is measured on the first box and the points are placed on this one. They must be
+    // the same size, or the size compared is not the size that was hit.
+    resized = Math.abs(seen.width - box.width) > epsilon || Math.abs(seen.height - box.height) > epsilon;
+    const middleX = seen.left + seen.width / 2;
+    const middleY = seen.top + seen.height / 2;
+    const points = [
+      [middleX, middleY],
+      [middleX, seen.top + 1],
+      [seen.right - 1, middleY],
+      [middleX, seen.bottom - 1],
+      [seen.left + 1, middleY],
+    ];
+    for (const [x, y] of points) {
+      const hit = document.elementFromPoint(x, y);
+      if (hit === null || !(hit === element || element.contains(hit))) {
+        missed = true;
+      }
+    }
+  } catch {
+    missed = true;
+  } finally {
+    for (const [node, left, top] of saved) {
+      if (node.scrollLeft !== left || node.scrollTop !== top) {
+        node.scrollTo({ left, top, behavior: 'instant' });
+      }
+    }
+    if (window.scrollX !== windowX || window.scrollY !== windowY) {
+      window.scrollTo({ left: windowX, top: windowY, behavior: 'instant' });
+    }
+  }
+  if (missed) {
+    limits.add('hit-test-missed');
+  }
+  if (resized) {
+    limits.add('size-changed-on-scroll');
+  }
+  const order = ${JSON.stringify(BOX_LIMITS)};
+  return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };
+}`;
+
+function isBoxLimit(value: unknown): value is BoxLimit {
+  return typeof value === 'string' && (BOX_LIMITS as readonly string[]).includes(value);
+}
+
+function readBoundingBox(value: unknown): ElementBox | null {
+  const width = readNumber(getProp(value, 'width'));
+  const height = readNumber(getProp(value, 'height'));
+  const fragments = readNumber(getProp(value, 'fragments'));
+  const unmeasurable = getProp(value, 'unmeasurable');
+  if (
+    width === null ||
+    height === null ||
+    fragments === null ||
+    !Number.isInteger(fragments) ||
+    !Array.isArray(unmeasurable) ||
+    !unmeasurable.every(isBoxLimit)
+  ) {
+    return null;
+  }
+  return { width, height, fragments, unmeasurable: BOX_LIMITS.filter((limit) => unmeasurable.includes(limit)) };
+}
 
 
 // The axe results the driver hands the axe provider. The mapping lives with the provider, so an
@@ -2471,6 +2703,9 @@ function wrapPage(
     async fullAxTree(): Promise<AxTreeRead> {
       return readFullAxTree((method, params) => cdp.send(method as never, params as never));
     },
+    async designAxTree(): Promise<DesignAxTreeRead> {
+      return readDesignAxTree((method, params) => cdp.send(method as never, params as never));
+    },
     async activeModalDialogs(): Promise<string[]> {
       const paths = await callInWorld(cdp, READ_WORLD, 'read the modal dialogs that hold focus', ACTIVE_MODAL_DIALOGS_FUNCTION);
       if (!Array.isArray(paths) || !paths.every((path): path is string => typeof path === 'string')) {
@@ -2526,6 +2761,9 @@ function wrapPage(
     async getComputedStyle(selector: string, property: string): Promise<string> {
       const value = await callInWorld(cdp, READ_WORLD, 'read a computed style', COMPUTED_STYLE_FUNCTION, [selector, property]);
       return typeof value === 'string' ? value : '';
+    },
+    async boundingBox(selector: string): Promise<ElementBox | null> {
+      return readBoundingBox(await callInWorld(cdp, READ_WORLD, 'read an element size', BOUNDING_BOX_FUNCTION, [selector]));
     },
     async screenshot(selector?: string): Promise<Buffer> {
       if (selector === undefined) {

@@ -182,6 +182,7 @@ describe('parseCliArgs', () => {
   it('accepts check command with flags after command', () => {
     expect(parseCliArgs(['check', '--ci'])).toEqual({
       command: 'check',
+      commandIndex: 0,
       staticOnly: false,
       html: false,
       all: false,

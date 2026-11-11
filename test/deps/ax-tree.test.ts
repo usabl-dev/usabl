@@ -5,7 +5,15 @@
  * and a read past its budget in time or in nodes is not a tree.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AX_TREE_NODE_BUDGET, AX_TREE_TIME_BUDGET_MS, axTreeFromCdp, readFullAxTree, sortStateFrom } from '../../src/deps/ax-tree.js';
+import {
+  AX_TREE_NODE_BUDGET,
+  AX_TREE_TIME_BUDGET_MS,
+  DESIGN_AX_TREE_NODE_LIMIT,
+  axTreeFromCdp,
+  readDesignAxTree,
+  readFullAxTree,
+  sortStateFrom,
+} from '../../src/deps/ax-tree.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 
 function prop(name: string, value: unknown, type = 'booleanOrUndefined'): unknown {
@@ -239,10 +247,77 @@ describe('readFullAxTree', () => {
   });
 });
 
+describe('readDesignAxTree', () => {
+  const header = {
+    nodes: [
+      { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: '' }, childIds: ['2'] },
+      { nodeId: '2', backendDOMNodeId: 2, ignored: false, role: { value: 'columnheader' }, name: { value: 'Name' }, parentId: '1', childIds: [] },
+    ],
+  };
+  const sized = (count: number): unknown => ({
+    nodes: Array.from({ length: count }, (_, index) => ({ nodeId: String(index + 1), backendDOMNodeId: index + 1, ignored: false })),
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('makes one tree call and no header reads, and keeps the nodes the silent change rule keeps', async () => {
+    const calls: string[] = [];
+    const read = await readDesignAxTree(async (method) => {
+      calls.push(method);
+      return RAW;
+    });
+    expect(calls).toEqual(['Accessibility.getFullAXTree']);
+    expect(read).toEqual({ kind: 'tree', nodes: axTreeFromCdp(RAW).nodes });
+  });
+
+  it('gives the same result on a slow machine and a fast one, because no clock takes part', async () => {
+    const now = vi.spyOn(Date, 'now');
+    const fast = await readDesignAxTree(async () => header);
+    // Checked before fake timers start, because starting them reads the clock.
+    expect(now).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    // On the slow machine a minute passes while the browser builds the tree. A timer in the read
+    // would fire inside that minute.
+    const slow = await readDesignAxTree(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+      return header;
+    });
+    expect(slow).toEqual(fast);
+    expect(fast.kind).toBe('tree');
+  });
+
+  it('reads an answer with no list of nodes as unreadable, never as a tree with no nodes', async () => {
+    for (const answer of [{}, { nodes: 'x' }, { nodes: { length: 1 } }, null, 'tree']) {
+      expect({ answer, read: await readDesignAxTree(async () => answer) }).toEqual({ answer, read: { kind: 'unreadable' } });
+    }
+    // An empty list is a real answer: a tree with no nodes.
+    expect(await readDesignAxTree(async () => ({ nodes: [] }))).toEqual({ kind: 'tree', nodes: [] });
+  });
+
+  it(`reads a tree of exactly ${DESIGN_AX_TREE_NODE_LIMIT} nodes`, async () => {
+    expect((await readDesignAxTree(async () => sized(DESIGN_AX_TREE_NODE_LIMIT))).kind).toBe('tree');
+  });
+
+  it(`is over the limit past ${DESIGN_AX_TREE_NODE_LIMIT} nodes, and says the limit`, async () => {
+    expect(await readDesignAxTree(async () => sized(DESIGN_AX_TREE_NODE_LIMIT + 1))).toEqual({
+      kind: 'over-limit',
+      limit: DESIGN_AX_TREE_NODE_LIMIT,
+    });
+  });
+
+  it('holds exactly the limit the ground truth states', () => {
+    expect(DESIGN_AX_TREE_NODE_LIMIT).toBe(20000);
+  });
+});
+
 describe('a fake page', () => {
   it('has an empty tree that never changes and no focused node, unless a test scripts them', async () => {
     const page = makeFakePage();
     expect(await page.fullAxTree()).toEqual({ kind: 'tree', documentNodeId: null, nodes: [] });
+    expect(await page.designAxTree()).toEqual({ kind: 'tree', nodes: [] });
     expect(await page.focusedNodeId()).toBeNull();
   });
 

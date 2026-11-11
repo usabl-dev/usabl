@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { makeFakePage } from '../../../src/deps/fakes.js';
 import {
   ENGINE_CALL_TIMEOUT_MS,
+  importPackage,
   loadEngineModule,
   makeRedactor,
   packageLookupDirs,
@@ -141,6 +142,33 @@ describe('probeInstalledPackage', () => {
     const found = await probeInstalledPackage('axe-core');
     expect(found).toMatchObject({ state: 'installed', version: '4.13.0' });
     expect(await probeInstalledPackage('@axe-devtools/playwright')).toEqual({ state: 'not-installed' });
+  });
+});
+
+describe('importPackage', () => {
+  // A relative or absolute path, a URL, a Node.js module, a path inside a package, and names with
+  // a separator a package name cannot hold. Each one could load a file in this repository or
+  // somewhere else, so the loader refuses it before it imports anything.
+  it.each([
+    './x.js',
+    '../import/figma/fetch.js',
+    '.hidden',
+    '/etc/hosts',
+    'C:\\x\\y.js',
+    'pkg\\..\\x',
+    'pkg/../x',
+    '@scope/name/deep.js',
+    '@scope/../x',
+    'file:///srv/app/x.js',
+    'node:fs',
+    '',
+  ])('refuses %j, which is not a package name', async (name) => {
+    await expect(importPackage(name)).rejects.toThrow('usabl loads only an optional package by its package name');
+  });
+
+  it('imports a package name, so a missing one fails as not found, not as refused', async () => {
+    await expect(importPackage('@usabl-absent/scanner')).rejects.toMatchObject({ code: 'ERR_MODULE_NOT_FOUND' });
+    await expect(importPackage('usabl-absent-scanner')).rejects.toMatchObject({ code: 'ERR_MODULE_NOT_FOUND' });
   });
 });
 

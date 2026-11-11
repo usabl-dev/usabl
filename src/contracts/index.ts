@@ -521,7 +521,16 @@ export interface InteractionContract {
 }
 
 // ---- design intake + docs output (producers wired; reachable via `usabl docs` and the usabl/docs export) ----
-export type RequirementKind = 'content' | 'flow' | 'doc' | 'voice';
+export type RequirementKind =
+  | 'content'
+  | 'flow'
+  | 'doc'
+  | 'voice'
+  | 'name'
+  | 'heading'
+  | 'landmark'
+  | 'focus-order'
+  | 'target-size';
 export interface ContentAssertion {
   type: 'content';
   selector: string;
@@ -545,14 +554,91 @@ export interface VoiceAssertion {
   obligations: SpeechObligation[];
   maxTabPath?: number;
 }
+// The roles a design requirement can name, the roles designers annotate. A requirement finds its
+// element by role and accessible name, the way a designer names it, and the browser accessibility
+// tree decides the role, so a div with role="button" is a button.
+export type TargetRole =
+  | 'button'
+  | 'link'
+  | 'heading'
+  | 'img'
+  | 'textbox'
+  | 'checkbox'
+  | 'menuitem'
+  | 'tab'
+  | 'main'
+  | 'navigation'
+  | 'banner'
+  | 'contentinfo'
+  | 'complementary'
+  | 'region'
+  | 'search'
+  | 'form';
+export type LandmarkRole = Extract<
+  TargetRole,
+  'main' | 'navigation' | 'banner' | 'contentinfo' | 'complementary' | 'region' | 'search' | 'form'
+>;
+// One element as a designer names it: what it is and what it is called. The name is compared with
+// the accessible name exactly, after trimming both.
+export interface RoleTarget {
+  role: TargetRole;
+  name: string;
+}
+// The element with this role and name exists on the screen.
+export interface NameAssertion {
+  type: 'name';
+  target: RoleTarget;
+}
+// The heading with this name is at this level.
+export interface HeadingAssertion {
+  type: 'heading';
+  name: string;
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+}
+// The screen has a landmark with this role, and this name when one is given.
+export interface LandmarkAssertion {
+  type: 'landmark';
+  role: LandmarkRole;
+  name?: string;
+}
+// Tab from the start of the screen reaches these names in this order. Other stops may come
+// between them. Each name is listed once.
+export interface FocusOrderAssertion {
+  type: 'focus-order';
+  sequence: string[];
+}
+// The element is at least this many CSS pixels wide and high.
+export interface TargetSizeAssertion {
+  type: 'target-size';
+  target: RoleTarget;
+  minCssPx: number;
+}
+// Where a requirement drafted from a design came from, so a design change after approval can be
+// flagged. Every field is read from the design tool, checked by the loader, and treated as data.
+export interface RequirementSource {
+  tool: 'figma';
+  file: string; // the file key
+  node: string; // the id of the design node the requirement was drafted from
+  version: string; // the file version the requirement was drafted from
+}
 export interface Requirement {
   id: string;
   kind: RequirementKind;
   surface: string;
   description: string;
-  assertion: ContentAssertion | FlowAssertion | DocAssertion | VoiceAssertion;
+  assertion:
+    | ContentAssertion
+    | FlowAssertion
+    | DocAssertion
+    | VoiceAssertion
+    | NameAssertion
+    | HeadingAssertion
+    | LandmarkAssertion
+    | FocusOrderAssertion
+    | TargetSizeAssertion;
   owner?: string;
   approved: boolean;
+  source?: RequirementSource;
 }
 export interface RequirementBundle {
   version: 1;
@@ -665,8 +751,55 @@ export interface AxTreeNode {
 export type AxTreeRead =
   | { kind: 'tree'; documentNodeId: number | null; nodes: AxTreeNode[] }
   | { kind: 'over-budget'; limit: 'time' | 'nodes' };
+// What one read of the whole accessibility tree for the design checks returned. The read has no
+// time limit, so its result never depends on how fast the machine is. A tree with more nodes than
+// `limit` is not read, and a check that needs it cannot tell, and says so. An answer that holds no
+// list of nodes is unreadable, never a tree with no nodes, and a check that needs it cannot tell.
+export type DesignAxTreeRead =
+  | { kind: 'tree'; nodes: AxTreeNode[] }
+  | { kind: 'over-limit'; limit: number }
+  | { kind: 'unreadable' };
 export interface ElementRef {
   selector: string;
+}
+// Why the box Page.boundingBox read may not be the area a pointer can hit. Each one is read on the
+// element and on every element above it in the flat tree.
+// 'rotated-or-skewed': a transform, or the rotate property, turns or slants the element, so the
+// axis-aligned box around it is larger than the element. A translate or a scale alone does not.
+// 'clip-path': a clip-path, or the older clip property, cuts the element's shape.
+// 'mask': a mask image hides part of the element.
+// 'overflow-clipped': an element above it has overflow other than visible on an axis (hidden,
+// clip, auto, scroll, or overlay), or paint containment, and the element reaches past that
+// element's padding box on that axis, so only part of it can be on screen at once. On the root and
+// the body, only hidden and clip count, because their scrolling is the viewport's.
+// 'outside-viewport': the element, or an element above it, is fixed or sticky, and the element
+// reaches past the viewport, where scrolling cannot bring it into view.
+// 'hit-test-missed': with the element scrolled into view, the browser was asked which element is
+// at five points of its box (the center and the middle of each edge, 1 CSS pixel in), and at least
+// one answer was not the element or an element inside it. Something clips it or covers it, it does
+// not take pointer events, or it is partly off the page. This one is a positive check: it also
+// covers shapes the other limits do not name.
+// 'size-changed-on-scroll': the box read again after the scroll into view differs in width or
+// height from the first read, so the size that was measured may not be the size a person meets.
+export type BoxLimit =
+  | 'rotated-or-skewed'
+  | 'clip-path'
+  | 'mask'
+  | 'overflow-clipped'
+  | 'outside-viewport'
+  | 'hit-test-missed'
+  | 'size-changed-on-scroll';
+// What Page.boundingBox read about one element. `width` and `height` are the CSS pixel size of its
+// border box as the browser lays it out, transforms included. `fragments` is how many boxes the
+// element is laid out in: an inline element that wraps onto two lines has two, and its size is the
+// box around both. `unmeasurable` lists each BoxLimit that holds, in the order of that type, and is
+// empty only when the box is the area a pointer can hit, as far as usabl reads it: no named shape
+// holds, and all five points of the hit test landed on the element.
+export interface ElementBox {
+  width: number;
+  height: number;
+  fragments: number;
+  unmeasurable: BoxLimit[];
 }
 // Why a row an element sits in could not be told apart from other rows. See RowContextRead.
 export type RowAmbiguity =
@@ -876,6 +1009,9 @@ export interface Page {
   // Accessibility.getFullAXTree. It covers open shadow roots, because the browser builds the tree
   // from the flat tree, and it does not cover child frames. See AxTreeRead for the budget.
   fullAxTree(): Promise<AxTreeRead>;
+  // The same tree, read for the design checks: one Accessibility.getFullAXTree call, bounded by a
+  // node count only, with no timer and no sort state read. See DesignAxTreeRead.
+  designAxTree(): Promise<DesignAxTreeRead>;
   axAt(selector: string): Promise<AxNode | null>;
   // The accessibility node of the first element innerSelector matches inside the open shadow root
   // of the first element hostSelector matches in the document. A web component's inner control,
@@ -910,6 +1046,9 @@ export interface Page {
   setZoom(percent: number): Promise<void>;
   setReducedMotion(enabled: boolean): Promise<void>;
   getComputedStyle(selector: string, property: string): Promise<string>;
+  // The laid-out box of the first element a selector matches in the document. Read in an isolated
+  // world, so page script cannot answer for it. Null when nothing matches. See ElementBox.
+  boundingBox(selector: string): Promise<ElementBox | null>;
   screenshot(selector?: string): Promise<Buffer>;
   // Present only on a page opened by the judge's isolated browser: the distinct origins of the
   // requests it blocked since the page opened. A blocked script can remove the very control a
