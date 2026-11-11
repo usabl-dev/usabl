@@ -285,13 +285,25 @@ describe('loads the import graph cannot follow', () => {
   it('records a glob call it cannot read as one that may load any file', async () => {
     for (const source of [
       'const a = import.meta.glob(PATTERNS);',
-      "const a = import.meta.glob('./x?.tsx');",
       "const a = import.meta.glob('./*.tsx', { base: '../tests' });",
       "const a = import.meta.globEager(`./${dir}/*.tsx`);",
     ]) {
       const graph = await graphOf(source);
       expect(graph.unresolvable.map((entry) => (entry.kind === 'glob-import' ? entry.patterns : 'other')), source).toEqual([null]);
     }
+  });
+
+  it('reads a pattern with syntax the matcher does not evaluate as every file in the folder above it', async () => {
+    const graph = await graphOf("const a = import.meta.glob('./x?.tsx');");
+    expect(graph.unresolvable).toEqual([
+      {
+        importer: 'src/pages/Page.tsx',
+        specifier: "import.meta.glob('./x?.tsx')",
+        kind: 'glob-import',
+        patterns: ['src/pages/**'],
+        widened: ['./x?.tsx'],
+      },
+    ]);
   });
 
   it('records a dynamic import or require whose path is built at run time, with its fixed start', async () => {
