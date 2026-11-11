@@ -55,6 +55,21 @@ const finding = (over: Partial<Finding>): Finding => ({
   ...over,
 });
 
+describe('the idle line of a run that excluded files', () => {
+  it('does not say no UI files changed, on the comment or the Stop hook', () => {
+    const markdown = projectPrComment(idle([EXCLUDED]));
+    const message = evaluateStopDecision(idle([EXCLUDED]), { stopHookActive: false }).message;
+    for (const text of [markdown, message]) {
+      expect(text).not.toContain('No UI files changed');
+      expect(text).toContain('Every changed file usabl would check was left out on purpose. No pass, no fail.');
+    }
+  });
+
+  it('keeps the usual words when nothing was excluded', () => {
+    expect(projectPrComment(idle([]))).toContain('No UI files changed, so there was nothing to check. No pass, no fail.');
+  });
+});
+
 describe('the pull request comment', () => {
   it('lists the excluded file of an idle run and says files were left out', () => {
     const markdown = projectPrComment(idle([EXCLUDED]));
@@ -79,7 +94,7 @@ describe('the pull request comment', () => {
     const markdown = projectPrComment(idle(many));
     expect(markdown).toContain('usabl left out 25 changed files on purpose');
     expect(markdown.match(/^file: /gmu)).toHaveLength(20);
-    expect(markdown).toContain('5 more excluded files are not shown.');
+    expect(markdown).toContain('- 5 more excluded files are not named here, because the list names at most 20 files.');
   });
 
   it('seals a file name that carries markup in a code span', () => {

@@ -973,7 +973,12 @@ function renderExcludedFiles(result: Result): CommentSection | null {
       ),
     ),
     hidden > 0
-      ? [`- ${wholeNumber(hidden)} more excluded ${hidden === 1 ? 'file is' : 'files are'} not shown.`, `_${FULL_RESULT_POINTER}_`]
+      ? [
+          // This counts files past the list of twenty. The line above it, when the size bound cut
+          // groups, counts groups, so each line says what it counts.
+          `- ${wholeNumber(hidden)} more excluded ${hidden === 1 ? 'file is' : 'files are'} not named here, because the list names at most 20 files.`,
+          `_${FULL_RESULT_POINTER}_`,
+        ]
       : [],
     { one: 'group of excluded files', many: 'groups of excluded files' },
     [UNTRUSTED_FRAME_END],
