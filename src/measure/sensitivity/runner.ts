@@ -170,23 +170,27 @@ export function precondition(entry: CatalogEntry, screen: SensitivityScreen, req
   if (needs?.profile === 'docs' && screen.profile !== 'docs') {
     return 'the defect is checked on documentation pages, and this screen is not one';
   }
+  // An unapproved requirement gives only preview drafts, which no gate reads, so its defect could
+  // never be caught. Only approved requirements count.
   if (needs?.requirement === 'flow') {
     const has = requirements.requirements.some(
       (requirement) =>
+        requirement.approved &&
         requirement.surface === screen.id &&
         requirement.assertion.type === 'flow' &&
         requirement.assertion.expectedAnnouncement !== undefined,
     );
-    if (!has) return 'no flow requirement with an expected announcement names this screen';
+    if (!has) return 'no approved flow requirement with an expected announcement names this screen';
   }
   if (needs?.requirement === 'voice') {
     const has = requirements.requirements.some(
       (requirement) =>
+        requirement.approved &&
         requirement.surface === screen.id &&
         requirement.assertion.type === 'voice' &&
         requirement.assertion.obligations.some((obligation) => obligation.mustAnnounce),
     );
-    if (!has) return 'no voice requirement that must hear a live region names this screen';
+    if (!has) return 'no approved voice requirement that must hear a live region names this screen';
   }
   return null;
 }

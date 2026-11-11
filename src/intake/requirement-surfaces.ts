@@ -1,7 +1,7 @@
 /**
  * Design requirements whose surface matches no screen usabl knows.
  *
- * A content, flow, or voice requirement is checked by a provider that runs only on a screen whose id is
+ * A requirement of any kind but doc is checked by a provider that runs only on a screen whose id is
  * the requirement's surface. A surface that matches no configured, routed, or documented screen is
  * never planned, so its requirement is never checked. Saying nothing about it would let a
  * misspelled surface turn a requirement off while the run still reads as verified. Each one is a

@@ -78,6 +78,7 @@ describe('usabl help', () => {
         'floor',
         'help',
         'history',
+        'import',
         'init',
         'install',
         'serve-build',

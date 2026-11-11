@@ -70,7 +70,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('Level 2 sensitivity in C
       { entry: 'flow-live-region-broken', screen: 'clusters', outcome: 'not applicable', rules: [] },
     ]);
     expect(measurements.find((measurement) => measurement.entry === 'flow-live-region-broken')?.reason).toBe(
-      'no flow requirement with an expected announcement names this screen',
+      'no approved flow requirement with an expected announcement names this screen',
     );
   });
 });

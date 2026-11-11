@@ -5,6 +5,7 @@
  * Documentation requirements emit no Provider because they define output artifacts, not checks.
  * Voice requirements become virtual screen reader providers, whose drafts are preview unless the
  * obligation class is promoted in config.
+ * A requirement that is not approved yet reports only preview drafts, whatever its kind.
  */
 import type {
   ActionSettle,
@@ -32,6 +33,8 @@ import { ProviderRunFailed } from '../providers/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { isActionStep, makeSilentChangeWatch, type SilentChangeWatch } from '../voicing/silent-change.js';
 import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
+import { shownUntilApproved } from './requirement-approval.js';
+import { designCheckProvider } from './structure-providers.js';
 
 function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
@@ -336,9 +339,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The one rule for which screen a requirement checks. The content and flow runs read it, and the
-// voice run skips a contract whose surfaceId is not the screen, which is the same test. So a brief
-// that says a requirement is off on a screen cannot disagree with what the scan does there.
+// The one rule for which screen a requirement checks. The content, flow, and design check runs read
+// it, and the voice run skips a contract whose surfaceId is not the screen, which is the same test.
+// So a brief that says a requirement is off on a screen cannot disagree with what the scan does.
 function requirementPlan(requirement: Requirement, screenId: string): PlannedApplicability {
   return screenId === requirement.surface
     ? { applies: true }
@@ -674,13 +677,22 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
   const providers: Provider[] = [];
 
   for (const requirement of bundle.requirements) {
+    // Each provider reports only preview drafts until a person approves its requirement.
     if (requirement.assertion.type === 'content') {
-      providers.push(toContentProvider(requirement, requirement.assertion));
+      providers.push(shownUntilApproved(requirement, toContentProvider(requirement, requirement.assertion)));
       continue;
     }
 
     if (requirement.assertion.type === 'flow') {
-      providers.push(toFlowProvider(requirement, requirement.assertion));
+      providers.push(shownUntilApproved(requirement, toFlowProvider(requirement, requirement.assertion)));
+    }
+
+    // Name, heading, landmark, focus order, and target size checks, planned by the same rule.
+    const design = designCheckProvider(requirement);
+    if (design !== null) {
+      providers.push(
+        shownUntilApproved(requirement, { ...design, appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id) }),
+      );
     }
   }
 
@@ -692,7 +704,7 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
     if (requirement.assertion.type === 'voice') {
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
       const options = { id: `intake:${requirement.id}`, rulePrefix: `intake:${requirement.id}` };
-      providers.push({
+      providers.push(shownUntilApproved(requirement, {
         ...makeVirtualSrProvider([contract], makeStepRunner({ settleAfterEachStep: true }), options),
         appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
         // The contract clicks and presses keys, so it changes the page, the same as a flow.
@@ -712,7 +724,7 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
           const drafts = Array.isArray(output) ? output : output.drafts;
           return [...drafts, ...watch.drafts(ctx.screen.id)];
         },
-      });
+      }));
     }
   }
 
