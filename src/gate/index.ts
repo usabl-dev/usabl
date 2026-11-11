@@ -150,8 +150,9 @@ function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
     reason:
       `${EVIDENCE_FLOOR_PATH} predates count tracking (version 1), so ${collapsible.length} name or ` +
       'structural entr' + (collapsible.length === 1 ? 'y' : 'ies') + ' record a placeholder count of 1 ' +
-      'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
-      'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
+      'instead of the accessibility barriers observed. Several accessibility barriers can share one of those ' +
+      'identities, so this run cannot compare their counts and cannot prove no new accessibility barrier is ' +
+      'hiding behind an accepted one. ' +
       'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
   }];
 }
@@ -186,9 +187,10 @@ function rowKeyFloorGaps(floor: EvidenceFloor, drafts: Draft[]): CoverageGap[] {
     state: 'not-covered',
     reason:
       `${EVIDENCE_FLOOR_PATH} predates row keys (version ${floor.version}). On ${screens.size} screen` +
-      (screens.size === 1 ? '' : 's') + ', this run found barriers in table rows that the floor recorded as one ' +
-      'identity across rows, so this run compares them the old way. A barrier fixed in one row and a new one in ' +
-      'another row leave that count unchanged, so this run cannot prove no new barrier is hiding behind an ' +
+      (screens.size === 1 ? '' : 's') + ', this run found accessibility barriers in table rows that the floor ' +
+      'recorded as one identity across rows, so this run compares them the old way. An accessibility barrier fixed ' +
+      'in one row and a new one in another row leave that count unchanged, so this run cannot prove no new ' +
+      'accessibility barrier is hiding behind an ' +
       'accepted one. Run "usabl baseline" to regenerate the floor at version 3, then review and merge the diff.',
   }];
 }
@@ -585,7 +587,7 @@ function differential(input: GateInput): Differential {
       // not a paid-down identity the operator still needs to prune from the floor.
       whatUserExperiences: 'This previously accepted finding is no longer present on the surface.',
       why: 'The identity is on the evidence floor and was not observed in this run.',
-      fix: 'Remove this identity from the evidence floor after review so a reintroduced barrier can gate as new.',
+      fix: 'Remove this identity from the evidence floor after review so a reintroduced accessibility barrier can gate as new.',
       evidence: {}, confidence: 'fail',
       elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
     });
@@ -761,7 +763,7 @@ function verdictSummary(
   // Barriers the floor records that this run did not see on a screen it cannot show rendered. Like
   // headroom, it does not move the verdict and appears on a verified run, which is where it matters.
   if (unconfirmed > 0) {
-    clauses.push(`${unconfirmed} recorded barrier${unconfirmed === 1 ? '' : 's'} not seen, not claimed fixed`);
+    clauses.push(`${unconfirmed} recorded accessibility barrier${unconfirmed === 1 ? '' : 's'} not seen, not claimed fixed`);
   }
   if (notEvaluated.gaps > 0) {
     clauses.push(`${notEvaluated.gaps} gap(s)`);

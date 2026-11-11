@@ -242,7 +242,7 @@ describe('stop-hook-runner protocol', () => {
           exitCode: 3,
           accessibilityVerdict: 'not_covered',
           accessibilityExitCode: 3,
-          summary: 'not_covered: nothing blocking, 2 recorded barriers not seen, not claimed fixed, 1 gap(s)',
+          summary: 'not_covered: nothing blocking, 2 recorded accessibility barriers not seen, not claimed fixed, 1 gap(s)',
           coverage: {
             changedFiles: [],
             affected: [],

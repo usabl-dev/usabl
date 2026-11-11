@@ -3634,7 +3634,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
         projectOverlay(
           result({
             verdict: 'verified',
-            summary: 'verified: nothing blocking, 2 recorded barriers not seen, not claimed fixed',
+            summary: 'verified: nothing blocking, 2 recorded accessibility barriers not seen, not claimed fixed',
             findings,
             exitCode: 0,
             floorUnconfirmed,
