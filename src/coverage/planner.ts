@@ -10,7 +10,7 @@ import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-di
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import { excludedTestFileReason, isTestFile, placeTestFiles, testFileGapReason } from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
-import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
+import { packageSourceFiles, type TrustedRead, workspaceDependencyFiles, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
@@ -237,11 +237,22 @@ export async function computeCoverage(
   // cannot follow may reach is a gap, because "nothing loads it" is then a guess. The rest are
   // disclosed as excluded, not gaps, so a change to tests alone stays nothing to check. See
   // test-files.ts for the wider graph, built only when a changed test file needs it.
+  //
+  // A test file outside uiFileGlobs that sits in a workspace package the app depends on follows the
+  // same rule, with the source files of that package as more starts: it keeps its workspace gap
+  // when a file of the package outside the tests loads it or a load usabl cannot follow may reach
+  // it, and it is excluded and listed otherwise.
   const testFiles = [...globbedFiles.filter(isTestFile)].sort();
+  const globbedSet = new Set(globbedFiles);
+  const outsideTestFiles = listedFiles.filter((file) => isTestFile(file) && !globbedSet.has(file));
+  const workspaceTests = outsideTestFiles.length === 0 ? [] : await workspaceDependencyFiles(fs, config, outsideTestFiles, trustedRead);
   const reachedTestFiles = new Set<string>();
   const testFileGaps: CoverageGap[] = [];
+  const workspaceTestGaps: CoverageGap[] = [];
   const excludedFiles: ExcludedFile[] = [];
-  if (testFiles.length > 0) {
+  const placeable = workspaceTests.filter((entry) => entry.packageDir !== null);
+  workspaceTestGaps.push(...workspaceTests.filter((entry) => entry.packageDir === null).map((entry) => entry.gap));
+  if (testFiles.length > 0 || placeable.length > 0) {
     const { aliasConfig, closures } = await loadRouteGraph();
     const unreached: string[] = [];
     for (const file of testFiles) {
@@ -252,13 +263,18 @@ export async function computeCoverage(
         unreached.push(file);
       }
     }
-    if (unreached.length > 0) {
+    if (unreached.length > 0 || placeable.length > 0) {
+      const packageStarts: string[] = [];
+      for (const dir of [...new Set(placeable.map((entry) => entry.packageDir as string))].sort()) {
+        packageStarts.push(...(await packageSourceFiles(fs, dir)));
+      }
       const placements = await placeTestFiles(
         fs,
         config,
         attributedRoutes.map((route) => route.entryFile),
         aliasConfig,
-        unreached,
+        [...unreached, ...placeable.map((entry) => entry.gap.ref)],
+        packageStarts,
       );
       for (const file of unreached) {
         const placement = placements.get(file) ?? { state: 'none' };
@@ -270,8 +286,17 @@ export async function computeCoverage(
           excludedFiles.push({ ref: file, reason: excludedTestFileReason(file) });
         }
       }
+      for (const entry of placeable) {
+        const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
+        if (placement.state === 'none') {
+          excludedFiles.push({ ref: entry.gap.ref, reason: excludedTestFileReason(entry.gap.ref) });
+        } else {
+          workspaceTestGaps.push(entry.gap);
+        }
+      }
     }
   }
+  excludedFiles.sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
   const uiFiles = globbedFiles.filter((file) => !isTestFile(file) || reachedTestFiles.has(file));
   // Omitted when empty, so a Coverage with nothing excluded has the same shape it always had.
   const excluded = excludedFiles.length === 0 ? {} : { excludedFiles };
@@ -279,7 +304,9 @@ export async function computeCoverage(
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
   const otherFiles = listedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
-  const workspaceGaps = await workspaceDependencyGaps(fs, config, otherFiles, trustedRead);
+  const workspaceGaps = [...(await workspaceDependencyGaps(fs, config, otherFiles, trustedRead)), ...workspaceTestGaps].sort((a, b) =>
+    a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0,
+  );
   // A bump of the UI component library touches the app's package.json and the lockfile, and
   // neither matches uiFileGlobs, while the new version can change every screen. Such a change is
   // wide blast, with a reason that names each file. See dependency-changes.ts.

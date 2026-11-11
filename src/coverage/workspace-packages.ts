@@ -402,7 +402,8 @@ export type TrustedRead = (file: string) => Promise<string | null>;
 /**
  * A not-covered gap for each changed file that sits in a workspace package the configured app
  * depends on, directly or through another workspace package. The files given are the ones the
- * planner did not already count as UI: not tests, and outside uiFileGlobs. A repository with no
+ * planner did not already count as UI, outside uiFileGlobs. The planner places a test file among
+ * them by the test file rule before it keeps its gap (see test-files.ts). A repository with no
  * workspaces, a file outside every workspace package, a file in a package the app does not depend
  * on, and a file in the app's own package give no gap. When the workspace root cannot be read,
  * every file given is a gap that names the file, because any of them may be in such a package.
@@ -417,6 +418,27 @@ export async function workspaceDependencyGaps(
   files: readonly string[],
   trusted?: TrustedRead,
 ): Promise<CoverageGap[]> {
+  return (await workspaceDependencyFiles(fs, config, files, trusted)).map((entry) => entry.gap);
+}
+
+/** A changed file in a workspace package the app depends on: its gap, and the package folder. */
+export interface WorkspaceDependencyFile {
+  gap: CoverageGap;
+  // The folder of the package the file sits in. Null when the workspace root could not be read, so
+  // the package is not known.
+  packageDir: string | null;
+}
+
+/**
+ * The same as workspaceDependencyGaps, with the folder of the package each file sits in, so the
+ * planner can place a test file in that package by the test file rule.
+ */
+export async function workspaceDependencyFiles(
+  fs: FsGlob,
+  config: UsablConfig,
+  files: readonly string[],
+  trusted?: TrustedRead,
+): Promise<WorkspaceDependencyFile[]> {
   const candidates = [...new Set(files.filter((file) => !isInstalledPath(file) && !isDocumentation(file)))].sort();
   if (candidates.length === 0) return [];
   const patterns: string[] = [];
@@ -428,7 +450,7 @@ export async function workspaceDependencyGaps(
       patterns.push(...(await workspacePatterns(read)));
     } catch (err) {
       if (!(err instanceof UnreadableWorkspaceRoot)) throw err;
-      return candidates.map((file) => unreadableRootGap(file, err, refLabel));
+      return candidates.map((file) => ({ gap: unreadableRootGap(file, err, refLabel), packageDir: null }));
     }
   }
   const dirs = await workspaceDirs(fs, [...new Set(patterns)]);
@@ -444,11 +466,22 @@ export async function workspaceDependencyGaps(
   const changedOwners = new Set(candidates.map((file) => ownerOf(file, workspace)?.dir).filter((dir): dir is string => dir !== undefined));
   const reached = await dependencyClosure(fs, apps, workspace, changedOwners);
 
-  const gaps: CoverageGap[] = [];
+  const found: WorkspaceDependencyFile[] = [];
   for (const file of candidates) {
     const owner = ownerOf(file, workspace);
     if (owner === null || appDirs.has(owner.dir) || !reached.has(owner.dir)) continue;
-    gaps.push(gapFor(file, owner, apps));
+    found.push({ gap: gapFor(file, owner, apps), packageDir: owner.dir });
   }
-  return gaps;
+  return found;
+}
+
+/**
+ * The source files of one workspace package, sorted: every file with a source extension under its
+ * folder, outside node_modules.
+ */
+export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[]> {
+  const prefix = dir === '' ? '' : `${dir}/`;
+  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+  const files = found.map(insideRepository).filter((file): file is string => file !== null && !isInstalledPath(file));
+  return [...new Set(files)].sort();
 }

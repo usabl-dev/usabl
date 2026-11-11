@@ -118,6 +118,44 @@ describe('an importer outside uiFileGlobs that the config names', () => {
   });
 });
 
+describe('a test file in a workspace package the app depends on', () => {
+  const workspace: Record<string, string> = {
+    'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/ui': '*', react: '^18.3.0' } }),
+    'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', main: 'src/index.ts' }),
+    'packages/ui/src/index.ts': "export * from './Widget.spec';\nexport * from './Button';\n",
+    'packages/ui/src/Button.tsx': 'export const Button = () => <button />;\n',
+    'packages/ui/src/Widget.spec.tsx': WIDGET,
+    'packages/ui/src/Button.test.tsx': "import { Button } from './Button';\n",
+    'packages/ui/src/tests/helpers.ts': 'export const helper = 1;\n',
+  };
+  const screen = "import { Widget } from '@acme/ui';";
+
+  it('is a workspace gap when a file of the package outside the tests loads it', async () => {
+    const coverage = await coverageOf(screen, workspace, 'packages/ui/src/Widget.spec.tsx');
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/ui/src/Widget.spec.tsx', 'not-covered']]);
+    expect(coverage.gaps[0]?.reason).toContain('@acme/ui');
+  });
+
+  it('gives the same gap as a file of the package that is not a test file', async () => {
+    const coverage = await coverageOf(screen, workspace, 'packages/ui/src/Button.tsx');
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/ui/src/Button.tsx', 'not-covered']]);
+  });
+
+  it('is excluded and listed, and the run is idle, when only tests import it', async () => {
+    for (const file of ['packages/ui/src/Button.test.tsx', 'packages/ui/src/tests/helpers.ts']) {
+      expectExcluded(await coverageOf(screen, workspace, file), file);
+    }
+  });
+
+  it('is a workspace gap when a load usabl cannot follow in the package may reach it', async () => {
+    const tree = { ...workspace, 'packages/ui/src/Button.tsx': "const all = import.meta.glob('./tests/*.ts');\nexport const Button = () => <button />;\n" };
+    const coverage = await coverageOf(screen, tree, 'packages/ui/src/tests/helpers.ts');
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/ui/src/tests/helpers.ts', 'not-covered']]);
+  });
+});
+
 describe('a bare import that no package explains', () => {
   it('is a gap through a Vite alias whose key is not quoted', async () => {
     expectGap(

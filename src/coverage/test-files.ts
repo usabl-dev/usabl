@@ -116,6 +116,9 @@ export async function placeTestFiles(
   routeEntries: readonly string[],
   aliases: AliasConfig,
   files: readonly string[],
+  // More files that start the graph, such as the source of a workspace package a changed test file
+  // sits in. Test files among them are left out.
+  extraStarts: readonly string[] = [],
 ): Promise<Map<string, TestFilePlacement>> {
   const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
   const options = {
@@ -134,6 +137,7 @@ export async function placeTestFiles(
     config.discovery.routerFile.replace(/^\/+/u, ''),
     ...wideBlast.filter((file) => !isTestFile(file)),
     ...config.surfaces.flatMap((surface) => surface.files),
+    ...extraStarts.filter((file) => !isTestFile(file)),
   ]);
   const loaded = await buildImportGraph(fs, entries, aliases, options);
 
