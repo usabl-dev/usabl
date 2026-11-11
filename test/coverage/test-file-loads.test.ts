@@ -51,6 +51,73 @@ function expectExcluded(coverage: Coverage, file = CHANGED): void {
 
 const PACKAGE_JSON = JSON.stringify({ name: 'app', dependencies: { react: '^18.3.0', '@patternfly/react-icons': '^6.0.0' } });
 
+describe('an importer outside uiFileGlobs that the config names', () => {
+  // The UI globs cover src/features only. The router file and src/main.tsx sit outside them.
+  const featureConfig: UsablConfig = {
+    ...config,
+    uiFileGlobs: ['src/features/**'],
+    discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: ['src/main.tsx'] },
+  };
+  const changed = 'src/features/tests/Widget.tsx';
+  const tree = (extra: Record<string, string>): Record<string, string> => ({
+    'src/App.tsx': 'export function App() { return <main />; }\n',
+    'src/features/Home.tsx': 'export function Home() { return <main />; }\n',
+    [changed]: WIDGET,
+    ...extra,
+  });
+
+  it('loads the test file when the router file imports it, with router fallback routes', async () => {
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'src/App.tsx': "import { Widget } from './features/tests/Widget';\nexport function App() { return <Widget />; }\n" })),
+      featureConfig,
+      [changed],
+    );
+    expectGap(coverage, changed);
+    expect(coverage.gaps[0]?.reason).toMatch(/^This UI file is not in any route closure/);
+  });
+
+  it('loads the test file when a file the wide-blast globs name imports it', async () => {
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'src/main.tsx': "import { Widget } from './features/tests/Widget';\n", 'usabl.routes.json': SIDECAR })),
+      featureConfig,
+      [changed],
+    );
+    expectGap(coverage, changed);
+  });
+
+  it('is a gap when a glob in a file the wide-blast globs name may load it', async () => {
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'src/main.tsx': "const m = import.meta.glob('./features/tests/*.tsx', { eager: true });\n", 'usabl.routes.json': SIDECAR })),
+      featureConfig,
+      [changed],
+    );
+    expectGap(coverage, changed);
+    expect(coverage.gaps[0]?.reason).toContain('src/main.tsx');
+  });
+
+  it('loads the test file when a surface file outside the globs imports it', async () => {
+    const withSurface: UsablConfig = {
+      ...featureConfig,
+      surfaces: [{ id: 'shell', url: `${BASE}/shell`, files: ['src/Shell.tsx'] }],
+    };
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'src/Shell.tsx': "import { Widget } from './features/tests/Widget';\n" })),
+      withSurface,
+      [changed],
+    );
+    expectGap(coverage, changed);
+  });
+
+  it('stays excluded when an importer outside the globs that the config does not name imports it', async () => {
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'src/other.tsx': "import { Widget } from './features/tests/Widget';\n", 'usabl.routes.json': SIDECAR })),
+      featureConfig,
+      [changed],
+    );
+    expectExcluded(coverage, changed);
+  });
+});
+
 describe('a bare import that no package explains', () => {
   it('is a gap through a Vite alias whose key is not quoted', async () => {
     expectGap(

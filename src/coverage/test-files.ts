@@ -7,8 +7,8 @@
  *
  * 1. Is it a UI file? A surface lists it, a route closure reaches it, or a file that is not a test
  *    file imports it, directly or through other files. This module answers the last question with a
- *    wider import graph that starts at every file under uiFileGlobs that is not a test file, and
- *    reads imports completely (see ImportGraphOptions).
+ *    wider import graph that starts at every file the config names as app code (see
+ *    placeTestFiles), and reads imports completely (see ImportGraphOptions).
  * 2. Is it a gap? An import usabl cannot follow, in any file that graph followed, may load it: an
  *    unresolved import that names it, an import.meta.glob pattern that matches it, a dynamic import
  *    whose path is built at run time and may point to it, or a bare import a tsconfig baseUrl
@@ -123,7 +123,18 @@ export async function placeTestFiles(
     baseUrlDirs: await loadBaseUrlDirs(fs, config.discovery.routerFile),
     declaredPackages: await declaredPackageNames(fs, config),
   };
-  const entries = sortedUnique([...listed.filter((file) => !isTestFile(file)), ...routeEntries]);
+  // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
+  // files under uiFileGlobs that are not test files, the route entry files, the router file, the
+  // files the wide-blast globs match that are not test files, and every surface's files. An
+  // importer outside uiFileGlobs that the config does not name is not followed.
+  const wideBlast = config.discovery.wideBlastGlobs.length === 0 ? [] : await fs.glob([...config.discovery.wideBlastGlobs]);
+  const entries = sortedUnique([
+    ...listed.filter((file) => !isTestFile(file)),
+    ...routeEntries,
+    config.discovery.routerFile.replace(/^\/+/u, ''),
+    ...wideBlast.filter((file) => !isTestFile(file)),
+    ...config.surfaces.flatMap((surface) => surface.files),
+  ]);
   const loaded = await buildImportGraph(fs, entries, aliases, options);
 
   // The files a load usabl cannot follow may reach, and the files those import in turn. A test
