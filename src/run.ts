@@ -258,7 +258,11 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     const now = deps.clock();
     const gated = gate({
       coverage,
-      guardDivergedPaths: policyDivergedPaths,
+      // The two reasons for approval, kept apart so the approval line can say what happened: the
+      // guarded paths that changed, and whether the requirements failed to load. Their union is
+      // policyDivergedPaths, which the Result still reports as dirtyGuardedPaths.
+      guardDivergedPaths: [...new Set(guardDivergedPaths)].sort(),
+      requirementsUnloaded: intakePolicyPaths.length > 0,
       drafts,
       floor: debt.effectiveFloor,
       waivers,

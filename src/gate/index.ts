@@ -17,6 +17,7 @@ import { compareCodeUnits, sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
 import { checkGateInput } from './input.js';
+import { InputRefusedError } from '../intake/input-refusal.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
@@ -29,15 +30,16 @@ export function gate(raw: GateInput): GateOutput {
   // hand. It reads the caller's input once and from then on reads only the checked copy. See
   // ./input.ts.
   const input = checkGateInput(raw);
+  const requirementsUnloaded = readRequirementsUnloaded(raw);
   const accessibility = accessibilityOutcome(input);
-  if (input.guardDivergedPaths.length > 0) {
+  if (input.guardDivergedPaths.length > 0 || requirementsUnloaded) {
     // Policy divergence is a human approval problem, not an accessibility skip.
     // Keep the scan outcome so CI can AND a second check without GitHub inside the gate.
     return {
       verdict: 'approval_required',
       findings: accessibility.findings,
       exitCode: 2,
-      summary: approvalSummary(input.guardDivergedPaths.length, accessibility),
+      summary: approvalSummary(input.guardDivergedPaths.length, requirementsUnloaded, accessibility),
       accessibilityVerdict: accessibility.verdict,
       accessibilityExitCode: accessibility.exitCode,
       // Carried through, not dropped. The accessibility half ran and reached these, and a reader
@@ -52,6 +54,20 @@ export function gate(raw: GateInput): GateOutput {
     accessibilityVerdict: accessibility.verdict,
     accessibilityExitCode: accessibility.exitCode,
   };
+}
+
+/**
+ * GateInput.requirementsUnloaded, read once and checked, so a getter cannot answer twice and a
+ * string "false", which is truthy, cannot ask for approval. Absent reads as false. It only selects
+ * the approval line and joins the approval test, so it is read here beside them.
+ */
+function readRequirementsUnloaded(raw: GateInput): boolean {
+  const value: unknown = raw.requirementsUnloaded;
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throw new InputRefusedError('requirementsUnloaded', 'gate() input requirementsUnloaded must be a boolean.');
+  }
+  return value;
 }
 
 function accessibilityOutcome(input: GateInput): {
@@ -667,12 +683,21 @@ export function findingKey(f: Finding): string {
  * is omitted rather than filled with "nothing to check". This is the same rule the accessibility
  * summary already follows for a clean run, where inventing "0 gap(s)" would teach the reader to
  * skip the clause on the runs where it carries something.
+ *
+ * A requirements file that could not be loaded is named on its own. It used to be counted as a
+ * changed path, so the line said a file changed when it only failed to load. The count is changed
+ * paths only.
  */
 function approvalSummary(
   divergedPaths: number,
+  requirementsUnloaded: boolean,
   accessibility: { verdict: AccessibilityVerdict | null; summary: string },
 ): string {
-  const head = `approval required: ${divergedPaths} guarded path(s) changed`;
+  const reasons = [
+    ...(divergedPaths > 0 ? [`${divergedPaths} guarded path(s) changed`] : []),
+    ...(requirementsUnloaded ? ['the requirements could not be loaded'] : []),
+  ];
+  const head = `approval required: ${reasons.join('; ')}`;
   if (accessibility.verdict === null) {
     return head;
   }
