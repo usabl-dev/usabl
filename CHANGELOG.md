@@ -267,18 +267,31 @@
   `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
   before any check, even when a screen imported it or a surface listed it, and a file in a test
   folder was excluded whenever no route closure reached it, which with router fallback routes was
-  always. Now a test file is a UI file when a surface lists it, a route closure reaches it, or any
-  file outside the tests imports it, directly or through other files; usabl builds a wider import
-  graph from every file outside the tests for this, only when a changed test file needs it. It is
-  an `unresolved` gap when a load usabl cannot follow may reach it: an unresolved import that names
-  it, an `import.meta.glob` pattern that matches it, an `import()` or `require()` whose path is
-  built at run time and may point to it, or a bare import a tsconfig `baseUrl` resolves to it.
-  The import graph also follows a name like `./Widget.spec` to `Widget.spec.tsx`. A change to a
-  test file that nothing outside the tests imports, and that no such load can reach, stays nothing
-  to check, and is now listed as excluded with a reason for a file named like a test too. The pull
-  request comment and the Stop hook now list excluded files, as `usabl check` does, and an idle run
-  that excluded files says so on both. `usabl baseline` and `usabl docs --all` place test files by
-  the same rule, so a test file a load usabl cannot follow may reach is a gap there too.
+  always. Now a test file is a UI file when a surface lists it, a route closure reaches it, or a
+  file outside the tests imports it, directly or through other files. For this usabl builds a wider
+  import graph, only when a changed test file needs it, that starts from the files the config names
+  as app code: the files under `uiFileGlobs` that are not test files, the route entry files, the
+  router file, the other files `wideBlastGlobs` match, and the files of every surface. When such a test
+  file is reached only through files no route closure reaches, such as stories or setup files, the
+  gap reason names them. A test file is an `unresolved` gap when a load usabl cannot follow may
+  reach it: an unresolved import that names it, an `import.meta.glob` pattern that matches it, an
+  `import()` or `require()` whose path is built at run time and may point to it, a webpack
+  `require.context` of a folder that holds it, a bare import a tsconfig or jsconfig `baseUrl`
+  resolves to it, or a bare import no package explains (a `#` import, or a package that no
+  package.json declares) that names it. usabl reads these loads narrowly: a glob that starts with
+  `/` is read from the Vite root, a pattern with syntax usabl does not evaluate covers only the
+  folder above that syntax, a load inside a comment is skipped, and a Vite alias key written
+  without quotes is read. The gap reason names the importer and says to narrow the load there, or
+  to list the file in a surface. The import graph also follows a name like `./Widget.spec` to
+  `Widget.spec.tsx`. A test file in a workspace package the app depends on follows the same rule,
+  with the package's own source files as starts. A change to a test file that nothing usabl reads
+  imports, and that no such load can reach, stays nothing to check, and is now listed as excluded
+  with a reason for a file named like a test too. The pull request comment and the Stop hook now
+  list excluded files, as `usabl check` does, and an idle run that excluded files says so on every
+  surface in place of "No UI files changed". `usabl baseline` and `usabl docs --all` place test
+  files by the same rule, so `usabl baseline` refuses without `--partial` when a load such as
+  `require(name)`, `import.meta.glob(variable)`, or a fixture import in a story may reach a test
+  file. The ways out are `--partial`, a narrower load, or a surface that lists the file.
 
 - Setup and discovery read truer for a new team. usabl's git reader runs with `LC_ALL=C`, so a
   missing policy file at a ref reads as absent under any locale, where a translated git error
