@@ -317,6 +317,20 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
   return { kind: 'glob', text, patterns: /\bbase\s*:/u.test(options) ? null : patterns };
 }
 
+// A webpack require.context(folder, recursive, pattern) call. It loads files under the folder, so
+// the folder is the fixed start of what it may load. Its other arguments only narrow that set, so
+// they are not read. A first argument that is not a string may point anywhere.
+function readContextCall(source: string, start: number, open: number): LoaderCall {
+  const text = callText(source, start);
+  const quoted = readQuoted(source, skipBlank(source, open + 1));
+  if (quoted === null || quoted.interpolated) return { kind: 'built', text, prefix: quoted === null ? null : quoted.text };
+  const after = source.charAt(skipBlank(source, quoted.end));
+  if (after !== ')' && after !== ',') return { kind: 'built', text, prefix: null };
+  return { kind: 'built', text, prefix: quoted.text.endsWith('/') ? quoted.text : `${quoted.text}/` };
+}
+
+const CONTEXT_CALL_RE = /(?<![\w$.])require\s*\.\s*context\s*\(/g;
+
 function findLoaderCalls(source: string): LoaderCall[] {
   const calls: LoaderCall[] = [];
   for (const match of source.matchAll(GLOB_CALL_RE)) {
@@ -324,6 +338,9 @@ function findLoaderCalls(source: string): LoaderCall[] {
   }
   for (const match of source.matchAll(DYNAMIC_CALL_RE)) {
     calls.push(readDynamicCall(source, match.index, match.index + match[0].length - 1));
+  }
+  for (const match of source.matchAll(CONTEXT_CALL_RE)) {
+    calls.push(readContextCall(source, match.index, match.index + match[0].length - 1));
   }
   return calls;
 }

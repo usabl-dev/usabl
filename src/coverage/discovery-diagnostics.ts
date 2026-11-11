@@ -25,7 +25,11 @@ export function describeLoad(entry: UnresolvableImport): string | null {
       entry.prefixes === null
         ? 'and usabl cannot tell where that path points, so it may load any file'
         : `so it may load any file ${[...under, ...named].join(', or any file ')}`;
-    return `${entry.importer} loads a module with ${entry.specifier}, whose path is built when the code runs, ${which}`;
+    const how = /^require\s*\.\s*context/u.test(entry.specifier)
+      ? 'loads the modules of a folder with'
+      : 'loads a module with';
+    const built = /^require\s*\.\s*context/u.test(entry.specifier) ? '' : ', whose path is built when the code runs,';
+    return `${entry.importer} ${how} ${entry.specifier}${built} ${which}`;
   }
   if (entry.kind === 'bare-unknown') {
     const why = entry.specifier.startsWith('#')

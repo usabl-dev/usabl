@@ -118,6 +118,22 @@ describe('an importer outside uiFileGlobs that the config names', () => {
   });
 });
 
+describe('a webpack require.context call', () => {
+  it('is a gap when its folder holds the test file', async () => {
+    const coverage = await coverageOf("const ctx = require.context('./tests', true, /\\.tsx$/);", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/');
+  });
+
+  it('is a gap when its first argument is not a literal', async () => {
+    expectGap(await coverageOf('const ctx = require.context(folder, true);', { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('stays excluded when its folder does not hold the test file', async () => {
+    expectExcluded(await coverageOf("const ctx = require.context('./pages', true, /\\.tsx$/);", { 'package.json': PACKAGE_JSON }));
+  });
+});
+
 describe('a test file in a workspace package the app depends on', () => {
   const workspace: Record<string, string> = {
     'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/ui': '*', react: '^18.3.0' } }),
