@@ -16,14 +16,11 @@ import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } fr
 import { compareCodeUnits, sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
+import { EVIDENCE_FLOOR_PATH } from '../evidence/floor.js';
 import { checkGateInput } from './input.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
-
-// Declared here rather than imported from the baseline module, which imports run(), which imports
-// this one. run.ts keeps its own copy for the same reason.
-const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
 export function gate(raw: GateInput): GateOutput {
   // The gate checks its own input, because it is exported and a library caller can build one by

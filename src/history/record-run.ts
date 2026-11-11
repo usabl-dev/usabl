@@ -10,16 +10,12 @@
  * checkout whose guarded files differ from HEAD, because a record speaks for the committed floor.
  */
 import type { Deps, EvidenceFloor, Result, UsablConfig } from '../contracts/index.js';
-import { everyScannableFile, EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
-import { parseEvidenceFloor } from '../evidence/floor.js';
+import { everyScannableFile } from '../baseline/index.js';
+import { EMPTY_FLOOR, EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from '../evidence/floor.js';
 import { computePolicyHash } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { expandConfigGuardedSet } from '../trust/guard.js';
 import { buildRecord, HISTORY_BRANCH, type HistoryRecord } from './record.js';
-
-// The floor run() uses when there is none, so a record of a run with no floor carries the same
-// floor hash the run compared with.
-const EMPTY_FLOOR: EvidenceFloor = { version: 2, entries: [] };
 
 export interface RecordOutcome {
   exitCode: 0 | 2 | 4;

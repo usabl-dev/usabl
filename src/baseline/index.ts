@@ -16,12 +16,13 @@ import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { computeIdentity, FLOOR_VERSION, identityKey, identitySchemeFor } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { runWithFloorGaps } from '../run.js';
-import { parseEvidenceFloor } from '../evidence/floor.js';
+import { EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from '../evidence/floor.js';
 import { groupByScreen, isUnconfirmedAbsence, keptUnconfirmedLines, observeFloor } from '../floor/unconfirmed.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { checkGuard } from '../trust/guard.js';
 
-export const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
+// Re-exported for the commands that already import it from here. It is defined with the parser.
+export { EVIDENCE_FLOOR_PATH };
 
 export interface BaselineFs {
   writeFile(path: string, contents: string): Promise<void>;
