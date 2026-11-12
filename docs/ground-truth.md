@@ -4243,7 +4243,11 @@ relative to the repository root, such as `usabl init --app packages/web`. A fold
 repository, one with no files, and one written with a glob character (`*`, `?`, `[`, `]`, `{`,
 `}`, or `!`) are refused, because a glob could name several apps at once. A folder written
 inside the repository whose real path, through symbolic links, is outside it is refused too,
-with exit 2, because its draft would check files the repository does not hold. With no flag, `init`
+with exit 2, because its draft would check files the repository does not hold. A folder whose
+real path is another folder inside the repository, such as `apps/web` linked to `packages/web`,
+is drafted from the real path, and a `Review:` note says the folder is a link and names the
+folder the draft uses. git reports a changed file at its real path and tracks the link as one
+entry, so a draft under the link path would match no changed file. With no flag, `init`
 drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
 `src/**/*.jsx` files. Otherwise it
 looks below the root: a folder with a Vite config two levels down anywhere, or three under

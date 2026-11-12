@@ -200,10 +200,10 @@ export interface InferInitOptions {
  * files, and one written with glob characters are refused: drafting it would write globs that
  * match nothing in this tree, or that match several apps.
  */
-async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
+async function normalizeAppDir(fs: InitFs, appDir: string): Promise<{ dir: string; note: string | null }> {
   const cleaned = posix.normalize(appDir.trim().split('\\').join('/')).replace(/\/+$/, '');
   if (cleaned === '.' || cleaned === '') {
-    return '';
+    return { dir: '', note: null };
   }
   if (posix.isAbsolute(cleaned) || cleaned === '..' || cleaned.startsWith('../')) {
     throw new Error(
@@ -228,16 +228,31 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
         'outside this repository. Pass the app folder inside the repository. Nothing was written.',
     );
   }
+  // git lists a file at its real path and tracks a symbolic link as one entry, so a change under a
+  // linked folder is reported under the folder it leads to. Every path is drafted from there, or
+  // no changed file would ever match the drafted globs and every run would read as nothing to check.
+  const dir = real !== null && real !== cleaned ? real : cleaned;
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
-  // A file counts only when its path starts with the folder as written, so the folder exists.
-  const inside = (await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).filter((file) => file.startsWith(`${cleaned}/`));
+  // A file counts only when its path starts with the folder, so the folder exists.
+  const inside = (await fs.glob(dir === '' ? ['*', '*/*'] : [`${dir}/*`, `${dir}/*/*`])).filter(
+    (file) => dir === '' || file.startsWith(`${dir}/`),
+  );
   if (inside.length === 0) {
     throw new Error(
       `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
         'Check the path, relative to the repository root. Nothing was written.',
     );
   }
-  return cleaned;
+  if (dir === cleaned) {
+    return { dir, note: `Drafting the app in ${operatorText(dir)}, from --app.` };
+  }
+  const where = dir === '' ? 'the repository root' : operatorText(dir);
+  return {
+    dir,
+    note:
+      `Review: ${operatorText(cleaned)} is a symbolic link, or sits under one, that leads to ${where} inside this ` +
+      `repository. git reports changed files at their real path, so the draft uses ${where} for every path.`,
+  };
 }
 
 function isSkippedPath(path: string): boolean {
@@ -283,8 +298,7 @@ async function rootIsApp(fs: InitFs): Promise<boolean> {
 // refused, because drafting the wrong app would write a config that checks the other app's files.
 async function chooseAppDir(fs: InitFs, appDir: string | undefined): Promise<{ dir: string; note: string | null }> {
   if (appDir !== undefined) {
-    const dir = await normalizeAppDir(fs, appDir);
-    return { dir, note: dir === '' ? null : `Drafting the app in ${dir}, from --app.` };
+    return normalizeAppDir(fs, appDir);
   }
   if (await rootIsApp(fs)) {
     return { dir: '', note: null };

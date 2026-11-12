@@ -3,7 +3,7 @@
  * path, through symbolic links, is outside the repository would draft a config that reads files
  * the repository does not hold, so init refuses it with exit 2 and writes nothing.
  */
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,8 +73,57 @@ describe('inferInit --app through the realpath port', () => {
     }
   });
 
-  it('drafts a folder whose real path is another folder inside the repository', async () => {
-    const draft = await inferInit(memoryFs(files, () => 'packages/web'), { appDir: 'apps/web' });
-    expect(draft.config.uiFileGlobs.some((glob) => glob.startsWith('apps/web/'))).toBe(true);
+  it('drafts a folder whose real path is another folder inside the repository from the real path', async () => {
+    // git lists the files at their real path and tracks the link as one entry, so the draft must
+    // name the real folder or no changed file would ever match it.
+    const realFiles = Object.fromEntries(Object.entries(APP_FILES).map(([name, text]) => [`packages/web/${name}`, text]));
+    const draft = await inferInit(
+      memoryFs(realFiles, (path) => (path === 'apps/web' ? 'packages/web' : path)),
+      { appDir: 'apps/web' },
+    );
+    expect(draft.config.uiFileGlobs.some((glob) => matchGlob(glob, 'packages/web/src/App.tsx'))).toBe(true);
+    expect(draft.config.uiFileGlobs.some((glob) => glob.startsWith('apps/web/'))).toBe(false);
+    expect(draft.notes.join('\n')).toMatch(/apps\/web is a symbolic link.*packages\/web/);
+  });
+});
+
+describe('usabl init --app with a symbolic link to another folder inside the repository', () => {
+  let base: string;
+  let originalCwd: string;
+  let stdout: string[];
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    base = await realpath(await mkdtemp(join(tmpdir(), 'usabl-init-inside-link-')));
+    await mkdir(join(base, 'repo', 'apps'), { recursive: true });
+    for (const [name, text] of Object.entries(APP_FILES)) {
+      await mkdir(join(base, 'repo', 'packages', 'web', name, '..'), { recursive: true });
+      await writeFile(join(base, 'repo', 'packages', 'web', name), text, 'utf8');
+    }
+    await symlink(join(base, 'repo', 'packages', 'web'), join(base, 'repo', 'apps', 'web'), 'dir');
+    process.chdir(join(base, 'repo'));
+    stdout = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as typeof process.stderr.write);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    process.chdir(originalCwd);
+    await rm(base, { recursive: true, force: true });
+  });
+
+  it('drafts uiFileGlobs that match a changed file as git names it, and says the folder is a link', async () => {
+    const code = await main(['init', '--app', 'apps/web']);
+    expect(code).toBe(0);
+    const config = JSON.parse(await readFile(join(base, 'repo', 'usabl.config.json'), 'utf8')) as { uiFileGlobs: string[] };
+    // git reports an edit to the app as packages/web/src/App.tsx, never under the link.
+    expect(config.uiFileGlobs.some((glob) => matchGlob(glob, 'packages/web/src/App.tsx'))).toBe(true);
+    expect(config.uiFileGlobs.some((glob) => glob.startsWith('apps/web/'))).toBe(false);
+    expect(stdout.join('')).toContain('Review: apps/web is a symbolic link');
+    expect(stdout.join('')).toContain('packages/web');
   });
 });
