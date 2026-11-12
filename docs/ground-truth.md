@@ -1638,17 +1638,24 @@ in this order:
      equals the file's name without its extension (or its folder name, for an `index` file). For
      example, `src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
      `src/tests/Dashboard.tsx` is a gap;
-   - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A relative
-     pattern is resolved from the importer's folder, and a pattern that starts with `/` from the
-     Vite root (the folder of the nearest Vite config at or above the router file, or else the
-     repository root), as Vite reads it. Patterns are matched with usabl's own glob matcher. Every
-     literal pattern in the call is read, an array of patterns too, and a negative pattern is left
-     out, which can only name more files. A pattern with syntax the matcher does not evaluate, such
-     as `?`, `[ ]`, `( )`, or a brace range, covers every file in the folder above its first such
-     segment, so `/src/pages/[id]/*.tsx` covers `src/pages/` and not a test folder beside it. A
-     call whose argument is not a string or a list of strings, a pattern that starts with an alias
-     usabl cannot map, and a call whose options set `base` may load any file, and the reason says
-     which of these it was;
+   - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A string
+     with a backslash escape is read as the string it is. Brace groups are expanded first, and each
+     alternative is resolved on its own, so `./{../tests,x}/*.tsx` covers `../tests/*.tsx` and
+     `x/*.tsx`. A relative alternative is resolved from the importer's folder. One that starts with
+     `/` is resolved from the Vite root, as Vite reads it, when usabl knows the root: exactly one
+     Vite config sits on the climb from the router file to the repository root and its text does
+     not hold the word `root`, so the root is that config's folder, or no Vite config sits there,
+     so the root is the repository root. Otherwise Vite's root depends on its `root` option or on
+     how it is started, so such a pattern may load any file. Patterns are matched with usabl's own
+     glob matcher. Every literal pattern in the call is read, an array of patterns too, and a
+     negative pattern is left out, which can only name more files. A pattern with syntax the
+     matcher does not evaluate, such as `?`, `[ ]`, `( )`, or a brace range, covers every file in
+     the folder above its first such segment, so `/src/pages/[id]/*.tsx` covers `src/pages/` and
+     not a test folder beside it. Each of these may load any file, and the reason says which it
+     was: a call whose argument is not a string or a list of strings, a pattern that starts with an
+     alias usabl cannot map, a call whose options set `base`, and a pattern usabl cannot read
+     exactly (a nested or unbalanced brace, more than 64 brace alternatives, or a `..` after a
+     segment with glob syntax);
    - an `import()` or `require()` whose argument is a template literal or is not a literal, and a
      webpack `require.context(folder, ...)`. The fixed text before the first `${`, or the folder, is
      a prefix, resolved from the importer's folder (or through an alias, or under a `baseUrl` for a
@@ -1665,12 +1672,19 @@ in this order:
      `tsconfig.app.json`, and `jsconfig.json`, in the folder of the nearest tsconfig at or above the
      router file and in the repository root;
    - a bare import that no package explains: a `#` specifier, which package.json `imports` maps and
-     which is never an npm package, or a name whose package (its first segment, or `@scope/name`) is
-     not a Node.js built-in module and is not declared in the dependency fields of a package.json
-     usabl reads: the ones on the climb from the router file, the `uiFileGlobs` folders, and each
-     surface file up to the repository root, and every workspace package the root lists. Such an
-     import may be an alias usabl did not read, so it may load a file its last segment names, as an
-     unresolved import does.
+     which is never an npm package, or a name that is not a Node.js built-in module and whose
+     package (its first segment, or `@scope/name`) is not declared in the dependency fields of a
+     package.json usabl reads: the ones on the climb from the router file, the `uiFileGlobs`
+     folders, and each surface file up to the repository root, and every workspace package the root
+     lists. A built-in is matched by the whole specifier, or its `node:` form, against Node.js's own
+     list, so `fs/promises` is a built-in and `util/tests/Widget` is not. Such an import may be an
+     alias usabl did not read, so it may load a file its last segment names, as an unresolved
+     import does. A bare template start counts as a package only when it names a whole declared
+     package, never a built-in, because the rest of the path is not known;
+   - a bare import of a path inside a workspace package, such as `@acme/ui/testing`, that names no
+     file under the package folder. It may go through the package's `exports` map, which usabl does
+     not read, so it may load any file of that package. A path that does name a file there, such as
+     `@acme/ui/src/tests/helpers`, is followed to it like any import.
 
    Loads inside comments are skipped. usabl finds the comments by parsing the file, so a string that
    holds comment marks, such as `"http://"`, never hides a call, and a file that does not parse, such
@@ -1679,11 +1693,11 @@ in this order:
    A file that such a load may reach through its own imports counts too: a glob that loads
    `src/tests/Index.tsx`, which re-exports `./Widget`, may load `src/tests/Widget.tsx`. The import
    graph records these loads in its `unresolvable` list as the kinds `glob-import`,
-   `dynamic-import`, `base-url`, and `bare-unknown`. The gap reason names the file that loads files
-   in a way usabl cannot follow and what usabl read of that load, says this file may be one of them,
-   and says where the fix belongs: change the load in the named importer so its pattern or path
-   start does not cover test folders, or make it a plain import usabl can resolve; or, if a screen
-   does render the file, list it in the `files` of a surface.
+   `dynamic-import`, `base-url`, `bare-unknown`, and `package-subpath`. The gap reason names the
+   file that loads files in a way usabl cannot follow and what usabl read of that load, says this
+   file may be one of them, and says where the fix belongs: change the load in the named importer
+   so its pattern or path start does not cover test folders, or make it a plain import usabl can
+   resolve; or, if a screen does render the file, list it in the `files` of a surface.
 3. **Otherwise it is excluded**, listed in `coverage.excludedFiles` with a reason for its kind (named
    like a test, or in a test folder) that says usabl found no import of it in the files it follows
    from this configuration, and no load it could not follow could reach it. Those files are the
@@ -1691,14 +1705,18 @@ in this order:
    `src/test/setup.ts`, a helper in `src/__tests__/`, a mock request handler in `src/test/`, or a
    `Button.test.tsx` that only the tests import. It is not a gap, so a pull request that edits only
    tests still has nothing to check. A glob pattern that does not match the file, or a template
-   prefix that does not cover it, changes nothing.
+   prefix that does not cover it, changes nothing. A test file that `wideBlastGlobs` match is still
+   a test file, so the match does not make it checked; its reason says it matched and was still
+   not checked, because nothing outside the tests loads it.
 
 A changed test file outside `uiFileGlobs` that sits in a workspace package the app depends on (see
-"Workspace packages at check time" below) follows the same rule, with the source files of that
-package that are not test files as more starts. When one of them loads it, or a load usabl cannot
-follow may reach it, it keeps the `not-covered` workspace gap a file of that package gets.
-Otherwise it is excluded and listed, and a change to it alone has nothing to check. When the
-workspace root cannot be read, the package is not known, so the file keeps its gap.
+"Workspace packages at check time" below) follows the same rule. The starts are the app's own, as
+above, and the source files that are not test files of every workspace package the app depends on,
+so a package that imports the file by a path inside its package counts. When a file outside the
+tests loads it, or a load usabl cannot follow may reach it, it keeps the `not-covered` workspace gap
+a file of that package gets. Otherwise, as for a file that only the package's tests import, it is
+excluded and listed, and a change to it alone has nothing to check. When the workspace root cannot
+be read, the package is not known, so the file keeps its gap.
 
 Every list is sorted, and nothing depends on the order the file system returns files in.
 
@@ -1731,8 +1749,11 @@ through one of them is excluded:
 - a loader that leaves no import text: a bundler plugin, a virtual module, a path string built far
   from the import (assigned to a variable in another file, then loaded), or an HTML file that loads
   a script from a test folder;
-- a bare import of a name that a package.json usabl reads does declare, which a Vite alias usabl
-  cannot read also maps, so the bundler loads an app file in place of the package.
+- a bare import of a name that a package.json usabl reads does declare, which an alias usabl
+  cannot read also maps, such as a webpack or Babel alias, so the bundler loads an app file in
+  place of the package. The package names are read from the working tree, which in CI is the pull
+  request tree, so a name an earlier change declared can make a later import of an app folder by
+  that name read as a package.
 
 If a screen renders a test file, list it in the `files` of a surface, which makes it a UI file
 whatever usabl finds.
@@ -1742,8 +1763,8 @@ is its repository path. The reason says why usabl could not place it, then the f
 `files` of a surface in `usabl.config.json`, or add the route that renders it to
 `usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
 way comes last, as discovery detail, in three labelled groups: the imports on the screens' paths
-that may load the file (one whose last segment names it, or a glob, dynamic, `require.context`,
-`baseUrl`, or unexplained bare load that covers it, as for test files), then the file's own
+that may load the file (one whose last segment names it, or a glob, dynamic, or `require.context`
+load that covers it; the route graph does not record `baseUrl` or bare loads), then the file's own
 imports, then every other import on the screens' paths, labelled as imports of other files that
 may still load this one. The first three entries are printed, in that order, and then the count of
 the rest. A test file that is a UI file only because files no route closure reaches import it
