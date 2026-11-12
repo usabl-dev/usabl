@@ -4362,8 +4362,11 @@ each path prints the same sentence, which says why and names the fix:
 A documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
 loads and names at least one page: the docs manifest says what to check. A manifest that is
 only there, with no pages or that does not load, does not count. Each path reads the manifest
-from where it reads policy: the folder usabl runs in for the loader and doctor, the trusted ref
-for the CI judge, and the repository root for the Stop hook. The Playwright helper reads the
+from where its run reads files, so the manifest that lets the config load is the one the run
+then checks. The loader reads it from the folder usabl runs in for the CLI, even when
+`--config` names a file in another folder, and from the plugin's `cwd` for the dev server
+overlay. Doctor reads it from the folder usabl runs in, the CI judge at the trusted ref, and the
+Stop hook at the repository root. The Playwright helper reads the
 config only for its design requirements and checks the one page a test hands it, so a run of
 it never reads as idle and it does not apply this rule.
 

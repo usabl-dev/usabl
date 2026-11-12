@@ -22,8 +22,10 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 const DEFAULT_CONFIG_PATH = 'usabl.config.json';
 
 export interface LoadConfigOptions {
-  // The docs manifest the run reads, from the folder usabl runs in. A config with no UI globs loads
-  // only when this manifest loads and names a page. Tests pass a path of their own.
+  // The docs manifest the run reads. A config with no UI globs loads only when this manifest loads
+  // and names a page, so it must be the file the run will check: the one in the folder the run
+  // reads its files from. That is the folder usabl runs in for the CLI, the default, even with
+  // --config elsewhere, and the plugin's cwd for the dev server overlay, which passes its path.
   docsManifestPath?: string;
   // Who asked for the config, so a missing file is explained in that caller's terms. The CLI takes
   // --config. The dev server plugin builds the path from its cwd and configPath options.
