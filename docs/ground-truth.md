@@ -4247,7 +4247,9 @@ with exit 2, because its draft would check files the repository does not hold. A
 real path is another folder inside the repository, such as `apps/web` linked to `packages/web`,
 is drafted from the real path, and a `Review:` note says the folder is a link and names the
 folder the draft uses. git reports a changed file at its real path and tracks the link as one
-entry, so a draft under the link path would match no changed file. With no flag, `init`
+entry, so a draft under the link path would match no changed file. When the real path cannot
+be read, because of a link loop or a path through a file, `init` gives the same refusal as a
+folder with no files, with exit 2. With no flag, `init`
 drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
 `src/**/*.jsx` files. Otherwise it
 looks below the root: a folder with a Vite config two levels down anywhere, or three under

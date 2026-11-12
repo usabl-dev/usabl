@@ -222,7 +222,15 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<{ dir: strin
   // A folder written inside the repository can be a symbolic link to one outside it. A draft for
   // it would check files the repository does not hold, so the real path decides.
   const real = await fs.realpath(cleaned);
-  if (real !== null && (posix.isAbsolute(real) || real === '..' || real.startsWith('../'))) {
+  const noFiles = new Error(
+    `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
+      'Check the path, relative to the repository root. Nothing was written.',
+  );
+  // Nothing usable is at the path: it is missing, a link loop, or a path through a file.
+  if (real === null) {
+    throw noFiles;
+  }
+  if (posix.isAbsolute(real) || real === '..' || real.startsWith('../')) {
     throw new Error(
       `usabl init refused --app ${operatorText(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
         'outside this repository. Pass the app folder inside the repository. Nothing was written.',
@@ -231,17 +239,14 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<{ dir: strin
   // git lists a file at its real path and tracks a symbolic link as one entry, so a change under a
   // linked folder is reported under the folder it leads to. Every path is drafted from there, or
   // no changed file would ever match the drafted globs and every run would read as nothing to check.
-  const dir = real !== null && real !== cleaned ? real : cleaned;
+  const dir = real;
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
   // A file counts only when its path starts with the folder, so the folder exists.
   const inside = (await fs.glob(dir === '' ? ['*', '*/*'] : [`${dir}/*`, `${dir}/*/*`])).filter(
     (file) => dir === '' || file.startsWith(`${dir}/`),
   );
   if (inside.length === 0) {
-    throw new Error(
-      `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
-        'Check the path, relative to the repository root. Nothing was written.',
-    );
+    throw noFiles;
   }
   if (dir === cleaned) {
     return { dir, note: `Drafting the app in ${operatorText(dir)}, from --app.` };

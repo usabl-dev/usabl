@@ -127,3 +127,47 @@ describe('usabl init --app with a symbolic link to another folder inside the rep
     expect(stdout.join('')).toContain('packages/web');
   });
 });
+
+describe('usabl init --app with a folder whose real path cannot be read', () => {
+  let base: string;
+  let originalCwd: string;
+  let stderr: string[];
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    base = await realpath(await mkdtemp(join(tmpdir(), 'usabl-init-unreadable-link-')));
+    await mkdir(join(base, 'repo', 'apps'), { recursive: true });
+    await writeFile(join(base, 'repo', 'apps', 'notes.txt'), 'a file, not a folder\n', 'utf8');
+    // Two links that point at each other: the real path read gives ELOOP.
+    await symlink(join(base, 'repo', 'apps', 'b'), join(base, 'repo', 'apps', 'a'));
+    await symlink(join(base, 'repo', 'apps', 'a'), join(base, 'repo', 'apps', 'b'));
+    process.chdir(join(base, 'repo'));
+    stderr = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    process.chdir(originalCwd);
+    await rm(base, { recursive: true, force: true });
+  });
+
+  // A link loop gives ELOOP, and a path through a file gives ENOTDIR.
+  for (const [label, appDir] of [
+    ['a symbolic link loop', 'apps/a'],
+    ['a path through a file', 'apps/notes.txt/web'],
+  ] as const) {
+    it(`gives the init refusal for ${label}, exit 2, and no raw error`, async () => {
+      const code = await main(['init', '--app', appDir]);
+      expect(code).toBe(2);
+      const text = stderr.join('');
+      expect(text).toContain(`usabl init refused --app ${appDir}: that folder has no files in this repository.`);
+      expect(text).not.toMatch(/ELOOP|ENOTDIR|realpath/);
+      expect(existsSync(join(base, 'repo', 'usabl.config.json'))).toBe(false);
+    });
+  }
+});
