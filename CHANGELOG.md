@@ -32,11 +32,14 @@
   Figma's published file format; not yet run on a real design file.
 - Five requirement kinds that find an element by role and accessible name, the way a screen reader
   user does: `name`, `heading` (with its level), `landmark`, `focus-order` (a Tab walk reaches the
-  names in order), and `target-size` (the laid-out border box in CSS pixels). A name matches with
+  names in order), and `target-size` (the laid-out border box in CSS pixels, with a minimum from 2
+  to 200; `minCssPx` and `--min-target` refuse a value under 2). A name matches with
   each run of ASCII white space read as one space and none at either end, as the browser reports
   it; any other character, such as a no-break space, is part of the name. A page that does not
-  match fails, except that a name that differs only in white space a person cannot see is needs
-  review, and the reason names the character and where it is. When usabl cannot tell, the result
+  match fails, except that in the name, heading, named landmark, and focus order checks a name
+  that differs only in white space a person cannot see is needs review, and the reason names the
+  character and where it is. That white space is every character `\s` matches, plus the zero
+  width space and the word joiner, from one list. When usabl cannot tell, the result
   is needs review, never a guess: two elements share the name, the page's accessibility tree has a
   match the document search could not read (such as one in a closed shadow root or with a role
   set through ElementInternals), the tree has more than 20000 nodes, the browser's tree answer has
@@ -44,22 +47,24 @@
   (it uses the keyboard walk's end rule), or the control to measure has a shape usabl does not
   measure: it wraps onto two lines; it or an element above it is rotated or skewed, or has a
   `clip-path`, `clip`, or mask; an element above it hides or scrolls its overflow and the control
-  reaches past that element's edges; it is fixed or sticky and reaches past the viewport; the
+  reaches past that element's edges, read in the units of the box under any scale, or that
+  element's layout size cannot be read; it is fixed or sticky and reaches past the viewport; the
   control can be brought fully into view only by a scroll of a box or page that hides its overflow,
   which a person cannot make; the control changes size when it is scrolled into view; or a hit
   test misses. Target size passes only when the browser confirms, with the control scrolled into
   view as far as a person can scroll it, that its center and the middle of each edge land on the
   control, so a control covered at any of the five points, one that takes no pointer
   events, one partly off the page, and one inside a scaled clipping element are needs review;
-  every scroll position is put back. A pass proves only those five points: a cover or clip
-  anywhere else, at a corner or between the points, is not seen. The check measures the control
-  alone, not a label that makes it larger, and a limit name it has no words for still asks for
-  review. The tree read has no time limit, only the node limit, so no clock decides a check;
-  nothing in usabl bounds a read that never returns, and in CI the job's time limit cancels it,
-  which is never a pass. The design checks on one screen share one read, read again after a focus
-  order or target size check. Known limit: an element in a closed shadow root inside a child frame
-  is seen by neither count, so on a page with child frames a second match there can go unseen.
-  `checkPage` runs them too.
+  every scroll position is put back. A control under 2 CSS pixels on either side cannot hold the
+  five points, so it gets no hit test and fails on size. A pass proves only those five points: a
+  cover or clip anywhere else, at a corner or between the points, is not seen. The check measures
+  the control alone, not a label that makes it larger, and a limit name it has no words for still
+  asks for review. The tree read has no time limit, only the node limit, so no clock decides a
+  check; nothing in usabl bounds a read that never returns, and in CI the job's time limit cancels
+  it, which is never a pass. The design checks on one screen share one read, read again after a
+  focus order or target size check. Known limit: an element in a closed shadow root inside a
+  child frame is seen by neither count, so on a page with child frames a second match there can go
+  unseen. `checkPage` runs them too.
 - `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
   identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
   it was first seen, its state, and its days open, from the floor file's first-parent history and
@@ -347,21 +352,25 @@
 - Setup and discovery read truer for a new team. usabl's git reader runs with `LC_ALL=C`, so a
   missing policy file at a ref reads as absent under any locale, where a translated git error
   crashed the run; the missing-ref message builds its fetch example from the ref instead of
-  assuming `main`. The import graph follows `./Child.js` to `Child.ts` (and `.jsx`, `.mjs`,
-  `.cjs` to their TypeScript names) at every depth. A tsconfig `extends` chain and single-file
-  `paths` entries are read. Two router paths that give one screen id, such as `/a-b` and `/a/b`,
-  are set aside instead of stopping the run: a wide-blast change records each as a `skipped`
-  gap, and a narrow change, which never reaches a route read from the router, reports the changed
-  file as an `unresolved` gap. `init` refuses that draft. `init` drafts every Vite config name as
-  wide blast, names workspace packages from the root `workspaces` list, names the apps `--app`
-  leaves out, and says when it could not read the exported Vite config at all.
+  assuming `main`. For a commit id it says to fetch more history, such as `fetch-depth: 0`, with
+  no fetch command, and a ref with a slash, such as `feature/foo`, is fetched from a remote only
+  when its first part names one, and otherwise by its whole name. The import graph follows
+  `./Child.js` to `Child.ts` (and `.jsx`, `.mjs`, `.cjs` to their TypeScript names) at every
+  depth. A tsconfig `extends` chain and single-file `paths` entries are read. Two router paths
+  that give one screen id, such as `/a-b` and `/a/b`, are set aside instead of stopping the run:
+  a wide-blast change records each as a `skipped` gap, and a narrow change, which never reaches a
+  route read from the router, reports the changed file as an `unresolved` gap. `init` refuses
+  that draft. `init` drafts every Vite config name as wide blast, names workspace packages from
+  the root `workspaces` list, names the apps `--app` leaves out, and says when it could not read
+  the exported Vite config at all.
 
 - Path aliases for check are read from the nearest tsconfig and the nearest Vite config at or
   above the router file, found on their own, and from the repository root configs as before. An
-  import the two sets map to different places links every file found and is disclosed in
-  `coverage.discoveryNotes`, printed as discovery notes. Gate effect: a change to a file that a
-  screen imports through a root alias maps to that screen again, where an app folder that held
-  only a Vite config or only a tsconfig dropped the other config and left the screen unchecked.
+  import the two sets map to different places links every file found. It is disclosed in
+  `coverage.discoveryNotes`, printed as discovery notes, when it reaches a changed UI file, and
+  otherwise as an `alias-conflict` line in the discovery detail. Gate effect: a change to a file
+  that a screen imports through a root alias maps to that screen again, where an app folder that
+  held only a Vite config or only a tsconfig dropped the other config and left the screen unchecked.
   More screens can be checked when the two sets disagree.
 
 - `usabl drift routes` counts routes set aside because their path gives a refused or shared
@@ -377,13 +386,37 @@
   outside the repository, and writes nothing. Gate effect: none on check; such a draft would
   have read files the repository does not hold.
 
+- `usabl init --app` drafts a folder that is a symbolic link to another folder inside the
+  repository, such as `apps/web` linked to `packages/web`, from the real folder, and a `Review:`
+  note says the folder is a link and which folder the draft uses. git reports a changed file at
+  its real path, so the old draft under the link path matched no change. A link loop or a path
+  through a file gets the same refusal as a folder with no files, with exit 2, where it printed a
+  raw `ELOOP` or `ENOTDIR` error. Gate effect: none on a written config; a new draft for a linked
+  app folder checks the app's changes, where every run read as nothing to check.
+
+- The CI judge's refusal of an empty `uiFileGlobs` list adds that in CI the config is read from
+  the base branch, so a pull request that fixes the list still gets exit 4, and the fix takes
+  effect once it is merged there. Gate effect: none; the exit code is unchanged.
+
+- The dev server overlay reads the `usabl.docs.json` that lets an empty `uiFileGlobs` list load
+  from the plugin's `cwd`, the folder its run reads files from, where it read the folder the dev
+  server process started in. This changes which file is read when the two folders differ, for
+  example with the `cwd: import.meta.dirname` that `usabl install --overlay` writes and a dev
+  server started from a monorepo root. The CLI is unchanged: it reads the manifest from the
+  folder usabl runs in, even when `--config` names a file in another folder, because its run
+  reads from there. Gate effect: an overlay config with no UI globs loads only when its own
+  folder's manifest names a page.
+
 - Terminal and report output. The discovery detail of an unplaced file lists the import that
   names the file first and labels each group, so an unrelated file no longer reads as if it held
   another file's imports, and the reason no longer calls a baseline file changed. The baseline
   list of unplaced files prints 20 and the count of the rest, and every baseline line goes
   through the surface scrubber. A grouped gradient contrast entry keeps each element's source
-  line. A missing `--config` file is told to check that path. The connection-refused reason names
-  the url once.
+  line. A missing `--config` file is told to check that path, and the dev server overlay, which
+  has no `--config` flag, is told the path and its plugin's `cwd` and `configPath` options. The
+  `init` note for a workspace package the app depends on prints its folder through the operator
+  text helper, as every other path in `init` output is printed. The connection-refused reason
+  names the url once.
 
 - A page-drafted alt-text manifest from `usabl docs` carries its origin, so an empty one says
   the page showed no images, and its state line no longer calls the page's text expectations.
@@ -1440,10 +1473,15 @@
   With no UI globs, no change was ever a UI change, so every run read as idle without looking at
   anything. The message names the fix. The CI judge
   (`check --ci --trusted-ref <ref> --isolated-browser`) applies the same rule to the config at
-  the trusted ref and exits 4, where it used to exit 0. The Stop hook blocks such a config once
+  the trusted ref and exits 4, where it used to exit 0, and says the fix takes effect once it is
+  merged into the base branch. The Stop hook blocks such a config once
   as approval required, where it used to say idle and let the stop through. `usabl doctor`
   reports it as drifted. A documentation-only repository still loads when its
-  `usabl.docs.json` loads and names at least one page, read from the same place as the config.
+  `usabl.docs.json` loads and names at least one page. Each path reads that manifest from where
+  its run reads files: the CLI's loader from the folder usabl runs in, even when `--config` names
+  a file in another folder; the dev server overlay from its plugin's `cwd`; doctor from the folder
+  usabl runs in; the CI judge at the trusted ref; and the Stop hook from the working tree at the
+  repository root, while it compares the config with `HEAD`.
   A manifest with no pages, or one that does not load, no longer counts. Gate effect: such a
   config fails as a config error, and the Stop hook blocks, where each read every run as idle.
   Scripts that read exit 0 from such a config now see 4.
