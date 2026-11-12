@@ -200,10 +200,10 @@ export interface InferInitOptions {
  * files, and one written with glob characters are refused: drafting it would write globs that
  * match nothing in this tree, or that match several apps.
  */
-async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
+async function normalizeAppDir(fs: InitFs, appDir: string): Promise<{ dir: string; note: string | null }> {
   const cleaned = posix.normalize(appDir.trim().split('\\').join('/')).replace(/\/+$/, '');
   if (cleaned === '.' || cleaned === '') {
-    return '';
+    return { dir: '', note: null };
   }
   if (posix.isAbsolute(cleaned) || cleaned === '..' || cleaned.startsWith('../')) {
     throw new Error(
@@ -222,22 +222,42 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
   // A folder written inside the repository can be a symbolic link to one outside it. A draft for
   // it would check files the repository does not hold, so the real path decides.
   const real = await fs.realpath(cleaned);
-  if (real !== null && (posix.isAbsolute(real) || real === '..' || real.startsWith('../'))) {
+  const noFiles = new Error(
+    `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
+      'Check the path, relative to the repository root. Nothing was written.',
+  );
+  // Nothing usable is at the path: it is missing, a link loop, or a path through a file.
+  if (real === null) {
+    throw noFiles;
+  }
+  if (posix.isAbsolute(real) || real === '..' || real.startsWith('../')) {
     throw new Error(
       `usabl init refused --app ${operatorText(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
         'outside this repository. Pass the app folder inside the repository. Nothing was written.',
     );
   }
+  // git lists a file at its real path and tracks a symbolic link as one entry, so a change under a
+  // linked folder is reported under the folder it leads to. Every path is drafted from there, or
+  // no changed file would ever match the drafted globs and every run would read as nothing to check.
+  const dir = real;
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
-  // A file counts only when its path starts with the folder as written, so the folder exists.
-  const inside = (await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).filter((file) => file.startsWith(`${cleaned}/`));
+  // A file counts only when its path starts with the folder, so the folder exists.
+  const inside = (await fs.glob(dir === '' ? ['*', '*/*'] : [`${dir}/*`, `${dir}/*/*`])).filter(
+    (file) => dir === '' || file.startsWith(`${dir}/`),
+  );
   if (inside.length === 0) {
-    throw new Error(
-      `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
-        'Check the path, relative to the repository root. Nothing was written.',
-    );
+    throw noFiles;
   }
-  return cleaned;
+  if (dir === cleaned) {
+    return { dir, note: `Drafting the app in ${operatorText(dir)}, from --app.` };
+  }
+  const where = dir === '' ? 'the repository root' : operatorText(dir);
+  return {
+    dir,
+    note:
+      `Review: ${operatorText(cleaned)} is a symbolic link, or sits under one, that leads to ${where} inside this ` +
+      `repository. git reports changed files at their real path, so the draft uses ${where} for every path.`,
+  };
 }
 
 function isSkippedPath(path: string): boolean {
@@ -283,8 +303,7 @@ async function rootIsApp(fs: InitFs): Promise<boolean> {
 // refused, because drafting the wrong app would write a config that checks the other app's files.
 async function chooseAppDir(fs: InitFs, appDir: string | undefined): Promise<{ dir: string; note: string | null }> {
   if (appDir !== undefined) {
-    const dir = await normalizeAppDir(fs, appDir);
-    return { dir, note: dir === '' ? null : `Drafting the app in ${dir}, from --app.` };
+    return normalizeAppDir(fs, appDir);
   }
   if (await rootIsApp(fs)) {
     return { dir: '', note: null };
@@ -344,9 +363,9 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     const name = packageJson(await fs.readFile(manifest))?.['name'];
     if (typeof name !== 'string' || !depends.has(name)) continue;
     notes.push(
-      `Review: ${appDir} depends on ${operatorText(name)} in ${dir}, and its files are not in uiFileGlobs, so a ` +
+      `Review: ${operatorText(appDir)} depends on ${operatorText(name)} in ${operatorText(dir)}, and its files are not in uiFileGlobs, so a ` +
         'change there is a coverage gap, because usabl cannot tell which screens render it. If the app renders ' +
-        `components from it, add their files to uiFileGlobs, such as ${dir}/src/**/*.tsx, and to the files of the surfaces that render them.`,
+        `components from it, add their files to uiFileGlobs, such as ${operatorText(`${dir}/src/**/*.tsx`)}, and to the files of the surfaces that render them.`,
     );
   }
   return notes;

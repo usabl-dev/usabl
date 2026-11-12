@@ -441,10 +441,11 @@ describe('focus order requirement', () => {
   it('reads each name with the one white space rule the name check uses: ASCII white space only', async () => {
     const one = req({ type: 'focus-order', sequence: ['Refresh'] });
     expect(await run(one, tabbingPage([' Refresh\n']))).toEqual([]);
-    // A no-break space is not ASCII white space, so it is part of the name, for both checks. The
-    // name check then asks for review and names the character, because a person cannot see it.
+    // A no-break space is not ASCII white space, so it is part of the name, for both checks. Each
+    // check then asks for review and names the character, because a person cannot see it.
     const focus = await run(one, tabbingPage(['Refresh ']));
-    expect(focus[0]?.confidence).toBe('fail');
+    expect(focus[0]?.confidence).toBe('unverified');
+    expect(focus[0]?.why).toContain('"Refresh" followed by a no-break space');
     expect(focus[0]?.evidence.extra).toMatchObject({ heard: ['Refresh '] });
     const name = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({ '#r': button('Refresh ') }));
     expect(name[0]?.confidence).toBe('unverified');
@@ -623,6 +624,64 @@ describe('focus order requirement', () => {
   });
 });
 
+// A name that differs from the design only in white space a person cannot see gets needs review
+// that names the character, in every check that looks a name up, never a bare "there is no" fail.
+// Zero width characters are covered too, because \s does not match them.
+describe('hidden white space in every check that looks a name up', () => {
+  const HIDDEN: ReadonlyArray<[string, string]> = [
+    [' ', 'a no-break space'],
+    ['​', 'a zero width space'],
+    ['⁠', 'a word joiner'],
+  ];
+  const sameButFor = (word: string, design: string): string =>
+    `is named "${design}" followed by ${word}, and the design names it "${design}". The two names differ only in white space that cannot be seen`;
+
+  for (const [character, word] of HIDDEN) {
+    const label = `U+${(character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`;
+
+    it(`asks for review on a name check that differs by ${label}`, async () => {
+      const drafts = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({ '#r': button(`Refresh${character}`) }));
+      expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain(`A button on this screen ${sameButFor(word, 'Refresh')}`);
+    });
+
+    it(`asks for review on a heading check that differs by ${label}`, async () => {
+      const page = pageWith({ '#h': { name: `Users${character}`, role: 'heading', states: { level: 1 } } });
+      const drafts = await run(req({ type: 'heading', name: 'Users', level: 1 }), page);
+      expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.whatUserExperiences).not.toContain('There is no heading');
+      expect(drafts[0]?.why).toContain(`A heading on this screen ${sameButFor(word, 'Users')}`);
+      expect(drafts[0]?.elementPath).toBe('#h');
+    });
+
+    it(`asks for review on a named landmark check that differs by ${label}`, async () => {
+      const page = pageWith({ '#n': { name: `Primary${character}`, role: 'navigation', states: {} } });
+      const drafts = await run(req({ type: 'landmark', role: 'navigation', name: 'Primary' }), page);
+      expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.whatUserExperiences).not.toContain('There is no navigation area');
+      expect(drafts[0]?.why).toContain(`A navigation area on this screen ${sameButFor(word, 'Primary')}`);
+    });
+
+    it(`asks for review on a focus order check that differs by ${label}`, async () => {
+      const drafts = await run(req({ type: 'focus-order', sequence: ['Create user', 'Refresh'] }), tabbingPage(['Create user', `Refresh${character}`]));
+      expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.whatUserExperiences).not.toContain('Focus never reached');
+      expect(drafts[0]?.why).toContain(`A focus stop ${sameButFor(word, 'Refresh')}`);
+    });
+  }
+
+  it('finds a zero width character inside a word, and names where it is', async () => {
+    const drafts = await run(req({ type: 'name', target: { role: 'button', name: 'Refresh' } }), pageWith({ '#r': button('Re​fresh') }));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('is named "Re", a zero width space, then "fresh", and the design names it "Refresh".');
+  });
+
+  it('still fails a focus order whose name differs in visible text', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Create user', 'Refresh'] }), tabbingPage(['Create user', 'Reload']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+  });
+});
+
 describe('target size requirement', () => {
   const r = req({ type: 'target-size', target: { role: 'button', name: 'Refresh' }, minCssPx: 24 });
 
@@ -696,6 +755,19 @@ describe('target size requirement', () => {
     const drafts = await run(r, sized({ width: 16, height: 16 }));
     expect(drafts[0]?.whatUserExperiences).toBe('"Refresh" is 16 by 16 CSS pixels. The design asks for at least 24.');
     expect(drafts[0]?.elementPath).toBe('#r');
+  });
+
+  // The box read skips the hit test for a box too small to hold its points and adds no limit, so
+  // the size compare decides: such a box fails on size, never reads as needs review.
+  it('fails a 1 pixel and a zero-area control with the size reason', async () => {
+    const thin = await run(r, sized({ width: 1, height: 44 }));
+    expect(thin).toHaveLength(1);
+    expect(thin[0]?.confidence).not.toBe('unverified');
+    expect(thin[0]?.whatUserExperiences).toBe('"Refresh" is 1 by 44 CSS pixels. The design asks for at least 24.');
+    const empty = await run(r, sized({ width: 0, height: 0 }));
+    expect(empty).toHaveLength(1);
+    expect(empty[0]?.confidence).not.toBe('unverified');
+    expect(empty[0]?.whatUserExperiences).toBe('"Refresh" is 0 by 0 CSS pixels. The design asks for at least 24.');
   });
 
   it('compares the measured size and never shows a failing size as the minimum', async () => {

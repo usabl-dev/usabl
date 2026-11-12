@@ -32,7 +32,7 @@ Give one `--frame <Frame name>=<surface id>` for each frame. Other options:
 
 - `--owner <name>`: the owner each requirement records. The default is `design`.
 - `--min-target <css px>`: also draft a target size check, at this size, for each stamped button,
-  for example `--min-target 24`.
+  for example `--min-target 24`. The size is from 2 to 200 CSS pixels.
 
 The command prints what it wrote and every note it did not turn into a check:
 
@@ -103,8 +103,10 @@ Once approved, each check gives one of these:
   usabl reads for a design check; the browser gave an accessibility tree usabl could not read; the
   focus walk was cut short, for example by a control that moves focus away when it gets it; or no
   button has the name, so its size cannot be measured. A name that differs from the design only in
-  white space a person cannot see is needs review too, and the reason names the character, for
-  example: a button on this screen is named "Refresh" followed by a no-break space. usabl never
+  white space a person cannot see, such as a no-break space, a zero width space, or a word joiner,
+  is needs review too, in the name, heading, landmark, and focus order checks. The reason names the
+  character, for example: a button on this screen is named "Refresh" followed by a no-break
+  space. usabl never
   guesses. A run with a needs review finding is not verified.
 
 One case usabl cannot see: an element inside a closed shadow root that is itself inside a child
@@ -119,12 +121,14 @@ overflow when the control reaches past its edges; and a fixed or sticky control 
 the viewport. A translate or a scale is measured.
 
 A list of shapes cannot name them all, so a pass also needs a hit test. usabl scrolls the control
-into view, centered, then puts back every box, and the page, that a person cannot scroll, so the
-control is where a person meets it. It then asks the browser what is at five points of its box: the center, and the middle of
-each edge, just inside. If any point is not the control or something inside it, the check is
+into view, centered, then puts back every box, and the page, on each axis a person cannot
+scroll, so the control is where a person meets it. It then asks the browser what is at five
+points of its box: the center, and the middle of each edge, just inside. If any point is not the control or something inside it, the check is
 needs review: something clips or covers part of the control, it does not take pointer events, or
 it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
-usabl puts every scroll position back afterwards.
+usabl puts every scroll position back afterwards. A control under 2 CSS pixels on either side is
+too small to hold the points, so it gets no hit test and fails on size, because a target size
+minimum is always at least 2.
 
 Two more rules guard that scroll. If bringing the control fully into view needs a scroll of a box
 that hides its overflow (`hidden` or `clip`), or of the page while the page hides its overflow, the

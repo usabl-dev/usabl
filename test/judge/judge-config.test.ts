@@ -81,6 +81,19 @@ describe('check --isolated-browser with a trusted ref', () => {
     expect(stderr.join('')).toContain('usabl.config.json has an empty uiFileGlobs list');
   }, 60_000);
 
+  it('tells a pull request that fixes the empty list that the fix takes effect once merged', async () => {
+    const base = await commitEmptyGlobs({ 'src/App.tsx': 'export const App = 1;\n' });
+    // The head fixes the list, but the judge reads the config at the trusted ref, so it still
+    // refuses. The message must say why, or the author reads exit 4 as a broken fix.
+    await writeFile(join(repo, 'usabl.config.json'), JSON.stringify({ ...testConfig(), uiFileGlobs: ['src/**/*.tsx'] }), 'utf8');
+    const code = await main(['check', '--ci', '--trusted-ref', base, '--isolated-browser', '--json']);
+    expect(code).toBe(4);
+    expect(stderr.join('')).toContain('usabl.config.json has an empty uiFileGlobs list');
+    expect(stderr.join('')).toContain(
+      'In CI, usabl reads this config from the base branch, so a fix to uiFileGlobs takes effect once it is merged there.',
+    );
+  }, 60_000);
+
   it('reads the docs manifest that would excuse it at the trusted ref, not in the head', async () => {
     const base = await commitEmptyGlobs({ 'usabl.docs.json': '{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}' });
     await writeFile(

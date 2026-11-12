@@ -4247,7 +4247,13 @@ relative to the repository root, such as `usabl init --app packages/web`. A fold
 repository, one with no files, and one written with a glob character (`*`, `?`, `[`, `]`, `{`,
 `}`, or `!`) are refused, because a glob could name several apps at once. A folder written
 inside the repository whose real path, through symbolic links, is outside it is refused too,
-with exit 2, because its draft would check files the repository does not hold. With no flag, `init`
+with exit 2, because its draft would check files the repository does not hold. A folder whose
+real path is another folder inside the repository, such as `apps/web` linked to `packages/web`,
+is drafted from the real path, and a `Review:` note says the folder is a link and names the
+folder the draft uses. git reports a changed file at its real path and tracks the link as one
+entry, so a draft under the link path would match no changed file. When the real path cannot
+be read, because of a link loop or a path through a file, `init` gives the same refusal as a
+folder with no files, with exit 2. With no flag, `init`
 drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
 `src/**/*.jsx` files. Otherwise it
 looks below the root: a folder with a Vite config two levels down anywhere, or three under
@@ -4350,7 +4356,9 @@ each path prints the same sentence, which says why and names the fix:
   through it, the dev-server overlay included, stop with exit 4 before they run, the same way
   they stop on any other config error.
 - The CI judge, `check --ci --trusted-ref <ref> --isolated-browser`. It reads the config at the
-  trusted ref and never calls the loader, so it applies the rule itself, with exit 4.
+  trusted ref and never calls the loader, so it applies the rule itself, with exit 4. Its
+  message adds that in CI the config is read from the base branch, so a pull request that fixes
+  the list is still refused, and the fix takes effect once it is merged there.
 - The Stop hook. It never says idle for such a config. It blocks the stop as approval
   required, as it does for a config that does not parse, and lets one continuation through.
 - `usabl doctor` reports the config as drifted, with the same sentence as its next step.
@@ -4358,8 +4366,11 @@ each path prints the same sentence, which says why and names the fix:
 A documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
 loads and names at least one page: the docs manifest says what to check. A manifest that is
 only there, with no pages or that does not load, does not count. Each path reads the manifest
-from where it reads policy: the folder usabl runs in for the loader and doctor, the trusted ref
-for the CI judge, and the repository root for the Stop hook. The Playwright helper reads the
+from where its run reads files, so the manifest that lets the config load is the one the run
+then checks. The loader reads it from the folder usabl runs in for the CLI, even when
+`--config` names a file in another folder, and from the plugin's `cwd` for the dev server
+overlay. Doctor reads it from the folder usabl runs in, the CI judge at the trusted ref, and the
+Stop hook at the repository root. The Playwright helper reads the
 config only for its design requirements and checks the one page a test hands it, so a run of
 it never reads as idle and it does not apply this rule.
 
@@ -4547,8 +4558,8 @@ A requirement never holds a CSS selector. The roles are `button`, `link`, `headi
 
 The other assertions are `{ type: heading, name, level }` with a level from 1 to 6;
 `{ type: landmark, role, name? }`; `{ type: focus-order, sequence: [name, ...] }` with 2 to 200
-names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size above 0 and up
-to 200. Names are stored the way the browser reports an accessible name: each run of ASCII white
+names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size from 2 to 200
+(the hit test needs a box at least 2 pixels on each side, see below). Names are stored the way the browser reports an accessible name: each run of ASCII white
 space is one space, with none at either end, and they are compared with the page's names the same
 way, so "Create  user" matches "Create user". Case and every other character must match. The
 loader refuses, as `approval_required`, an empty name, a
@@ -4606,18 +4617,22 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 | Kind | Fails (`confidence: 'fail'`) | Unknown (`confidence: 'unverified'`, needs review) |
 |---|---|---|
 | `name` | No element has that role and name, and none has it once all white space is collapsed | More than one does, a candidate is out of reach, usabl cannot tell, or no element has the name but one has it once all white space is collapsed (the reason names the character and where it is) |
-| `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
-| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
-| `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
+| `heading` | No heading has that name, and none has it once all white space is collapsed, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, its level cannot be read, or no heading has the name but one has it once all white space is collapsed |
+| `landmark` | No landmark of that role (and name, when given, and none has that name once all white space is collapsed) | A named landmark matches more than once, a candidate is out of reach, usabl cannot tell, or no landmark has the name but one has it once all white space is collapsed; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
+| `focus-order` | A name is never reached, and no stop has it once all white space is collapsed, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, the walk was cut short, or a name is never reached but a stop has it once all white space is collapsed |
 | `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, its size cannot be read, or it has a shape usabl does not measure (below) |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
-failure, with one exception. When no element has the name, but one has it once white space of any
-kind is collapsed and trimmed on both sides, the check is needs review, never a failure, because a
-person looking at the page sees the name the design gives. The reason names the character and
-where it sits, for example: a button on this screen is named "Refresh" followed by a no-break
-space.
+failure, with one exception, which the `heading`, named `landmark`, and `focus-order` checks share.
+When no element or focus stop has the name, but one has it once white space of any kind is
+collapsed and trimmed on both sides, the check is needs review, never a failure, because a person
+looking at the page sees the name the design gives. The reason names the character and where it
+sits, for example: a button on this screen is named "Refresh" followed by a no-break space. One
+list in `src/primitives/hidden-white-space.ts` says which characters count: every character the
+JavaScript `\s` class matches, plus the zero width space (U+200B) and the word joiner (U+2060),
+which `\s` does not match. The zero width ones (those two and U+FEFF) are removed for this
+comparison, and every other run is read as one space. This rule never makes a name match.
 
 The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
 from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it
@@ -4645,7 +4660,11 @@ the box it reads can be larger than the area a pointer can hit:
 - an element above it has overflow other than visible on an axis (hidden, clip, auto, scroll, or
   overlay), or a `contain` value that holds paint, and the element reaches past that element's
   padding box on that axis, so only part of it can be on screen at once. On the root and the
-  body, only hidden and clip count, because their scrolling is the viewport's;
+  body, only hidden and clip count, because their scrolling is the viewport's. The padding box is
+  read in the same units as the element's box: its layout sizes (`clientLeft`, `clientWidth`, and
+  the rest) are scaled by the ratio of the element above's box on screen to its layout box
+  (`offsetWidth`, `offsetHeight`), so a scale on that element or above it moves the clip edge with
+  the box. When that ratio cannot be read, as for a layout size of 0, the axis counts as clipped;
 - the element, or an element above it, is fixed or sticky, and the element reaches past the
   viewport;
 - the walk up passes 512 elements;
@@ -4672,15 +4691,20 @@ The list above cannot name every shape, so a pass also needs a hit test, read la
 browser function. usabl scrolls the control into view (centered, with instant scrolling), then
 puts every box, and the window, back where it was on each axis a person cannot scroll (overflow
 hidden or clip, or a value usabl cannot read), so the points are read only at a position a person
-can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is at five points: the center, and the
-middle of each edge, 1 CSS pixel in. Edge middles are used, not corners, so a round or
-pill-shaped control is not flagged. A point is a hit only when the answer is the control or an
+can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is
+at five points: the center, and the middle of each edge, 1 CSS pixel in. Edge middles are used,
+not corners, so a round or
+pill-shaped control is not flagged. A box under 2 CSS pixels on either side cannot hold these
+points, and a box with no area has no point inside it, so the hit test does not run on such a box
+and adds no limit. The size compare then fails it, because no requirement with a minimum under 2
+loads. A point is a hit only when the answer is the control or an
 element inside it; an answer of null, outside the viewport, is a miss. Any miss is needs review,
 with the reason that part of the control's box cannot be hit: something clips it or covers it, it
 does not take pointer events, or it is partly off the page. The real-browser tests in
 `test/intake/roles.real.integration.test.ts` hold that each of these is needs review, with a box
 large enough to pass: a clipping element that is itself scaled, or sits inside a scaled element
-(no named shape sees either); `content-visibility: auto` on a short element above; a control
+(the overflow limit names both too, since its clip edge is read in scaled units);
+`content-visibility: auto` on a short element above; a control
 partly left of the page; `pointer-events: none`; and a control half covered by another element.
 They also hold that a button below a scaled box that hides its overflow, shown only by the read's
 own scroll, is needs review, and that a plain button, a round one, one in a box that scrolls
@@ -4692,7 +4716,11 @@ first read, before the scroll. A pass proves that the box is large enough and th
 points land on the control. A cover or clip anywhere else, at a corner or between the points, is
 not seen, so such a control can still pass. The check does not measure the spacing between
 targets. A target size check drops the design checks' shared tree read when it ends, as the focus
-order check does, because page script can answer its scroll by changing the page.
+order check does, because page script can answer its scroll by changing the page. This narrows
+the window for a stale read; it does not remove it. The page's `scroll` handler runs at the next
+frame, and the next design check's tree read can start before that, so a change the handler
+makes can still be missed. usabl does not wait for it, because nothing that reaches the gate may
+depend on timing.
 
 The check measures the control alone: a label that makes the real target larger, such as the
 label of a checkbox, is not counted, so a small checkbox can fail although its real target is

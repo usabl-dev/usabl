@@ -942,9 +942,9 @@ describe('loadConfig', () => {
     const path = join(dir, 'usabl.config.json');
     await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
     const docsManifest = join(dir, 'usabl.docs.json');
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/uiFileGlobs/);
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(path);
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/usabl\.docs\.json/);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/uiFileGlobs/);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(path);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/usabl\.docs\.json/);
   });
 
   it('keeps a docs-only repository working: empty uiFileGlobs loads when usabl.docs.json names a page', async () => {
@@ -963,8 +963,36 @@ describe('loadConfig', () => {
       }),
       'utf8',
     );
-    const config = await loadConfig(path, () => {}, docsManifest);
+    const config = await loadConfig(path, () => {}, { docsManifestPath: docsManifest });
     expect(config.uiFileGlobs).toEqual([]);
+  });
+
+  // The CLI's run reads usabl.docs.json from the folder usabl runs in, even with --config pointing
+  // elsewhere. A manifest beside a config in another folder is not the one the run checks, so it
+  // must not let an empty list load: the run would then find no page and read as idle.
+  it('reads the excusing manifest from the folder usabl runs in, not beside a --config elsewhere', async () => {
+    const originalCwd = process.cwd();
+    const runFolder = await mkdtemp(join(tmpdir(), 'usabl-config-run-'));
+    const other = await mkdtemp(join(tmpdir(), 'usabl-config-other-'));
+    const path = join(other, 'usabl.config.json');
+    await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+    await writeFile(
+      join(other, 'usabl.docs.json'),
+      JSON.stringify({
+        format: 'asciidoc-modular',
+        docsBaseUrl: 'http://127.0.0.1:4000',
+        builtRoot: 'build/html',
+        pages: [{ pageId: 'install', url: '/install/index.html', assemblyFile: 'assemblies/install.adoc', sources: [] }],
+        sharedGlobs: [],
+      }),
+      'utf8',
+    );
+    process.chdir(runFolder);
+    try {
+      await expect(loadConfig(path, () => {})).rejects.toThrow(/empty uiFileGlobs list/);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   // A manifest file alone is not a documentation-only repository: one with no pages, or one that
@@ -976,7 +1004,7 @@ describe('loadConfig', () => {
     const docsManifest = join(dir, 'usabl.docs.json');
     for (const docs of ['{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}', '{not json']) {
       await writeFile(docsManifest, docs, 'utf8');
-      await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/empty uiFileGlobs list/);
+      await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/empty uiFileGlobs list/);
     }
   });
 });

@@ -134,14 +134,18 @@ async function runEnforce(opts: CliOptions): Promise<number> {
 /**
  * init's realpath port. The real path of a path in the folder usabl runs in, through symbolic
  * links, relative to that folder's own real path and with forward slashes. On another drive it is
- * absolute, written with a leading slash so init reads it as outside. Null when nothing is there.
+ * absolute, written with a leading slash so init reads it as outside. Null when nothing is there,
+ * and when no folder can be reached there: a symbolic link loop (ELOOP) or a path through a file
+ * (ENOTDIR). init then gives its refusal for a folder it cannot use, not a raw system error.
  */
 async function realpathFromRoot(path: string): Promise<string | null> {
   let real: string;
   try {
     real = await realpath(path);
   } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') return null;
+    if (isErrnoException(error) && (error.code === 'ENOENT' || error.code === 'ELOOP' || error.code === 'ENOTDIR')) {
+      return null;
+    }
     throw error;
   }
   const fromRoot = relative(await realpath(process.cwd()), real).split(sep).join('/');

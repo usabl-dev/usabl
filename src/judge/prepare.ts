@@ -64,7 +64,11 @@ export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJu
   const trustedConfig = input.trustedRef === null ? null : parseTrusted(configRaw);
   const refusal = trustedConfig === null ? null : uiFileGlobsRefusal(trustedConfig, docsRaw, 'usabl.config.json');
   if (refusal !== null) {
-    return { ok: false, message: refusal, exitCode: 4 };
+    // The config comes from the trusted ref, so a pull request that fixes the list is still
+    // refused. Say so, or the author reads the exit code as a fix that did not work.
+    const whenFixed =
+      'In CI, usabl reads this config from the base branch, so a fix to uiFileGlobs takes effect once it is merged there.';
+    return { ok: false, message: `${refusal} ${whenFixed}`, exitCode: 4 };
   }
   const origins = allowedOriginsFrom(configRaw, docsRaw);
   if (origins.length === 0) {

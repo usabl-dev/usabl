@@ -296,7 +296,8 @@ export interface OverlayFromConfigOptions {
 export interface OverlayFactoryPorts {
   cwd: () => string;
   resolvePath: (cwd: string, configPath: string) => string;
-  loadConfig: (path: string) => Promise<UsablConfig>;
+  // `root` is the folder the run reads its files from: the overlay's cwd.
+  loadConfig: (path: string, root: string) => Promise<UsablConfig>;
   buildDeps: (
     config: UsablConfig,
     options: { cwd: string; browserFor?: (options: RealBrowserOptions) => BrowserDriver },
@@ -318,7 +319,12 @@ function makeOverlayFactoryPorts(overrides: Partial<OverlayFactoryPorts> = {}): 
   return {
     cwd: overrides.cwd ?? (() => process.cwd()),
     resolvePath: overrides.resolvePath ?? ((cwd: string, configPath: string) => resolve(cwd, configPath)),
-    loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
+    // The docs manifest that lets a config with no UI globs load is read from the folder the run
+    // reads its files from, the overlay's cwd, so it is the manifest the run will then check.
+    loadConfig:
+      overrides.loadConfig ??
+      (async (path: string, root: string) =>
+        loadConfig(path, undefined, { caller: 'dev-server', docsManifestPath: resolve(root, 'usabl.docs.json') })),
     buildDeps:
       overrides.buildDeps ??
       (async (
@@ -806,7 +812,7 @@ export function makeConfigBackedOverlayRun(
   return {
     workspaceRoot: cwd,
     run: async () => {
-      const config = await resolvedPorts.loadConfig(resolvedConfigPath);
+      const config = await resolvedPorts.loadConfig(resolvedConfigPath, cwd);
       warmBrowser ??= resolvedPorts.makeBrowser();
       const shared = warmBrowser;
       // buildDeps resolves this run's storage state and readiness budget and hands them back here,
