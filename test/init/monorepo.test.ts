@@ -116,6 +116,28 @@ describe('usabl init --app on a monorepo', () => {
     expect(note).toContain('@mono/widgets');
   });
 
+  // A folder name is text from the repository, and init prints it to a terminal. Like every other
+  // path in init output, the workspace note prints it through the operator text helper, so a
+  // control sequence in a folder name cannot reach the terminal.
+  it('prints the workspace package folder through the operator text helper', async () => {
+    const folder = 'libs/w\u001b[31midgets‮';
+    const files: Record<string, string> = {
+      ...monorepo(),
+      'package.json': JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*', 'libs/*'] }),
+      [`${folder}/package.json`]: JSON.stringify({ name: '@mono/widgets' }),
+    };
+    const adminManifest = JSON.parse(files['packages/admin/package.json'] ?? '{}') as Record<string, Record<string, string>>;
+    files['packages/admin/package.json'] = JSON.stringify({
+      ...adminManifest,
+      dependencies: { ...(adminManifest['dependencies'] ?? {}), '@mono/widgets': 'workspace:*' },
+    });
+    const admin = await inferInit(memoryFs(files), { appDir: 'packages/admin' });
+    const note = admin.notes.find((line) => line.includes('@mono/widgets'));
+    expect(note).toMatch(/^Review: /);
+    expect(note).not.toContain('\u001b');
+    expect(note).not.toContain('‮');
+  });
+
   // A config drafted with --app checks that app only. The other apps init can see are named, so a
   // reader does not take the config to cover the whole repository.
   it('names the apps that --app leaves out', async () => {

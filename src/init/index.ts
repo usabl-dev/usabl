@@ -363,9 +363,9 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     const name = packageJson(await fs.readFile(manifest))?.['name'];
     if (typeof name !== 'string' || !depends.has(name)) continue;
     notes.push(
-      `Review: ${appDir} depends on ${operatorText(name)} in ${dir}, and its files are not in uiFileGlobs, so a ` +
+      `Review: ${operatorText(appDir)} depends on ${operatorText(name)} in ${operatorText(dir)}, and its files are not in uiFileGlobs, so a ` +
         'change there is a coverage gap, because usabl cannot tell which screens render it. If the app renders ' +
-        `components from it, add their files to uiFileGlobs, such as ${dir}/src/**/*.tsx, and to the files of the surfaces that render them.`,
+        `components from it, add their files to uiFileGlobs, such as ${operatorText(`${dir}/src/**/*.tsx`)}, and to the files of the surfaces that render them.`,
     );
   }
   return notes;
