@@ -698,6 +698,19 @@ describe('target size requirement', () => {
     expect(drafts[0]?.elementPath).toBe('#r');
   });
 
+  // The box read skips the hit test for a box too small to hold its points and adds no limit, so
+  // the size compare decides: such a box fails on size, never reads as needs review.
+  it('fails a 1 pixel and a zero-area control with the size reason', async () => {
+    const thin = await run(r, sized({ width: 1, height: 44 }));
+    expect(thin).toHaveLength(1);
+    expect(thin[0]?.confidence).not.toBe('unverified');
+    expect(thin[0]?.whatUserExperiences).toBe('"Refresh" is 1 by 44 CSS pixels. The design asks for at least 24.');
+    const empty = await run(r, sized({ width: 0, height: 0 }));
+    expect(empty).toHaveLength(1);
+    expect(empty[0]?.confidence).not.toBe('unverified');
+    expect(empty[0]?.whatUserExperiences).toBe('"Refresh" is 0 by 0 CSS pixels. The design asks for at least 24.');
+  });
+
   it('compares the measured size and never shows a failing size as the minimum', async () => {
     const drafts = await run(r, sized({ width: 23.96, height: 30 }));
     expect(drafts).toHaveLength(1);

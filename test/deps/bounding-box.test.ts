@@ -364,6 +364,45 @@ describe('the box read for target size', () => {
     });
   });
 
+  // The five points sit 1 pixel inside each edge, so a box under 2 pixels on a side cannot hold
+  // them, and a box with no area has no point inside it at all. Such a box must fail on size, as it
+  // did before the hit test, so the hit test does not run and adds no limit.
+  describe('a box too small to hold the points', () => {
+    for (const size of [
+      { width: 1, height: 44 },
+      { width: 44, height: 1 },
+      { width: 1.5, height: 1.5 },
+      { width: 0, height: 0 },
+    ]) {
+      it(`adds no hit test limit for a ${size.width} by ${size.height} box, and does not scroll`, () => {
+        const page = fakePage({
+          document: { width: 1280, height: 3000 },
+          box: { left: 0, top: 1000, width: 400, height: 400 },
+          control: { left: 100, top: 100, ...size },
+        });
+        expect(readBox(page)).toEqual({ ...size, fragments: 1, unmeasurable: [] });
+        expect([page.window.scrollX, page.window.scrollY]).toEqual([0, 0]);
+      });
+    }
+
+    it('still runs the hit test on a box exactly 2 pixels on each side', () => {
+      const page = fakePage({
+        box: { left: 0, top: 0, width: 400, height: 400 },
+        control: { left: 100, top: 100, width: 2, height: 2 },
+        cover: () => ({ left: 100, top: 100, width: 2, height: 2 }),
+      });
+      expect(readBox(page).unmeasurable).toEqual(['hit-test-missed']);
+    });
+
+    it('keeps the other limits on a box too small for the points', () => {
+      const page = fakePage({
+        box: { left: 0, top: 0, width: 400, height: 100, style: HIDDEN },
+        control: { left: 100, top: 150, width: 1, height: 44 },
+      });
+      expect(readBox(page).unmeasurable).toEqual(['overflow-clipped']);
+    });
+  });
+
   describe('scroll positions', () => {
     const scrolled = (setup: Setup): FakePage => {
       const page = fakePage({

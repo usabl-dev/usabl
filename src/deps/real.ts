@@ -948,6 +948,15 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   // The centered scroll that follows is not judged this way, and any axis it moves that a person
   // cannot scroll is put back before the points are read (below). The overflow of each box
   // is read before any scroll, and a value that is not one usabl knows counts as hidden.
+  //
+  // The points sit 1 pixel inside each edge, so a box under 2 pixels on a side cannot hold them,
+  // and a box with no area has no point inside it. Such a box is left to the size compare, which
+  // fails it, because no allowed minimum is under 2. The hit test does not run and adds no limit.
+  const order = ${JSON.stringify(BOX_LIMITS)};
+  const finish = () => ({ width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) });
+  if (!(box.width >= 2 && box.height >= 2)) {
+    return finish();
+  }
   const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
   const saved = [];
   for (let node = parentOf(element); node !== null; node = parentOf(node)) {
@@ -1031,8 +1040,7 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   if (resized) {
     limits.add('size-changed-on-scroll');
   }
-  const order = ${JSON.stringify(BOX_LIMITS)};
-  return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };
+  return finish();
 }`;
 
 function isBoxLimit(value: unknown): value is BoxLimit {

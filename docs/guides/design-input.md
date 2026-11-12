@@ -32,7 +32,7 @@ Give one `--frame <Frame name>=<surface id>` for each frame. Other options:
 
 - `--owner <name>`: the owner each requirement records. The default is `design`.
 - `--min-target <css px>`: also draft a target size check, at this size, for each stamped button,
-  for example `--min-target 24`.
+  for example `--min-target 24`. The size is from 2 to 200 CSS pixels.
 
 The command prints what it wrote and every note it did not turn into a check:
 
@@ -124,7 +124,9 @@ control is where a person meets it. It then asks the browser what is at five poi
 each edge, just inside. If any point is not the control or something inside it, the check is
 needs review: something clips or covers part of the control, it does not take pointer events, or
 it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
-usabl puts every scroll position back afterwards.
+usabl puts every scroll position back afterwards. A control under 2 CSS pixels on either side is
+too small to hold the points, so it gets no hit test and fails on size, because a target size
+minimum is always at least 2.
 
 Two more rules guard that scroll. If bringing the control fully into view needs a scroll of a box
 that hides its overflow (`hidden` or `clip`), or of the page while the page hides its overflow, the

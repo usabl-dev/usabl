@@ -4554,8 +4554,8 @@ A requirement never holds a CSS selector. The roles are `button`, `link`, `headi
 
 The other assertions are `{ type: heading, name, level }` with a level from 1 to 6;
 `{ type: landmark, role, name? }`; `{ type: focus-order, sequence: [name, ...] }` with 2 to 200
-names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size above 0 and up
-to 200. Names are stored the way the browser reports an accessible name: each run of ASCII white
+names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size from 2 to 200
+(the hit test needs a box at least 2 pixels on each side, see below). Names are stored the way the browser reports an accessible name: each run of ASCII white
 space is one space, with none at either end, and they are compared with the page's names the same
 way, so "Create  user" matches "Create user". Case and every other character must match. The
 loader refuses, as `approval_required`, an empty name, a
@@ -4681,7 +4681,10 @@ puts every box, and the window, back where it was on each axis a person cannot s
 hidden or clip, or a value usabl cannot read), so the points are read only at a position a person
 can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is at five points: the center, and the
 middle of each edge, 1 CSS pixel in. Edge middles are used, not corners, so a round or
-pill-shaped control is not flagged. A point is a hit only when the answer is the control or an
+pill-shaped control is not flagged. A box under 2 CSS pixels on either side cannot hold these
+points, and a box with no area has no point inside it, so the hit test does not run on such a box
+and adds no limit. The size compare then fails it, because no requirement with a minimum under 2
+loads. A point is a hit only when the answer is the control or an
 element inside it; an answer of null, outside the viewport, is a miss. Any miss is needs review,
 with the reason that part of the control's box cannot be hit: something clips it or covers it, it
 does not take pointer events, or it is partly off the page. The real-browser tests in
