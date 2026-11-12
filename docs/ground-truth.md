@@ -1641,24 +1641,29 @@ in this order:
    - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A string
      with a backslash escape is read as the string it is. Brace groups are expanded first, and each
      alternative is resolved on its own, so `./{../tests,x}/*.tsx` covers `../tests/*.tsx` and
-     `x/*.tsx`. A relative alternative is resolved from the importer's folder. One that starts with
-     `/` is resolved from the Vite root, as Vite reads it, when usabl takes the root as known.
-     usabl takes the config's folder as the root when exactly one Vite config sits on the climb
-     from the router file to the repository root, its text does not hold the word `root`, and it
-     takes no settings from another file: it holds no spread (`...`), no `mergeConfig`, no `export
-     ... from`, and no import or require of a relative path. A config that imports only packages
-     counts as the whole config. usabl takes the repository root as the root when no Vite config
-     sits there. Otherwise such a pattern may load any file. A root given on the command line, such
-     as `vite --root src`, is not seen (see the limits below). Patterns are matched with usabl's own
-     glob matcher. Every literal pattern in the call is read, an array of patterns too, and a
+     `x/*.tsx`. A relative alternative is resolved from the importer's folder. Vite reads one that
+     starts with `/` from its root, and a config, a plugin, or the command line can set that folder,
+     so usabl does not read the config to find it. It reads such a pattern under every folder: the
+     pattern covers a file when, for some folder at or above the file (the repository root
+     included), the file's path below that folder matches the pattern. So `/tests/**/*.tsx` covers
+     `tests/a.tsx`, `src/tests/a.tsx`, and `apps/web/src/tests/x/a.tsx`, and `/src/pages/**/*.tsx`
+     does not cover `src/tests/helper.ts`. This holds for any Vite root inside the repository. It
+     also means a glob in one app covers the same folders in another app. A leading `..` after the
+     `/` is dropped, since the folder above is also read. The rules below apply to the pattern below
+     each folder. Patterns are matched with usabl's own glob matcher. Every literal pattern in the call is read, an array of patterns too, and a
      negative pattern is left out, which can only name more files. A pattern with syntax the
      matcher does not evaluate, such as `?`, `[ ]`, `( )`, or a brace range, covers every file in
      the folder above its first such segment, so `/src/pages/[id]/*.tsx` covers `src/pages/` and
      not a test folder beside it. Each of these may load any file, and the reason says which it
      was: a call whose argument is not a string or a list of strings, a pattern that starts with an
-     alias usabl cannot map, a call whose options set `base`, and a pattern usabl cannot read
+     alias usabl cannot map, a call whose options may set `base`, and a pattern usabl cannot read
      exactly (a nested or unbalanced brace, more than 64 brace alternatives, an escaped brace or
-     comma, or a `..` after a segment with glob syntax);
+     comma, or a `..` after a segment with glob syntax). The `base` option moves where the patterns
+     start, and Vite evaluates the options as code, so a quoted key, a computed key, or a spread can
+     set it. usabl reads the patterns only when the options are an object whose keys are `eager`,
+     `import`, `query`, `as`, or `exhaustive`, plain or quoted, and whose values are a plain string,
+     a number, `true`, `false`, or, for `query`, an object of those. Any other options may set
+     `base`;
    - an `import()` or `require()` whose argument is a template literal or is not a literal, and a
      webpack `require.context(folder, ...)`. The fixed text before the first `${`, or the folder, is
      a prefix, resolved from the importer's folder (or through an alias, or under a `baseUrl` for a
@@ -1686,8 +1691,14 @@ in this order:
      package, never a built-in, because the rest of the path is not known;
    - a bare import of a path inside a workspace package, such as `@acme/ui/testing`, that usabl
      does not follow by path. When the package's package.json has an `exports` field, the resolver
-     reads that field in place of the folders, and usabl does not read it, so every path into the
-     package may load any file of that package. Without `exports`, a path that names a file under
+     reads that field in place of the folders. usabl reads one kind of entry exactly: when
+     `exports` is an object with a key that equals the subpath, such as `./styles.css` for
+     `@acme/ui/styles.css`, and that key's value is a string that starts with `./`, holds no `*`,
+     and names a file inside the package folder, the import is followed to that one file. An exact
+     key wins over a pattern key, as in Node.js. Every other path into the package may load any
+     file of that package: a conditions object, an array, a key with `*` that would be needed to
+     match, a string `exports`, an entry that leaves the package or names no file, and a
+     package.json that cannot be parsed. Without `exports`, a path that names a file under
      the package folder, such as `@acme/ui/src/tests/helpers`, is followed to it like any import,
      and one that names no file there may load any file of that package. A path that leaves the
      package folder, such as `@acme/ui/../other/x`, may load any file.
@@ -1760,9 +1771,9 @@ through one of them is excluded:
   place of the package. The package names are read from the working tree, which in CI is the pull
   request tree, so a name an earlier change declared can make a later import of an app folder by
   that name read as a package;
-- a Vite root given on the command line, such as `vite --root src` or `vite src`, in a package.json
-  script, a Makefile, or a CI step. usabl reads only the Vite config, so it reads a glob that starts
-  with `/` from the config's folder, and a test file that only such a glob loads is excluded.
+- a Vite root above the repository root. usabl reads a glob that starts with `/` under every folder
+  of the repository. With such a root, the pattern starts with folders above the repository, which
+  usabl does not see, so it can miss a test file the pattern loads.
 
 If a screen renders a test file, list it in the `files` of a surface, which makes it a UI file
 whatever usabl finds.
