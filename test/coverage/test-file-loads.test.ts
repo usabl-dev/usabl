@@ -4,7 +4,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Coverage, FsGlob, UsablConfig } from '../../src/contracts/index.js';
+import type { ImportGraphView } from '../../src/coverage/import-graph.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
+import { importersOutsideTests } from '../../src/coverage/test-files.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 
 const BASE = 'http://127.0.0.1:5173';
@@ -241,6 +243,27 @@ describe('a glob with brace alternatives', () => {
   it('stays excluded when no alternative covers the test file', async () => {
     expectExcluded(await coverageOf('', pages("const all = import.meta.glob('./{../widgets,x}/[A-Z]*.tsx');")));
     expectExcluded(await coverageOf("const all = import.meta.glob('./{pages,widgets}/*.tsx');"));
+  });
+});
+
+describe('the importers of loaded test files', () => {
+  it('reads each edge of the graph once for many test files', () => {
+    let reads = 0;
+    const app = Array.from({ length: 50 }, (_, index) => `src/Page${index}.tsx`);
+    const tests = ['src/tests/a.ts', 'src/tests/b.ts', 'src/tests/c.ts'];
+    const edges = new Map<string, string[]>([...app.map((file): [string, string[]] => [file, ['src/util.ts', ...tests]]), ['src/tests/c.ts', ['src/tests/a.ts']]]);
+    const graph: ImportGraphView = {
+      get: (file) => {
+        reads += 1;
+        return edges.get(file) ?? [];
+      },
+      unresolvable: [],
+      visited: new Set([...app, 'src/util.ts', ...tests]),
+    };
+    const importers = importersOutsideTests(graph, tests);
+    expect(reads).toBe(graph.visited.size);
+    expect(importers.get('src/tests/a.ts')).toEqual([...app].sort());
+    expect([...importers.keys()]).toEqual(tests);
   });
 });
 

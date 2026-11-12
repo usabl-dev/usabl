@@ -119,26 +119,37 @@ function reachable(graph: ImportGraphView, starts: Iterable<string>): Set<string
   return seen;
 }
 
-// The files outside the tests that import `file`, directly or through test files only, sorted. The
-// walk goes back along the graph's edges and stops at each file that is not a test file.
-function importersOutsideTests(graph: ImportGraphView, file: string): string[] {
+/**
+ * For each file given, the files outside the tests that import it, directly or through test files
+ * only, sorted. The walk goes back along the graph's edges and stops at each file that is not a test
+ * file. The reverse edges are built once for every file given, so the cost grows with the size of
+ * the graph, not with the graph times the number of files.
+ */
+export function importersOutsideTests(graph: ImportGraphView, files: readonly string[]): Map<string, string[]> {
   const importersOf = new Map<string, string[]>();
   for (const from of [...graph.visited].sort()) {
-    for (const to of graph.get(from)) importersOf.set(to, [...(importersOf.get(to) ?? []), from]);
-  }
-  const found = new Set<string>();
-  const seen = new Set<string>([file]);
-  const queue = [file];
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
-    for (const importer of importersOf.get(current) ?? []) {
-      if (seen.has(importer)) continue;
-      seen.add(importer);
-      if (isTestFile(importer)) queue.push(importer);
-      else found.add(importer);
+    for (const to of graph.get(from)) {
+      const list = importersOf.get(to);
+      if (list === undefined) importersOf.set(to, [from]);
+      else list.push(from);
     }
   }
-  return [...found].sort();
+  const result = new Map<string, string[]>();
+  for (const file of files) {
+    const found = new Set<string>();
+    const seen = new Set<string>([file]);
+    const queue = [file];
+    for (let at = 0; at < queue.length; at += 1) {
+      for (const importer of importersOf.get(queue[at] as string) ?? []) {
+        if (seen.has(importer)) continue;
+        seen.add(importer);
+        if (isTestFile(importer)) queue.push(importer);
+        else found.add(importer);
+      }
+    }
+    result.set(file, [...found].sort());
+  }
+  return result;
 }
 
 function entryKey(entry: UnresolvableImport): string {
@@ -219,9 +230,13 @@ export async function placeTestFiles(
   }
 
   const placements = new Map<string, TestFilePlacement>();
+  const importers = importersOutsideTests(
+    loaded,
+    sortedUnique(files).filter((file) => loaded.visited.has(file)),
+  );
   for (const file of sortedUnique(files)) {
     if (loaded.visited.has(file)) {
-      placements.set(file, { state: 'loaded', importers: importersOutsideTests(loaded, file) });
+      placements.set(file, { state: 'loaded', importers: importers.get(file) ?? [] });
       continue;
     }
     const by = loads.filter((entry) => reachedBy.get(entryKey(entry))?.has(file) === true);
