@@ -13,7 +13,7 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
       return 'and its options set base, which moves where its patterns start and which usabl does not read, so it may load any file';
     }
     if (entry.unread === 'start') {
-      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading / while usabl does not know the Vite root, because the Vite config sets root or takes settings from another file, or more than one Vite config sits above the router file), so it may load any file';
+      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading /, which Vite reads from its root, a folder usabl does not know), so it may load any file';
     }
     if (entry.unread === 'pattern') {
       return (
@@ -23,7 +23,18 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
     }
     return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
   }
-  const matches = `which loads every file that matches ${entry.patterns.join(', ')}`;
+  const which: string[] = [];
+  if (entry.patterns.length > 0 || entry.underEveryFolder === undefined) {
+    which.push(`every file that matches ${entry.patterns.join(', ')}`);
+  }
+  if (entry.underEveryFolder !== undefined) {
+    which.push(`every file whose path below some folder matches ${entry.underEveryFolder.join(', ')}`);
+  }
+  const rootedNote =
+    entry.underEveryFolder === undefined
+      ? ''
+      : '. usabl reads a pattern that starts with / under every folder, because it cannot know the folder Vite runs from (the Vite root)';
+  const matches = `which loads ${which.join(', and ')}${rootedNote}`;
   if (entry.widened === undefined) return matches;
   return (
     `${matches}. usabl does not evaluate the syntax in ${entry.widened.join(', ')}, ` +

@@ -20,7 +20,7 @@
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import type { AliasConfig } from './alias-config.js';
-import { loadBaseUrlDirs, viteRootFor } from './alias-config.js';
+import { loadBaseUrlDirs } from './alias-config.js';
 import { declaredPackageNames, workspacePackages } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
@@ -192,9 +192,6 @@ export async function placeTestFiles(
     complete: true,
     baseUrlDirs: await loadBaseUrlDirs(fs, config.discovery.routerFile),
     declaredPackages: await declaredPackageNames(fs, config),
-    // The folder of the one Vite config at or above the router file, the repository root when there
-    // is none, or null when usabl cannot know the root.
-    viteRoot: await viteRootFor(fs, config.discovery.routerFile),
     workspacePackages: await workspacePackages(fs),
   };
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the

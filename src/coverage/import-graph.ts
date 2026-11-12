@@ -53,6 +53,11 @@ export type UnresolvableImport =
       // The patterns, written relative to the repository root, sorted. Null when usabl could not
       // read them, which means the call may load any file.
       patterns: string[] | null;
+      // The patterns that start with /, without the /, sorted. Vite reads such a pattern from its
+      // root, and usabl cannot know that folder, so each is read under every folder: it covers a
+      // file when the file's path below some folder at or above it matches. Absent when there is
+      // none.
+      underEveryFolder?: string[];
       // Why the patterns are null: the argument is not a string or a list of strings, the
       // options set `base`, a pattern starts in a way usabl cannot resolve, or a pattern has a
       // part usabl cannot read exactly (see braceAlternatives). Absent otherwise.
@@ -128,10 +133,6 @@ export interface ImportGraphOptions {
   // The package names a bare import may name (see declaredPackageNames). Read only when complete.
   // When given, a bare import no package explains is recorded as `bare-unknown`.
   declaredPackages?: readonly string[];
-  // The Vite root (see viteRootFor), '' for the repository root. A glob pattern that starts with /
-  // is read from it, as Vite reads it. Null when usabl cannot know it, so such a pattern may load
-  // any file. Read only when complete.
-  viteRoot?: string | null;
   // The workspace packages, by name and folder, and whether each has an exports field. A bare
   // import of a path inside one, such as '@acme/ui/src/tests/helpers', is followed to the file it
   // names under the package folder when the package has no exports field. It is recorded as
@@ -412,9 +413,9 @@ interface LoadContext {
   aliases: AliasConfig;
   baseUrlDirs: readonly string[];
   packages: ReadonlySet<string> | null;
-  // The folder a glob pattern that starts with / is read from, '' for the repository root. Null
-  // when not known, so such a pattern may load any file.
-  viteRoot: string | null;
+  // Whether a glob pattern that starts with / is read under every folder. The complete reading does
+  // this. Otherwise such a pattern may load any file.
+  rootedUnderEveryFolder: boolean;
 }
 
 const BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
@@ -555,8 +556,25 @@ function braceAlternatives(pattern: string): string[] | null {
   return alternatives;
 }
 
+// A pattern that starts with /, as the pattern below each folder it is read under: the / is taken
+// off and the rest normalized. A leading .. is dropped too. Under a folder F, ../x names x under
+// the folder above F, and that folder is also one the pattern is read under, so the pattern
+// without the .. covers every file the pattern with it covers.
+function belowEveryFolder(pattern: string): string {
+  let below = path.normalize(pattern.slice(1));
+  while (below === '..' || below.startsWith('../')) below = below.slice(3);
+  return below === '' || below === '.' ? '**' : below;
+}
+
+// Every path of a file below a folder at or above it, the repository root included:
+// a/b/c.tsx, b/c.tsx, and c.tsx for a/b/c.tsx.
+function pathsBelowEachFolder(file: string): string[] {
+  const segments = file.split('/');
+  return segments.map((_, index) => segments.slice(index).join('/'));
+}
+
 function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
-  const { aliases, baseUrlDirs, viteRoot } = context;
+  const { aliases, baseUrlDirs, rootedUnderEveryFolder } = context;
   const open = (unread: 'argument' | 'base' | 'start' | 'pattern'): UnresolvableImport => ({
     importer,
     specifier: call.text,
@@ -566,27 +584,33 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
   });
   if (call.patterns === null) return open(call.base === true ? 'base' : 'argument');
   const resolved: string[] = [];
+  const rooted: string[] = [];
   const widened: string[] = [];
+  // Each path is read exactly when the glob matcher can, and otherwise as every file in the folder
+  // above the syntax it cannot evaluate.
+  const add = (into: string[], resolvedPath: string, pattern: string): void => {
+    if (readableGlob(resolvedPath)) {
+      into.push(resolvedPath);
+    } else {
+      into.push(folderAbove(resolvedPath));
+      widened.push(pattern);
+    }
+  };
   // A negative pattern only takes files away, so leaving it out can only name more files.
   for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
     // The braces are expanded first, so a .. or an alias inside an alternative is resolved.
     const alternatives = braceAlternatives(pattern);
     if (alternatives === null) return open('pattern');
     for (const alternative of alternatives) {
-      // Vite reads a pattern that starts with / from its root.
-      const paths =
-        alternative.startsWith('/') && viteRoot !== null
-          ? [path.normalize(path.join(viteRoot === '' ? '.' : viteRoot, alternative.slice(1)))]
-          : resolveLoaderPaths(importer, alternative, aliases, baseUrlDirs, 'glob');
-      if (paths === null) return open('start');
-      for (const resolvedPath of paths) {
-        if (readableGlob(resolvedPath)) {
-          resolved.push(resolvedPath);
-        } else {
-          resolved.push(folderAbove(resolvedPath));
-          widened.push(pattern);
-        }
+      // Vite reads a pattern that starts with / from its root. A plugin, the command line, or a
+      // config usabl cannot run can set that folder, so usabl reads the pattern under every folder.
+      if (alternative.startsWith('/') && rootedUnderEveryFolder) {
+        add(rooted, belowEveryFolder(alternative), pattern);
+        continue;
       }
+      const paths = resolveLoaderPaths(importer, alternative, aliases, baseUrlDirs, 'glob');
+      if (paths === null) return open('start');
+      for (const resolvedPath of paths) add(resolved, resolvedPath, pattern);
     }
   }
   return {
@@ -594,6 +618,7 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
     specifier: call.text,
     kind: 'glob-import',
     patterns: [...new Set(resolved)].sort(),
+    ...(rooted.length === 0 ? {} : { underEveryFolder: [...new Set(rooted)].sort() }),
     ...(widened.length === 0 ? {} : { widened: [...new Set(widened)].sort() }),
   };
 }
@@ -651,7 +676,9 @@ function pathHasSegmentStart(file: string, start: string): boolean {
  */
 export function importMayLoad(entry: UnresolvableImport, file: string): boolean {
   if (entry.kind === 'glob-import') {
-    return entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file));
+    if (entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file))) return true;
+    const below = entry.underEveryFolder ?? [];
+    return below.length > 0 && pathsBelowEachFolder(file).some((tail) => below.some((pattern) => matchGlob(pattern, tail)));
   }
   if (entry.kind === 'dynamic-import') {
     return (
@@ -888,9 +915,8 @@ export async function buildImportGraph(
   const unresolvable: UnresolvableImport[] = [];
   const aliases = aliasConfig ?? NO_ALIASES;
   const packages = complete && options.declaredPackages !== undefined ? new Set(options.declaredPackages) : null;
-  const viteRoot = complete ? (options.viteRoot ?? null) : null;
   const workspacePackages = complete ? (options.workspacePackages ?? []) : [];
-  const context: LoadContext = { aliases, baseUrlDirs, packages, viteRoot };
+  const context: LoadContext = { aliases, baseUrlDirs, packages, rootedUnderEveryFolder: complete };
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -993,7 +1019,7 @@ export async function inspectDirectImports(
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
-  for (const entry of loaderEntries(file, findLoaderCallsInCode(source, file), { aliases, baseUrlDirs: [], packages: null, viteRoot: null })) {
+  for (const entry of loaderEntries(file, findLoaderCallsInCode(source, file), { aliases, baseUrlDirs: [], packages: null, rootedUnderEveryFolder: false })) {
     pushUniqueUnresolvable(unresolvable, entry);
   }
 

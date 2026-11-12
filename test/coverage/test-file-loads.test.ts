@@ -155,7 +155,7 @@ describe('a load read as narrowly as its text allows', () => {
   const helperTree = { 'package.json': PACKAGE_JSON, [helper]: 'export const helper = 1;\n' };
   const of = (body: string, extra: Record<string, string> = {}): Promise<Coverage> => coverageOf(body, { ...helperTree, ...extra }, helper);
 
-  it('resolves a rooted glob from the Vite root, so a glob of pages does not cover a test helper', async () => {
+  it('reads a rooted glob of pages under every folder, so it does not cover a test helper', async () => {
     expectExcluded(await of("const pages = import.meta.glob('/src/pages/**/*.tsx');"), helper);
     expectExcluded(await of("const pages = import.meta.glob('/pages/**/*.tsx');", { 'src/vite.config.ts': 'export default {};' }), helper);
   });
@@ -188,29 +188,29 @@ describe('a load read as narrowly as its text allows', () => {
   });
 });
 
-describe('a rooted glob when usabl does not know the Vite root', () => {
+describe('a glob pattern that starts with /, read under every folder', () => {
   const glob = "const all = import.meta.glob('/tests/**/*.tsx', { eager: true });";
+  const PLAIN = "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });";
 
-  it('is a gap when the Vite config sets root', async () => {
-    expectGap(await coverageOf(glob, { 'vite.config.ts': "export default { root: 'src' };" }));
+  it('is a gap when the Vite config is a factory or a config from a package', async () => {
+    const workspace = {
+      'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/vite-config': '*', react: '^18.3.0' } }),
+      'packages/vite-config/package.json': JSON.stringify({ name: '@acme/vite-config', main: 'index.ts' }),
+      'packages/vite-config/index.ts': "export const make = (d: string) => ({ root: d + '/src' });\nexport default { root: 'src' };\n",
+    };
+    for (const text of [
+      "import { make } from '@acme/vite-config';\nexport default make(__dirname);",
+      "import config from '@acme/vite-config';\nexport default config;",
+    ]) {
+      expectGap(await coverageOf(glob, { ...workspace, 'vite.config.ts': text }));
+    }
   });
 
-  it('is a gap when the Vite config sets root as ./src through defineConfig', async () => {
-    expectGap(await coverageOf(glob, { 'vite.config.ts': "import { defineConfig } from 'vite';\nexport default defineConfig({ root: './src' });" }));
-  });
-
-  it('is a gap when more than one Vite config sits on the climb from the router file', async () => {
-    const coverage = await coverageOf("const all = import.meta.glob('/src/tests/**/*.tsx', { eager: true });", {
-      'vite.config.ts': 'export default {};',
-      'src/vite.config.ts': 'export default {};',
-    });
-    expectGap(coverage);
-    expect(coverage.gaps[0]?.reason).toContain('Vite root');
-  });
-
-  it('is a gap when the Vite config takes its settings from another file', async () => {
+  it('is a gap for every config shape that can move the root', async () => {
     const base = { 'vite.base.ts': "export default { root: 'src' };", 'tools/vite.ts': "export const make = () => ({ root: 'src' });", 'config/vite.ts': "export default { root: 'src' };" };
     for (const text of [
+      "export default { root: 'src' };",
+      "import { defineConfig } from 'vite';\nexport default defineConfig({ root: './src' });",
       "import base from './vite.base';\nexport default { ...base };",
       "import { mergeConfig } from 'vite';\nimport base from './vite.base';\nexport default mergeConfig(base, {});",
       "import { make } from './tools/vite';\nexport default make(__dirname);",
@@ -220,13 +220,62 @@ describe('a rooted glob when usabl does not know the Vite root', () => {
     }
   });
 
-  it('still reads a rooted glob from a plain Vite config with only package imports', async () => {
-    const text = "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });";
-    expectExcluded(await coverageOf("const pages = import.meta.glob('/src/pages/**/*.tsx');", { 'vite.config.ts': text }));
+  it('is a gap when more than one Vite config sits on the climb from the router file, and says why', async () => {
+    const coverage = await coverageOf(glob, { 'vite.config.ts': 'export default {};', 'src/vite.config.ts': 'export default {};' });
+    expectGap(coverage);
+    const reason = coverage.gaps[0]?.reason ?? '';
+    expect(reason).toContain('src/ClustersPage.tsx');
+    expect(reason).toContain('usabl reads a pattern that starts with / under every folder, because it cannot know the folder Vite runs from');
+    expect(reason).toContain('so its pattern or path start does not cover test folders');
+    expect(reason).toContain('list the file in the files of a surface');
   });
 
-  it('still reads a rooted glob from the one Vite config that does not set root', async () => {
-    expectExcluded(await coverageOf("const pages = import.meta.glob('/src/pages/**/*.tsx');", { 'vite.config.ts': 'export default {};' }));
+  it('is a gap with no Vite config at all, so a root given on the command line is covered', async () => {
+    expectGap(await coverageOf(glob, { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('reads a leading .. as the folder above, which is also read', async () => {
+    expectGap(await coverageOf("const all = import.meta.glob('/../tests/*.tsx');", { 'package.json': PACKAGE_JSON }));
+    expectExcluded(await coverageOf("const all = import.meta.glob('/../mytests/*.tsx');", { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('stays idle for a test helper the pattern does not cover, whatever the config holds', async () => {
+    const helper = 'src/tests/helper.ts';
+    const fileRoutes = "const pages = import.meta.glob('/src/pages/**/*.tsx');";
+    const generouted = "const pages = import.meta.glob('/src/pages/**/[\\\\w[-]*.{jsx,tsx,mdx}', { eager: true });";
+    const configs = [
+      'export default {};',
+      PLAIN,
+      "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react(), ...extra] });",
+      "export default { root: 'src' };",
+    ];
+    for (const body of [fileRoutes, generouted]) {
+      for (const text of configs) {
+        const tree = { 'package.json': PACKAGE_JSON, [helper]: 'export const helper = 1;\n', 'vite.config.ts': text };
+        expectExcluded(await coverageOf(body, tree, helper), helper);
+      }
+    }
+  });
+
+  it('is a gap in a second app when only the first app has the glob', async () => {
+    const changed = 'apps/admin/src/pages/x.test.tsx';
+    const monorepo: UsablConfig = { ...config, uiFileGlobs: ['apps/**'], discovery: { routerFile: 'apps/web/src/App.tsx', wideBlastGlobs: [] } };
+    const routes = { routes: [{ screenId: 'home', url: '/home', entryFile: 'apps/web/src/Home.tsx' }] };
+    const coverage = await computeCoverage(
+      fsOf({
+        'package.json': PACKAGE_JSON,
+        'apps/web/vite.config.ts': PLAIN,
+        'apps/web/src/App.tsx': "import { Home } from './Home';\nexport function App() { return <Home />; }\n",
+        'apps/web/src/Home.tsx': "const pages = import.meta.glob('/src/pages/**/*.tsx');\nexport function Home() { return <main />; }\n",
+        'apps/admin/src/pages/Index.tsx': 'export const Index = () => <main />;\n',
+        [changed]: WIDGET,
+        'usabl.routes.json': `${JSON.stringify(routes)}\n`,
+      }),
+      monorepo,
+      [changed],
+    );
+    expectGap(coverage, changed);
+    expect(coverage.gaps[0]?.reason).toContain('apps/web/src/Home.tsx');
   });
 });
 
