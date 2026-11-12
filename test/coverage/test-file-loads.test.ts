@@ -279,6 +279,26 @@ describe('a glob pattern that starts with /, read under every folder', () => {
   });
 });
 
+describe('the options of an import.meta.glob call', () => {
+  const tree = { 'package.json': PACKAGE_JSON };
+
+  it.each(["{ base: './tests' }", "{ 'base': './tests' }", '{ "base": "./tests" }', "{ ['base']: './tests' }", "{ ['ba' + 'se']: './tests' }"])(
+    'is a gap when the options may set base: %s',
+    async (options) => {
+      const coverage = await coverageOf(`const all = import.meta.glob('./pages/*.tsx', ${options});`, tree);
+      expectGap(coverage);
+      expect(coverage.gaps[0]?.reason).toContain('may load any file');
+    },
+  );
+
+  it.each(['{ eager: true }', "{ eager: true, import: 'default' }", "{ query: '?raw', import: 'default' }", "{ 'eager': true, query: { url: true } }"])(
+    'still reads the patterns when the options are plain values with no base: %s',
+    async (options) => {
+      expectExcluded(await coverageOf(`const all = import.meta.glob('./pages/*.tsx', ${options});`, tree));
+    },
+  );
+});
+
 describe('a glob with brace alternatives', () => {
   const pages = (body: string): Record<string, string> => ({ 'src/pages/index.tsx': `${body}\nexport const Index = () => <main />;\n` });
 

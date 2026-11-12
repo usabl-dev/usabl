@@ -299,7 +299,7 @@ function callText(source: string, start: number): string {
 type LoaderCall =
   | { kind: 'literal'; path: string }
   | { kind: 'built'; text: string; prefix: string | null }
-  // `base` is set when the patterns are null because the options set base.
+  // `base` is set when the patterns are null because the options may set base.
   | { kind: 'glob'; text: string; patterns: string[] | null; base?: true };
 
 // The first argument of the import() or require() whose opening parenthesis is at `open`.
@@ -316,8 +316,23 @@ function readDynamicCall(source: string, start: number, open: number): LoaderCal
   return { kind: 'built', text, prefix: null };
 }
 
+// The options of an import.meta.glob call that usabl reads as setting no `base`: an object whose
+// keys are the other options Vite knows, plain or quoted, and whose values are a plain string, a
+// number, true, false, or, for query, an object of those. Vite evaluates the options as code, so a
+// quoted key, a computed key, or a spread can set base too. Anything else may set it.
+const GLOB_STRING = String.raw`(?:'[^'\\\n]*'|"[^"\\\n]*")`;
+const GLOB_VALUE = String.raw`(?:true|false|-?\d+(?:\.\d+)?|${GLOB_STRING})`;
+const GLOB_QUERY_ENTRY = String.raw`(?:[A-Za-z_$][\w$]*|${GLOB_STRING})\s*:\s*${GLOB_VALUE}`;
+const GLOB_QUERY = String.raw`\{\s*(?:${GLOB_QUERY_ENTRY}(?:\s*,\s*${GLOB_QUERY_ENTRY})*\s*,?)?\s*\}`;
+const GLOB_KEY = String.raw`(?:(?:eager|import|query|as|exhaustive)|'(?:eager|import|query|as|exhaustive)'|"(?:eager|import|query|as|exhaustive)")`;
+const GLOB_ENTRY = String.raw`${GLOB_KEY}\s*:\s*(?:${GLOB_VALUE}|${GLOB_QUERY})`;
+const OPTIONS_WITHOUT_BASE_RE = new RegExp(
+  String.raw`^,\s*(?:\{\s*(?:${GLOB_ENTRY}(?:\s*,\s*${GLOB_ENTRY})*\s*,?)?\s*\}\s*,?\s*)?$`,
+  'u',
+);
+
 // The patterns of the import.meta.glob call that starts at `start`: one string or a list of
-// strings. Null when the argument is anything else, or when an options object sets `base`, which
+// strings. Null when the argument is anything else, or when the options may set `base`, which
 // moves where relative patterns start.
 function readGlobCall(source: string, start: number, nameEnd: number): LoaderCall {
   const text = callText(source, start);
@@ -361,7 +376,7 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
   if (source.charAt(at) !== ',') return { kind: 'glob', text, patterns: null };
   const close = source.indexOf(')', at);
   const options = source.slice(at, close === -1 ? source.length : close);
-  return /\bbase\s*:/u.test(options) ? { kind: 'glob', text, patterns: null, base: true } : { kind: 'glob', text, patterns };
+  return OPTIONS_WITHOUT_BASE_RE.test(options) ? { kind: 'glob', text, patterns } : { kind: 'glob', text, patterns: null, base: true };
 }
 
 // A webpack require.context(folder, recursive, pattern) call. It loads files under the folder, so

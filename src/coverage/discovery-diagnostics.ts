@@ -10,7 +10,7 @@ const MAX_DETAIL_LINES = 3;
 function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>): string {
   if (entry.patterns === null) {
     if (entry.unread === 'base') {
-      return 'and its options set base, which moves where its patterns start and which usabl does not read, so it may load any file';
+      return 'and its options set base or may set it, which moves where its patterns start and which usabl does not read, so it may load any file';
     }
     if (entry.unread === 'start') {
       return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading /, which Vite reads from its root, a folder usabl does not know), so it may load any file';
