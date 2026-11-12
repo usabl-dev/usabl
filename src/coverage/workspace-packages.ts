@@ -483,10 +483,26 @@ export async function workspaceDependencies(
   return { files: found, dependedDirs: [...reached.keys()].filter((dir) => !appDirs.has(dir)).sort() };
 }
 
-/** A workspace package: its name and its folder. */
+/** A workspace package: its name, its folder, and whether its package.json has an exports field. */
 export interface WorkspacePackage {
   name: string;
   dir: string;
+  // Node.js and bundlers resolve a subpath only through `exports` once it is present, so the folder
+  // layout then says nothing about which file a subpath loads.
+  hasExports: boolean;
+}
+
+// Whether a package.json has an exports field. One that cannot be read or parsed counts as having
+// one, so a subpath into it is never followed by path.
+async function hasExportsField(fs: FsGlob, dir: string): Promise<boolean> {
+  const text = await fs.readFile(dir === '' ? 'package.json' : `${dir}/package.json`);
+  if (text === null) return true;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed !== 'object' || parsed === null || 'exports' in parsed;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -497,7 +513,7 @@ export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]>
   const found: WorkspacePackage[] = [];
   for (const dir of await workspacePackageDirs(fs)) {
     const { name } = await readManifest((file) => fs.readFile(file), dir);
-    if (name !== null) found.push({ name, dir });
+    if (name !== null) found.push({ name, dir, hasExports: await hasExportsField(fs, dir) });
   }
   return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }

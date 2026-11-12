@@ -63,8 +63,9 @@ export function describeLoad(entry: UnresolvableImport): string | null {
   }
   if (entry.kind === 'package-subpath') {
     return (
-      `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that names ` +
-      "no file there, so it may go through the package's exports map, which usabl does not read, and it may load any file of that package"
+      `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that usabl ` +
+      'cannot follow by path (the package has an exports field, which usabl does not read, or no file has that path), ' +
+      'so it may load any file of that package'
     );
   }
   if (entry.kind === 'base-url') {

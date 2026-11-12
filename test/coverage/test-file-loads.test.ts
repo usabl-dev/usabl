@@ -384,6 +384,16 @@ describe('a test file in a workspace package the app depends on', () => {
     expectWorkspaceGap(await coverageOf("import { helper } from '@acme/ui/testing';", tree, helpers));
   });
 
+  it('does not follow a subpath by path when the package has an exports field', async () => {
+    const tree = {
+      ...workspace,
+      'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', exports: { '.': './src/index.ts', './testing': './src/tests/helpers.ts' } }),
+      'packages/ui/testing.ts': 'export const stub = 1;\n',
+    };
+    const coverage = await coverageOf("import { helper } from '@acme/ui/testing';", tree, helpers);
+    expectWorkspaceGap(coverage);
+  });
+
   it('is a workspace gap when another workspace package the app depends on imports it', async () => {
     const tree = {
       ...workspace,
