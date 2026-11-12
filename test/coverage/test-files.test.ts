@@ -257,8 +257,10 @@ describe('a test file that only other test files import', () => {
     expect(excluded[0]?.reason).toMatch(/named like a test/);
     expect(excluded[1]?.reason).toMatch(/test folder/);
     for (const entry of excluded) {
-      expect(entry.reason).toMatch(/outside the tests/);
-      expect(entry.reason).toMatch(/no import usabl could not follow could load it/);
+      // The search starts from the files the config names, so the reason says that, not "any file".
+      expect(entry.reason).toMatch(/usabl found no import of it in the files it follows from this configuration/);
+      expect(entry.reason).toMatch(/no load it could not follow could reach it/);
+      expect(entry.reason).not.toMatch(/any file outside the tests/);
     }
   });
 

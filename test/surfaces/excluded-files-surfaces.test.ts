@@ -11,7 +11,7 @@ import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from '../../src/surfaces/s
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 
 const REASON =
-  'This file is in a test folder (test, tests, or __tests__). usabl found no import of it in any file outside the tests, and no import usabl could not follow could load it, so usabl reads it as test code and did not check it.';
+  'This file is in a test folder (test, tests, or __tests__). usabl found no import of it in the files it follows from this configuration, and no load it could not follow could reach it, so usabl reads it as test code and did not check it.';
 const EXCLUDED: ExcludedFile = { ref: 'src/tests/setup.ts', reason: REASON };
 
 const result = (over: Partial<Result>): Result => ({

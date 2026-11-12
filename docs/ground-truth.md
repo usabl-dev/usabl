@@ -1685,9 +1685,9 @@ in this order:
    start does not cover test folders, or make it a plain import usabl can resolve; or, if a screen
    does render the file, list it in the `files` of a surface.
 3. **Otherwise it is excluded**, listed in `coverage.excludedFiles` with a reason for its kind (named
-   like a test, or in a test folder) that says usabl found no import of it in any file outside the
-   tests, and no import usabl could not follow could load it. The files searched are the ones the
-   wider graph reads, so the limits below apply to that sentence. Such as
+   like a test, or in a test folder) that says usabl found no import of it in the files it follows
+   from this configuration, and no load it could not follow could reach it. Those files are the
+   ones the wider graph reads, so the limits below apply to that sentence. Such as
    `src/test/setup.ts`, a helper in `src/__tests__/`, a mock request handler in `src/test/`, or a
    `Button.test.tsx` that only the tests import. It is not a gap, so a pull request that edits only
    tests still has nothing to check. A glob pattern that does not match the file, or a template

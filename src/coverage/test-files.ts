@@ -39,8 +39,10 @@ export function isTestFile(file: string): boolean {
   return isInTestFolder(file) || isTestNamedFile(file);
 }
 
+// The search starts from the files the config names as app code, not from every file in the
+// repository, so the reason says so.
 const NOT_FOUND =
-  'usabl found no import of it in any file outside the tests, and no import usabl could not follow could load it, ' +
+  'usabl found no import of it in the files it follows from this configuration, and no load it could not follow could reach it, ' +
   'so usabl reads it as test code and did not check it. This does not block. If a screen renders it, import it ' +
   'from that screen, or add it to the files of a surface in usabl.config.json.';
 
