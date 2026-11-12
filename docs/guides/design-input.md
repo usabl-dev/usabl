@@ -121,9 +121,9 @@ overflow when the control reaches past its edges; and a fixed or sticky control 
 the viewport. A translate or a scale is measured.
 
 A list of shapes cannot name them all, so a pass also needs a hit test. usabl scrolls the control
-into view, centered, then puts back every box, and the page, that a person cannot scroll, so the
-control is where a person meets it. It then asks the browser what is at five points of its box: the center, and the middle of
-each edge, just inside. If any point is not the control or something inside it, the check is
+into view, centered, then puts back every box, and the page, on each axis a person cannot
+scroll, so the control is where a person meets it. It then asks the browser what is at five
+points of its box: the center, and the middle of each edge, just inside. If any point is not the control or something inside it, the check is
 needs review: something clips or covers part of the control, it does not take pointer events, or
 it is partly off the page. Edge middles are used, not corners, so a round button is not flagged.
 usabl puts every scroll position back afterwards. A control under 2 CSS pixels on either side is

@@ -4687,8 +4687,9 @@ The list above cannot name every shape, so a pass also needs a hit test, read la
 browser function. usabl scrolls the control into view (centered, with instant scrolling), then
 puts every box, and the window, back where it was on each axis a person cannot scroll (overflow
 hidden or clip, or a value usabl cannot read), so the points are read only at a position a person
-can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is at five points: the center, and the
-middle of each edge, 1 CSS pixel in. Edge middles are used, not corners, so a round or
+can bring the control to. It reads the box again, and asks `document.elementFromPoint` what is
+at five points: the center, and the middle of each edge, 1 CSS pixel in. Edge middles are used,
+not corners, so a round or
 pill-shaped control is not flagged. A box under 2 CSS pixels on either side cannot hold these
 points, and a box with no area has no point inside it, so the hit test does not run on such a box
 and adds no limit. The size compare then fails it, because no requirement with a minimum under 2
@@ -4711,7 +4712,11 @@ first read, before the scroll. A pass proves that the box is large enough and th
 points land on the control. A cover or clip anywhere else, at a corner or between the points, is
 not seen, so such a control can still pass. The check does not measure the spacing between
 targets. A target size check drops the design checks' shared tree read when it ends, as the focus
-order check does, because page script can answer its scroll by changing the page.
+order check does, because page script can answer its scroll by changing the page. This narrows
+the window for a stale read; it does not remove it. The page's `scroll` handler runs at the next
+frame, and the next design check's tree read can start before that, so a change the handler
+makes can still be missed. usabl does not wait for it, because nothing that reaches the gate may
+depend on timing.
 
 The check measures the control alone: a label that makes the real target larger, such as the
 label of a checkbox, is not counted, so a small checkbox can fail although its real target is

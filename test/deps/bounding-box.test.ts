@@ -2,9 +2,9 @@
  * The box read for the target size check, run on a small fake page. A real browser runs the same
  * function in roles.real.integration.test.ts. The fake lays out one scroll box inside a document
  * and models scrollIntoView the way the browser does: a `nearest` scroll moves a box only when
- * the control is not fully inside that box's scrollport, a `center` scroll centers it, and every
- * scroll stays between 0 and the most the content allows. So a rule about the scroll can be shown
- * to fail and then to hold.
+ * the control is not fully inside that box's scrollport and does not cover it, a `center` scroll
+ * centers it, and every scroll stays between 0 and the most the content allows. So a rule about
+ * the scroll can be shown to fail and then to hold.
  */
 import { describe, expect, it } from 'vitest';
 import { BOUNDING_BOX_FUNCTION } from '../../src/deps/real.js';
@@ -65,8 +65,19 @@ function scrolledTo(current: number, start: number, size: number, port: number, 
   if (mode === 'center') {
     next = start + size / 2 - port / 2;
   } else {
-    const inside = start - current >= 0 && start - current + size <= port;
-    next = inside ? current : start < current || size > port ? start : start + size - port;
+    // The CSSOM rule for nearest: no scroll when the control is inside the port or covers it;
+    // otherwise align the near edge when the control is past the start and fits, or past the end
+    // and does not fit, and align the far edge in the other two cases.
+    const before = start < current;
+    const after = start + size > current + port;
+    const fits = size <= port;
+    if (before === after) {
+      next = current;
+    } else if ((before && fits) || (after && !fits)) {
+      next = start;
+    } else {
+      next = start + size - port;
+    }
   }
   return Math.min(Math.max(next, 0), Math.max(max, 0));
 }
@@ -235,6 +246,20 @@ function readBox(page: FakePage): { width: number; height: number; fragments: nu
 }
 
 const HIDDEN = { overflowX: 'hidden', overflowY: 'hidden' };
+
+// The fake's scroll must follow the CSSOM rule, or a case could pass or fail on a scroll no browser
+// makes. For `nearest`, a control larger than the scrollport that covers it leaves the box where it
+// is, and one that sits partly before the port is aligned by its far edge.
+describe('the fake scroll for a control larger than its scrollport', () => {
+  it('follows the browser rule for nearest', () => {
+    // The port shows 50 to 150. A 200 pixel control at 20 to 220 covers it: no scroll.
+    expect(scrolledTo(50, 20, 200, 100, 500, 'nearest')).toBe(50);
+    // A 200 pixel control at 0 to 200, with the port at 150 to 250: its far edge is aligned.
+    expect(scrolledTo(150, 0, 200, 100, 500, 'nearest')).toBe(100);
+    // A 200 pixel control at 300 to 500, with the port at 150 to 250: its near edge is aligned.
+    expect(scrolledTo(150, 300, 200, 100, 500, 'nearest')).toBe(300);
+  });
+});
 
 describe('the box read for target size', () => {
   it('finds nothing to limit on a plain control the scroll does not move', () => {
