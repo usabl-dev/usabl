@@ -21,29 +21,46 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 const DEFAULT_CONFIG_PATH = 'usabl.config.json';
 
+export interface LoadConfigOptions {
+  // The docs manifest the run reads, from the folder usabl runs in. A config with no UI globs loads
+  // only when this manifest loads and names a page. Tests pass a path of their own.
+  docsManifestPath?: string;
+  // Who asked for the config, so a missing file is explained in that caller's terms. The CLI takes
+  // --config. The dev server plugin builds the path from its cwd and configPath options.
+  caller?: 'cli' | 'dev-server';
+}
+
+// The first error a new user meets. It names the path and the command that writes the file. A CLI
+// path other than the default came from --config, so telling that reader to pass --config would
+// repeat what they did. The dev server plugin has no --config flag, so it is told its own options.
+function missingConfigMessage(path: string, caller: 'cli' | 'dev-server'): string {
+  if (caller === 'dev-server') {
+    return (
+      `${operatorText(path)} not found. The usabl dev server plugin reads its config from that path, which it ` +
+      'builds from its cwd and configPath options. Run "usabl init" in that folder to draft it, or set cwd or ' +
+      'configPath in the plugin options to where the config is.'
+    );
+  }
+  return path === DEFAULT_CONFIG_PATH
+    ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
+    : `${operatorText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`;
+}
+
 export async function loadConfig(
   path = DEFAULT_CONFIG_PATH,
   warn: (line: string) => void = (line) => {
     process.stderr.write(`${line}\n`);
   },
-  // The docs manifest the run reads, from the folder usabl runs in. A config with no UI globs loads
-  // only when this manifest loads and names a page. Tests pass a path of their own.
-  docsManifestPath = 'usabl.docs.json',
+  options: LoadConfigOptions = {},
 ): Promise<UsablConfig> {
+  const docsManifestPath = options.docsManifestPath ?? 'usabl.docs.json';
   // Targets come from config so the same engine can run in local, CI, and preview environments.
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
-      // The first error a new user meets. Name the command that writes the file. A path other than
-      // the default came from --config, so telling that reader to pass --config would repeat what
-      // they did.
-      throw new Error(
-        path === DEFAULT_CONFIG_PATH
-          ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
-          : `${operatorText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`,
-      );
+      throw new Error(missingConfigMessage(path, options.caller ?? 'cli'));
     }
     throw error;
   }

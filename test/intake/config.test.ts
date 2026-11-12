@@ -942,9 +942,9 @@ describe('loadConfig', () => {
     const path = join(dir, 'usabl.config.json');
     await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
     const docsManifest = join(dir, 'usabl.docs.json');
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/uiFileGlobs/);
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(path);
-    await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/usabl\.docs\.json/);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/uiFileGlobs/);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(path);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/usabl\.docs\.json/);
   });
 
   it('keeps a docs-only repository working: empty uiFileGlobs loads when usabl.docs.json names a page', async () => {
@@ -963,7 +963,7 @@ describe('loadConfig', () => {
       }),
       'utf8',
     );
-    const config = await loadConfig(path, () => {}, docsManifest);
+    const config = await loadConfig(path, () => {}, { docsManifestPath: docsManifest });
     expect(config.uiFileGlobs).toEqual([]);
   });
 
@@ -976,7 +976,7 @@ describe('loadConfig', () => {
     const docsManifest = join(dir, 'usabl.docs.json');
     for (const docs of ['{"docsBaseUrl":"http://127.0.0.1:4000","pages":[]}', '{not json']) {
       await writeFile(docsManifest, docs, 'utf8');
-      await expect(loadConfig(path, () => {}, docsManifest)).rejects.toThrow(/empty uiFileGlobs list/);
+      await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/empty uiFileGlobs list/);
     }
   });
 });

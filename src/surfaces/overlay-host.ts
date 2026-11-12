@@ -318,7 +318,7 @@ function makeOverlayFactoryPorts(overrides: Partial<OverlayFactoryPorts> = {}): 
   return {
     cwd: overrides.cwd ?? (() => process.cwd()),
     resolvePath: overrides.resolvePath ?? ((cwd: string, configPath: string) => resolve(cwd, configPath)),
-    loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
+    loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path, undefined, { caller: 'dev-server' })),
     buildDeps:
       overrides.buildDeps ??
       (async (
