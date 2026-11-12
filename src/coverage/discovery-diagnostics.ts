@@ -62,6 +62,9 @@ export function describeLoad(entry: UnresolvableImport): string | null {
     return `${entry.importer} imports '${entry.specifier}', and ${why}`;
   }
   if (entry.kind === 'package-subpath') {
+    if (entry.packageDir === null) {
+      return `${entry.importer} imports '${entry.specifier}', a path that leaves the folder of the workspace package it names, so it may load any file`;
+    }
     return (
       `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that usabl ` +
       'cannot follow by path (the package has an exports field, which usabl does not read, or no file has that path), ' +

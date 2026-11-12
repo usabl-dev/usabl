@@ -94,8 +94,9 @@ export type UnresolvableImport =
       // no file under the package folder has that path. It may load any file of the package.
       // Recorded only by the complete reading.
       kind: 'package-subpath';
-      // The package folder, relative to the repository root.
-      packageDir: string;
+      // The package folder, relative to the repository root. Null when the path leaves that
+      // folder, such as '@acme/ui/../other/x', which may then load any file.
+      packageDir: string | null;
     }
   | {
       importer: string;
@@ -661,7 +662,7 @@ export function importMayLoad(entry: UnresolvableImport, file: string): boolean 
     return entry.candidates.includes(file);
   }
   if (entry.kind === 'package-subpath') {
-    return file.startsWith(`${entry.packageDir}/`);
+    return entry.packageDir === null || file.startsWith(`${entry.packageDir}/`);
   }
   return importLastSegments(entry.specifier).includes(importName(file));
 }
@@ -923,11 +924,12 @@ export async function buildImportGraph(
         // folder, as a hoisted install resolves it, when the package has no exports field. With
         // one, the resolver reads it in place of the folders, and a path that names no file there
         // may go through it too, so either may load any file of the package.
+        // A path that leaves the package folder is not narrowed to it, so it may load any file.
         const target = path.normalize(path.join(inPackage.dir, inPackage.subpath));
-        const byPath = !inPackage.hasExports && target.startsWith(`${inPackage.dir}/`);
-        const resolved = byPath ? await resolveFileAtPath(fs, target) : null;
+        const inside = target.startsWith(`${inPackage.dir}/`);
+        const resolved = inside && !inPackage.hasExports ? await resolveFileAtPath(fs, target) : null;
         if (resolved === null) {
-          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'package-subpath', packageDir: inPackage.dir });
+          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'package-subpath', packageDir: inside ? inPackage.dir : null });
           continue;
         }
         if ('candidates' in resolved) pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));

@@ -394,6 +394,19 @@ describe('a test file in a workspace package the app depends on', () => {
     expectWorkspaceGap(coverage);
   });
 
+  it('is a gap when a subpath leaves the package folder', async () => {
+    const other = 'packages/other/src/tests/helpers.ts';
+    const tree = {
+      ...workspace,
+      'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/ui': '*', '@acme/other': '*' } }),
+      'packages/other/package.json': JSON.stringify({ name: '@acme/other', main: 'src/index.ts' }),
+      'packages/other/src/index.ts': 'export const other = 1;\n',
+      [other]: 'export const helper = 1;\n',
+    };
+    const coverage = await coverageOf("import { helper } from '@acme/ui/../other/src/tests/helpers';", tree, other);
+    expectWorkspaceGap(coverage, other);
+  });
+
   it('is a workspace gap when another workspace package the app depends on imports it', async () => {
     const tree = {
       ...workspace,
