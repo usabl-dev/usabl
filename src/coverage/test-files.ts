@@ -49,9 +49,19 @@ const NOT_FOUND =
 const TEST_NAMED_REASON = `This file is named like a test (.test. or .spec.). ${NOT_FOUND}`;
 const TEST_FOLDER_REASON = `This file is in a test folder (test, tests, or __tests__). ${NOT_FOUND}`;
 
-/** Why a test file nothing loads was excluded, in words that fit its kind. */
-export function excludedTestFileReason(file: string): string {
-  return isTestNamedFile(file) ? TEST_NAMED_REASON : TEST_FOLDER_REASON;
+// A test file that wideBlastGlobs match is still read as a test file, so the reason says the match
+// did not make it a file usabl checks.
+const WIDE_BLAST_CLAUSE = 'It matches wideBlastGlobs, but it was still not checked, because nothing outside the tests loads it.';
+
+/**
+ * Why a test file nothing loads was excluded, in words that fit its kind. `matchesWideBlast` adds
+ * that a wideBlastGlobs pattern matched it.
+ */
+export function excludedTestFileReason(file: string, matchesWideBlast = false): string {
+  const reason = isTestNamedFile(file) ? TEST_NAMED_REASON : TEST_FOLDER_REASON;
+  if (!matchesWideBlast) return reason;
+  const kindEnd = reason.indexOf('. ') + 2;
+  return `${reason.slice(0, kindEnd)}${WIDE_BLAST_CLAUSE} ${reason.slice(kindEnd)}`;
 }
 
 function kindOf(file: string): string {
@@ -88,8 +98,9 @@ export function testFileGapReason(file: string, loads: readonly UnresolvableImpo
  */
 export function loadedTestFileNote(file: string, importers: readonly string[]): string {
   const who = importers.length === 0 ? 'files outside the tests' : importers.join(', ');
+  const verb = importers.length === 1 ? 'imports' : 'import';
   return (
-    `It ${kindOf(file)}, and usabl counts it as a UI file because ${who} import it, but no route closure reaches ` +
+    `It ${kindOf(file)}, and usabl counts it as a UI file because ${who} ${verb} it, but no route closure reaches ` +
     `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, such as stories, setup files, ` +
     'or mocks, this gap stays until they are named like a test or sit in a test folder. If a screen renders this file, ' +
     'list it in the files of a surface in usabl.config.json.'

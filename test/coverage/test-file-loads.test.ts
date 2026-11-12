@@ -246,6 +246,39 @@ describe('a glob with brace alternatives', () => {
   });
 });
 
+describe('reasons that say what is true', () => {
+  it('says a changed test file matched wideBlastGlobs and was still not checked', async () => {
+    const wide: UsablConfig = { ...config, discovery: { ...config.discovery, wideBlastGlobs: ['src/tests/**'] } };
+    const coverage = await coverageOf('', { 'package.json': PACKAGE_JSON }, CHANGED, wide);
+    expectExcluded(coverage);
+    const reason = coverage.excludedFiles?.[0]?.reason ?? '';
+    expect(reason).toContain('It matches wideBlastGlobs, but it was still not checked, because nothing outside the tests loads it.');
+    expect(reason).toContain('usabl found no import of it');
+  });
+
+  it('does not name wideBlastGlobs when the file does not match one', async () => {
+    const coverage = await coverageOf('', { 'package.json': PACKAGE_JSON });
+    expect(coverage.excludedFiles?.[0]?.reason).not.toContain('wideBlastGlobs');
+  });
+
+  it('says "imports it" for one importer', async () => {
+    const coverage = await coverageOf('', { 'package.json': PACKAGE_JSON, 'src/Orphan.tsx': "import { Widget } from './tests/Widget';\n" });
+    expect(coverage.gaps[0]?.reason).toContain('because src/Orphan.tsx imports it');
+  });
+
+  it('reads a glob string with a backslash escape as the string it is', async () => {
+    // The pattern generouted uses for file routes, as it is written in source.
+    const body = "const pages = import.meta.glob('/src/pages/**/[\\\\w[-]*.{jsx,tsx,mdx}', { eager: true });";
+    const tree = { 'package.json': PACKAGE_JSON, 'vite.config.ts': 'export default {};' };
+    expectExcluded(await coverageOf(body, tree));
+    const inPages = 'src/pages/tests/helper.ts';
+    const coverage = await coverageOf(body, { ...tree, [inPages]: 'export const helper = 1;\n' }, inPages);
+    expectGap(coverage, inPages);
+    expect(coverage.gaps[0]?.reason).toContain('usabl does not evaluate the syntax in /src/pages/**/[\\w[-]*.{jsx,tsx,mdx}');
+    expect(coverage.gaps[0]?.reason).not.toContain('is not a string');
+  });
+});
+
 describe('the importers of loaded test files', () => {
   it('reads each edge of the graph once for many test files', () => {
     let reads = 0;

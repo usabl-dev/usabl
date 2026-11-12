@@ -289,13 +289,14 @@ export async function computeCoverage(
         } else if (placement.state === 'maybe') {
           testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads) });
         } else {
-          excludedFiles.push({ ref: file, reason: excludedTestFileReason(file) });
+          excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, isWideBlastFile(file, config.discovery.wideBlastGlobs)) });
         }
       }
       for (const entry of placeable) {
         const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
         if (placement.state === 'none') {
-          excludedFiles.push({ ref: entry.gap.ref, reason: excludedTestFileReason(entry.gap.ref) });
+          const ref = entry.gap.ref;
+          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref, config.discovery.wideBlastGlobs)) });
         } else {
           workspaceTestGaps.push(entry.gap);
         }

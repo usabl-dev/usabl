@@ -235,22 +235,36 @@ function skipBlank(source: string, from: number): number {
   }
 }
 
-// A quoted string that starts at `start`. A template literal with a ${...} part is `interpolated`,
-// and `text` is then the text before it. Null when the text there is not a string, or holds a
-// backslash, which this reader does not decode.
+// A quoted string that starts at `start`, as the string it is: a backslash escape is decoded. A
+// template literal with a ${...} part is `interpolated`, and `text` is then the text before it.
+// Null when the text there is not a string, or holds an escape this reader does not decode (a
+// character code, such as \x41 or A, or an octal digit).
 type QuotedString = { text: string; end: number; interpolated: false } | { text: string; interpolated: true };
+
+const SIMPLE_ESCAPES: Record<string, string> = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v' };
 
 function readQuoted(source: string, start: number): QuotedString | null {
   const quote = source.charAt(start);
   if (quote !== "'" && quote !== '"' && quote !== '`') return null;
+  let text = '';
   for (let index = start + 1; index < source.length; index += 1) {
     const char = source.charAt(index);
-    if (char === '\\') return null;
+    if (char === '\\') {
+      const next = source.charAt(index + 1);
+      if (next === '' || /[0-9xu]/u.test(next)) return null;
+      index += 1;
+      // A backslash before a line break continues the string on the next line.
+      if (next === '\r' && source.charAt(index + 1) === '\n') index += 1;
+      if (next === '\n' || next === '\r') continue;
+      text += SIMPLE_ESCAPES[next] ?? next;
+      continue;
+    }
     if (char === '\n' && quote !== '`') return null;
     if (quote === '`' && char === '$' && source.charAt(index + 1) === '{') {
-      return { text: source.slice(start + 1, index), interpolated: true };
+      return { text, interpolated: true };
     }
-    if (char === quote) return { text: source.slice(start + 1, index), end: index + 1, interpolated: false };
+    if (char === quote) return { text, end: index + 1, interpolated: false };
+    text += char;
   }
   return null;
 }
