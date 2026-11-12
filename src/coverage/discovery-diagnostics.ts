@@ -13,7 +13,7 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
       return 'and its options set base, which moves where its patterns start and which usabl does not read, so it may load any file';
     }
     if (entry.unread === 'start') {
-      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading / while usabl does not know the Vite root, because the Vite config sets root or more than one Vite config sits above the router file), so it may load any file';
+      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading / while usabl does not know the Vite root, because the Vite config sets root or takes settings from another file, or more than one Vite config sits above the router file), so it may load any file';
     }
     if (entry.unread === 'pattern') {
       return (

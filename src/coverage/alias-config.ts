@@ -372,12 +372,27 @@ export async function aliasConfigDirs(fs: FsGlob, fromFile: string): Promise<{ t
 // It may also match a comment or another option's value, which only makes usabl read less.
 const ROOT_WORD_RE = /(?<![\w$])root(?![\w$])/u;
 
+// Signs that a config takes settings from another file, which can set root where usabl does not
+// read: a spread, mergeConfig, a re-export, or an import or require of a relative path. A config
+// that imports only packages is read as the whole config.
+const SETTINGS_FROM_ELSEWHERE_RE = [
+  /\.\.\./u,
+  /(?<![\w$])mergeConfig(?![\w$])/u,
+  /(?<![\w$])export\s[^;]*?(?<![\w$])from\s*['"`]/u,
+  /(?:(?<![\w$])from|(?<![\w$.])import|(?<![\w$.])require)\s*\(?\s*['"`]\.\.?\//u,
+];
+
+function takesSettingsFromElsewhere(text: string): boolean {
+  return SETTINGS_FROM_ELSEWHERE_RE.some((pattern) => pattern.test(text));
+}
+
 /**
  * The folder Vite reads a glob pattern that starts with / from, '' for the repository root, or null
  * when usabl cannot know it. Vite reads such a pattern from its `root`, which is the folder it was
  * started in unless the config sets `root`. usabl knows the root only when exactly one Vite config
- * sits on the climb from a file of the app, such as its router file, to the repository root, and its
- * text does not name root: then it is that config's folder. With no Vite config it is the
+ * sits on the climb from a file of the app, such as its router file, to the repository root, its
+ * text does not name root, and it takes no settings from another file: then it is that config's
+ * folder. A root given on the command line is not seen. With no Vite config it is the
  * repository root. With a config that sets root, which Vite resolves from the folder it runs in, or
  * with more than one config, which one runs depends on how Vite is started, so it is null.
  */
@@ -397,7 +412,7 @@ export async function viteRootFor(fs: FsGlob, fromFile: string): Promise<string 
   if (found.length === 0) return '';
   if (found.length > 1) return null;
   const [only] = found;
-  return only === undefined || ROOT_WORD_RE.test(only.text) ? null : only.dir;
+  return only === undefined || ROOT_WORD_RE.test(only.text) || takesSettingsFromElsewhere(only.text) ? null : only.dir;
 }
 
 async function tsconfigMappingsIn(fs: FsGlob, dir: string): Promise<AliasMapping[]> {

@@ -208,6 +208,23 @@ describe('a rooted glob when usabl does not know the Vite root', () => {
     expect(coverage.gaps[0]?.reason).toContain('Vite root');
   });
 
+  it('is a gap when the Vite config takes its settings from another file', async () => {
+    const base = { 'vite.base.ts': "export default { root: 'src' };", 'tools/vite.ts': "export const make = () => ({ root: 'src' });", 'config/vite.ts': "export default { root: 'src' };" };
+    for (const text of [
+      "import base from './vite.base';\nexport default { ...base };",
+      "import { mergeConfig } from 'vite';\nimport base from './vite.base';\nexport default mergeConfig(base, {});",
+      "import { make } from './tools/vite';\nexport default make(__dirname);",
+      "export { default } from './config/vite';",
+    ]) {
+      expectGap(await coverageOf(glob, { ...base, 'vite.config.ts': text }));
+    }
+  });
+
+  it('still reads a rooted glob from a plain Vite config with only package imports', async () => {
+    const text = "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\nexport default defineConfig({ plugins: [react()] });";
+    expectExcluded(await coverageOf("const pages = import.meta.glob('/src/pages/**/*.tsx');", { 'vite.config.ts': text }));
+  });
+
   it('still reads a rooted glob from the one Vite config that does not set root', async () => {
     expectExcluded(await coverageOf("const pages = import.meta.glob('/src/pages/**/*.tsx');", { 'vite.config.ts': 'export default {};' }));
   });
