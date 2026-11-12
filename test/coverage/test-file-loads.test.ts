@@ -186,6 +186,31 @@ describe('a load read as narrowly as its text allows', () => {
   });
 });
 
+describe('a rooted glob when usabl does not know the Vite root', () => {
+  const glob = "const all = import.meta.glob('/tests/**/*.tsx', { eager: true });";
+
+  it('is a gap when the Vite config sets root', async () => {
+    expectGap(await coverageOf(glob, { 'vite.config.ts': "export default { root: 'src' };" }));
+  });
+
+  it('is a gap when the Vite config sets root as ./src through defineConfig', async () => {
+    expectGap(await coverageOf(glob, { 'vite.config.ts': "import { defineConfig } from 'vite';\nexport default defineConfig({ root: './src' });" }));
+  });
+
+  it('is a gap when more than one Vite config sits on the climb from the router file', async () => {
+    const coverage = await coverageOf("const all = import.meta.glob('/src/tests/**/*.tsx', { eager: true });", {
+      'vite.config.ts': 'export default {};',
+      'src/vite.config.ts': 'export default {};',
+    });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('Vite root');
+  });
+
+  it('still reads a rooted glob from the one Vite config that does not set root', async () => {
+    expectExcluded(await coverageOf("const pages = import.meta.glob('/src/pages/**/*.tsx');", { 'vite.config.ts': 'export default {};' }));
+  });
+});
+
 describe('a webpack require.context call', () => {
   it('is a gap when its folder holds the test file', async () => {
     const coverage = await coverageOf("const ctx = require.context('./tests', true, /\\.tsx$/);", { 'package.json': PACKAGE_JSON });

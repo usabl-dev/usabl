@@ -115,9 +115,10 @@ export interface ImportGraphOptions {
   // The package names a bare import may name (see declaredPackageNames). Read only when complete.
   // When given, a bare import no package explains is recorded as `bare-unknown`.
   declaredPackages?: readonly string[];
-  // The Vite root: the folder of the nearest Vite config, '' for the repository root. A glob
-  // pattern that starts with / is read from it, as Vite reads it. Read only when complete.
-  viteRoot?: string;
+  // The Vite root (see viteRootFor), '' for the repository root. A glob pattern that starts with /
+  // is read from it, as Vite reads it. Null when usabl cannot know it, so such a pattern may load
+  // any file. Read only when complete.
+  viteRoot?: string | null;
 }
 
 export interface ImportGraphView {
