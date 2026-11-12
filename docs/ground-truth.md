@@ -4352,7 +4352,9 @@ each path prints the same sentence, which says why and names the fix:
   through it, the dev-server overlay included, stop with exit 4 before they run, the same way
   they stop on any other config error.
 - The CI judge, `check --ci --trusted-ref <ref> --isolated-browser`. It reads the config at the
-  trusted ref and never calls the loader, so it applies the rule itself, with exit 4.
+  trusted ref and never calls the loader, so it applies the rule itself, with exit 4. Its
+  message adds that in CI the config is read from the base branch, so a pull request that fixes
+  the list is still refused, and the fix takes effect once it is merged there.
 - The Stop hook. It never says idle for such a config. It blocks the stop as approval
   required, as it does for a config that does not parse, and lets one continuation through.
 - `usabl doctor` reports the config as drifted, with the same sentence as its next step.
