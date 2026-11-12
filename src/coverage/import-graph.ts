@@ -543,9 +543,11 @@ function dotDotAfterGlob(pattern: string): boolean {
 
 // The literal alternatives of a pattern's brace groups, so each is resolved and normalized on its
 // own: ./{../tests,x}/*.tsx is ../tests/*.tsx and x/*.tsx. Null when usabl cannot read the braces
-// exactly: a nested or unbalanced brace, more alternatives than the cap, or a .. after a glob
-// segment in an alternative.
+// exactly: a nested or unbalanced brace, more alternatives than the cap, a .. after a glob segment
+// in an alternative, or an escaped brace or comma, such as \{x,tests\}, which the glob reads as
+// literal text and usabl would expand.
 function braceAlternatives(pattern: string): string[] | null {
+  if (/\\[{},]/u.test(pattern)) return null;
   if (!pattern.includes('{') && !pattern.includes('}')) return dotDotAfterGlob(pattern) ? null : [pattern];
   if (braceAlternativeCount(pattern) > MAX_BRACE_ALTERNATIVES) return null;
   const alternatives = expandBraces(pattern);

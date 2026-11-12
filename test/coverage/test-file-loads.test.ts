@@ -257,6 +257,14 @@ describe('a glob with brace alternatives', () => {
     expectGap(await coverageOf(`const all = import.meta.glob('./{${many}}/*.tsx');`));
   });
 
+  it('is a gap for an escaped brace, which usabl does not read as a group', async () => {
+    // The source holds './\\{x,tests\\}/*.tsx', so the string holds a backslash before each brace.
+    const changed = 'src/{x,tests}/Widget.spec.tsx';
+    const coverage = await coverageOf("const all = import.meta.glob('./\\\\{x,tests\\\\}/*.tsx');", { [changed]: WIDGET }, changed);
+    expectGap(coverage, changed);
+    expect(coverage.gaps[0]?.reason).toContain('cannot evaluate');
+  });
+
   it('stays excluded when no alternative covers the test file', async () => {
     expectExcluded(await coverageOf('', pages("const all = import.meta.glob('./{../widgets,x}/[A-Z]*.tsx');")));
     expectExcluded(await coverageOf("const all = import.meta.glob('./{pages,widgets}/*.tsx');"));

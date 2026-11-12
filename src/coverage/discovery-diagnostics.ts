@@ -18,7 +18,7 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
     if (entry.unread === 'pattern') {
       return (
         'and one of its patterns has a part usabl cannot evaluate (a nested or unbalanced brace, more than ' +
-        `${MAX_BRACE_ALTERNATIVES} brace alternatives, or a .. after a glob segment), so it may load any file`
+        `${MAX_BRACE_ALTERNATIVES} brace alternatives, an escaped brace or comma, or a .. after a glob segment), so it may load any file`
       );
     }
     return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
