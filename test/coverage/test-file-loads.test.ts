@@ -291,6 +291,41 @@ describe('a test file in a workspace package the app depends on', () => {
     }
   });
 
+  const helpers = 'packages/ui/src/tests/helpers.ts';
+  const expectWorkspaceGap = (coverage: Coverage, file = helpers): void => {
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[file, 'not-covered']]);
+  };
+
+  it('is a workspace gap when a screen imports it by a path inside the package', async () => {
+    expectWorkspaceGap(await coverageOf("import { helper } from '@acme/ui/src/tests/helpers';", workspace, helpers));
+  });
+
+  it('is a workspace gap when a screen imports a package subpath that usabl cannot find as a file', async () => {
+    const tree = {
+      ...workspace,
+      'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', exports: { '.': './src/index.ts', './testing': './src/tests/index.ts' } }),
+      'packages/ui/src/tests/index.ts': "export * from './helpers';\n",
+    };
+    expectWorkspaceGap(await coverageOf("import { helper } from '@acme/ui/testing';", tree, helpers));
+  });
+
+  it('is a workspace gap when another workspace package the app depends on imports it', async () => {
+    const tree = {
+      ...workspace,
+      'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/shell': '*', react: '^18.3.0' } }),
+      'packages/shell/package.json': JSON.stringify({ name: '@acme/shell', main: 'src/index.ts', dependencies: { '@acme/ui': '*' } }),
+      'packages/shell/src/index.ts': "import { helper } from '@acme/ui/src/tests/helpers';\nexport const Shell = () => helper;\n",
+    };
+    expectWorkspaceGap(await coverageOf("import { Shell } from '@acme/shell';", tree, helpers));
+  });
+
+  it('gives the same gap for a file of the package that is not a test file, imported by a path inside it', async () => {
+    const tree = { ...workspace, 'packages/ui/src/Other.tsx': 'export const Other = () => <i />;\n' };
+    expectWorkspaceGap(await coverageOf("import { Other } from '@acme/ui/src/Other';", tree, 'packages/ui/src/Other.tsx'), 'packages/ui/src/Other.tsx');
+  });
+
   it('is a workspace gap when a load usabl cannot follow in the package may reach it', async () => {
     const tree = { ...workspace, 'packages/ui/src/Button.tsx': "const all = import.meta.glob('./tests/*.ts');\nexport const Button = () => <button />;\n" };
     const coverage = await coverageOf(screen, tree, 'packages/ui/src/tests/helpers.ts');

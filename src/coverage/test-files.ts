@@ -21,7 +21,7 @@
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import type { AliasConfig } from './alias-config.js';
 import { loadBaseUrlDirs, viteRootFor } from './alias-config.js';
-import { declaredPackageNames } from './workspace-packages.js';
+import { declaredPackageNames, workspacePackages } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
 
@@ -161,8 +161,8 @@ export async function placeTestFiles(
   routeEntries: readonly string[],
   aliases: AliasConfig,
   files: readonly string[],
-  // More files that start the graph, such as the source of a workspace package a changed test file
-  // sits in. Test files among them are left out.
+  // More files that start the graph, such as the source of the workspace packages the app depends
+  // on. Test files among them are left out.
   extraStarts: readonly string[] = [],
 ): Promise<Map<string, TestFilePlacement>> {
   const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
@@ -173,6 +173,7 @@ export async function placeTestFiles(
     // The folder of the one Vite config at or above the router file, the repository root when there
     // is none, or null when usabl cannot know the root.
     viteRoot: await viteRootFor(fs, config.discovery.routerFile),
+    workspacePackages: await workspacePackages(fs),
   };
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
   // files under uiFileGlobs that are not test files, the route entry files, the router file, the

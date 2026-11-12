@@ -10,7 +10,7 @@ import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-di
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import { excludedTestFileReason, isTestFile, loadedTestFileNote, placeTestFiles, testFileGapReason } from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
-import { packageSourceFiles, type TrustedRead, workspaceDependencyFiles, workspaceDependencyGaps } from './workspace-packages.js';
+import { packageSourceFiles, type TrustedRead, workspaceDependencies, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
@@ -239,13 +239,15 @@ export async function computeCoverage(
   // test-files.ts for the wider graph, built only when a changed test file needs it.
   //
   // A test file outside uiFileGlobs that sits in a workspace package the app depends on follows the
-  // same rule, with the source files of that package as more starts: it keeps its workspace gap
-  // when a file of the package outside the tests loads it or a load usabl cannot follow may reach
+  // same rule, with the source files of every workspace package the app depends on as more starts,
+  // so a package that imports it through a path inside its package counts too. It keeps its
+  // workspace gap when a file outside the tests loads it or a load usabl cannot follow may reach
   // it, and it is excluded and listed otherwise.
   const testFiles = [...globbedFiles.filter(isTestFile)].sort();
   const globbedSet = new Set(globbedFiles);
   const outsideTestFiles = listedFiles.filter((file) => isTestFile(file) && !globbedSet.has(file));
-  const workspaceTests = outsideTestFiles.length === 0 ? [] : await workspaceDependencyFiles(fs, config, outsideTestFiles, trustedRead);
+  const { files: workspaceTests, dependedDirs } =
+    outsideTestFiles.length === 0 ? { files: [], dependedDirs: [] } : await workspaceDependencies(fs, config, outsideTestFiles, trustedRead);
   const reachedTestFiles = new Set<string>();
   // For a test file that counts as a UI file only because the wider graph found an importer
   // outside the tests, what its gap says if no screen takes it.
@@ -268,8 +270,8 @@ export async function computeCoverage(
     }
     if (unreached.length > 0 || placeable.length > 0) {
       const packageStarts: string[] = [];
-      for (const dir of [...new Set(placeable.map((entry) => entry.packageDir as string))].sort()) {
-        packageStarts.push(...(await packageSourceFiles(fs, dir)));
+      if (placeable.length > 0) {
+        for (const dir of dependedDirs) packageStarts.push(...(await packageSourceFiles(fs, dir)));
       }
       const placements = await placeTestFiles(
         fs,

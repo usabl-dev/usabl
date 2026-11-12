@@ -61,6 +61,12 @@ export function describeLoad(entry: UnresolvableImport): string | null {
       : 'no package.json usabl reads declares that package, and no alias usabl reads maps it, so it may be an alias usabl did not read';
     return `${entry.importer} imports '${entry.specifier}', and ${why}`;
   }
+  if (entry.kind === 'package-subpath') {
+    return (
+      `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that names ` +
+      "no file there, so it may go through the package's exports map, which usabl does not read, and it may load any file of that package"
+    );
+  }
   if (entry.kind === 'base-url') {
     return (
       `${entry.importer} imports '${entry.specifier}', which the tsconfig baseUrl resolves to ${entry.candidates.join(', ')}, ` +

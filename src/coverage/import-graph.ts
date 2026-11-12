@@ -89,6 +89,17 @@ export type UnresolvableImport =
   | {
       importer: string;
       specifier: string;
+      // A bare import of a path inside a workspace package, such as '@acme/ui/testing', that names
+      // no file under the package folder as written. It may go through the package's "exports"
+      // map, which usabl does not read, so it may load any file of the package. Recorded only by
+      // the complete reading.
+      kind: 'package-subpath';
+      // The package folder, relative to the repository root.
+      packageDir: string;
+    }
+  | {
+      importer: string;
+      specifier: string;
       // A bare import, such as 'tests/Widget', that the tsconfig baseUrl resolves to a file in
       // the repository. The compiler reads baseUrl, but a bundler reads it only with a plugin, and
       // usabl cannot tell which one this build uses. So the import is not followed.
@@ -120,6 +131,10 @@ export interface ImportGraphOptions {
   // is read from it, as Vite reads it. Null when usabl cannot know it, so such a pattern may load
   // any file. Read only when complete.
   viteRoot?: string | null;
+  // The workspace packages, by name and folder. A bare import of a path inside one, such as
+  // '@acme/ui/src/tests/helpers', is followed to the file it names under the package folder, or
+  // recorded as `package-subpath` when it names none. Read only when complete.
+  workspacePackages?: readonly { name: string; dir: string }[];
 }
 
 export interface ImportGraphView {
@@ -618,6 +633,9 @@ export function importMayLoad(entry: UnresolvableImport, file: string): boolean 
   if (entry.kind === 'base-url') {
     return entry.candidates.includes(file);
   }
+  if (entry.kind === 'package-subpath') {
+    return file.startsWith(`${entry.packageDir}/`);
+  }
   return importLastSegments(entry.specifier).includes(importName(file));
 }
 
@@ -801,6 +819,18 @@ function readOnce(fs: FsGlob): FsGlob {
   };
 }
 
+// The workspace package a bare import names a path inside of, and that path, or null when it names
+// no workspace package or only the package itself.
+function workspaceSubpath(
+  specifier: string,
+  packages: readonly { name: string; dir: string }[],
+): { dir: string; subpath: string } | null {
+  const name = packageNameOf(specifier);
+  const owner = packages.find((candidate) => candidate.name === name);
+  if (owner === undefined || specifier.length <= name.length + 1) return null;
+  return { dir: owner.dir, subpath: specifier.slice(name.length + 1) };
+}
+
 // The files a bare import resolves to under each baseUrl folder, sorted. Empty when none does,
 // which means the import names a package.
 async function baseUrlCandidates(fs: FsGlob, specifier: string, baseUrlDirs: readonly string[]): Promise<string[]> {
@@ -829,6 +859,7 @@ export async function buildImportGraph(
   const aliases = aliasConfig ?? NO_ALIASES;
   const packages = complete && options.declaredPackages !== undefined ? new Set(options.declaredPackages) : null;
   const viteRoot = complete ? (options.viteRoot ?? null) : null;
+  const workspacePackages = complete ? (options.workspacePackages ?? []) : [];
   const context: LoadContext = { aliases, baseUrlDirs, packages, viteRoot };
 
   while (queue.length > 0) {
@@ -855,6 +886,25 @@ export async function buildImportGraph(
         for (const target of targets) {
           pushUnique(fileEdges, target);
           queue.push(target);
+        }
+        continue;
+      }
+
+      const inPackage = isRelativeSpecifier(specifier) ? null : workspaceSubpath(specifier, workspacePackages);
+      if (inPackage !== null) {
+        // A path inside a workspace package is followed to the file it names under the package
+        // folder, as a hoisted install resolves it. One that names no file there may go through
+        // the package's exports map, so it may load any file of the package.
+        const target = path.normalize(path.join(inPackage.dir, inPackage.subpath));
+        const resolved = target.startsWith(`${inPackage.dir}/`) ? await resolveFileAtPath(fs, target) : null;
+        if (resolved === null) {
+          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'package-subpath', packageDir: inPackage.dir });
+          continue;
+        }
+        if ('candidates' in resolved) pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
+        for (const found of edgeTargets(resolved)) {
+          pushUnique(fileEdges, found);
+          queue.push(found);
         }
         continue;
       }

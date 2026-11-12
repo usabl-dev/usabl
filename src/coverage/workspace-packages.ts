@@ -418,7 +418,7 @@ export async function workspaceDependencyGaps(
   files: readonly string[],
   trusted?: TrustedRead,
 ): Promise<CoverageGap[]> {
-  return (await workspaceDependencyFiles(fs, config, files, trusted)).map((entry) => entry.gap);
+  return (await workspaceDependencies(fs, config, files, trusted)).files.map((entry) => entry.gap);
 }
 
 /** A changed file in a workspace package the app depends on: its gap, and the package folder. */
@@ -429,18 +429,26 @@ export interface WorkspaceDependencyFile {
   packageDir: string | null;
 }
 
+export interface WorkspaceDependencies {
+  files: WorkspaceDependencyFile[];
+  // The folders of every workspace package the app depends on, other than the app's own, sorted.
+  dependedDirs: string[];
+}
+
 /**
- * The same as workspaceDependencyGaps, with the folder of the package each file sits in, so the
- * planner can place a test file in that package by the test file rule.
+ * The same as workspaceDependencyGaps, with the folder of the package each file sits in and the
+ * folders of every package the app depends on, so the planner can place a test file in one of them
+ * by the test file rule.
  */
-export async function workspaceDependencyFiles(
+export async function workspaceDependencies(
   fs: FsGlob,
   config: UsablConfig,
   files: readonly string[],
   trusted?: TrustedRead,
-): Promise<WorkspaceDependencyFile[]> {
+): Promise<WorkspaceDependencies> {
+  const none: WorkspaceDependencies = { files: [], dependedDirs: [] };
   const candidates = [...new Set(files.filter((file) => !isInstalledPath(file) && !isDocumentation(file)))].sort();
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return none;
   const patterns: string[] = [];
   for (const [read, refLabel] of [
     [(file: string) => fs.readFile(file), ''],
@@ -450,18 +458,18 @@ export async function workspaceDependencyFiles(
       patterns.push(...(await workspacePatterns(read)));
     } catch (err) {
       if (!(err instanceof UnreadableWorkspaceRoot)) throw err;
-      return candidates.map((file) => ({ gap: unreadableRootGap(file, err, refLabel), packageDir: null }));
+      return { files: candidates.map((file) => ({ gap: unreadableRootGap(file, err, refLabel), packageDir: null })), dependedDirs: [] };
     }
   }
   const dirs = await workspaceDirs(fs, [...new Set(patterns)]);
-  if (dirs.length === 0) return [];
+  if (dirs.length === 0) return none;
 
   const workspace: PackageManifest[] = [];
   for (const dir of dirs) workspace.push(await readManifestBoth(fs, trusted, dir));
   const root = await readManifestBoth(fs, trusted, '');
   const all = [root, ...workspace];
   const apps = appPackages(config, all);
-  if (apps.length === 0) return [];
+  if (apps.length === 0) return none;
   const appDirs = new Set(apps.map((app) => app.dir));
   const changedOwners = new Set(candidates.map((file) => ownerOf(file, workspace)?.dir).filter((dir): dir is string => dir !== undefined));
   const reached = await dependencyClosure(fs, apps, workspace, changedOwners);
@@ -472,7 +480,26 @@ export async function workspaceDependencyFiles(
     if (owner === null || appDirs.has(owner.dir) || !reached.has(owner.dir)) continue;
     found.push({ gap: gapFor(file, owner, apps), packageDir: owner.dir });
   }
-  return found;
+  return { files: found, dependedDirs: [...reached.keys()].filter((dir) => !appDirs.has(dir)).sort() };
+}
+
+/** A workspace package: its name and its folder. */
+export interface WorkspacePackage {
+  name: string;
+  dir: string;
+}
+
+/**
+ * The named workspace packages the repository root lists, sorted by name. Empty when the root lists
+ * none or cannot be read. The import graph uses them to follow a bare import into a package folder.
+ */
+export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]> {
+  const found: WorkspacePackage[] = [];
+  for (const dir of await workspacePackageDirs(fs)) {
+    const { name } = await readManifest((file) => fs.readFile(file), dir);
+    if (name !== null) found.push({ name, dir });
+  }
+  return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }
 
 /**
