@@ -2442,7 +2442,11 @@ their own.
 
 1. **Guard check first.** If any guarded path differs from the trust anchor, the
    verdict is `approval_required`. Affected UI still scans unless intake is
-   malformed (the harness stays closed for unreadable requirements). Findings
+   malformed (the harness stays closed for unreadable requirements). A
+   requirements file that does not load is also `approval_required`, even when
+   it did not change. The summary names the two reasons apart:
+   `approval required: N guarded path(s) changed` counts changed paths only, and
+   `the requirements could not be loaded` is added when the load failed. Findings
    stay on the Result. No receipt. The gate also mints `accessibilityVerdict`
    and `accessibilityExitCode` (never 2) so CI can split policy approval from
    accessibility enforcement.
@@ -2713,7 +2717,7 @@ the screen, the rules, and the number of barriers, and gives the fix, for exampl
 accessibility barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
 claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
 --unconfirmed." It never names an element key, because a key carries page text. The summary line
-gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
+gains a `N recorded accessibility barriers not seen, not claimed fixed` clause that counts barriers, not entries,
 and the notice itself is printed by the terminal, the pull request comment, the Stop hook (on a
 verified stop too), the self-check, and the overlay. The text is written once, in
 `src/output/floor-notice.ts`. The data is `floorUnconfirmed` on the gate output and on the Result,

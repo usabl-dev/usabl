@@ -248,9 +248,15 @@ describe('gate() reads its input once and gates what it checked', () => {
     const out = gate(counted);
     expect(out.verdict).toBe('verified');
     expect(out.findings).toEqual([]);
-    for (const key of ['coverage', 'guardDivergedPaths', 'drafts', 'floor', 'waivers', 'now', 'cleanlyScannedScreens', 'renderEvidence']) {
+    for (const key of ['coverage', 'guardDivergedPaths', 'drafts', 'floor', 'waivers', 'now', 'cleanlyScannedScreens', 'renderEvidence', 'requirementsUnloaded']) {
       expect(reads.get(key), key).toBe(1);
     }
+  });
+
+  it('refuses a requirementsUnloaded that is not a boolean', () => {
+    // A string "false" is truthy. Read as given, it would ask for approval on a run that had none.
+    const err = refusal(() => gate(input({ requirementsUnloaded: 'false' as unknown as boolean })));
+    expect(err.field).toBe('requirementsUnloaded');
   });
 
   it('refuses a cleanlyScannedScreens that is not a real Set', () => {

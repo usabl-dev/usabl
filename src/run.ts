@@ -38,7 +38,7 @@ import {
   summarizeApplicability,
   treeChangedDuringCheckGap,
 } from './evidence/receipt.js';
-import { parseEvidenceFloor } from './evidence/floor.js';
+import { EMPTY_FLOOR, EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from './evidence/floor.js';
 import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
@@ -48,10 +48,7 @@ import { checkGuard } from './trust/guard.js';
 import { debtStatusOf, loadDebtTracking } from './history/tracking.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
-const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 const CONFIG_PATH = 'usabl.config.json';
-// Synthesized now, so it is version 2. It holds nothing, so nothing can hide behind it.
-const EMPTY_FLOOR: EvidenceFloor = { version: 2, entries: [] };
 
 export interface RunOptions {
   changedFiles?: string[];
@@ -258,7 +255,11 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     const now = deps.clock();
     const gated = gate({
       coverage,
-      guardDivergedPaths: policyDivergedPaths,
+      // The two reasons for approval, kept apart so the approval line can say what happened: the
+      // guarded paths that changed, and whether the requirements failed to load. Their union is
+      // policyDivergedPaths, which the Result still reports as dirtyGuardedPaths.
+      guardDivergedPaths: [...new Set(guardDivergedPaths)].sort(),
+      requirementsUnloaded: intakePolicyPaths.length > 0,
       drafts,
       floor: debt.effectiveFloor,
       waivers,

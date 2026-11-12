@@ -157,6 +157,62 @@ describe('approval_required keeps the accessibility disclosure', () => {
   });
 });
 
+describe('the approval line keeps a changed path and an unloadable requirements file apart', () => {
+  // A requirements file that does not load was counted as a changed guarded path, so the line
+  // said "1 guarded path(s) changed" about a file nobody changed. The gate now gets the two facts
+  // apart and names each one. The verdict and the exit code are the same in every case.
+  const unloadable = {
+    ...base,
+    coverage: coverage({ gaps: [gap({ ref: 'requirements/bad.yaml', reason: 'usabl could not load the design requirements' })] }),
+    drafts: [],
+  };
+
+  it('says the requirements could not be loaded when nothing changed', () => {
+    const out = gate({ ...unloadable, guardDivergedPaths: [], requirementsUnloaded: true });
+
+    expect(out.summary).toBe(
+      'approval required: the requirements could not be loaded; accessibility not_covered: nothing blocking, 1 gap(s)',
+    );
+    expect(out.verdict).toBe('approval_required');
+    expect(out.exitCode).toBe(2);
+  });
+
+  it('names both facts when a path changed and the requirements could not be loaded', () => {
+    const out = gate({ ...unloadable, guardDivergedPaths: DIVERGED, requirementsUnloaded: true });
+
+    expect(out.summary).toBe(
+      'approval required: 1 guarded path(s) changed; the requirements could not be loaded; ' +
+        'accessibility not_covered: nothing blocking, 1 gap(s)',
+    );
+    expect(out.verdict).toBe('approval_required');
+    expect(out.exitCode).toBe(2);
+  });
+
+  it('reads as before when only a path changed', () => {
+    const out = gate({ ...unloadable, guardDivergedPaths: DIVERGED, requirementsUnloaded: false });
+
+    expect(out.summary).toBe('approval required: 1 guarded path(s) changed; accessibility not_covered: nothing blocking, 1 gap(s)');
+    expect(out.verdict).toBe('approval_required');
+    expect(out.exitCode).toBe(2);
+  });
+
+  it('keeps the plain line when a requirements load failure meets a run with nothing to check', () => {
+    const out = gate({ ...unloadable, coverage: coverage({ nothingToCheck: true }), guardDivergedPaths: [], requirementsUnloaded: true });
+
+    expect(out.summary).toBe('approval required: the requirements could not be loaded');
+    expect(out.verdict).toBe('approval_required');
+    expect(out.exitCode).toBe(2);
+  });
+
+  it('asks for no approval when neither fact holds', () => {
+    const out = gate({ ...unloadable, guardDivergedPaths: [], requirementsUnloaded: false });
+    const absent = gate({ ...unloadable, guardDivergedPaths: [] });
+
+    expect(out.verdict).toBe('not_covered');
+    expect(out).toEqual(absent);
+  });
+});
+
 describe('the surfaces that only interpolate the summary now disclose it', () => {
   it('reaches the stop hook, which prints no accessibility split of its own', () => {
     // summary.ts and pr-comment.ts already render accessibilityVerdict separately. The stop hook,

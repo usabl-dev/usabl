@@ -12,7 +12,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EvidenceFloor, HistoryReader } from '../contracts/index.js';
-import { parseEvidenceFloor } from '../evidence/floor.js';
+import { EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from '../evidence/floor.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 import { identityKey } from '../primitives/identity.js';
 import type { FloorSnapshot, LedgerFloor, LedgerFloorEntry, LedgerHistory, LedgerInput, LedgerRecord } from './ledger.js';
@@ -25,7 +25,7 @@ const MAX_BUFFER = 256 * 1024 * 1024;
 // bounds that list across all floor commits, so a huge history gives a plain refusal, not a crash.
 export const MAX_FLOOR_ENTRIES = 2_000_000;
 
-export const LEDGER_FLOOR_PATH = '.usabl-evidence.json';
+export const LEDGER_FLOOR_PATH = EVIDENCE_FLOOR_PATH;
 
 /** One git read printed more than the ledger reads. The ledger does not run. */
 export class LedgerLimitError extends Error {
