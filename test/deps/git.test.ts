@@ -306,6 +306,39 @@ describe('makeGitReader in a repository with no commits', () => {
     expect(bare).toContain('git remote show origin');
     expect(bare).not.toContain('origin main');
   });
+
+  // The CI workflow passes the base commit. git fetch cannot be shown as one fixed command for
+  // it, and a shallow checkout is the usual reason it is missing, so the hint says to fetch more
+  // history and gives no git fetch example.
+  it('gives a missing commit id the history hint, not a branch fetch', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    for (const sha of ['abc1234', '0123456789ab']) {
+      const message = await git.show(sha, 'usabl.config.json').catch((err: Error) => err.message);
+      expect(message).toContain(`git cannot read ${sha}`);
+      expect(message).toContain('fetch-depth: 0');
+      expect(message).not.toContain('git fetch');
+      expect(message).not.toContain('git remote show origin');
+    }
+  });
+
+  // A branch named feature/foo is not the branch foo on a remote called feature. When the first
+  // part names no remote, the example fetches the branch by its whole name.
+  it('fetches a branch with a slash by its whole name when the first part is not a remote', async () => {
+    await runGit(emptyRepo, ['remote', 'add', 'origin', 'https://example.test/app.git']);
+    const git = makeGitReader({ cwd: emptyRepo });
+    const message = await git.show('feature/foo', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(message).toContain('git fetch origin feature/foo:feature/foo');
+    expect(message).not.toContain('git fetch feature foo');
+  });
+
+  it('fetches a remote-tracking ref from its remote when the first part is a remote', async () => {
+    await runGit(emptyRepo, ['remote', 'add', 'origin', 'https://example.test/app.git']);
+    await runGit(emptyRepo, ['remote', 'add', 'upstream', 'https://example.test/upstream.git']);
+    const git = makeGitReader({ cwd: emptyRepo });
+    const message = await git.show('upstream/develop', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(message).toContain('git fetch upstream develop');
+    expect(message).not.toContain('upstream/develop:');
+  });
 });
 
 // usabl reads git's error text to tell a missing file from a failure. git translates that text
