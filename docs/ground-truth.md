@@ -1642,11 +1642,14 @@ in this order:
      with a backslash escape is read as the string it is. Brace groups are expanded first, and each
      alternative is resolved on its own, so `./{../tests,x}/*.tsx` covers `../tests/*.tsx` and
      `x/*.tsx`. A relative alternative is resolved from the importer's folder. One that starts with
-     `/` is resolved from the Vite root, as Vite reads it, when usabl knows the root: exactly one
-     Vite config sits on the climb from the router file to the repository root and its text does
-     not hold the word `root`, so the root is that config's folder, or no Vite config sits there,
-     so the root is the repository root. Otherwise Vite's root depends on its `root` option or on
-     how it is started, so such a pattern may load any file. Patterns are matched with usabl's own
+     `/` is resolved from the Vite root, as Vite reads it, when usabl takes the root as known.
+     usabl takes the config's folder as the root when exactly one Vite config sits on the climb
+     from the router file to the repository root, its text does not hold the word `root`, and it
+     takes no settings from another file: it holds no spread (`...`), no `mergeConfig`, no `export
+     ... from`, and no import or require of a relative path. A config that imports only packages
+     counts as the whole config. usabl takes the repository root as the root when no Vite config
+     sits there. Otherwise such a pattern may load any file. A root given on the command line, such
+     as `vite --root src`, is not seen (see the limits below). Patterns are matched with usabl's own
      glob matcher. Every literal pattern in the call is read, an array of patterns too, and a
      negative pattern is left out, which can only name more files. A pattern with syntax the
      matcher does not evaluate, such as `?`, `[ ]`, `( )`, or a brace range, covers every file in
@@ -1654,8 +1657,8 @@ in this order:
      not a test folder beside it. Each of these may load any file, and the reason says which it
      was: a call whose argument is not a string or a list of strings, a pattern that starts with an
      alias usabl cannot map, a call whose options set `base`, and a pattern usabl cannot read
-     exactly (a nested or unbalanced brace, more than 64 brace alternatives, or a `..` after a
-     segment with glob syntax);
+     exactly (a nested or unbalanced brace, more than 64 brace alternatives, an escaped brace or
+     comma, or a `..` after a segment with glob syntax);
    - an `import()` or `require()` whose argument is a template literal or is not a literal, and a
      webpack `require.context(folder, ...)`. The fixed text before the first `${`, or the folder, is
      a prefix, resolved from the importer's folder (or through an alias, or under a `baseUrl` for a
@@ -1681,10 +1684,13 @@ in this order:
      alias usabl did not read, so it may load a file its last segment names, as an unresolved
      import does. A bare template start counts as a package only when it names a whole declared
      package, never a built-in, because the rest of the path is not known;
-   - a bare import of a path inside a workspace package, such as `@acme/ui/testing`, that names no
-     file under the package folder. It may go through the package's `exports` map, which usabl does
-     not read, so it may load any file of that package. A path that does name a file there, such as
-     `@acme/ui/src/tests/helpers`, is followed to it like any import.
+   - a bare import of a path inside a workspace package, such as `@acme/ui/testing`, that usabl
+     does not follow by path. When the package's package.json has an `exports` field, the resolver
+     reads that field in place of the folders, and usabl does not read it, so every path into the
+     package may load any file of that package. Without `exports`, a path that names a file under
+     the package folder, such as `@acme/ui/src/tests/helpers`, is followed to it like any import,
+     and one that names no file there may load any file of that package. A path that leaves the
+     package folder, such as `@acme/ui/../other/x`, may load any file.
 
    Loads inside comments are skipped. usabl finds the comments by parsing the file, so a string that
    holds comment marks, such as `"http://"`, never hides a call, and a file that does not parse, such
@@ -1753,7 +1759,10 @@ through one of them is excluded:
   cannot read also maps, such as a webpack or Babel alias, so the bundler loads an app file in
   place of the package. The package names are read from the working tree, which in CI is the pull
   request tree, so a name an earlier change declared can make a later import of an app folder by
-  that name read as a package.
+  that name read as a package;
+- a Vite root given on the command line, such as `vite --root src` or `vite src`, in a package.json
+  script, a Makefile, or a CI step. usabl reads only the Vite config, so it reads a glob that starts
+  with `/` from the config's folder, and a test file that only such a glob loads is excluded.
 
 If a screen renders a test file, list it in the `files` of a surface, which makes it a UI file
 whatever usabl finds.

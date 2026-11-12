@@ -349,17 +349,20 @@
   resolves to it, or a bare import no package explains (a `#` import, or a name that is not a
   Node.js built-in as a whole and whose package no package.json declares) that names it. usabl
   reads these loads narrowly only where it can read the text exactly: a glob's brace alternatives
-  are expanded and resolved one by one, a glob that starts with `/` is read from the Vite root when
-  exactly one Vite config sits above the app and does not set `root` (and may load any file
-  otherwise), a pattern with syntax usabl does not evaluate covers only the folder above that
-  syntax, a load inside a comment is skipped, a string with a backslash escape is read as the
-  string it is, and a Vite alias key written without quotes is read. The gap reason names the
-  importer and says to narrow the load there, or to list the file in a surface. The import graph
-  also follows a name like `./Widget.spec` to `Widget.spec.tsx`. A test file in a workspace package
-  the app depends on follows the same rule, with the sources of every workspace package the app
-  depends on as starts, and a bare import of a path inside a workspace package is followed to the
-  file it names, or may load any file of the package when it names none, as through an `exports`
-  map. A change to a test file that nothing usabl reads
+  are expanded and resolved one by one, a glob that starts with `/` is read from the config's
+  folder when exactly one Vite config sits above the app, its text sets no `root`, and it takes no
+  settings from another file (a spread, `mergeConfig`, a re-export, or a relative import), and may
+  load any file otherwise, a pattern with syntax usabl does not evaluate covers only the folder
+  above that syntax, a load inside a comment is skipped, a string with a backslash escape is read
+  as the string it is, and a Vite alias key written without quotes is read. A root given on the
+  command line, such as `vite --root src`, is not seen. The gap reason names the importer and says
+  to narrow the load there, or to list the file in a surface. The import graph also follows a name
+  like `./Widget.spec` to `Widget.spec.tsx`. A test file in a workspace package the app depends on
+  follows the same rule, with the sources of every workspace package the app depends on as starts.
+  A bare import of a path inside a workspace package is followed to the file it names only when the
+  package has no `exports` field. Otherwise, or when it names no file, it may load any file of the
+  package, and one that leaves the package folder may load any file. A change to a test file that
+  nothing usabl reads
   imports, and that no such load can reach, stays nothing to check, and is now listed as excluded
   with a reason for a file named like a test too. The pull request comment and the Stop hook now
   list excluded files, as `usabl check` does, and an idle run that excluded files says so on every
