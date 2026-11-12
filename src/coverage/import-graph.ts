@@ -401,6 +401,9 @@ interface LoadContext {
 }
 
 const BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
+// Built-ins that exist only with the node: prefix, which some Node.js versions leave out of
+// builtinModules.
+const NODE_SCHEME_ONLY_MODULES: ReadonlySet<string> = new Set(['sea', 'sqlite', 'test', 'test/reporters']);
 
 // The package name of a bare specifier: its first segment, or its first two for a scoped name.
 function packageNameOf(specifier: string): string {
@@ -408,8 +411,15 @@ function packageNameOf(specifier: string): string {
   return segments.slice(0, specifier.startsWith('@') ? 2 : 1).join('/');
 }
 
-function isBuiltinModule(name: string): boolean {
-  return name.startsWith('node:') || BUILTIN_MODULES.has(name);
+// Whether a whole specifier is a Node.js built-in module, such as fs, fs/promises, or node:test.
+// The first segment is not enough: util/tests/Widget is not the built-in util, and an alias usabl
+// does not read may map util to a folder of the app. The subpaths that are built-ins come from the
+// same list.
+function isBuiltinModule(specifier: string): boolean {
+  if (BUILTIN_MODULES.has(specifier)) return true;
+  if (!specifier.startsWith('node:')) return false;
+  const name = specifier.slice('node:'.length);
+  return BUILTIN_MODULES.has(name) || NODE_SCHEME_ONLY_MODULES.has(name);
 }
 
 /**
@@ -421,20 +431,21 @@ function isBuiltinModule(name: string): boolean {
 function unexplainedBare(specifier: string, packages: ReadonlySet<string> | null): boolean {
   if (packages === null) return false;
   if (specifier.startsWith('#')) return true;
-  const name = packageNameOf(specifier);
-  return !isBuiltinModule(name) && !packages.has(name);
+  return !isBuiltinModule(specifier) && !packages.has(packageNameOf(specifier));
 }
 
 // Whether the fixed start of a bare path names a whole package that explains it, such as
 // `@patternfly/react-icons/dist/` for a declared @patternfly/react-icons. A start that ends inside
-// the package name, such as `@patternfly/` or `te`, may still become any name.
+// the package name, such as `@patternfly/` or `te`, may still become any name. A built-in module
+// does not count, because the rest of the path is not known, so the whole specifier cannot be
+// checked against the list of built-ins.
 function startNamesKnownPackage(start: string, packages: ReadonlySet<string> | null): boolean {
   if (packages === null) return true;
   const segments = start.split('/');
   const nameSegments = start.startsWith('@') ? 2 : 1;
   if (segments.length <= nameSegments) return false;
   const name = segments.slice(0, nameSegments).join('/');
-  return !start.startsWith('#') && (isBuiltinModule(name) || packages.has(name));
+  return !start.startsWith('#') && packages.has(name);
 }
 
 // Whether a loader's start is bare: not relative, not rooted, not one that can still become either,

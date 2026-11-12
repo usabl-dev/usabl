@@ -387,6 +387,19 @@ describe('a bare import that no package explains', () => {
     expectExcluded(await coverageOf(body, { 'package.json': PACKAGE_JSON }));
   });
 
+  it('is a gap when the first segment names a Node.js built-in module but the whole name does not', async () => {
+    const changed = 'src/util/tests/Widget.tsx';
+    const coverage = await coverageOf("import { Widget } from 'util/tests/Widget';", { 'package.json': PACKAGE_JSON, [changed]: WIDGET }, changed);
+    expectGap(coverage, changed);
+    expect(coverage.gaps[0]?.reason).toContain("'util/tests/Widget'");
+  });
+
+  it('stays excluded beside built-in subpaths that Node.js lists', async () => {
+    const body = "import { readFile } from 'fs/promises';\nimport { types } from 'util/types';\nimport { join } from 'node:path/posix';";
+    const changed = 'src/util/tests/promises.ts';
+    expectExcluded(await coverageOf(body, { 'package.json': PACKAGE_JSON, [changed]: 'export const p = 1;\n' }, changed), changed);
+  });
+
   it('stays excluded when the unknown bare import names another file', async () => {
     expectExcluded(await coverageOf("import { thing } from 'lodash-es/thing';", { 'package.json': PACKAGE_JSON }));
   });
