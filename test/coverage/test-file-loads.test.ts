@@ -211,6 +211,39 @@ describe('a rooted glob when usabl does not know the Vite root', () => {
   });
 });
 
+describe('a glob with brace alternatives', () => {
+  const pages = (body: string): Record<string, string> => ({ 'src/pages/index.tsx': `${body}\nexport const Index = () => <main />;\n` });
+
+  it('resolves a .. inside an alternative, for a pattern it cannot evaluate', async () => {
+    expectGap(await coverageOf('', pages("const all = import.meta.glob('./{../tests,x}/[A-Z]*.tsx');")));
+  });
+
+  it('resolves a .. inside an alternative, for a pattern it can read, from either importer', async () => {
+    expectGap(await coverageOf('', pages("const all = import.meta.glob('./{../tests,x}/*.tsx');")));
+    expectGap(await coverageOf("const all = import.meta.glob('./pages/{../tests,x}/*.tsx');"));
+  });
+
+  it('is a gap when a .. follows a glob segment', async () => {
+    expectGap(await coverageOf("const all = import.meta.glob('./*/../tests/*.tsx');"));
+  });
+
+  it('is a gap for a nested brace, and says the pattern has a part usabl cannot evaluate', async () => {
+    const coverage = await coverageOf("const all = import.meta.glob('./{pages,{a,b}}/*.tsx');");
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('cannot evaluate');
+  });
+
+  it('is a gap when the braces expand to more alternatives than usabl reads', async () => {
+    const many = Array.from({ length: 70 }, (_, index) => `p${index}`).join(',');
+    expectGap(await coverageOf(`const all = import.meta.glob('./{${many}}/*.tsx');`));
+  });
+
+  it('stays excluded when no alternative covers the test file', async () => {
+    expectExcluded(await coverageOf('', pages("const all = import.meta.glob('./{../widgets,x}/[A-Z]*.tsx');")));
+    expectExcluded(await coverageOf("const all = import.meta.glob('./{pages,widgets}/*.tsx');"));
+  });
+});
+
 describe('a webpack require.context call', () => {
   it('is a gap when its folder holds the test file', async () => {
     const coverage = await coverageOf("const ctx = require.context('./tests', true, /\\.tsx$/);", { 'package.json': PACKAGE_JSON });

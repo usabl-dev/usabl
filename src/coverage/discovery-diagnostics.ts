@@ -2,7 +2,7 @@
  * Formats import-graph unresolvable entries into human-readable discovery detail.
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
-import { importMayLoad, type UnresolvableImport } from './import-graph.js';
+import { importMayLoad, MAX_BRACE_ALTERNATIVES, type UnresolvableImport } from './import-graph.js';
 
 const MAX_DETAIL_LINES = 3;
 
@@ -14,6 +14,12 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
     }
     if (entry.unread === 'start') {
       return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading / while usabl does not know the Vite root, because the Vite config sets root or more than one Vite config sits above the router file), so it may load any file';
+    }
+    if (entry.unread === 'pattern') {
+      return (
+        'and one of its patterns has a part usabl cannot evaluate (a nested or unbalanced brace, more than ' +
+        `${MAX_BRACE_ALTERNATIVES} brace alternatives, or a .. after a glob segment), so it may load any file`
+      );
     }
     return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
   }

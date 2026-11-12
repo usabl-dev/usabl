@@ -54,8 +54,9 @@ export type UnresolvableImport =
       // read them, which means the call may load any file.
       patterns: string[] | null;
       // Why the patterns are null: the argument is not a string or a list of strings, the
-      // options set `base`, or a pattern starts in a way usabl cannot resolve. Absent otherwise.
-      unread?: 'argument' | 'base' | 'start';
+      // options set `base`, a pattern starts in a way usabl cannot resolve, or a pattern has a
+      // part usabl cannot read exactly (see braceAlternatives). Absent otherwise.
+      unread?: 'argument' | 'base' | 'start' | 'pattern';
       // The patterns, as written, that hold syntax the glob matcher does not evaluate, such as a
       // character class. Each is read as every file in the folder above that syntax, sorted.
       // Absent when there is none.
@@ -474,9 +475,44 @@ function folderAbove(pattern: string): string {
   return segments.length === 0 ? '**' : `${segments.join('/')}/**`;
 }
 
+// The most brace alternatives usabl reads in one pattern. A pattern with more may load any file.
+export const MAX_BRACE_ALTERNATIVES = 64;
+
+// How many alternatives the brace groups of a pattern expand to, counted without expanding them, and
+// stopped once past the cap so a long pattern costs nothing. A group needs a comma, as in expandBraces.
+function braceAlternativeCount(pattern: string): number {
+  let count = 1;
+  for (const match of pattern.matchAll(/\{([^{}]*)\}/gu)) {
+    const body = match[1] ?? '';
+    if (body.includes(',')) count *= body.split(',').length;
+    if (count > MAX_BRACE_ALTERNATIVES) return count;
+  }
+  return count;
+}
+
+// Whether a `..` comes after a segment with glob syntax, such as ./*/../tests/*.tsx. Which folder
+// that names depends on the files the glob part matches, so usabl cannot read it exactly.
+function dotDotAfterGlob(pattern: string): boolean {
+  const segments = pattern.split('/');
+  const first = segments.findIndex((segment) => /[*?[\](){}!]/u.test(segment));
+  return first !== -1 && segments.slice(first + 1).includes('..');
+}
+
+// The literal alternatives of a pattern's brace groups, so each is resolved and normalized on its
+// own: ./{../tests,x}/*.tsx is ../tests/*.tsx and x/*.tsx. Null when usabl cannot read the braces
+// exactly: a nested or unbalanced brace, more alternatives than the cap, or a .. after a glob
+// segment in an alternative.
+function braceAlternatives(pattern: string): string[] | null {
+  if (!pattern.includes('{') && !pattern.includes('}')) return dotDotAfterGlob(pattern) ? null : [pattern];
+  if (braceAlternativeCount(pattern) > MAX_BRACE_ALTERNATIVES) return null;
+  const alternatives = expandBraces(pattern);
+  if (alternatives === null || alternatives.some(dotDotAfterGlob)) return null;
+  return alternatives;
+}
+
 function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
   const { aliases, baseUrlDirs, viteRoot } = context;
-  const open = (unread: 'argument' | 'base' | 'start'): UnresolvableImport => ({
+  const open = (unread: 'argument' | 'base' | 'start' | 'pattern'): UnresolvableImport => ({
     importer,
     specifier: call.text,
     kind: 'glob-import',
@@ -488,18 +524,23 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
   const widened: string[] = [];
   // A negative pattern only takes files away, so leaving it out can only name more files.
   for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
-    // Vite reads a pattern that starts with / from its root.
-    const paths =
-      pattern.startsWith('/') && viteRoot !== null
-        ? [path.normalize(path.join(viteRoot === '' ? '.' : viteRoot, pattern.slice(1)))]
-        : resolveLoaderPaths(importer, pattern, aliases, baseUrlDirs, 'glob');
-    if (paths === null) return open('start');
-    for (const resolvedPath of paths) {
-      if (readableGlob(resolvedPath)) {
-        resolved.push(resolvedPath);
-      } else {
-        resolved.push(folderAbove(resolvedPath));
-        widened.push(pattern);
+    // The braces are expanded first, so a .. or an alias inside an alternative is resolved.
+    const alternatives = braceAlternatives(pattern);
+    if (alternatives === null) return open('pattern');
+    for (const alternative of alternatives) {
+      // Vite reads a pattern that starts with / from its root.
+      const paths =
+        alternative.startsWith('/') && viteRoot !== null
+          ? [path.normalize(path.join(viteRoot === '' ? '.' : viteRoot, alternative.slice(1)))]
+          : resolveLoaderPaths(importer, alternative, aliases, baseUrlDirs, 'glob');
+      if (paths === null) return open('start');
+      for (const resolvedPath of paths) {
+        if (readableGlob(resolvedPath)) {
+          resolved.push(resolvedPath);
+        } else {
+          resolved.push(folderAbove(resolvedPath));
+          widened.push(pattern);
+        }
       }
     }
   }
