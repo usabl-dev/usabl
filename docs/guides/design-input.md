@@ -103,8 +103,10 @@ Once approved, each check gives one of these:
   usabl reads for a design check; the browser gave an accessibility tree usabl could not read; the
   focus walk was cut short, for example by a control that moves focus away when it gets it; or no
   button has the name, so its size cannot be measured. A name that differs from the design only in
-  white space a person cannot see is needs review too, and the reason names the character, for
-  example: a button on this screen is named "Refresh" followed by a no-break space. usabl never
+  white space a person cannot see, such as a no-break space, a zero width space, or a word joiner,
+  is needs review too, in the name, heading, landmark, and focus order checks. The reason names the
+  character, for example: a button on this screen is named "Refresh" followed by a no-break
+  space. usabl never
   guesses. A run with a needs review finding is not verified.
 
 One case usabl cannot see: an element inside a closed shadow root that is itself inside a child

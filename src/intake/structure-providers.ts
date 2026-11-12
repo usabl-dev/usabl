@@ -30,6 +30,7 @@ import { DESIGN_AX_TREE_NODE_LIMIT } from '../deps/ax-tree.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
+import { looseName, spelledName } from '../primitives/hidden-white-space.js';
 import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
 import {
   findByRole,
@@ -37,7 +38,6 @@ import {
   resolveTarget,
   sameName,
   type DesignTreeSource,
-  type TargetMatch,
   type TargetResolution,
 } from './resolve-target.js';
 
@@ -223,78 +223,54 @@ function refusedDraft(
   });
 }
 
-// A name with every run of white space, of any kind, read as one space and none at either end.
-// Used only to find a name that differs from the design in white space a person cannot see.
-function looseName(name: string): string {
-  return name.replace(/\s+/gu, ' ').trim();
-}
+const HIDDEN_SPACE_FIX =
+  'Use the same white space in the accessible name on the page and in the design, for example a plain space in both, or update the requirement if the design changed.';
 
-// How a sentence names each white space character that is not a plain space.
-const SPACE_WORDS: Readonly<Record<string, string>> = {
-  ' ': 'a space',
-  '\t': 'a tab',
-  '\n': 'a line break',
-  ' ': 'a no-break space',
-  ' ': 'an Ogham space mark',
-  ' ': 'a figure space',
-  ' ': 'a line separator',
-  ' ': 'a paragraph separator',
-  ' ': 'a narrow no-break space',
-  ' ': 'a medium mathematical space',
-  '　': 'an ideographic space',
-  '﻿': 'a zero width no-break space',
-};
-
-function spaceWord(character: string): string {
-  if (Object.hasOwn(SPACE_WORDS, character)) {
-    return SPACE_WORDS[character] ?? '';
-  }
-  const code = (character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0');
-  return `the white space character U+${code}`;
-}
-
-// A name written out so a person can see where white space they cannot see sits, for example
-// '"Refresh" followed by a no-break space'. A plain space between words stays inside the quotes.
-function spelledName(name: string): string {
-  const parts: string[] = [];
-  let text = '';
-  for (const piece of name.split(/(\s+)/u)) {
-    if (piece === '') {
-      continue;
-    }
-    if (/^\s+$/u.test(piece) && !/^ +$/u.test(piece)) {
-      if (text !== '') {
-        parts.push(`"${text}"`);
-        text = '';
-      }
-      parts.push(...Array.from(piece, spaceWord));
-    } else {
-      text += piece;
-    }
-  }
-  if (text !== '' || parts.length === 0) {
-    parts.push(`"${text}"`);
-  }
-  if (parts.length === 1) {
-    return parts[0] ?? '';
-  }
-  if (parts.length === 2) {
-    return `${parts[0] ?? ''} followed by ${parts[1] ?? ''}`;
-  }
-  return `${parts.slice(0, -1).join(', ')}, then ${parts[parts.length - 1] ?? ''}`;
-}
-
-// When no element has the design's name, the elements whose name is the same once white space of
-// any kind is collapsed and trimmed. Such an element is most likely the one the design means, so
-// the check asks for review and names the character, instead of saying there is no such element.
-async function sameButForWhiteSpace(page: Page, target: RoleTarget): Promise<TargetMatch[]> {
-  const wanted = looseName(target.name);
-  const search = await findByRole(page, target.role);
-  return search.matches.filter((match) => match.node.name !== null && looseName(match.node.name) === wanted);
+// The reason for names that differ from the design only in white space that cannot be seen.
+// `subject` is how one such element reads, such as "A button on this screen", and `plural` how
+// several read. The text between the white space is the design's own, because the names match once
+// white space is collapsed. Only the white space comes from the page, and it is named, not copied.
+function hiddenSpaceWhy(subject: string, plural: string, word: string, pageNames: readonly string[], designName: string): string {
+  const design = spelledName(designName);
+  return pageNames.length === 1
+    ? `${subject} is named ${spelledName(pageNames[0] ?? '')}, and the design names it ${design}. The two names differ only in white space that cannot be seen, so usabl cannot tell whether this is the ${word} the design means, and it does not guess.`
+    : `${pageNames.length} ${plural} have names that differ from ${design} only in white space that cannot be seen, so usabl cannot tell which one the design means, and it does not guess.`;
 }
 
 function article(word: string): string {
   return /^[aeiou]/u.test(word) ? `An ${word}` : `A ${word}`;
+}
+
+/**
+ * The needs review draft for a lookup that found no element with the design's name, when elements
+ * with the same name once hidden white space is collapsed exist. Such an element is most likely the
+ * one the design means, so the check asks for review and names the character, instead of saying
+ * there is no such element. Null when there is no such element, and the caller then fails.
+ */
+async function hiddenSpaceDraft(requirement: Requirement, kind: DesignKind, page: Page, target: RoleTarget): Promise<Draft | null> {
+  const wanted = looseName(target.name);
+  const search = await findByRole(page, target.role);
+  const near = search.matches.filter((match) => match.node.name !== null && looseName(match.node.name) === wanted);
+  const [only] = near;
+  if (only === undefined) {
+    return null;
+  }
+  const word = ROLE_WORD[target.role];
+  const one = near.length === 1;
+  return draft(requirement, kind, 'unverified', {
+    elementPath: one ? only.selector : SCREEN_PATH,
+    node: one ? only.node : null,
+    whatUserExperiences: `Whether the screen has the ${word} the design names ${spelledName(target.name)} is unknown.`,
+    why: hiddenSpaceWhy(
+      `${article(word)} on this screen`,
+      `${ROLE_PLURAL[target.role]} on this screen`,
+      word,
+      near.map((match) => match.node.name ?? ''),
+      target.name,
+    ),
+    fix: HIDDEN_SPACE_FIX,
+    extra: { sameButForWhiteSpace: near.length },
+  });
 }
 
 async function checkName(requirement: Requirement, assertion: NameAssertion, page: Page, tree: DesignTreeSource): Promise<Draft[]> {
@@ -304,27 +280,9 @@ async function checkName(requirement: Requirement, assertion: NameAssertion, pag
     return [];
   }
   if (found.kind === 'none') {
-    const near = await sameButForWhiteSpace(page, target);
-    const [only] = near;
-    if (only !== undefined) {
-      const word = ROLE_WORD[target.role];
-      const design = spelledName(target.name);
-      // The text between the white space is the design's own, because the names match once white
-      // space is collapsed. Only the white space comes from the page, and it is named, not copied.
-      const why =
-        near.length === 1
-          ? `${article(word)} on this screen is named ${spelledName(only.node.name ?? '')}, and the design names it ${design}. The two names differ only in white space that cannot be seen, so usabl cannot tell whether this is the ${word} the design means, and it does not guess.`
-          : `${near.length} ${ROLE_PLURAL[target.role]} on this screen have names that differ from ${design} only in white space that cannot be seen, so usabl cannot tell which one the design means, and it does not guess.`;
-      return [
-        draft(requirement, 'name', 'unverified', {
-          elementPath: near.length === 1 ? only.selector : SCREEN_PATH,
-          node: near.length === 1 ? only.node : null,
-          whatUserExperiences: `Whether the screen has the ${word} the design names ${design} is unknown.`,
-          why,
-          fix: `Use the same white space in the accessible name on the page and in the design, for example a plain space in both, or update the requirement if the design changed.`,
-          extra: { sameButForWhiteSpace: near.length },
-        }),
-      ];
+    const near = await hiddenSpaceDraft(requirement, 'name', page, target);
+    if (near !== null) {
+      return [near];
     }
     return [
       draft(requirement, 'name', 'fail', {
@@ -353,6 +311,10 @@ async function checkHeading(
   const target: RoleTarget = { role: 'heading', name: assertion.name };
   const found = await resolveTarget(page, target, tree);
   if (found.kind === 'none') {
+    const near = await hiddenSpaceDraft(requirement, 'heading', page, target);
+    if (near !== null) {
+      return [near];
+    }
     return [
       draft(requirement, 'heading', 'fail', {
         elementPath: SCREEN_PATH,
@@ -422,7 +384,7 @@ async function checkLandmark(
       return [];
     }
     if (found.kind === 'none') {
-      return [missing(` named "${assertion.name}"`)];
+      return [(await hiddenSpaceDraft(requirement, 'landmark', page, target)) ?? missing(` named "${assertion.name}"`)];
     }
     return [refusedDraft(requirement, 'landmark', target, found, `the screen has the ${named(target)}`)];
   }
@@ -623,6 +585,17 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
 
   const missingAt = positions.findIndex((at) => at.length === 0);
   if (missingAt !== -1) {
+    // A stop whose name differs from the design only in hidden white space is most likely the
+    // control the design means, so this asks for review and names the character, as the name check
+    // does, instead of saying focus never reached it.
+    const wanted = sequence[missingAt] ?? '';
+    const near = names.filter((name) => looseName(name) === looseName(wanted));
+    if (near.length > 0) {
+      return unconfirmed(hiddenSpaceWhy('A focus stop', 'focus stops', 'control', near, wanted), HIDDEN_SPACE_FIX, {
+        ...extra,
+        sameButForWhiteSpace: near.length,
+      });
+    }
     const where = missingAt === 0 ? 'The design puts it first.' : `The design puts it after "${sequence[missingAt - 1] ?? ''}".`;
     return fail(`Focus never reached "${sequence[missingAt] ?? ''}". ${where}`);
   }

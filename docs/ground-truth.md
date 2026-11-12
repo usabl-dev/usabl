@@ -4613,18 +4613,22 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 | Kind | Fails (`confidence: 'fail'`) | Unknown (`confidence: 'unverified'`, needs review) |
 |---|---|---|
 | `name` | No element has that role and name, and none has it once all white space is collapsed | More than one does, a candidate is out of reach, usabl cannot tell, or no element has the name but one has it once all white space is collapsed (the reason names the character and where it is) |
-| `heading` | No heading has that name, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, or its level cannot be read |
-| `landmark` | No landmark of that role (and name, when given) | A named landmark matches more than once, a candidate is out of reach, or usabl cannot tell; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
-| `focus-order` | A name is never reached, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short |
+| `heading` | No heading has that name, and none has it once all white space is collapsed, or it has another level | More than one does, a candidate is out of reach, usabl cannot tell, its level cannot be read, or no heading has the name but one has it once all white space is collapsed |
+| `landmark` | No landmark of that role (and name, when given, and none has that name once all white space is collapsed) | A named landmark matches more than once, a candidate is out of reach, usabl cannot tell, or no landmark has the name but one has it once all white space is collapsed; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
+| `focus-order` | A name is never reached, and no stop has it once all white space is collapsed, or two names are reached out of order, in a walk whose end was confirmed | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, the walk was cut short, or a name is never reached but a stop has it once all white space is collapsed |
 | `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, its size cannot be read, or it has a shape usabl does not measure (below) |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
 the size of nothing cannot be measured. The `name` check reports the same missing element as a
-failure, with one exception. When no element has the name, but one has it once white space of any
-kind is collapsed and trimmed on both sides, the check is needs review, never a failure, because a
-person looking at the page sees the name the design gives. The reason names the character and
-where it sits, for example: a button on this screen is named "Refresh" followed by a no-break
-space.
+failure, with one exception, which the `heading`, named `landmark`, and `focus-order` checks share.
+When no element or focus stop has the name, but one has it once white space of any kind is
+collapsed and trimmed on both sides, the check is needs review, never a failure, because a person
+looking at the page sees the name the design gives. The reason names the character and where it
+sits, for example: a button on this screen is named "Refresh" followed by a no-break space. One
+list in `src/primitives/hidden-white-space.ts` says which characters count: every character the
+JavaScript `\s` class matches, plus the zero width space (U+200B) and the word joiner (U+2060),
+which `\s` does not match. The zero width ones (those two and U+FEFF) are removed for this
+comparison, and every other run is read as one space. This rule never makes a name match.
 
 The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
 from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it
