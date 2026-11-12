@@ -137,8 +137,18 @@ export interface ImportGraphOptions {
   // import of a path inside one, such as '@acme/ui/src/tests/helpers', is followed to the file it
   // names under the package folder when the package has no exports field. It is recorded as
   // `package-subpath` when it names no file, or when the package has an exports field, which the
-  // resolver reads in place of the folder layout. Read only when complete.
-  workspacePackages?: readonly { name: string; dir: string; hasExports: boolean }[];
+  // resolver reads in place of the folder layout. With an exports field, a subpath whose key is in
+  // `exactExports` is followed to the one file that entry names, when that file is inside the
+  // package folder. Read only when complete.
+  workspacePackages?: readonly WorkspacePackageView[];
+}
+
+// What the graph reads of a workspace package (see WorkspacePackage in workspace-packages.ts).
+interface WorkspacePackageView {
+  name: string;
+  dir: string;
+  hasExports: boolean;
+  exactExports?: Readonly<Record<string, string>>;
 }
 
 export interface ImportGraphView {
@@ -895,12 +905,17 @@ function readOnce(fs: FsGlob): FsGlob {
 // no workspace package or only the package itself.
 function workspaceSubpath(
   specifier: string,
-  packages: readonly { name: string; dir: string; hasExports: boolean }[],
-): { dir: string; subpath: string; hasExports: boolean } | null {
+  packages: readonly WorkspacePackageView[],
+): { dir: string; subpath: string; hasExports: boolean; exportTarget: string | null } | null {
   const name = packageNameOf(specifier);
   const owner = packages.find((candidate) => candidate.name === name);
   if (owner === undefined || specifier.length <= name.length + 1) return null;
-  return { dir: owner.dir, subpath: specifier.slice(name.length + 1), hasExports: owner.hasExports };
+  const subpath = specifier.slice(name.length + 1);
+  // The exports entry whose key is this subpath exactly, as Node.js picks it before any pattern key.
+  const key = `./${subpath}`;
+  const exact = owner.exactExports ?? {};
+  const exportTarget = owner.hasExports && Object.hasOwn(exact, key) ? (exact[key] ?? null) : null;
+  return { dir: owner.dir, subpath, hasExports: owner.hasExports, exportTarget };
 }
 
 // The files a bare import resolves to under each baseUrl folder, sorted. Empty when none does,
@@ -968,6 +983,16 @@ export async function buildImportGraph(
         // one, the resolver reads it in place of the folders, and a path that names no file there
         // may go through it too, so either may load any file of the package.
         // A path that leaves the package folder is not narrowed to it, so it may load any file.
+        // An exports entry usabl reads exactly is followed to the one file it names, when that file
+        // is inside the package folder.
+        if (inPackage.exportTarget !== null) {
+          const exported = path.normalize(path.join(inPackage.dir, inPackage.exportTarget));
+          if (exported.startsWith(`${inPackage.dir}/`) && (await fs.readFile(exported)) !== null) {
+            pushUnique(fileEdges, exported);
+            queue.push(exported);
+            continue;
+          }
+        }
         const target = path.normalize(path.join(inPackage.dir, inPackage.subpath));
         const inside = target.startsWith(`${inPackage.dir}/`);
         const resolved = inside && !inPackage.hasExports ? await resolveFileAtPath(fs, target) : null;

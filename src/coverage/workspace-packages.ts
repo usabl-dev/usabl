@@ -483,26 +483,46 @@ export async function workspaceDependencies(
   return { files: found, dependedDirs: [...reached.keys()].filter((dir) => !appDirs.has(dir)).sort() };
 }
 
-/** A workspace package: its name, its folder, and whether its package.json has an exports field. */
+/**
+ * A workspace package: its name, its folder, whether its package.json has an exports field, and the
+ * entries of that field usabl reads exactly.
+ */
 export interface WorkspacePackage {
   name: string;
   dir: string;
   // Node.js and bundlers resolve a subpath only through `exports` once it is present, so the folder
   // layout then says nothing about which file a subpath loads.
   hasExports: boolean;
+  // The entries of an `exports` object that usabl reads exactly, by key, such as
+  // { './styles.css': './styles.css' }: a key with no * whose value is a string that starts with
+  // ./ and holds no *. Node.js picks an exact key before any pattern key, so such a subpath loads
+  // that one path. Empty when exports is not an object or holds no such entry.
+  exactExports: Readonly<Record<string, string>>;
 }
 
-// Whether a package.json has an exports field. One that cannot be read or parsed counts as having
-// one, so a subpath into it is never followed by path.
-async function hasExportsField(fs: FsGlob, dir: string): Promise<boolean> {
+// Whether a package.json has an exports field, and the entries of it usabl reads exactly. One that
+// cannot be read or parsed counts as having one with no such entry, so a subpath into it is never
+// followed by path.
+async function readExportsField(fs: FsGlob, dir: string): Promise<{ hasExports: boolean; exactExports: Record<string, string> }> {
+  const unread = { hasExports: true, exactExports: {} };
   const text = await fs.readFile(dir === '' ? 'package.json' : `${dir}/package.json`);
-  if (text === null) return true;
+  if (text === null) return unread;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed !== 'object' || parsed === null || 'exports' in parsed;
+    parsed = JSON.parse(text);
   } catch {
-    return true;
+    return unread;
   }
+  if (typeof parsed !== 'object' || parsed === null) return unread;
+  if (!('exports' in parsed)) return { hasExports: false, exactExports: {} };
+  const exports: unknown = (parsed as Record<string, unknown>)['exports'];
+  if (typeof exports !== 'object' || exports === null || Array.isArray(exports)) return unread;
+  const exactExports: Record<string, string> = {};
+  for (const [key, value] of Object.entries(exports as Record<string, unknown>)) {
+    if (!key.startsWith('./') || key.includes('*') || typeof value !== 'string' || !value.startsWith('./') || value.includes('*')) continue;
+    exactExports[key] = value;
+  }
+  return { hasExports: true, exactExports };
 }
 
 /**
@@ -513,7 +533,7 @@ export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]>
   const found: WorkspacePackage[] = [];
   for (const dir of await workspacePackageDirs(fs)) {
     const { name } = await readManifest((file) => fs.readFile(file), dir);
-    if (name !== null) found.push({ name, dir, hasExports: await hasExportsField(fs, dir) });
+    if (name !== null) found.push({ name, dir, ...(await readExportsField(fs, dir)) });
   }
   return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }

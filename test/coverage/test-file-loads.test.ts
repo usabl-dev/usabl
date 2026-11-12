@@ -471,6 +471,50 @@ describe('a test file in a workspace package the app depends on', () => {
     expectWorkspaceGap(coverage);
   });
 
+  describe('a plain string entry in exports', () => {
+    const withExports = (exports: Record<string, unknown>, extra: Record<string, string> = {}): Record<string, string> => ({
+      ...workspace,
+      'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', exports }),
+      'packages/ui/styles.css': 'a{}\n',
+      ...extra,
+    });
+    const css = "import '@acme/ui/styles.css';";
+
+    it('is followed to its one file, so a test-only change in the package stays idle', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf(css, tree, helpers), helpers);
+    });
+
+    it('wins over a pattern key, as in Node.js', async () => {
+      const tree = withExports({ '.': './src/index.ts', './*': './src/tests/*.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf(css, tree, helpers), helpers);
+    });
+
+    it('is still a gap for a conditions object under the same key', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': { import: './styles.css', default: './styles.css' } });
+      expectWorkspaceGap(await coverageOf(css, tree, helpers));
+    });
+
+    it('is still a gap when the entry leaves the package', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './../other/styles.css' }, { 'packages/other/styles.css': 'a{}\n' });
+      expectWorkspaceGap(await coverageOf(css, tree, helpers));
+    });
+
+    it('is still a gap when the entry names no file', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './dist/styles.css' });
+      expectWorkspaceGap(await coverageOf(css, tree, helpers));
+    });
+
+    it('makes the test file it names a UI file with a gap, and leaves other test files excluded', async () => {
+      const tree = withExports({ '.': './src/index.ts', './testing': './src/tests/helpers.ts' });
+      const screen = "import { helper } from '@acme/ui/testing';";
+      const coverage = await coverageOf(screen, tree, helpers);
+      expectWorkspaceGap(coverage);
+      expect(coverage.gaps[0]?.reason).not.toContain('cannot follow by path');
+      expectExcluded(await coverageOf(screen, tree, 'packages/ui/src/Button.test.tsx'), 'packages/ui/src/Button.test.tsx');
+    });
+  });
+
   it('is a gap when a subpath leaves the package folder', async () => {
     const other = 'packages/other/src/tests/helpers.ts';
     const tree = {
