@@ -913,16 +913,29 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
     if (!clipsX && !clipsY) {
       continue;
     }
+    // The box from getBoundingClientRect includes every transform on the node and above it, while
+    // clientLeft, clientWidth, and the rest are layout sizes, which include none. So each client
+    // size is scaled by the ratio of the box on screen to the layout box, and the clip edges are in
+    // the same units as the control's box. A ratio that cannot be read, such as for a layout size
+    // of 0, counts as clipped.
     const outer = node.getBoundingClientRect();
-    const left = outer.left + node.clientLeft;
-    const top = outer.top + node.clientTop;
-    const right = left + node.clientWidth;
-    const bottom = top + node.clientHeight;
-    if (clipsX && (box.left < left - epsilon || box.right > right + epsilon)) {
-      limits.add('overflow-clipped');
+    const ratio = (screen, layout) =>
+      typeof layout === 'number' && layout > 0 && Number.isFinite(screen) && Number.isFinite(layout) ? screen / layout : null;
+    if (clipsX) {
+      const scaleX = ratio(outer.width, node.offsetWidth);
+      const left = outer.left + node.clientLeft * (scaleX ?? 1);
+      const right = left + node.clientWidth * (scaleX ?? 1);
+      if (scaleX === null || box.left < left - epsilon || box.right > right + epsilon) {
+        limits.add('overflow-clipped');
+      }
     }
-    if (clipsY && (box.top < top - epsilon || box.bottom > bottom + epsilon)) {
-      limits.add('overflow-clipped');
+    if (clipsY) {
+      const scaleY = ratio(outer.height, node.offsetHeight);
+      const top = outer.top + node.clientTop * (scaleY ?? 1);
+      const bottom = top + node.clientHeight * (scaleY ?? 1);
+      if (scaleY === null || box.top < top - epsilon || box.bottom > bottom + epsilon) {
+        limits.add('overflow-clipped');
+      }
     }
   }
   if (pinned) {

@@ -4656,7 +4656,11 @@ the box it reads can be larger than the area a pointer can hit:
 - an element above it has overflow other than visible on an axis (hidden, clip, auto, scroll, or
   overlay), or a `contain` value that holds paint, and the element reaches past that element's
   padding box on that axis, so only part of it can be on screen at once. On the root and the
-  body, only hidden and clip count, because their scrolling is the viewport's;
+  body, only hidden and clip count, because their scrolling is the viewport's. The padding box is
+  read in the same units as the element's box: its layout sizes (`clientLeft`, `clientWidth`, and
+  the rest) are scaled by the ratio of the element above's box on screen to its layout box
+  (`offsetWidth`, `offsetHeight`), so a scale on that element or above it moves the clip edge with
+  the box. When that ratio cannot be read, as for a layout size of 0, the axis counts as clipped;
 - the element, or an element above it, is fixed or sticky, and the element reaches past the
   viewport;
 - the walk up passes 512 elements;
@@ -4694,7 +4698,8 @@ with the reason that part of the control's box cannot be hit: something clips it
 does not take pointer events, or it is partly off the page. The real-browser tests in
 `test/intake/roles.real.integration.test.ts` hold that each of these is needs review, with a box
 large enough to pass: a clipping element that is itself scaled, or sits inside a scaled element
-(no named shape sees either); `content-visibility: auto` on a short element above; a control
+(the overflow limit names both too, since its clip edge is read in scaled units);
+`content-visibility: auto` on a short element above; a control
 partly left of the page; `pointer-events: none`; and a control half covered by another element.
 They also hold that a button below a scaled box that hides its overflow, shown only by the read's
 own scroll, is needs review, and that a plain button, a round one, one in a box that scrolls
