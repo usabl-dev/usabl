@@ -146,7 +146,7 @@ describe('a screen whose chrome mounted and whose content did not', () => {
       expect(r.coverage.gaps).toEqual([]);
       expect(r.verdict).toBe('verified');
       expect(r.floorUnconfirmed).toEqual([{ screenId: 'orders', rules: [entry.rule], barriers: entry.count }]);
-      expect(r.summary).toContain('1 recorded barrier not seen, not claimed fixed');
+      expect(r.summary).toContain('1 recorded accessibility barrier not seen, not claimed fixed');
     });
   }
 });
@@ -193,7 +193,7 @@ describe('a fully rendered screen whose floored barriers were fixed', () => {
     expect(r.coverage.gaps).toEqual([]);
     // Barriers, not entries: one entry that recorded two barriers is two.
     expect(r.floorUnconfirmed).toEqual([{ screenId: 'orders', rules: ['button-name'], barriers: 2 }]);
-    expect(r.summary).toContain('2 recorded barriers not seen, not claimed fixed');
+    expect(r.summary).toContain('2 recorded accessibility barriers not seen, not claimed fixed');
     expect(r.receipt?.findingsSummary.fixed).toBe(0);
   });
 });

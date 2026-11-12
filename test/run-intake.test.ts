@@ -335,4 +335,18 @@ describe('run with a requirements file it cannot load', () => {
     expect(result.verdict).toBe('approval_required');
     expect(result.coverage.gaps.map((entry) => entry.ref)).toContain('requirements/bad.yaml');
   });
+
+  it('says the requirements could not be loaded, not that a guarded path changed', async () => {
+    // The file matches HEAD, so nothing changed. It still asks for approval, and the approval
+    // line says why. dirtyGuardedPaths still lists the file, so every surface that reads it works
+    // as before.
+    const result = await run(depsWith(['fixtures/app/src/ClustersPage.tsx']), config);
+
+    expect(result.summary).toBe(
+      'approval required: the requirements could not be loaded; accessibility not_covered: nothing blocking, 1 gap(s)',
+    );
+    expect(result.dirtyGuardedPaths).toEqual(['requirements/bad.yaml']);
+    expect(result.verdict).toBe('approval_required');
+    expect(result.exitCode).toBe(2);
+  });
 });

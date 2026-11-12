@@ -101,7 +101,7 @@ export function decideAccessibilityVerdict(input: { hasBlockingFailure: boolean;
  */
 export const DONE_CONDITIONS = {
   noBlockingFailure:
-    'Every reached screen is scanned and shows no new deterministic failure. A barrier the evidence floor already records, or one a waiver covers, does not block.',
+    'Every reached screen is scanned and shows no new deterministic failure. An accessibility barrier the evidence floor already records, or one a waiver covers, does not block.',
   noUnconfirmedFinding:
     'No new deterministic finding is one usabl could not confirm. A finding with confidence unverified, such as a focus stop the walk could not read, makes the result not_covered.',
   coverageComplete:

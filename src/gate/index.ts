@@ -16,28 +16,27 @@ import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } fr
 import { compareCodeUnits, sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
+import { EVIDENCE_FLOOR_PATH } from '../evidence/floor.js';
 import { checkGateInput } from './input.js';
+import { InputRefusedError } from '../intake/input-refusal.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
-
-// Declared here rather than imported from the baseline module, which imports run(), which imports
-// this one. run.ts keeps its own copy for the same reason.
-const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
 export function gate(raw: GateInput): GateOutput {
   // The gate checks its own input, because it is exported and a library caller can build one by
   // hand. It reads the caller's input once and from then on reads only the checked copy. See
   // ./input.ts.
   const input = checkGateInput(raw);
+  const requirementsUnloaded = readRequirementsUnloaded(raw);
   const accessibility = accessibilityOutcome(input);
-  if (input.guardDivergedPaths.length > 0) {
+  if (input.guardDivergedPaths.length > 0 || requirementsUnloaded) {
     // Policy divergence is a human approval problem, not an accessibility skip.
     // Keep the scan outcome so CI can AND a second check without GitHub inside the gate.
     return {
       verdict: 'approval_required',
       findings: accessibility.findings,
       exitCode: 2,
-      summary: approvalSummary(input.guardDivergedPaths.length, accessibility),
+      summary: approvalSummary(input.guardDivergedPaths.length, requirementsUnloaded, accessibility),
       accessibilityVerdict: accessibility.verdict,
       accessibilityExitCode: accessibility.exitCode,
       // Carried through, not dropped. The accessibility half ran and reached these, and a reader
@@ -52,6 +51,20 @@ export function gate(raw: GateInput): GateOutput {
     accessibilityVerdict: accessibility.verdict,
     accessibilityExitCode: accessibility.exitCode,
   };
+}
+
+/**
+ * GateInput.requirementsUnloaded, read once and checked, so a getter cannot answer twice and a
+ * string "false", which is truthy, cannot ask for approval. Absent reads as false. It only selects
+ * the approval line and joins the approval test, so it is read here beside them.
+ */
+function readRequirementsUnloaded(raw: GateInput): boolean {
+  const value: unknown = raw.requirementsUnloaded;
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throw new InputRefusedError('requirementsUnloaded', 'gate() input requirementsUnloaded must be a boolean.');
+  }
+  return value;
 }
 
 function accessibilityOutcome(input: GateInput): {
@@ -137,8 +150,9 @@ function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
     reason:
       `${EVIDENCE_FLOOR_PATH} predates count tracking (version 1), so ${collapsible.length} name or ` +
       'structural entr' + (collapsible.length === 1 ? 'y' : 'ies') + ' record a placeholder count of 1 ' +
-      'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
-      'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
+      'instead of the accessibility barriers observed. Several accessibility barriers can share one of those ' +
+      'identities, so this run cannot compare their counts and cannot prove no new accessibility barrier is ' +
+      'hiding behind an accepted one. ' +
       'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
   }];
 }
@@ -173,9 +187,10 @@ function rowKeyFloorGaps(floor: EvidenceFloor, drafts: Draft[]): CoverageGap[] {
     state: 'not-covered',
     reason:
       `${EVIDENCE_FLOOR_PATH} predates row keys (version ${floor.version}). On ${screens.size} screen` +
-      (screens.size === 1 ? '' : 's') + ', this run found barriers in table rows that the floor recorded as one ' +
-      'identity across rows, so this run compares them the old way. A barrier fixed in one row and a new one in ' +
-      'another row leave that count unchanged, so this run cannot prove no new barrier is hiding behind an ' +
+      (screens.size === 1 ? '' : 's') + ', this run found accessibility barriers in table rows that the floor ' +
+      'recorded as one identity across rows, so this run compares them the old way. An accessibility barrier fixed ' +
+      'in one row and a new one in another row leave that count unchanged, so this run cannot prove no new ' +
+      'accessibility barrier is hiding behind an ' +
       'accepted one. Run "usabl baseline" to regenerate the floor at version 3, then review and merge the diff.',
   }];
 }
@@ -572,7 +587,7 @@ function differential(input: GateInput): Differential {
       // not a paid-down identity the operator still needs to prune from the floor.
       whatUserExperiences: 'This previously accepted finding is no longer present on the surface.',
       why: 'The identity is on the evidence floor and was not observed in this run.',
-      fix: 'Remove this identity from the evidence floor after review so a reintroduced barrier can gate as new.',
+      fix: 'Remove this identity from the evidence floor after review so a reintroduced accessibility barrier can gate as new.',
       evidence: {}, confidence: 'fail',
       elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
     });
@@ -580,11 +595,28 @@ function differential(input: GateInput): Differential {
 
   return {
     findings: sortBy(applyWaivers(findings, input.waivers, input.now), findingKey),
-    staleIdentities: sortBy(staleIdentities, (s) => `${s.screenId}|${s.rule}`),
+    staleIdentities: [...staleIdentities].sort(byHeadroom),
     // Sorted by the whole identity, so no two entries tie and the per-screen sums below always add
     // in the same order, even where a sum is past the range a number holds exactly.
     unconfirmed: sortBy(unconfirmed, (u) => identityKey(u)),
   };
+}
+
+/**
+ * A total order over headroom entries. The screen and rule key comes first, so entries that differ
+ * there keep the order they always had. Two entries on one screen under one rule (different
+ * elements) used to tie and keep the order they arrived in, so the list moved with input order.
+ * Every field decides now, strings by code unit and counts by value, so only entries equal on every
+ * field can tie, and those are interchangeable.
+ */
+function byHeadroom(a: FloorHeadroom, b: FloorHeadroom): number {
+  return (
+    compareCodeUnits(`${a.screenId}|${a.rule}`, `${b.screenId}|${b.rule}`) ||
+    compareCodeUnits(a.screenId, b.screenId) ||
+    compareCodeUnits(a.rule, b.rule) ||
+    a.recorded - b.recorded ||
+    a.observed - b.observed
+  );
 }
 
 /**
@@ -650,12 +682,21 @@ export function findingKey(f: Finding): string {
  * is omitted rather than filled with "nothing to check". This is the same rule the accessibility
  * summary already follows for a clean run, where inventing "0 gap(s)" would teach the reader to
  * skip the clause on the runs where it carries something.
+ *
+ * A requirements file that could not be loaded is named on its own. It used to be counted as a
+ * changed path, so the line said a file changed when it only failed to load. The count is changed
+ * paths only.
  */
 function approvalSummary(
   divergedPaths: number,
+  requirementsUnloaded: boolean,
   accessibility: { verdict: AccessibilityVerdict | null; summary: string },
 ): string {
-  const head = `approval required: ${divergedPaths} guarded path(s) changed`;
+  const reasons = [
+    ...(divergedPaths > 0 ? [`${divergedPaths} guarded path(s) changed`] : []),
+    ...(requirementsUnloaded ? ['the requirements could not be loaded'] : []),
+  ];
+  const head = `approval required: ${reasons.join('; ')}`;
   if (accessibility.verdict === null) {
     return head;
   }
@@ -722,7 +763,7 @@ function verdictSummary(
   // Barriers the floor records that this run did not see on a screen it cannot show rendered. Like
   // headroom, it does not move the verdict and appears on a verified run, which is where it matters.
   if (unconfirmed > 0) {
-    clauses.push(`${unconfirmed} recorded barrier${unconfirmed === 1 ? '' : 's'} not seen, not claimed fixed`);
+    clauses.push(`${unconfirmed} recorded accessibility barrier${unconfirmed === 1 ? '' : 's'} not seen, not claimed fixed`);
   }
   if (notEvaluated.gaps > 0) {
     clauses.push(`${notEvaluated.gaps} gap(s)`);

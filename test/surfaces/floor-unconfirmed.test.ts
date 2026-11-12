@@ -30,7 +30,7 @@ const NOTICE_USERS =
 const result = (over: Partial<Result> = {}): Result => ({
   schemaVersion: 'usabl.result.v1',
   verdict: 'verified',
-  summary: 'verified: nothing blocking, 4 recorded barriers not seen, not claimed fixed',
+  summary: 'verified: nothing blocking, 4 recorded accessibility barriers not seen, not claimed fixed',
   screens: [],
   coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
   findings: [],
@@ -51,7 +51,7 @@ const notCovered = (): Result =>
     exitCode: 3,
     accessibilityVerdict: 'not_covered',
     accessibilityExitCode: 3,
-    summary: 'not_covered: nothing blocking, 4 recorded barriers not seen, not claimed fixed, 1 gap(s)',
+    summary: 'not_covered: nothing blocking, 4 recorded accessibility barriers not seen, not claimed fixed, 1 gap(s)',
     coverage: {
       changedFiles: [],
       affected: [],
@@ -162,7 +162,7 @@ describe('a shortened model message', () => {
       exitCode: 1,
       accessibilityVerdict: 'regression',
       accessibilityExitCode: 1,
-      summary: 'regression: 200 blocking finding(s), 4 recorded barriers not seen, not claimed fixed',
+      summary: 'regression: 200 blocking finding(s), 4 recorded accessibility barriers not seen, not claimed fixed',
       findings: Array.from({ length: 200 }, (_, index) => barrier(index)),
     });
   const config: UsablConfig = { ...testConfig(), noiseBudget: { default: 200 } };

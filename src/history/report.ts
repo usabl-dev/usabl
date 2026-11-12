@@ -11,7 +11,7 @@
  * text.
  */
 import type { DebtStatus, EvidenceFloor, HistoryReader } from '../contracts/index.js';
-import { parseEvidenceFloor } from '../evidence/floor.js';
+import { EMPTY_FLOOR, parseEvidenceFloor } from '../evidence/floor.js';
 import { identityKey } from '../primitives/identity.js';
 import { compareCodeUnits } from '../primitives/sortKey.js';
 import { trackingOffSentence } from '../output/debt.js';
@@ -137,7 +137,7 @@ export async function runDebt(
   let floor: EvidenceFloor;
   try {
     const text = await readFloor();
-    floor = text === null ? { version: 3, entries: [] } : parseEvidenceFloor(JSON.parse(text));
+    floor = text === null ? EMPTY_FLOOR : parseEvidenceFloor(JSON.parse(text));
   } catch {
     const message = 'usabl debt: .usabl-evidence.json could not be read, so there is no accepted debt to report. Fix the file, or run usabl baseline to write it again.';
     return { exitCode: 4, text: message, json: JSON.stringify({ error: message }, null, 2) };

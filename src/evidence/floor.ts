@@ -9,8 +9,22 @@
  * repeats the value, because a floor identity carries page-derived text.
  */
 import type { EvidenceFloor, FloorEntry } from '../contracts/index.js';
-import { identityKey } from '../primitives/identity.js';
+import { FLOOR_VERSION, identityKey } from '../primitives/identity.js';
 import { assertIdField, InputRefusedError } from '../intake/input-refusal.js';
+
+/** The evidence floor file, relative to the repository root. Every reader of the floor uses this. */
+export const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
+
+/**
+ * The floor a run, a history record, and `usabl debt` use when there is no floor file.
+ *
+ * It holds nothing, so nothing can hide behind it, and its version raises no gap: the version 1
+ * gap needs an entry, the row key gap needs an entry on the screen, and identitySchemeFor reads an
+ * empty floor as row-scoped at any version. It is at the current version because it is what
+ * `usabl baseline` would write for an application with no accepted debt. A history record of a
+ * run with no floor file hashes this same value, so the record names the floor the run compared with.
+ */
+export const EMPTY_FLOOR: EvidenceFloor = Object.freeze({ version: FLOOR_VERSION, entries: Object.freeze([]) as unknown as FloorEntry[] });
 
 /**
  * Where a floor came from, for refusal messages. `source` names the file or the call, and `path`
