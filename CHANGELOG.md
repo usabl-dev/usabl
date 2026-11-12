@@ -331,6 +331,19 @@
 
 ### Fixed
 
+- The gate's own words are exact. A requirements file that did not load was counted as a changed
+  guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
+  The line now counts changed paths only and adds "the requirements could not be loaded" when the
+  load failed; `dirtyGuardedPaths` still lists the file. The `floorHeadroom` list is sorted by
+  every field, so two entries on one screen under one rule no longer keep the order they arrived
+  in. The gate's summary clause, its two floor gap reasons, the fix text of a fixed finding, and
+  the `usabl brief` done condition for blocking failures say "accessibility barrier" where they
+  said a bare "barrier". The floor path and the empty floor are defined once, beside the floor
+  parser. The empty floor is now version 3 everywhere, where the run and `usabl history record`
+  used version 2; an empty floor raises no gap at any version, so a history record of a run with
+  no floor file carries a different floor hash and tracks nothing either way. Gate effect: none on
+  a verdict or exit code.
+
 - Setup and discovery read truer for a new team. usabl's git reader runs with `LC_ALL=C`, so a
   missing policy file at a ref reads as absent under any locale, where a translated git error
   crashed the run; the missing-ref message builds its fetch example from the ref instead of

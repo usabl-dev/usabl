@@ -173,7 +173,7 @@ describe('the notice for a pay-down the run cannot confirm', () => {
       { screenId: 'orders', rules: ['button-name', 'link-name'], barriers: 4 },
       { screenId: 'users', rules: ['button-name'], barriers: 1 },
     ]);
-    expect(out.summary).toBe('verified: nothing blocking, 5 recorded barriers not seen, not claimed fixed');
+    expect(out.summary).toBe('verified: nothing blocking, 5 recorded accessibility barriers not seen, not claimed fixed');
     // Not counted as headroom either: the run cannot say it observed zero there.
     expect(out.floorHeadroom).toEqual([]);
   });

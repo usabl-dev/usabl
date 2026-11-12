@@ -1324,6 +1324,10 @@ export interface GateInput {
   // means no such evidence, which is the safe reading: it can only withhold a `fixed`, never grant
   // one. Build it with renderEvidenceOf in src/gate/.
   renderEvidence?: ReadonlyMap<string, RenderEvidence>;
+  // True when the requirements could not be loaded. That needs approval as a changed guarded path
+  // does, but the file did not change, so it is kept out of guardDivergedPaths and the approval line
+  // names it on its own. Absent means false.
+  requirementsUnloaded?: boolean;
 }
 // What one scanned screen showed of itself. See GateInput.renderEvidence.
 export interface RenderEvidence {

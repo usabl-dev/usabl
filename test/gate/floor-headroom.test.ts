@@ -304,3 +304,43 @@ describe('the gate is safe through its own exported door', () => {
     expect(out.accessibilityVerdict).toBe('verified');
   });
 });
+
+describe('floor headroom order', () => {
+  // Two named buttons on one screen under one rule. Different names give two identities, so the
+  // floor holds two entries that share the screen and the rule and differ only in their counts.
+  function button(name: string): Draft {
+    return {
+      rule: 'color-contrast', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
+      screenId: 'clusters', elementPath: `main > button.${name.toLowerCase()}`,
+      elementName: name, role: 'button',
+      whatUserExperiences: '', why: '', fix: '',
+      evidence: { name: { value: name, source: 'ax-tree', fromTree: true } }, confidence: 'fail',
+    };
+  }
+
+  function entryFor(draft: Draft, count: number): EvidenceFloor['entries'][number] {
+    const { elementKey, identityBasis } = computeIdentity(draft);
+    return { screenId: draft.screenId, layer: draft.layer, rule: draft.rule, elementKey, identityBasis, count };
+  }
+
+  it('does not depend on the order the floor and the drafts arrive in', () => {
+    const save = button('Save');
+    const edit = button('Edit');
+    const entries = [entryFor(save, 3), entryFor(edit, 2)];
+
+    const forward = gate({ ...base, floor: { version: 3, entries }, drafts: [save, edit] });
+    const reverse = gate({ ...base, floor: { version: 3, entries: [...entries].reverse() }, drafts: [edit, save] });
+
+    // Both entries share the screen and the rule, so a sort on those two fields alone leaves them
+    // in the order they arrived in.
+    expect(forward.floorHeadroom).toHaveLength(2);
+    expect(JSON.stringify(reverse.floorHeadroom)).toBe(JSON.stringify(forward.floorHeadroom));
+    expect(forward.floorHeadroom).toEqual([
+      { screenId: 'clusters', rule: 'color-contrast', recorded: 2, observed: 1 },
+      { screenId: 'clusters', rule: 'color-contrast', recorded: 3, observed: 1 },
+    ]);
+    // Order only. The verdict is the same either way and does not move.
+    expect(forward.accessibilityVerdict).toBe('verified');
+    expect(reverse.accessibilityVerdict).toBe('verified');
+  });
+});
