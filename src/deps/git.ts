@@ -75,6 +75,23 @@ function fetchExample(ref: string): string {
   return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
 }
 
+// A git ref name cannot start with a dash, be empty, or hold a colon, *, ?, [, a backslash, white
+// space, or a control character. git reads such a value another way: a dash starts an option, a
+// colon starts a path inside a commit, and a glob character makes git show HEAD filtered by a
+// pathspec. Each of those can come back as an empty or absent file for a ref usabl never read. So
+// every function here that takes a ref refuses one of these before it calls git.
+const UNREADABLE_REF = /^-|[:*?[\\\s\u0000-\u001f\u007f]/u;
+
+function assertReadableRef(ref: string): void {
+  if (ref.length === 0 || UNREADABLE_REF.test(ref)) {
+    throw new Error(
+      `usabl cannot use "${operatorText(ref)}" as a git ref. A ref name cannot be empty, start with a dash, ` +
+        'or hold a colon, *, ?, [, a backslash, white space, or a control character. Name a branch, a tag, ' +
+        'or a commit id, then run usabl again.',
+    );
+  }
+}
+
 // HEAD does not exist, so the working tree cannot be read against it. A new repository with no
 // commits, or an orphan branch with none yet, lands here. git's own text is left out: the message
 // says what happened and the step that clears it.
@@ -232,11 +249,13 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       return parseStatus(output);
     },
     async diffNameOnly(ref) {
+      assertReadableRef(ref);
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
       const output = await runListing(cwd, ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`], maxBuffer);
       return parseNameOnly(output);
     },
     async show(ref, path) {
+      assertReadableRef(ref);
       try {
         // --end-of-options keeps a ref that starts with a dash from being read as an option.
         const output = await runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`]);
@@ -257,6 +276,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       }
     },
     async lsTree(ref, paths) {
+      assertReadableRef(ref);
       if (paths.length === 0) {
         return {};
       }
@@ -264,6 +284,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       return parseLsTree(output);
     },
     async lsFiles(ref, prefix) {
+      assertReadableRef(ref);
       const output = await runListing(
         cwd,
         ['ls-tree', '-r', '--name-only', '-z', '--end-of-options', ref, '--', prefix],
@@ -274,6 +295,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     async lsFilesUnder(ref, prefixes) {
       // One listing for every prefix, so a ref is read once however many guarded entries share it.
       // ls-tree matches each prefix as a path or a folder, never as a pattern.
+      assertReadableRef(ref);
       if (prefixes.length === 0) {
         return [];
       }

@@ -373,6 +373,104 @@ describe('makeGitReader with a trusted commit that is not in the repository', { 
   });
 });
 
+// A git ref name cannot start with a dash, be empty, or hold a colon, *, ?, [, a backslash, white
+// space, or a control character. git reads such a value another way: as an option, as a path inside
+// a commit, or as a pathspec that filters HEAD. Each of those can come back as a file state, such as
+// an empty file or an absent one, for a ref usabl never read. So the reader refuses it first.
+describe('makeGitReader with a value it cannot use as a ref', { timeout: 30_000 }, () => {
+  const REFUSED = /usabl cannot use .* as a git ref/s;
+  let repoPath = '';
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  // Without the refusal, git took each of these as a pathspec over HEAD and printed nothing, so
+  // show returned an empty file.
+  it('refuses a ref with a glob character instead of reading an empty file', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['nosuch*', 'nosuch?', 'nosuch[1]', '*', 'HEAD^{/zzz[0-9]}']) {
+      await expect(git.show(ref, 'screen.tsx')).rejects.toThrow(REFUSED);
+    }
+  });
+
+  // git splits a ref at its first colon, so HEAD:pol^{commit} names the file pol^{commit} in HEAD,
+  // not a commit. With that file committed, the commit check passed and show read
+  // pol/usabl.config.json as absent although it exists.
+  it('refuses a ref with a colon instead of reading a file as absent', async () => {
+    await mkdir(join(repoPath, 'pol'), { recursive: true });
+    await writeFile(join(repoPath, 'pol/usabl.config.json'), '{}\n', 'utf8');
+    await writeFile(join(repoPath, 'pol^{commit}'), 'odd name\n', 'utf8');
+    await runGit(repoPath, ['add', 'pol/usabl.config.json', 'pol^{commit}']);
+    await runGit(repoPath, ['commit', '-m', 'add pol']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD:pol', 'usabl.config.json')).rejects.toThrow(REFUSED);
+  });
+
+  it('refuses a ref that starts with one dash or two in every function, and git writes nothing', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['-x', '--output=written']) {
+      await expect(git.show(ref, 'screen.tsx')).rejects.toThrow(REFUSED);
+      await expect(git.diffNameOnly(ref)).rejects.toThrow(REFUSED);
+      await expect(git.lsTree(ref, ['screen.tsx'])).rejects.toThrow(REFUSED);
+      await expect(git.lsTree(ref, [])).rejects.toThrow(REFUSED);
+      await expect(git.lsFiles(ref, 'src/gate')).rejects.toThrow(REFUSED);
+      await expect(git.lsFilesUnder(ref, ['src/gate'])).rejects.toThrow(REFUSED);
+      await expect(git.lsFilesUnder(ref, [])).rejects.toThrow(REFUSED);
+    }
+    const listed = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
+    expect(listed).not.toMatch(/written/);
+  });
+
+  it('refuses an empty ref, white space, a backslash, and a control character', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['', 'main ', 'ma in', 'ma\tin', 'ma\nin', 'ma\\in', 'ma\u001b[31min', 'ma\u0000in', 'ma\u007fin']) {
+      await expect(git.show(ref, 'screen.tsx')).rejects.toThrow(REFUSED);
+    }
+  });
+
+  it('shows the refused ref without its control characters', async () => {
+    const error = await makeGitReader({ cwd: repoPath })
+      .show('ma\u001b]0;title\u0007in', 'screen.tsx')
+      .catch((err: Error) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  describe('still reads every ref form usabl takes', () => {
+    beforeEach(async () => {
+      await runGit(repoPath, ['tag', 'v1']);
+      await runGit(repoPath, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    });
+
+    const forms: Array<[string, (repo: string) => Promise<string>]> = [
+      ['a branch', async () => 'main'],
+      ['a remote-tracking branch', async () => 'origin/main'],
+      ['a tag', async () => 'v1'],
+      ['a full commit id', async (repo) => runGit(repo, ['rev-parse', 'HEAD'])],
+      ['a short commit id', async (repo) => runGit(repo, ['rev-parse', '--short', 'HEAD'])],
+      ['HEAD', async () => 'HEAD'],
+      ['HEAD~1', async () => 'HEAD~1'],
+      ['HEAD^', async () => 'HEAD^'],
+      ['main@{1}', async () => 'main@{1}'],
+    ];
+
+    it.each(forms)('reads %s', async (_label, refFor) => {
+      const ref = await refFor(repoPath);
+      const git = makeGitReader({ cwd: repoPath });
+      await expect(git.show(ref, 'screen.tsx')).resolves.toBe('first version\n');
+      await expect(git.show(ref, 'missing.tsx')).resolves.toBeNull();
+      expect(Object.keys(await git.lsTree(ref, ['screen.tsx']))).toEqual(['screen.tsx']);
+      await expect(git.lsFilesUnder(ref, [''])).resolves.toContain('screen.tsx');
+      await expect(git.diffNameOnly(ref)).resolves.toBeInstanceOf(Array);
+    });
+  });
+});
+
 // usabl reads git's error text to tell a missing file from a failure. git translates that text
 // when the user's locale asks for another language, so a German locale turned a missing policy file
 // into a crash. This machine may have no git translations, so a stand-in git answers in German
