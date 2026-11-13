@@ -258,7 +258,12 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     async diffNameOnly(ref) {
       assertReadableRef(ref);
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      const output = await runListing(cwd, ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`], maxBuffer);
+      // The closing -- keeps git from reading <ref>...HEAD as a path when a file has that name.
+      const output = await runListing(
+        cwd,
+        ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`, '--'],
+        maxBuffer,
+      );
       return parseNameOnly(output);
     },
     async show(ref, path) {

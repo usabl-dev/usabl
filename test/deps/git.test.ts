@@ -421,6 +421,18 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     await expect(makeGitReader({ cwd: repoPath }).show('main', '.usabl-waivers.json')).resolves.toBeNull();
   });
 
+  // git diff reads <ref>...HEAD as a path in the same way, so a file with that name made the diff
+  // of a ref that does not exist list nothing, which reads as no changed files.
+  it('fails the diff listing for a missing ref when a file is named <ref>...HEAD', async () => {
+    await writeFile(join(repoPath, 'nosuch...HEAD'), 'named like the diff\n', 'utf8');
+    await runGit(repoPath, ['add', 'nosuch...HEAD']);
+    await runGit(repoPath, ['commit', '-m', 'a file named like the diff']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.diffNameOnly('nosuch')).rejects.toThrow();
+    const first = await runGit(repoPath, ['rev-list', '--max-parents=0', 'HEAD']);
+    await expect(git.diffNameOnly(first)).resolves.toContain('nosuch...HEAD');
+  });
+
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
     const odd = 'café\tline\r\nno newline at the end ';
     const large = 'x'.repeat(3 * 1024 * 1024);
