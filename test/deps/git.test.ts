@@ -536,6 +536,15 @@ describe('makeGitReader with a value it cannot use as a ref', { timeout: 30_000 
     }
   });
 
+  // U+0085 (next line) and U+009B (control sequence introducer) are C1 control characters. JavaScript
+  // does not count them as white space, so the check let them through.
+  it('refuses a C1 control character', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['ma\u0085in', 'ma\u009b31min']) {
+      await expect(git.show(ref, 'screen.tsx')).rejects.toThrow(REFUSED);
+    }
+  });
+
   it('shows the refused ref without its control characters', async () => {
     const error = await makeGitReader({ cwd: repoPath })
       .show('ma\u001b]0;title\u0007in', 'screen.tsx')

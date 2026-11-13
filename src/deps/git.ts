@@ -75,13 +75,15 @@ function fetchExample(ref: string): string {
   return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
 }
 
-// A git ref name cannot be empty, start with a dash or a caret, or hold two dots, a colon, *, ?, [,
-// a backslash, white space, or a control character. git reads such a value another way: a dash
-// starts an option, a leading caret or two dots make a negative or range revision, a colon starts
-// a path inside a commit, and a glob character makes git show HEAD filtered by a pathspec. Each of
-// those can come back as an empty or absent file for a ref usabl never read. So every function
-// that takes a ref from a person refuses one of these before it calls git.
-const UNREADABLE_REF = /^[-^]|\.\.|[:*?[\\\s\u0000-\u001f\u007f]/u;
+// usabl accepts no ref that is empty, starts with a dash or a caret, or holds two dots, a colon,
+// *, ?, [, a backslash, white space, or a control character. White space here includes non-ASCII
+// spaces that git itself allows in a ref name, and control characters include U+0080 to U+009F.
+// git reads such a value another way: a dash starts an option, a leading caret or two dots make a
+// negative or range revision, a colon starts a path inside a commit, and a glob character makes
+// git show HEAD filtered by a pathspec. Each of those can come back as an empty or absent file
+// for a ref usabl never read. So every function that takes a ref from a person refuses one of
+// these before it calls git.
+const UNREADABLE_REF = /^[-^]|\.\.|[:*?[\\\s\u0000-\u001f\u007f-\u009f]/u;
 
 /** The error for a value usabl cannot use as a ref. Its message names the value and the fix. */
 export class RefRefusedError extends Error {
