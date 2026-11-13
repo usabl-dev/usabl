@@ -3166,10 +3166,13 @@ permission on the repository as `admin` or `write`, read from
 On a public repository anyone can submit an approving review, so a login in `CODEOWNERS` that lost
 its access, or a name someone else registered, would otherwise pass. An approval from a user with
 `read` or `none` does not count, and the output names the reviewer and the permission. A read that
-fails for any reason (network, a 403 or 404 answer, a body usabl cannot read, a value outside the
-four) never counts as write: the output names the reviewer and says the job's token needs read
-access to repository metadata. A code owner whose login is not in GitHub's form is not asked about
-and does not count. A later request for changes still retracts an approval. The permission is the
+fails for any reason (network, an error answer, a body usabl cannot read, a value outside the
+four) never counts as write, and the output names the reviewer and the cause: for a 404, GitHub
+has no readable user by that login on this repository; for a 401 or 403, the job's token needs
+read access to repository metadata; otherwise, the permission could not be read. A code owner
+login is asked about only when it holds letters, digits, hyphens, and underscores, starts with a
+letter or a digit, and has at most 100 characters, so a managed user login such as `mona_acme` is
+read. A login in another form is not asked about and does not count. A later request for changes still retracts an approval. The permission is the
 one GitHub reports when the check runs, not when the review was given. GitHub maps the maintain
 role to `write` and the triage role to `read`. `usabl doctor` reports the same limits in the same
 words under policy scope.
@@ -3210,8 +3213,9 @@ a wildcard, since a wildcard can stand for any number of folders and a later `..
 any of them, so `policy/*/../../x.json` guards the whole tree. A brace expansion that is empty or
 names the root, as in `{,}`, guards the whole tree too. An entry with more than 256 brace
 expansions is not expanded, because the local guard lists the working tree once for each
-expansion: at 256 a check stays well under one second, and at 65,536 it took about 31 seconds,
-long enough for a Stop hook to time out. Such an entry guards the literal folder above its first
+expansion. At 256 a local check took about 0.4 seconds on an idle machine and up to 1.5 seconds
+on a heavily loaded one, and at 65,536 it took about 31 seconds, long enough for a Stop hook to
+time out. The time depends on the machine. Such an entry guards the literal folder above its first
 brace group, so `policy/` followed by nine `{a,b}` groups guards `policy/`. It guards the whole
 tree when there is no such folder, or when an expansion can join two dots into a `..` that climbs
 out of it. The count is taken before anything is expanded, so an entry of any size is read at
@@ -3263,7 +3267,9 @@ The two places select from different lists:
   It then adds, as found, what `fs.glob` finds on the working tree for each entry and for
   everything under it. That adds files on disk that no commit holds, such as a new untracked file
   under a guarded folder. The HEAD listing holds a file deleted locally, so that file is still
-  compared.
+  compared. For an entry read wide, it also lists the dot-named files and the files in dot-named
+  folders under the folder it guards, which `fs.glob` skips under `**`, so a wide reading guards
+  them on the working tree as the git listings do. It leaves out `.git/`, which git never tracks.
 
 For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
 mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`

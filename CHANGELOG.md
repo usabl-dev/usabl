@@ -488,6 +488,12 @@
   the expansions before they build any, so an entry of any size is read at once. Gate effect: a
   config with such an entry no longer loads; at a trusted ref it guards more, never less.
 
+- The local guard lists the dot-named files and dot-named folders under an entry it reads wide.
+  It listed the folder with `fs.glob`, which skips them under `**`, so a new untracked file such
+  as `policy/.x` under a wide entry was not reported, while git listings, and so CI, held it. It
+  leaves out `.git/`, which git never tracks. Gate effect: such a file is `approval_required`
+  where the local guard passed it.
+
 - The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
   expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed
   in the pattern, so `{.,b}/y.json` and `{policy,b/..}/rules.json` never matched the root
@@ -1575,10 +1581,12 @@
   approving code owner. On a public repository anyone can submit an approving review, so a login
   in `CODEOWNERS` that lost its access, or a name someone else registered, passed the policy
   check. An approval from a user with `read` or `none` does not count. A read that fails never
-  counts as write, and the output says the job's token needs read access to repository metadata.
-  The output names each reviewer whose approval did not count and says why. A later request for
-  changes still retracts an approval. Gate effect: the policy check refuses where such an approval
-  passed it.
+  counts as write. For a 404 the output says GitHub has no readable user by that login, for a 401
+  or 403 it says the job's token needs read access to repository metadata, and otherwise it says
+  the permission could not be read. A login with an underscore, as a managed user login has, is
+  read. The output names each reviewer whose approval did not count and says why. A later request
+  for changes still retracts an approval. Gate effect: the policy check refuses where such an
+  approval passed it.
 
 - Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
   `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`

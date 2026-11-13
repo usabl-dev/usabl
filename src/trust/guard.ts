@@ -163,8 +163,9 @@ export function readGuardedEntry(entry: string, literal = false): GuardedEntry[]
 
 /**
  * The most brace expansions the guard reads one by one for a single entry. The local guard lists
- * the working tree once for each expansion. At 256 a check stays well under one second; at 65,536
- * it took about 31 seconds, long enough for a Stop hook to time out and let the stop through.
+ * the working tree once for each expansion. At 256 a check took about 0.4 seconds on an idle
+ * machine and up to 1.5 seconds on a loaded one; at 65,536 it took about 31 seconds, long enough
+ * for a Stop hook to time out and let the stop through. The time depends on the machine.
  */
 export const MAX_BRACE_EXPANSIONS = 256;
 
