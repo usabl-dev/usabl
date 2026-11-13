@@ -338,11 +338,14 @@
   read the ref and how to fetch it. `usabl debt --trusted-ref <commit>` exited 0 and said no
   accessibility debt is accepted; it now exits 4 and names the ref. `serve-build` said the config
   file was missing; it now names the ref. No gate path gave a false green before, because a later
-  git call at the same ref failed. The git reader also refuses, before any git call, a ref it
-  cannot read exactly: one that is empty, starts with a dash, or holds a colon, `*`, `?`, `[`, a
-  backslash, white space, or a control character. git read `nosuch*` as a pathspec over HEAD, so
-  a trusted file read as empty, and read `HEAD:pol` as a path, so a file could read as absent.
-  `git show`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
+  git call at the same ref failed. The git reader, the history reader, and the ledger reader also
+  refuse these values as a ref, before any git call: an empty value, a value that starts with `-`
+  or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
+  character. git read `nosuch*` as a pathspec over HEAD and `^main` or `main..HEAD` as a negative
+  or range revision, so a trusted file that exists read as empty. It read `HEAD:pol` as a path, so
+  a file could read as absent, and `usabl debt ledger --trusted-ref HEAD:pol` said no commit had
+  ever held the floor; it now exits 4 and names the value. In the git reader, `git show`,
+  `git rev-parse`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
   `--output=<file>` is never read as an option; on `git diff` it wrote the listing to a file and
   read as no changed files. `serve-build --trusted-ref` refuses a value that starts with one
   dash, as the main CLI does. usabl now needs Git 2.30 or later, the first release where

@@ -32,11 +32,12 @@ re-baseline to green.
 - The requirements root is also read from trusted-ref `usabl.config.json`, so a
   PR cannot rewrite the requirements path to bypass baseline intake providers.
 - A trusted ref that is not in the repository, such as a base commit a shallow clone lacks, is an
-  error, never an absent file. A value usabl cannot read exactly as a ref is refused before any
-  git call: one that is empty, starts with a dash, or holds a colon, `*`, `?`, `[`, a backslash,
-  white space, or a control character. git would read such a value as an option, a path inside a
-  commit, or a pathspec. So missing policy is never read as no policy, and a ref is never read as
-  a git option.
+  error, never an absent file, so missing policy is never read as no policy. The git reader, the
+  history reader, and the ledger reader refuse these values as a ref before any git call: an empty
+  value, a value that starts with `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`,
+  `\`, white space, or a control character. git would read such a value as an option, a negative
+  or range revision, a path inside a commit, or a pathspec, and it could come back as an empty or
+  absent file. The git reader also passes each ref after `--end-of-options`.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
