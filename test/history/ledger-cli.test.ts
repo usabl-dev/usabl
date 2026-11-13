@@ -133,6 +133,19 @@ describe('usabl debt ledger on the command line', () => {
     expect(err).not.toContain('no accessibility debt is accepted');
   });
 
+  // git resolved HEAD:pol^{commit} to the blob of a file named pol^{commit}, and ^main to main, so
+  // the ledger read a value that names no commit as a ref and said no commit ever held the floor.
+  it.each([['HEAD:pol'], ['^main']])('refuses the ledger trusted ref %s with the ref message', async (ref) => {
+    await repoWithFloor();
+    await writeFile(join(workspace, 'pol^{commit}'), 'odd name\n', 'utf8');
+    await git(workspace, ['add', 'pol^{commit}']);
+    await git(workspace, ['commit', '--quiet', '-m', 'add an odd name']);
+    expect(await main(['debt', 'ledger', '--trusted-ref', ref])).toBe(4);
+    const err = stderr.join('');
+    expect(err).toContain(`usabl cannot use "${ref}" as a git ref`);
+    expect(err).not.toContain('has ever held');
+  });
+
   it('refuses a trusted ref that starts with a dash', () => {
     expect(() => parseCliArgs(['debt', '--trusted-ref', '--output=written'])).toThrow(/--trusted-ref requires a value/);
   });

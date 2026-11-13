@@ -10,6 +10,7 @@
  * no claim about how fast a team fixes things and no claim about compliance.
  */
 import type { HistoryReader } from '../contracts/index.js';
+import { RefRefusedError } from '../deps/git.js';
 import { scrubOutboundData, scrubString } from '../surfaces/scrub.js';
 import { buildLedger, LedgerInvariantError, type Ledger, type LedgerRow, type LedgerState, type LedgerStateTotals } from './ledger.js';
 import { LedgerLimitError, readLedgerSources, type LedgerGit, type LedgerReadOptions } from './ledger-git.js';
@@ -202,6 +203,10 @@ export async function runLedger(
         `One git read of the history of ${trustedRef} printed more than ${sizeOf(err.limitBytes)}, more than the ledger reads. ` +
           'The ledger did not run. Name a ref with less floor history with --trusted-ref, or run it in a full clone if this one is shallow.',
       );
+    }
+    if (err instanceof RefRefusedError) {
+      // The message names the value and the fix, and refusal() scrubs it.
+      return refusal(4, err.message);
     }
     if (err instanceof LedgerInvariantError) {
       return refusal(

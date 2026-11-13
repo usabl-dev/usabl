@@ -12,6 +12,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EvidenceFloor, HistoryReader } from '../contracts/index.js';
+import { assertReadableRef } from '../deps/git.js';
 import { EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from '../evidence/floor.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 import { identityKey } from '../primitives/identity.js';
@@ -94,6 +95,8 @@ export function makeLedgerGit(options: { cwd?: string; maxBuffer?: number } = {}
       return (await git(['rev-parse', '--is-shallow-repository'])).trim() === 'true';
     },
     async resolveCommit(ref) {
+      // A value such as ^main or HEAD:pol can resolve to a commit or a blob it does not name.
+      assertReadableRef(ref);
       try {
         const sha = (await git(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`])).trim();
         return sha.length === 0 ? null : sha;

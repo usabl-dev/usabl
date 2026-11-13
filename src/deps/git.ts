@@ -83,10 +83,15 @@ function fetchExample(ref: string): string {
 // that takes a ref from a person refuses one of these before it calls git.
 const UNREADABLE_REF = /^[-^]|\.\.|[:*?[\\\s\u0000-\u001f\u007f]/u;
 
+/** The error for a value usabl cannot use as a ref. Its message names the value and the fix. */
+export class RefRefusedError extends Error {
+  override name = 'RefRefusedError';
+}
+
 /** Throws when git would read the ref as something other than a ref. Call it before any git call. */
 export function assertReadableRef(ref: string): void {
   if (ref.length === 0 || UNREADABLE_REF.test(ref)) {
-    throw new Error(
+    throw new RefRefusedError(
       `usabl cannot use "${operatorText(ref)}" as a git ref. A ref name cannot be empty, start with a dash ` +
         'or a caret, or hold two dots, a colon, *, ?, [, a backslash, white space, or a control character. ' +
         'Name a branch, a tag, or a commit id, then run usabl again.',
