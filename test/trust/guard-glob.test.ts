@@ -606,6 +606,40 @@ describe('a guardedPaths entry that can name a path outside its folder', REAL_GI
 });
 
 /**
+ * `{,}` expands to empty paths, which guard the whole tree. The entry does not say so, so the
+ * policy check names it as read wide.
+ */
+describe('a guardedPaths entry with an empty brace expansion', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const config = configWith(['{,}']);
+
+  it('reads {,} as the whole repository in CI and names it', async () => {
+    root = await repoWith(config, files);
+    await git(root, ['checkout', '-b', 'feature']);
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    await git(root, ['commit', '-am', 'change the app']);
+    const refused = await policyCheckAt(root);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.message).toContain('src/App.tsx');
+    expect(refused.message).toContain('guardedPaths entry "{,}" as the whole repository');
+  });
+
+  it('reads {,} as the whole repository in the local guard', async () => {
+    root = await repoWith(config, files);
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    const result = await run(realDeps(root), config);
+    expect(result.verdict).toBe('approval_required');
+    expect(result.dirtyGuardedPaths).toEqual(['src/App.tsx']);
+  });
+});
+
+/**
  * Past 256 brace expansions the guard reads an entry as the folder above its first brace group,
  * so a trusted ref that already holds such an entry cannot make the guard slow, and still guards
  * every path the entry names. The policy check names the entry.

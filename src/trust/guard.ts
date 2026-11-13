@@ -228,6 +228,11 @@ function readForm(entry: string, form: string, literal: boolean, braced: boolean
   if (literal) {
     return { text: entry, path, glob: false, readWide: null };
   }
+  // An empty brace alternative, as in `{,}`, can leave nothing: the whole tree, which the entry
+  // does not say. It is read wide, so the entry is named.
+  if (braced && path === '') {
+    return wide('', 'one of its brace expansions names the repository root');
+  }
   const problem = unmatchableForm(path);
   if (problem !== null) {
     return wide(literalFolder(segments), problem);

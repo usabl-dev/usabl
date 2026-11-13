@@ -136,7 +136,8 @@ function checkGuardedPathForm(entry: string): void {
   if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
     throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
   }
-  for (const segments of bracedSegments(entry)) {
+  const expansions = bracedSegments(entry);
+  for (const segments of expansions) {
     if (segments.length > 1 && segments[0]?.text === '' && entry.charAt(0) === '{') {
       throw configError`guardedPaths entry "${entry}" has a brace alternative that starts the path with /, so it names no path from the repository root. Write each alternative as a path from the repository root.`;
     }
@@ -161,6 +162,11 @@ function checkGuardedPathForm(entry: string): void {
       }
       depth++;
       afterWildcard ||= segment.braced || isPatternSegment(segment.text);
+    }
+    // An empty brace alternative, as in {,}, can leave no path at all, which the guard reads as the
+    // whole repository. The entry does not say that, so it is refused.
+    if (depth === 0 && expansions.length > 1) {
+      throw configError`guardedPaths entry "${entry}" has a brace alternative that leaves the path empty, so it names the whole repository. Write each alternative as a path from the repository root, or write . to guard the whole repository.`;
     }
   }
 }

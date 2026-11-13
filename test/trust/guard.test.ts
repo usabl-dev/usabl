@@ -197,6 +197,29 @@ describe('trust guard', () => {
   });
 });
 
+describe('a guardedPaths entry with an empty brace expansion', () => {
+  // `{,}` expands to two empty paths, which the guard reads as the whole tree. The entry does not
+  // say so, so the guard reads it wide, and the policy check and doctor name it.
+  it('reads an expansion that names the repository root wide', () => {
+    for (const entry of ['{,}', '{,}/', '.{,}']) {
+      const readings = readGuardedEntry(entry);
+      expect(readings.length, entry).toBeGreaterThan(0);
+      for (const reading of readings) {
+        expect(reading, entry).toEqual({ text: entry, path: '', glob: false, readWide: expect.any(String) });
+      }
+      expect(readWideNotice(readings[0]!), entry).toContain('as the whole repository');
+    }
+  });
+
+  it('reads only the empty expansion wide when the others name a path', () => {
+    expect(readGuardedEntry('{,policy}')).toEqual([
+      { text: '{,policy}', path: '', glob: false, readWide: expect.any(String) },
+      { text: '{,policy}', path: 'policy', glob: true, readWide: null },
+    ]);
+    expect(readGuardedEntry('policy/{rules.json,}').every((reading) => reading.readWide === null)).toBe(true);
+  });
+});
+
 /**
  * Each brace expansion is one reading, and the local guard lists the working tree once per reading.
  * An entry with 16 brace groups has 65,536 readings and took about 31 seconds, so a Stop hook could

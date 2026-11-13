@@ -684,8 +684,24 @@ describe('parseUsablConfig glob syntax', () => {
     });
   });
 
+  it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
+    // The guard reads such an expansion as the whole repository, which the entry does not say.
+    for (const entry of ['{,}', '.{,}', '{,policy}']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toContain('leaves the path empty');
+    }
+    expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/{rules.json,}'] }))).not.toThrow();
+  });
+
   it('refuses every guardedPaths entry the guard reads wide', () => {
     const readWide = [
+      '{,}',
       '/src/gate/',
       '../outside',
       'policy/*/../x.json',
