@@ -376,9 +376,10 @@ describe('makeGitReader under a non-English locale', { timeout: 30_000 }, () => 
     const script = [
       '#!/bin/sh',
       'if [ "$LC_ALL" != "C" ]; then',
-      '  case "$2" in',
-      "    HEAD:*) echo \"fatal: Pfad '${2#HEAD:}' existiert nicht in 'HEAD'\" >&2; exit 128 ;;",
-      "    *) echo \"fatal: ungültiger Objektname '${2%%:*}'.\" >&2; exit 128 ;;",
+      // The reader runs git show --end-of-options <ref>:<path>, so the ref is the third argument.
+      '  case "$3" in',
+      "    HEAD:*) echo \"fatal: Pfad '${3#HEAD:}' existiert nicht in 'HEAD'\" >&2; exit 128 ;;",
+      "    *) echo \"fatal: ungültiger Objektname '${3%%:*}'.\" >&2; exit 128 ;;",
       '  esac',
       'fi',
       `exec "${realGit}" "$@"`,
