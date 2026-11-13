@@ -347,9 +347,19 @@ function listingPrefixes(entries: GuardedEntry[]): string[] {
 }
 
 // fs.glob patterns for one entry. fs.glob returns files only, so a folder entry expands to the
-// files beneath it and a file entry matches itself.
+// files beneath it and a file entry matches itself. A wide reading guards every file under its
+// folder, dot-named ones too, as the git listings do, but fs.glob skips a dot name under `**`
+// unless the pattern names one. So a wide reading also lists the dot names.
 function workingTreeGlobs(entry: GuardedEntry): string[] {
-  return entry.path === '' ? ['**'] : [entry.path, entry.path + '/**'];
+  const under = entry.path === '' ? '' : entry.path + '/';
+  const plain = entry.path === '' ? ['**'] : [entry.path, under + '**'];
+  return entry.readWide === null ? plain : [...plain, under + '**/.*', under + '**/.*/**'];
+}
+
+// Git never tracks a path with a `.git` segment, so such a path is git's own data and never
+// guarded content. The dot listing of a wide reading would otherwise list every file in `.git/`.
+function trackablePaths(paths: string[]): string[] {
+  return paths.filter((path) => !path.split('/').includes('.git'));
 }
 
 /**
@@ -388,7 +398,12 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
   const [refListings, workingByEntry] = await Promise.all([
     Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
-    Promise.all(entries.map((entry) => deps.fs.glob(workingTreeGlobs(entry)))),
+    Promise.all(
+      entries.map(async (entry) => {
+        const found = await deps.fs.glob(workingTreeGlobs(entry));
+        return entry.readWide === null ? found : trackablePaths(found);
+      }),
+    ),
   ]);
   return selectGuarded(entries, refListings.flat(), workingByEntry);
 }

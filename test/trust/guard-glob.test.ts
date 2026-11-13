@@ -22,7 +22,7 @@ import { makeGitReader } from '../../src/deps/git.js';
 import { computePolicyHash } from '../../src/evidence/receipt.js';
 import { run } from '../../src/run.js';
 import { enforcePolicy } from '../../src/surfaces/policy-enforce.js';
-import { buildGuardedSet, expandConfigGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
+import { buildGuardedSet, checkGuard, expandConfigGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -684,6 +684,53 @@ describe('a guardedPaths entry past the brace expansion cap', REAL_GIT, () => {
       const result = await run(realDeps(root), config);
       expect(result.verdict).toBe('approval_required');
       expect(result.dirtyGuardedPaths).toEqual(['policy/rule1.json']);
+    });
+  }
+});
+
+/**
+ * A wide reading guards every file under its folder, dot-named files and folders too, as the git
+ * listings do. Node's fs.glob skips a dot name under `**`, so the local guard also lists the dot
+ * names. Otherwise a new untracked dot file under a wide entry would not be reported.
+ */
+describe('a new dot file under an entry the guard reads wide, in the local guard', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'other/keep.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const underPolicy = ['policy/.x', 'policy/.github/x.json', 'policy/.a/.b/c.json', 'policy/n/.c/d.json'];
+  const outsidePolicy = ['other/.y', '.z', '.cfg/x.json'];
+
+  async function divergedWith(entry: string): Promise<string[]> {
+    const config = configWith([entry]);
+    root = await repoWith(config, files);
+    for (const path of [...underPolicy, ...outsidePolicy]) {
+      await write(root, path, '{}\n');
+    }
+    return checkGuard(realDeps(root), config);
+  }
+
+  const folderCases: Array<[string, string]> = [
+    ['past the cap', `policy/{${Array.from({ length: 257 }, (_, i) => `f${i}`).join(',')}}.json`],
+    ['with a brace range', 'policy/rule{1..3}.json'],
+  ];
+  for (const [label, entry] of folderCases) {
+    it(`reports new dot files under the folder of an entry ${label}, and nothing outside it`, async () => {
+      expect(await divergedWith(entry)).toEqual([...underPolicy].sort());
+    });
+  }
+
+  const wholeTreeCases: Array<[string, string]> = [
+    ['past the cap', '{a,b}'.repeat(9)],
+    ['with an empty brace expansion', '{,}'],
+    ['with a .. after a wildcard', 'policy/*/../rule1.json'],
+  ];
+  for (const [label, entry] of wholeTreeCases) {
+    it(`reports new dot files at the root and in dot folders for an entry ${label}, and nothing in .git`, async () => {
+      expect(await divergedWith(entry)).toEqual([...underPolicy, ...outsidePolicy].sort());
     });
   }
 });
