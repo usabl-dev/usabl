@@ -331,6 +331,53 @@
 
 ### Fixed
 
+- A change to a test file that a screen can load is now checked, or is a gap, where it passed as
+  nothing to check. A test file is a file under `uiFileGlobs` named like a test (`*.test.*`,
+  `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
+  before any check, even when a screen imported it or a surface listed it, and a file in a test
+  folder was excluded whenever no route closure reached it, which with router fallback routes was
+  always. Now a test file is a UI file when a surface lists it, a route closure reaches it, or a
+  file outside the tests imports it, directly or through other files. For this usabl builds a wider
+  import graph, only when a changed test file needs it, that starts from the files the config names
+  as app code: the files under `uiFileGlobs` that are not test files, the route entry files, the
+  router file, the other files `wideBlastGlobs` match, and the files of every surface. When such a test
+  file is reached only through files no route closure reaches, such as stories or setup files, the
+  gap reason names them. A test file is an `unresolved` gap when a load usabl cannot follow may
+  reach it: an unresolved import that names it, an `import.meta.glob` pattern that matches it, an
+  `import()` or `require()` whose path is built at run time and may point to it, a webpack
+  `require.context` of a folder that holds it, a bare import a tsconfig or jsconfig `baseUrl`
+  resolves to it, or a bare import no package explains (a `#` import, or a name that is not a
+  Node.js built-in as a whole and whose package no package.json declares) that names it. usabl
+  reads these loads narrowly only where it can read the text exactly: a glob's brace alternatives
+  are expanded and resolved one by one, a glob that starts with `/`, or with more than one `/`, is
+  read under every folder, because usabl cannot know the folder Vite runs from (so
+  `/tests/**/*.tsx` covers `src/tests/a.tsx`, and `/src/pages/**/*.tsx` does not cover
+  `src/tests/helper.ts`), a pattern with syntax usabl does not evaluate covers only the folder
+  above that syntax, a glob whose options may set `base` (any options other than plain values of
+  the other known keys, or options text longer than 1000 characters) may load any file, a load
+  inside a comment is skipped, a string with a backslash escape is read as the
+  string it is, and a Vite alias key written without quotes is read. A Vite root above the
+  repository root is not covered. The gap reason names the importer and says to narrow the load
+  there, or to list the file in a surface. The import graph also follows a name like
+  `./Widget.spec` to `Widget.spec.tsx`. A test file in a workspace package the app depends on
+  follows the same rule, with the sources of every workspace package the app depends on as starts.
+  A bare import of a path inside a workspace package is followed to the file it names when the
+  package has no `exports` field. With one, it is followed to one file only when `exports` has a
+  key that equals the subpath, such as `./styles.css`, whose value is a string that starts with
+  `./`, holds no `*`, and names a file inside the package. When any target under the key the
+  subpath matches leaves the package folder, as a plain string or inside a conditions object or an
+  array, it may load any file. Otherwise, or when it names no file, it may load any file of the
+  package, and one that leaves the package folder may load any file. A
+  change to a test file that
+  nothing usabl reads
+  imports, and that no such load can reach, stays nothing to check, and is now listed as excluded
+  with a reason for a file named like a test too. The pull request comment and the Stop hook now
+  list excluded files, as `usabl check` does, and an idle run that excluded files says so on every
+  surface in place of "No UI files changed". `usabl baseline` and `usabl docs --all` place test
+  files by the same rule, so `usabl baseline` refuses without `--partial` when a load such as
+  `require(name)`, `import.meta.glob(variable)`, or a fixture import in a story may reach a test
+  file. The ways out are `--partial`, a narrower load, or a surface that lists the file.
+
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
   The line now counts changed paths only and adds "the requirements could not be loaded" when the

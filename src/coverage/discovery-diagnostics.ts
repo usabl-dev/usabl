@@ -2,11 +2,103 @@
  * Formats import-graph unresolvable entries into human-readable discovery detail.
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
-import type { UnresolvableImport } from './import-graph.js';
+import { importMayLoad, MAX_BRACE_ALTERNATIVES, type UnresolvableImport } from './import-graph.js';
 
 const MAX_DETAIL_LINES = 3;
 
+// What usabl read of a glob call and which files it may load, in words that say what is true.
+function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>): string {
+  if (entry.patterns === null) {
+    if (entry.unread === 'base') {
+      return 'and its options set base or may set it, which moves where its patterns start and which usabl does not read, so it may load any file';
+    }
+    if (entry.unread === 'start') {
+      return 'and usabl cannot resolve where one of its patterns starts (an alias usabl does not read, or a leading /, which Vite reads from its root, a folder usabl does not know), so it may load any file';
+    }
+    if (entry.unread === 'pattern') {
+      return (
+        'and one of its patterns has a part usabl cannot evaluate (a nested or unbalanced brace, more than ' +
+        `${MAX_BRACE_ALTERNATIVES} brace alternatives, an escaped brace or comma, or a .. after a glob segment), so it may load any file`
+      );
+    }
+    return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
+  }
+  const which: string[] = [];
+  if (entry.patterns.length > 0 || entry.underEveryFolder === undefined) {
+    which.push(`every file that matches ${entry.patterns.join(', ')}`);
+  }
+  if (entry.underEveryFolder !== undefined) {
+    which.push(`every file whose path below some folder matches ${entry.underEveryFolder.join(', ')}`);
+  }
+  const rootedNote =
+    entry.underEveryFolder === undefined
+      ? ''
+      : '. usabl reads a pattern that starts with / under every folder, because it cannot know the folder Vite runs from (the Vite root)';
+  const matches = `which loads ${which.join(', and ')}${rootedNote}`;
+  if (entry.widened === undefined) return matches;
+  return (
+    `${matches}. usabl does not evaluate the syntax in ${entry.widened.join(', ')}, ` +
+    'so for each of those it counts every file in the folder above that syntax'
+  );
+}
+
+/**
+ * One load usabl cannot follow, as a clause that names the file that holds it, what it does, and
+ * which files it may load. Null for an import that did not resolve, which formatUnresolvableImport
+ * describes.
+ */
+export function describeLoad(entry: UnresolvableImport): string | null {
+  if (entry.kind === 'glob-import') {
+    return `${entry.importer} loads files with ${entry.specifier}, ${globWhich(entry)}`;
+  }
+  if (entry.kind === 'dynamic-import') {
+    const under = entry.prefixes === null ? [] : entry.prefixes.map((prefix) => `under ${prefix}`);
+    const named = (entry.nameStarts ?? []).map(
+      (start) => `whose path holds a folder or name that starts with ${start}, since no package explains that start and usabl may not read the alias that does`,
+    );
+    const which =
+      entry.prefixes === null
+        ? 'and usabl cannot tell where that path points, so it may load any file'
+        : `so it may load any file ${[...under, ...named].join(', or any file ')}`;
+    const how = /^require\s*\.\s*context/u.test(entry.specifier)
+      ? 'loads the modules of a folder with'
+      : 'loads a module with';
+    const built = /^require\s*\.\s*context/u.test(entry.specifier) ? '' : ', whose path is built when the code runs,';
+    return `${entry.importer} ${how} ${entry.specifier}${built} ${which}`;
+  }
+  if (entry.kind === 'bare-unknown') {
+    const why = entry.specifier.startsWith('#')
+      ? 'a package.json "imports" entry maps it, which usabl does not read'
+      : 'no package.json usabl reads declares that package, and no alias usabl reads maps it, so it may be an alias usabl did not read';
+    return `${entry.importer} imports '${entry.specifier}', and ${why}`;
+  }
+  if (entry.kind === 'package-subpath') {
+    if (entry.packageDir === null) {
+      return (
+        `${entry.importer} imports '${entry.specifier}', a path that leaves the folder of the workspace package it names, ` +
+        'or that an exports entry of that package maps to a target outside its folder, so it may load any file'
+      );
+    }
+    return (
+      `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that usabl ` +
+      'cannot follow by path (the package has an exports field, which usabl does not read, or no file has that path), ' +
+      'so it may load any file of that package'
+    );
+  }
+  if (entry.kind === 'base-url') {
+    return (
+      `${entry.importer} imports '${entry.specifier}', which the tsconfig baseUrl resolves to ${entry.candidates.join(', ')}, ` +
+      'and usabl cannot tell whether the bundler reads baseUrl'
+    );
+  }
+  return null;
+}
+
 export function formatUnresolvableImport(entry: UnresolvableImport): string {
+  const load = describeLoad(entry);
+  if (load !== null) {
+    return load;
+  }
   if (entry.kind === 'alias-unconfigured') {
     return `could not resolve '${entry.specifier}' in ${entry.importer}: no alias mapping found in tsconfig or vite config`;
   }
@@ -39,32 +131,14 @@ function aliasConflictText(entry: Extract<UnresolvableImport, { kind: 'alias-con
   return `in ${entry.importer}: ${aliasConfigConflictReason(entry)}`;
 }
 
-// The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
-function importName(file: string): string {
-  const segments = file.split('/');
-  const base = segments[segments.length - 1] ?? '';
-  const stem = base.replace(/\.[^.]*$/u, '');
-  if (stem === 'index' && segments.length > 1) {
-    return segments[segments.length - 2] ?? stem;
-  }
-  return stem;
-}
-
-// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
-// `@/tests/Dashboard.js` both name a file called Dashboard.
-function importLastSegments(specifier: string): string[] {
-  const last = specifier.split('/').pop() ?? '';
-  return [last, last.replace(/\.[^.]*$/u, '')];
-}
-
 /**
- * The imports usabl could not resolve whose last segment names this file. Any of them may be the
- * import that loads it, so "no screen reaches it" is a guess while one stands.
+ * The imports usabl could not follow that may load this file: one that did not resolve and whose
+ * last segment names it, or a glob, a dynamic import, or a baseUrl import that covers it (see
+ * importMayLoad). Any of them may be the import that loads it, so "no screen reaches it" is a
+ * guess while one stands.
  */
 export function unresolvedImportsNaming(file: string, unresolvable: readonly UnresolvableImport[]): UnresolvableImport[] {
-  const name = importName(file);
-  return unresolvable.filter((entry) => importLastSegments(entry.specifier).includes(name));
+  return unresolvable.filter((entry) => importMayLoad(entry, file));
 }
 
 /**
@@ -117,14 +191,17 @@ export function buildUnresolvedReason(
   file: string,
   unresolvable: UnresolvableImport[],
   visitedFiles: ReadonlySet<string>,
+  // Said in place of the usual fix, such as who imports a test file that counts as a UI file.
+  note?: string,
 ): string {
   // No "changed": baseline passes every UI file here, changed or not.
   const base = 'This UI file is not in any route closure, wide-blast glob, or manual surface mapping';
   const details = selectDiscoveryDetails(file, unresolvable, visitedFiles);
+  const fix = note ?? UNPLACED_FILE_FIX;
   // The fix goes before the detail. Surfaces bound a printed reason, and the detail is the part
   // that can run long, so it is the part a bound may cut.
   if (details.length === 0) {
-    return `${base}. ${UNPLACED_FILE_FIX}`;
+    return `${base}. ${fix}`;
   }
-  return `${base}. ${UNPLACED_FILE_FIX} Discovery detail: ${details.join('. ')}`;
+  return `${base}. ${fix} Discovery detail: ${details.join('. ')}`;
 }

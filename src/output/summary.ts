@@ -21,6 +21,7 @@ import {
   isGradientContrastReview,
 } from '../primitives/gradient-contrast.js';
 import { UNCONFIRMED_HEADING, unconfirmedNotice } from './floor-notice.js';
+import { FULL_LIST_NOTE, listFileNotes, MAX_LISTED_FILES } from './file-notes.js';
 import { NOTES_HEADING, screenNotes } from './notes.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
@@ -100,13 +101,9 @@ function renderNotes(result: Result): string[] {
   ];
 }
 
-// A pull request can change thousands of files. Each file list prints this many entries, then one
-// line with the count of the rest and where the full list is.
-const MAX_LISTED_FILES = 20;
-const FULL_LIST_NOTE = 'Run usabl check --json to see the full list in coverage.';
-
 /**
- * The changed files the planner left out on purpose, such as test helpers no screen imports. They
+ * The changed files the planner left out on purpose, such as test files nothing outside the tests
+ * imports. They
  * are not gaps and never change the verdict, so the heading says they do not block, and they
  * print under any run, an idle one included, so a reader can see what usabl did not look at.
  * Files that share a reason are printed together, then the reason once. A Result built outside
@@ -126,35 +123,19 @@ function renderDiscoveryNotes(result: Result): string[] {
 }
 
 function renderFileNotes(listed: unknown, label: string, moreLabel: string): string[] {
-  if (!Array.isArray(listed)) {
-    return [];
-  }
-  const byReason = new Map<string, string[]>();
-  for (const entry of listed as Array<{ ref?: unknown; reason?: unknown }>) {
-    if (typeof entry?.ref !== 'string' || typeof entry.reason !== 'string') {
-      continue;
-    }
-    byReason.set(entry.reason, [...(byReason.get(entry.reason) ?? []), entry.ref]);
-  }
-  const count = [...byReason.values()].reduce((sum, refs) => sum + refs.length, 0);
+  const { count, groups, hidden } = listFileNotes(listed);
   if (count === 0) {
     return [];
   }
   const lines = [`  ${label}: ${count} (${NOTES_HEADING})`];
-  let shown = 0;
-  for (const reason of [...byReason.keys()].sort()) {
-    const groupRefs = [...(byReason.get(reason) ?? [])].sort().slice(0, Math.max(0, MAX_LISTED_FILES - shown));
-    if (groupRefs.length === 0) {
-      break;
-    }
-    for (const ref of groupRefs) {
+  for (const group of groups) {
+    for (const ref of group.refs) {
       lines.push(`    ${boundField(neutralizePrintedText(ref), 'gapRef')}`);
     }
-    shown += groupRefs.length;
-    lines.push(`    why: ${boundField(neutralizePrintedText(reason), 'gapReason')}`);
+    lines.push(`    why: ${boundField(neutralizePrintedText(group.reason), 'gapReason')}`);
   }
-  if (count > shown) {
-    lines.push(`    ${count - shown} more ${moreLabel} not shown. ${FULL_LIST_NOTE}`);
+  if (hidden > 0) {
+    lines.push(`    ${hidden} more ${moreLabel} not shown. ${FULL_LIST_NOTE}`);
   }
   return lines;
 }
