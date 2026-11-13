@@ -75,19 +75,21 @@ function fetchExample(ref: string): string {
   return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
 }
 
-// A git ref name cannot start with a dash, be empty, or hold a colon, *, ?, [, a backslash, white
-// space, or a control character. git reads such a value another way: a dash starts an option, a
-// colon starts a path inside a commit, and a glob character makes git show HEAD filtered by a
-// pathspec. Each of those can come back as an empty or absent file for a ref usabl never read. So
-// every function here that takes a ref refuses one of these before it calls git.
-const UNREADABLE_REF = /^-|[:*?[\\\s\u0000-\u001f\u007f]/u;
+// A git ref name cannot be empty, start with a dash or a caret, or hold two dots, a colon, *, ?, [,
+// a backslash, white space, or a control character. git reads such a value another way: a dash
+// starts an option, a leading caret or two dots make a negative or range revision, a colon starts
+// a path inside a commit, and a glob character makes git show HEAD filtered by a pathspec. Each of
+// those can come back as an empty or absent file for a ref usabl never read. So every function
+// that takes a ref from a person refuses one of these before it calls git.
+const UNREADABLE_REF = /^[-^]|\.\.|[:*?[\\\s\u0000-\u001f\u007f]/u;
 
-function assertReadableRef(ref: string): void {
+/** Throws when git would read the ref as something other than a ref. Call it before any git call. */
+export function assertReadableRef(ref: string): void {
   if (ref.length === 0 || UNREADABLE_REF.test(ref)) {
     throw new Error(
-      `usabl cannot use "${operatorText(ref)}" as a git ref. A ref name cannot be empty, start with a dash, ` +
-        'or hold a colon, *, ?, [, a backslash, white space, or a control character. Name a branch, a tag, ' +
-        'or a commit id, then run usabl again.',
+      `usabl cannot use "${operatorText(ref)}" as a git ref. A ref name cannot be empty, start with a dash ` +
+        'or a caret, or hold two dots, a colon, *, ?, [, a backslash, white space, or a control character. ' +
+        'Name a branch, a tag, or a commit id, then run usabl again.',
     );
   }
 }

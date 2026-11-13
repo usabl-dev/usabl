@@ -426,6 +426,33 @@ describe('makeGitReader with a value it cannot use as a ref', { timeout: 30_000 
     expect(listed).not.toMatch(/written/);
   });
 
+  // git reads ^X:path and A..B:path as a negative or range revision over a blob. It printed
+  // nothing and exited 0, so show read an existing file as empty.
+  it('refuses a leading caret or a double dot in every function', async () => {
+    await runGit(repoPath, ['switch', '-c', 'feature']);
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['^HEAD', '^main', '^', 'main..HEAD', 'main~0..', '..main']) {
+      await expect(git.show(ref, 'screen.tsx')).rejects.toThrow(REFUSED);
+      await expect(git.diffNameOnly(ref)).rejects.toThrow(REFUSED);
+      await expect(git.lsTree(ref, ['screen.tsx'])).rejects.toThrow(REFUSED);
+      await expect(git.lsFiles(ref, 'src/gate')).rejects.toThrow(REFUSED);
+      await expect(git.lsFilesUnder(ref, ['src/gate'])).rejects.toThrow(REFUSED);
+    }
+  });
+
+  it('still reads the second parent of a merge as HEAD^2', async () => {
+    await runGit(repoPath, ['switch', '-c', 'side', 'HEAD~1']);
+    await writeFile(join(repoPath, 'side.txt'), 'side\n', 'utf8');
+    await runGit(repoPath, ['add', 'side.txt']);
+    await runGit(repoPath, ['commit', '-m', 'side']);
+    await runGit(repoPath, ['switch', 'main']);
+    await runGit(repoPath, ['merge', '--no-ff', '--no-edit', 'side']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD^2', 'side.txt')).resolves.toBe('side\n');
+    await expect(git.show('HEAD^2', 'src/gate/index.ts')).resolves.toBeNull();
+    await expect(git.lsFilesUnder('HEAD^2', [''])).resolves.toContain('side.txt');
+  });
+
   it('refuses an empty ref, white space, a backslash, and a control character', async () => {
     const git = makeGitReader({ cwd: repoPath });
     for (const ref of ['', 'main ', 'ma in', 'ma\tin', 'ma\nin', 'ma\\in', 'ma\u001b[31min', 'ma\u0000in', 'ma\u007fin']) {
