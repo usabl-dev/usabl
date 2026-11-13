@@ -31,6 +31,8 @@ re-baseline to green.
   requirements YAML from `--trusted-ref`, not working tree bytes.
 - The requirements root is also read from trusted-ref `usabl.config.json`, so a
   PR cannot rewrite the requirements path to bypass baseline intake providers.
+- A trusted ref that is not in the repository, such as a base commit a shallow clone lacks, is an
+  error, never an absent file, so missing policy is never read as no policy.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
