@@ -338,8 +338,15 @@
   read the ref and how to fetch it. `usabl debt --trusted-ref <commit>` exited 0 and said no
   accessibility debt is accepted; it now exits 4 and names the ref. `serve-build` said the config
   file was missing; it now names the ref. No gate path gave a false green before, because a later
-  git call at the same ref failed. `git show` also ends its options before the ref, so a ref that
-  starts with a dash is never read as an option.
+  git call at the same ref failed. The git reader also refuses, before any git call, a ref it
+  cannot read exactly: one that is empty, starts with a dash, or holds a colon, `*`, `?`, `[`, a
+  backslash, white space, or a control character. git read `nosuch*` as a pathspec over HEAD, so
+  a trusted file read as empty, and read `HEAD:pol` as a path, so a file could read as absent.
+  `git show`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
+  `--output=<file>` is never read as an option; on `git diff` it wrote the listing to a file and
+  read as no changed files. `serve-build --trusted-ref` refuses a value that starts with one
+  dash, as the main CLI does. usabl now needs Git 2.24 or later, the first release with
+  `--end-of-options`.
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
   The line now counts changed paths only and adds "the requirements could not be loaded" when the

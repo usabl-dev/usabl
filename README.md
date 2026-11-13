@@ -36,7 +36,7 @@ page.
 
 ## Install
 
-usabl needs Node.js 22 or later. It is not on npm yet, so build the latest release
+usabl needs Node.js 22 or later and Git 2.24 or later. It is not on npm yet, so build the latest release
 from source in a folder next to your app:
 
 ```bash
