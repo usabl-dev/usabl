@@ -308,6 +308,58 @@ describe('makeGitReader in a repository with no commits', () => {
   });
 });
 
+// A shallow clone can lack the trusted commit. For a full commit id git then says the path "does not
+// exist in" or "exists on disk, but not in" that commit, the same text it gives for a file that is
+// truly absent. Read as absent, a trusted policy file would read as no policy, so the reader checks
+// that the ref names a commit before it reports a file as absent.
+describe('makeGitReader with a trusted commit that is not in the repository', { timeout: 30_000 }, () => {
+  const ABSENT_COMMIT = 'deadbeef'.repeat(5);
+  let repoPath = '';
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('names the ref and the fix for a full commit id the repository does not have', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    // screen.tsx is on disk, so git says "exists on disk, but not in". missing.tsx is not, so git
+    // says "does not exist in". Both mean the commit is absent, not the file.
+    for (const path of ['screen.tsx', 'missing.tsx']) {
+      const error = await git.show(ABSENT_COMMIT, path).then(
+        (value) => value,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(new RegExp(`git cannot read ${ABSENT_COMMIT}.*fetch it`, 's'));
+    }
+  });
+
+  it('still reads a file that is absent at a real commit or branch as absent', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    const head = await runGit(repoPath, ['rev-parse', 'HEAD']);
+    await expect(git.show(head, 'missing.tsx')).resolves.toBeNull();
+    await expect(git.show(head, 'screen.tsx')).resolves.toBe('first version\n');
+    await expect(git.show('main', 'missing.tsx')).resolves.toBeNull();
+    await expect(git.show('main', 'src/gate/local-only.ts')).resolves.toBeNull();
+  });
+
+  // The CLI refuses a --trusted-ref value that starts with a dash, and git gets every argument on
+  // its own, never through a shell. The reader still ends git's options before the ref, so a ref
+  // such as --output=<file> is never read as an option that writes a file.
+  it('passes a ref that starts with a dash or holds shell characters as a ref, never as an option', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['--output=written', '-x', '$(touch shell-ran)', '`touch shell-ran`']) {
+      await expect(git.show(ref, 'usabl.config.json')).rejects.toThrow();
+    }
+    const listed = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
+    expect(listed).not.toMatch(/written|shell-ran/);
+  });
+});
+
 // usabl reads git's error text to tell a missing file from a failure. git translates that text
 // when the user's locale asks for another language, so a German locale turned a missing policy file
 // into a crash. This machine may have no git translations, so a stand-in git answers in German

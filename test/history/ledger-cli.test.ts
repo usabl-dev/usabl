@@ -121,6 +121,22 @@ describe('usabl debt ledger on the command line', () => {
     expect(stderr.join('')).toContain('not in a git repository');
   });
 
+  // A shallow clone can lack the trusted commit. The floor at that commit was never read, so the
+  // command must not say that no accessibility debt is accepted.
+  it('fails and names the ref when the trusted commit is not in the repository', async () => {
+    await repoWithFloor();
+    const absent = 'deadbeef'.repeat(5);
+    expect(await main(['debt', '--trusted-ref', absent])).toBe(4);
+    expect(stdout.join('')).toBe('');
+    const err = stderr.join('');
+    expect(err).toContain(`git cannot read ${absent}`);
+    expect(err).not.toContain('no accessibility debt is accepted');
+  });
+
+  it('refuses a trusted ref that starts with a dash', () => {
+    expect(() => parseCliArgs(['debt', '--trusted-ref', '--output=written'])).toThrow(/--trusted-ref requires a value/);
+  });
+
   it('refuses --out on the plain debt command, which writes no file', async () => {
     expect(await main(['debt', '--out', 'debt.json'])).toBe(2);
     expect(stderr.join('')).toContain('--out is for usabl debt ledger');

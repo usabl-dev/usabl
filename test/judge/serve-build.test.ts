@@ -368,6 +368,21 @@ describe('runServeBuild', () => {
     const outcome = await runServeBuild(['--dir', root, '--trusted-ref', 'origin/no-such-branch'], { ...streams, cwd: repo });
     expect(outcome.exitCode).toBe(2);
   });
+
+  // A shallow clone can lack the trusted commit. git then says the config "exists on disk, but not
+  // in" it, which is not the same as a trusted ref with no config.
+  it('names the ref, not a missing config, when the trusted commit is not in the repository', async () => {
+    const { root } = makeBuild();
+    const repo = repoWithConfigs('http://127.0.0.1:5173', 'http://127.0.0.1:5173');
+    const absent = 'deadbeef'.repeat(5);
+    const streams = io();
+    const outcome = await runServeBuild(['--dir', root, '--trusted-ref', absent], { ...streams, cwd: repo });
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.server).toBeUndefined();
+    const err = streams.err.join('');
+    expect(err).toContain(`git cannot read ${absent}`);
+    expect(err).not.toContain('there is no usabl.config.json');
+  });
 });
 
 describe('usabl serve-build through the CLI', () => {

@@ -51,6 +51,10 @@ function missingRefError(ref: string, stderr: string): Error | null {
   if (!/invalid object name/i.test(stderr)) {
     return null;
   }
+  return refNotFoundError(ref);
+}
+
+function refNotFoundError(ref: string): Error {
   if (ref === 'HEAD') {
     return new Error(NO_HEAD_MESSAGE);
   }
@@ -200,6 +204,20 @@ async function runListing(
   }
 }
 
+// True when the ref names a commit in this repository. With --verify --quiet, git exits 1 and
+// prints nothing when it does not. Any other failure is not an answer, so it is thrown.
+async function namesCommit(cwd: string, ref: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+    return true;
+  } catch (err) {
+    if (readErrorCode(err) === 1) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}): GitReader {
   const cwd = options.cwd ?? process.cwd();
   // The buffer size is an option only so tests can reach the over-limit path with a small repository.
@@ -220,13 +238,20 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     },
     async show(ref, path) {
       try {
-        const output = await runGit(cwd, ['show', `${ref}:${path}`]);
+        // --end-of-options keeps a ref that starts with a dash from being read as an option.
+        const output = await runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`]);
         return output;
       } catch (err) {
         const code = readErrorCode(err);
         const stderr = readErrorStderr(err);
         if (code !== null && isMissingShow(stderr)) {
-          return null;
+          // For a full commit id git gives the missing-file text even when the commit itself is
+          // not in the repository, as in a shallow clone. The file is absent only when the ref
+          // names a commit here. Otherwise usabl could not read the ref at all.
+          if (await namesCommit(cwd, ref)) {
+            return null;
+          }
+          throw refNotFoundError(ref);
         }
         throw missingRefError(ref, stderr) ?? err;
       }
