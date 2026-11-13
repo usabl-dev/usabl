@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -548,6 +548,82 @@ describe('makeGitReader under a non-English locale', { timeout: 30_000 }, () => 
   it('still names the fix when the trusted ref does not exist', async () => {
     const git = makeGitReader({ cwd: repoPath });
     await expect(git.show('origin/nope', 'usabl.config.json')).rejects.toThrow(/git cannot read origin\/nope/);
+  });
+});
+
+// The ref check refuses a dash before git runs, so a test through the reader cannot see the second
+// layer. A stand-in git records every argument list and hands the call to real git, so the test can
+// check that --end-of-options comes before the ref in each call that takes one.
+describe('makeGitReader ends git options before every ref', { timeout: 30_000 }, () => {
+  const ABSENT_COMMIT = 'deadbeef'.repeat(5);
+  const SEPARATOR = '\u001f';
+  let repoPath = '';
+  let binDir = '';
+  let logPath = '';
+  const savedPath = process.env['PATH'];
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+    binDir = await mkdtemp(join(tmpdir(), 'usabl-git-args-bin-'));
+    logPath = join(binDir, 'calls.log');
+    const realGit = (await execFileAsync('which', ['git'], { encoding: 'utf8' })).stdout.trim();
+    const script = [
+      '#!/bin/sh',
+      `printf '%s\\037' "$@" >> "${logPath}"`,
+      `printf '\\n' >> "${logPath}"`,
+      `exec "${realGit}" "$@"`,
+      '',
+    ].join('\n');
+    await writeFile(join(binDir, 'git'), script, { encoding: 'utf8', mode: 0o755 });
+    await writeFile(logPath, '', 'utf8');
+    process.env['PATH'] = `${binDir}:${savedPath ?? ''}`;
+  });
+
+  afterEach(async () => {
+    if (savedPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = savedPath;
+    await rm(repoPath, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+  });
+
+  async function calls(): Promise<string[][]> {
+    const text = await readFile(logPath, 'utf8');
+    return text
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => line.split(SEPARATOR).filter((arg, index, all) => index < all.length - 1 || arg.length > 0));
+  }
+
+  function expectEndBefore(all: string[][], refArg: string, command: string): void {
+    const call = all.find((args) => args[0] === command && args.includes(refArg));
+    expect(call, `a git ${command} call with ${refArg}`).toBeDefined();
+    const args = call ?? [];
+    const end = args.indexOf('--end-of-options');
+    expect(end, `--end-of-options in git ${args.join(' ')}`).toBeGreaterThan(-1);
+    expect(end).toBeLessThan(args.indexOf(refArg));
+  }
+
+  it('puts --end-of-options before the ref in show, the commit check, the diff, and each tree listing', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await git.show('main', 'screen.tsx');
+    await git.show(ABSENT_COMMIT, 'missing.tsx').catch(() => undefined);
+    await git.diffNameOnly('main');
+    await git.lsTree('main', ['screen.tsx']);
+    await git.lsFiles('main', 'src/gate');
+    await git.lsFilesUnder('main', ['src/gate']);
+    await git.lsFilesUnder('HEAD', ['']);
+    const all = await calls();
+    expectEndBefore(all, 'main:screen.tsx', 'show');
+    expectEndBefore(all, `${ABSENT_COMMIT}^{commit}`, 'rev-parse');
+    expectEndBefore(all, 'main...HEAD', 'diff');
+    const listings = all.filter((args) => args[0] === 'ls-tree');
+    expect(listings).toHaveLength(4);
+    for (const args of listings) {
+      const ref = args.includes('HEAD') ? 'HEAD' : 'main';
+      const end = args.indexOf('--end-of-options');
+      expect(end, `--end-of-options in git ${args.join(' ')}`).toBeGreaterThan(-1);
+      expect(end).toBeLessThan(args.indexOf(ref));
+    }
   });
 });
 
