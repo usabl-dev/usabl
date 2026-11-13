@@ -233,7 +233,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     },
     async diffNameOnly(ref) {
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      const output = await runListing(cwd, ['diff', '--name-only', '-z', `${ref}...HEAD`], maxBuffer);
+      const output = await runListing(cwd, ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`], maxBuffer);
       return parseNameOnly(output);
     },
     async show(ref, path) {
@@ -260,11 +260,15 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       if (paths.length === 0) {
         return {};
       }
-      const output = await runListing(cwd, ['ls-tree', '-z', ref, '--', ...paths], maxBuffer);
+      const output = await runListing(cwd, ['ls-tree', '-z', '--end-of-options', ref, '--', ...paths], maxBuffer);
       return parseLsTree(output);
     },
     async lsFiles(ref, prefix) {
-      const output = await runListing(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix], maxBuffer);
+      const output = await runListing(
+        cwd,
+        ['ls-tree', '-r', '--name-only', '-z', '--end-of-options', ref, '--', prefix],
+        maxBuffer,
+      );
       return parseLsFiles(output);
     },
     async lsFilesUnder(ref, prefixes) {
@@ -274,7 +278,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return [];
       }
       const unique = [...new Set(prefixes)].sort();
-      const args = ['ls-tree', '-r', '--name-only', '-z', ref];
+      const args = ['ls-tree', '-r', '--name-only', '-z', '--end-of-options', ref];
       if (!unique.includes('')) {
         args.push('--', ...unique);
       }

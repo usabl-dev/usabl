@@ -358,6 +358,19 @@ describe('makeGitReader with a trusted commit that is not in the repository', { 
     const listed = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
     expect(listed).not.toMatch(/written|shell-ran/);
   });
+
+  // git diff pastes the ref into <ref>...HEAD, so --output=<file> as the ref would make git write
+  // the listing to a file and print nothing, which reads as no changed files.
+  it('never reads a ref as an option in the diff and tree listings', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.diffNameOnly('--output=written')).rejects.toThrow();
+    await expect(git.lsTree('--output=written', ['screen.tsx'])).rejects.toThrow();
+    await expect(git.lsFiles('--output=written', 'src/gate')).rejects.toThrow();
+    await expect(git.lsFilesUnder('--output=written', ['src/gate'])).rejects.toThrow();
+    await expect(git.lsFilesUnder('--output=written', [''])).rejects.toThrow();
+    const listed = await runGit(repoPath, ['status', '--porcelain', '--untracked-files=all']);
+    expect(listed).not.toMatch(/written/);
+  });
 });
 
 // usabl reads git's error text to tell a missing file from a failure. git translates that text
