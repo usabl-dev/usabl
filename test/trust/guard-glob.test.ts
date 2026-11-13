@@ -736,6 +736,45 @@ describe('a new dot file under an entry the guard reads wide, in the local guard
 });
 
 /**
+ * A literal folder entry guards every file under it, dot-named files and folders too, as the git
+ * listings do. fs.glob skips a dot name under `**`, so the local guard also lists the dot names
+ * under the folder, or a new untracked `src/gate/.x` would not be reported.
+ */
+describe('a new dot file under a literal folder entry, in the local guard', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('reports new dot files under the folder, a modified tracked dot file once, and nothing outside', async () => {
+    const config = configWith(['src/gate', 'src/run.ts']);
+    root = await repoWith(config, {
+      'src/gate/index.ts': 'export {}\n',
+      'src/gate/.tracked': 'one\n',
+      'src/run.ts': 'export {}\n',
+      'src/App.tsx': 'export {}\n',
+      'other/keep.json': '{}\n',
+    });
+    const underGate = ['src/gate/.x', 'src/gate/.d/y.ts', 'src/gate/.d/.e/z.ts', 'src/gate/n/.f/w.ts'];
+    const outside = ['src/.y', 'src/gateway/.z', 'src/run.ts.d/.v', '.w', 'other/.u'];
+    for (const path of [...underGate, ...outside]) {
+      await write(root, path, 'new\n');
+    }
+    await write(root, 'src/gate/.tracked', 'two\n');
+    await write(root, 'src/run.ts', 'export const changed = 1\n');
+    const diverged = await checkGuard(realDeps(root), config);
+    expect(diverged).toEqual([...underGate, 'src/gate/.tracked', 'src/run.ts'].sort());
+  });
+
+  it('reports nothing for a clean tree', async () => {
+    const config = configWith(['src/gate', 'src/run.ts']);
+    root = await repoWith(config, { 'src/gate/.tracked': 'one\n', 'src/run.ts': 'export {}\n' });
+    expect(await checkGuard(realDeps(root), config)).toEqual([]);
+  });
+});
+
+/**
  * The requirements value is a folder, not a glob, and the requirements loader accepts any folder
  * name. The guard reads it as a literal path, as it did before the matcher.
  */

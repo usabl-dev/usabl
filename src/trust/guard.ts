@@ -348,19 +348,38 @@ function listingPrefixes(entries: GuardedEntry[]): string[] {
 }
 
 // fs.glob patterns for one entry. fs.glob returns files only, so a folder entry expands to the
-// files beneath it and a file entry matches itself. A wide reading guards every file under its
-// folder, dot-named ones too, as the git listings do, but fs.glob skips a dot name under `**`
-// unless the pattern names one. So a wide reading also lists the dot names.
+// files beneath it and a file entry matches itself.
 function workingTreeGlobs(entry: GuardedEntry): string[] {
+  return entry.path === '' ? ['**'] : [entry.path, entry.path + '/**'];
+}
+
+// The dot names under an entry that guards every file under its path: a literal entry and a wide
+// reading. The matcher and the git listings take dot-named files there, but fs.glob skips a dot
+// name under `**` unless the pattern names one. A glob reading keeps Node's dot rule, so it has
+// none. Under a file the patterns match nothing.
+function workingTreeDotGlobs(entry: GuardedEntry): string[] {
+  if (entry.glob && entry.readWide === null) {
+    return [];
+  }
   const under = entry.path === '' ? '' : entry.path + '/';
-  const plain = entry.path === '' ? ['**'] : [entry.path, under + '**'];
-  return entry.readWide === null ? plain : [...plain, under + '**/.*', under + '**/.*/**'];
+  return [under + '**/.*', under + '**/.*/**'];
 }
 
 // Git never tracks a path with a `.git` segment, so such a path is git's own data and never
-// guarded content. The dot listing of a wide reading would otherwise list every file in `.git/`.
+// guarded content. The dot listing would otherwise list every file in `.git/`.
 function trackablePaths(paths: string[]): string[] {
   return paths.filter((path) => !path.split('/').includes('.git'));
+}
+
+// What fs.glob finds for one entry: the plain listing as found, as before, joined with the dot
+// listing less git's own data. Listing more can only report more.
+async function workingTreeFiles(deps: Deps, entry: GuardedEntry): Promise<string[]> {
+  const dotGlobs = workingTreeDotGlobs(entry);
+  const [plain, dots] = await Promise.all([
+    deps.fs.glob(workingTreeGlobs(entry)),
+    dotGlobs.length === 0 ? Promise.resolve([]) : deps.fs.glob(dotGlobs),
+  ]);
+  return [...new Set([...plain, ...trackablePaths(dots)])].sort();
 }
 
 /**
@@ -399,12 +418,7 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
   const [refListings, workingByEntry] = await Promise.all([
     Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
-    Promise.all(
-      entries.map(async (entry) => {
-        const found = await deps.fs.glob(workingTreeGlobs(entry));
-        return entry.readWide === null ? found : trackablePaths(found);
-      }),
-    ),
+    Promise.all(entries.map((entry) => workingTreeFiles(deps, entry))),
   ]);
   return selectGuarded(entries, refListings.flat(), workingByEntry);
 }
