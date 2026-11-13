@@ -146,7 +146,7 @@ function checkGuardedPathForm(entry: string): void {
       }
       if (segment.text === '..') {
         if (afterWildcard) {
-          throw configError`guardedPaths entry "${entry}" has a .. after a wildcard, so it can name a path anywhere in the repository. Write it without .. segments, as a path from the repository root.`;
+          throw configError`guardedPaths entry "${entry}" has a .. after a wildcard or a brace group, so it can name a path anywhere in the repository. Write it without .. segments, as a path from the repository root.`;
         }
         if (depth === 0) {
           throw configError`guardedPaths entry "${entry}" has a .. segment that leaves the repository root, so it names no path in the repository. Write it as a path from the repository root without .. segments.`;

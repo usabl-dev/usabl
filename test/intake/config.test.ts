@@ -637,6 +637,21 @@ describe('parseUsablConfig glob syntax', () => {
     }
   });
 
+  it('names a brace group, not only a wildcard, when a .. follows one', () => {
+    // These entries have a brace group and no wildcard, so a message that names only a wildcard
+    // points at something the entry does not have.
+    for (const entry of ['{a,b}/../x.json', '{policy/sub,b}/../rule1.json']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toContain('has a .. after a wildcard or a brace group');
+    }
+  });
+
   it('refuses every guardedPaths entry the guard reads wide', () => {
     const readWide = ['/src/gate/', '../outside', 'policy/*/../x.json', 'policy/rule{1..3}.json', 'a}/../x.json'];
     for (const entry of readWide) {
