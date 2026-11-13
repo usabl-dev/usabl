@@ -606,6 +606,53 @@ describe('a guardedPaths entry that can name a path outside its folder', REAL_GI
 });
 
 /**
+ * Past 256 brace expansions the guard reads an entry as the folder above its first brace group,
+ * so a trusted ref that already holds such an entry cannot make the guard slow, and still guards
+ * every path the entry names. The policy check names the entry.
+ */
+describe('a guardedPaths entry past the brace expansion cap', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const alternatives = Array.from({ length: 257 }, (_, i) => `rule${i}`).join(',');
+  const cases: Array<[string, string]> = [
+    ['one past the cap', `policy/{${alternatives}}.json`],
+    ['far past the cap', 'policy/' + '{a,b}'.repeat(64) + '.json'],
+  ];
+
+  for (const [label, entry] of cases) {
+    const config = configWith([entry]);
+
+    it(`reads an entry ${label} as its folder in CI, names it, and lets an owner clear it`, async () => {
+      root = await repoWith(config, files);
+      await git(root, ['checkout', '-b', 'feature']);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      await git(root, ['commit', '-am', 'change a rule']);
+      const refused = await policyCheckAt(root);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.message).toContain('policy/rule1.json');
+      expect(refused.message).toContain('as the folder policy/');
+      expect(refused.message).toContain('more than 256');
+      const approved = await policyCheckWith(root, ['owner']);
+      expect(approved.exitCode).toBe(0);
+      expect(approved.message).toContain('more than 256');
+    });
+
+    it(`reads an entry ${label} as its folder in the local guard`, async () => {
+      root = await repoWith(config, files);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      const result = await run(realDeps(root), config);
+      expect(result.verdict).toBe('approval_required');
+      expect(result.dirtyGuardedPaths).toEqual(['policy/rule1.json']);
+    });
+  }
+});
+
+/**
  * The requirements value is a folder, not a glob, and the requirements loader accepts any folder
  * name. The guard reads it as a literal path, as it did before the matcher.
  */

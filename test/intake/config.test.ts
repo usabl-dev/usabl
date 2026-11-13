@@ -652,8 +652,47 @@ describe('parseUsablConfig glob syntax', () => {
     }
   });
 
+  describe('a guardedPaths entry with many brace expansions', () => {
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(entry: string): string {
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    it('loads an entry at the cap of 256 expansions', () => {
+      for (const entry of [`policy/{${alternatives(256)}}.json`, 'policy/' + '{a,b}'.repeat(8) + '.json']) {
+        expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).not.toThrow();
+      }
+    });
+
+    it('refuses an entry one past the cap and says so', () => {
+      const message = refusal(`policy/{${alternatives(257)}}.json`);
+      expect(message).toContain('guardedPaths entry "policy/{f0,f1');
+      expect(message).toContain('more than 256');
+    });
+
+    it('refuses an entry far past the cap without building its expansions', () => {
+      for (const glob of ['policy/' + '{a,b}'.repeat(64) + '.json', 'policy/' + '{a,b}'.repeat(64) + '{c,{d,e}}']) {
+        expect(refusal(glob), glob).toContain('guardedPaths');
+      }
+      expect(refusal('policy/' + '{a,b}'.repeat(64) + '.json')).toContain('more than 256');
+    });
+  });
+
   it('refuses every guardedPaths entry the guard reads wide', () => {
-    const readWide = ['/src/gate/', '../outside', 'policy/*/../x.json', 'policy/rule{1..3}.json', 'a}/../x.json'];
+    const readWide = [
+      '/src/gate/',
+      '../outside',
+      'policy/*/../x.json',
+      'policy/rule{1..3}.json',
+      'a}/../x.json',
+      'policy/' + '{a,b}'.repeat(9),
+    ];
     for (const entry of readWide) {
       expect(readGuardedEntry(entry).some((reading) => reading.readWide !== null), entry).toBe(true);
       expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).toThrow(/guardedPaths/);

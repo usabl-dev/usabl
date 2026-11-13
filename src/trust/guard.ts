@@ -6,7 +6,7 @@
 import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
 import { operatorText } from '../intake/config-error.js';
-import { braceRangeIn, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
 const CONFIG_PATH = 'usabl.config.json';
 const ALWAYS_GUARDED = [
@@ -85,7 +85,7 @@ function unmatchableForm(path: string): string | null {
   if (character !== undefined) {
     return `it uses "${character}", which the guard cannot match`;
   }
-  if (path.includes('{') && expandBraces(path) === null) {
+  if (path.includes('{') && countBraceExpansions(path) === null) {
     return 'it uses a nested or unbalanced brace';
   }
   const range = braceRangeIn(path);
@@ -140,19 +140,60 @@ export interface GuardedEntry {
  * is read wide: it guards the literal folder above the first segment the matcher cannot evaluate.
  * A form with no such folder guards the whole tree: one that starts with `/`, one with a `..` that
  * leaves the root, and one with a `..` anywhere after a wildcard, which can climb above any folder.
- * Config load refuses these forms, but the guard also reads a trusted ref's config, which config
- * load never checked.
+ * An entry with more than MAX_BRACE_EXPANSIONS expansions is read wide too, as the literal folder
+ * above its first brace group, and is never expanded. Config load refuses these forms, but the
+ * guard also reads a trusted ref's config, which config load never checked.
  */
 export function readGuardedEntry(entry: string, literal = false): GuardedEntry[] {
   if (literal || !entry.includes('{')) {
     return [readForm(entry, entry, literal, false)];
   }
-  const expansions = expandBraces(entry);
+  // The count comes first, because the expansions of a short entry can exhaust memory.
+  const count = countBraceExpansions(entry);
+  if (count !== null && count > MAX_BRACE_EXPANSIONS) {
+    return [readPastCap(entry)];
+  }
+  const expansions = count === null ? null : expandBraces(entry);
   if (expansions === null) {
     // A bad brace has no expansion. The form check names it, and the entry is read wide.
     return [readForm(entry, entry, false, true)];
   }
   return expansions.map((form) => readForm(entry, form, false, true));
+}
+
+/**
+ * The most brace expansions the guard reads one by one for a single entry. The local guard lists
+ * the working tree once for each expansion. At 256 a check stays well under one second; at 65,536
+ * it took about 31 seconds, long enough for a Stop hook to time out and let the stop through.
+ */
+export const MAX_BRACE_EXPANSIONS = 256;
+
+// Whether an expansion of the text can hold a `..`. Two dots end up side by side only when they
+// are written together, or when the text between them is all left out. That text then starts and
+// ends with brace syntax, so one dot comes right before a brace or comma and one right after.
+function canJoinDots(text: string): boolean {
+  return text.includes('..') || (/\.[{,}]/.test(text) && /[{,}]\./.test(text));
+}
+
+/**
+ * An entry past the cap, read as the literal folder above its first brace group. Every expansion
+ * starts with the text before that group, so the folder holds every path the entry names, unless
+ * an expansion can climb out of it with a `..`. Then, and when there is no such folder, the entry
+ * guards the whole tree.
+ */
+function readPastCap(entry: string): GuardedEntry {
+  // Where the segment that holds the first brace group starts. Text before it is the same in every
+  // expansion; text from it on can join into a `..` segment.
+  const start = entry.slice(0, entry.indexOf('{')).lastIndexOf('/') + 1;
+  const folder = canJoinDots(entry.slice(start))
+    ? ''
+    : literalFolder(readForm(entry, entry.slice(0, start), false, false).path.split('/'));
+  return {
+    text: entry,
+    path: folder,
+    glob: false,
+    readWide: `its brace groups expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, more than the guard reads one by one`,
+  };
 }
 
 // One form of an entry, in canonical form. A form that came from a brace group is a glob reading
