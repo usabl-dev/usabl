@@ -523,3 +523,49 @@ describe('makeGitReader under a non-English locale', { timeout: 30_000 }, () => 
     await expect(git.show('origin/nope', 'usabl.config.json')).rejects.toThrow(/git cannot read origin\/nope/);
   });
 });
+
+// The commit check reads only one answer from git rev-parse: exit 1 means the ref names no commit.
+// Any other failure says nothing about the ref, so it must reach the caller unchanged, never as a
+// missing ref and never as an absent file. A stand-in git fails every rev-parse with exit 128.
+describe('makeGitReader when the commit check itself fails', { timeout: 30_000 }, () => {
+  let repoPath = '';
+  let binDir = '';
+  const savedPath = process.env['PATH'];
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+    binDir = await mkdtemp(join(tmpdir(), 'usabl-git-revparse-bin-'));
+    const realGit = (await execFileAsync('which', ['git'], { encoding: 'utf8' })).stdout.trim();
+    const script = [
+      '#!/bin/sh',
+      'if [ "$1" = "rev-parse" ]; then',
+      '  echo "fatal: stand-in rev-parse failure" >&2; exit 128',
+      'fi',
+      `exec "${realGit}" "$@"`,
+      '',
+    ].join('\n');
+    await writeFile(join(binDir, 'git'), script, { encoding: 'utf8', mode: 0o755 });
+    process.env['PATH'] = `${binDir}:${savedPath ?? ''}`;
+  });
+
+  afterEach(async () => {
+    if (savedPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = savedPath;
+    await rm(repoPath, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+  });
+
+  it('throws the rev-parse failure unchanged for a missing commit and for a real one', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    for (const ref of ['deadbeef'.repeat(5), 'HEAD']) {
+      const error = await git.show(ref, 'missing.tsx').then(
+        (value) => value,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toContain('stand-in rev-parse failure');
+      expect(message).not.toContain('git cannot read');
+    }
+  });
+});
