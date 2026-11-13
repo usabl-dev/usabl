@@ -581,12 +581,13 @@ function braceAlternatives(pattern: string): string[] | null {
   return alternatives;
 }
 
-// A pattern that starts with /, as the pattern below each folder it is read under: the / is taken
-// off and the rest normalized. A leading .. is dropped too. Under a folder F, ../x names x under
+// A pattern that starts with /, as the pattern below each folder it is read under: every leading /
+// is taken off, since Vite joins the rest to its root and so reads //tests as /tests, and the rest
+// is normalized. A leading .. is dropped too. Under a folder F, ../x names x under
 // the folder above F, and that folder is also one the pattern is read under, so the pattern
 // without the .. covers every file the pattern with it covers.
 function belowEveryFolder(pattern: string): string {
-  let below = path.normalize(pattern.slice(1));
+  let below = path.normalize(pattern.replace(/^\/+/u, ''));
   while (below === '..' || below.startsWith('../')) below = below.slice(3);
   return below === '' || below === '.' ? '**' : below;
 }

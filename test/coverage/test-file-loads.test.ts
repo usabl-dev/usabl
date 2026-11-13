@@ -239,6 +239,16 @@ describe('a glob pattern that starts with /, read under every folder', () => {
     expectExcluded(await coverageOf("const all = import.meta.glob('/../mytests/*.tsx');", { 'package.json': PACKAGE_JSON }));
   });
 
+  it.each(['//tests/*.tsx', '///tests/*.tsx', '//src/tests/*.tsx'])('reads %s like a pattern with one leading /', async (pattern) => {
+    expectGap(await coverageOf(`const all = import.meta.glob('${pattern}');`, { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('stays idle for a test helper that a pattern with more than one leading / does not cover', async () => {
+    const helper = 'src/tests/helper.ts';
+    const tree = { 'package.json': PACKAGE_JSON, [helper]: 'export const helper = 1;\n', 'vite.config.ts': PLAIN };
+    expectExcluded(await coverageOf("const pages = import.meta.glob('//src/pages/**/*.tsx');", tree, helper), helper);
+  });
+
   it('stays idle for a test helper the pattern does not cover, whatever the config holds', async () => {
     const helper = 'src/tests/helper.ts';
     const fileRoutes = "const pages = import.meta.glob('/src/pages/**/*.tsx');";
