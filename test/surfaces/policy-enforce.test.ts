@@ -7,6 +7,7 @@ import {
   enforceAccessibility,
   enforcePolicy,
   GITHUB_REVIEWS_PAGE_SIZE,
+  isAskableLogin,
   parseGithubReviews,
   parsePullRequestEvent,
   parseResultJson,
@@ -332,13 +333,13 @@ describe('enforcePolicy', () => {
       expect(out.message.split('the approval from @alice does not count')).toHaveLength(2);
     });
 
-    it('asks nothing for a code owner whose login is not a GitHub login, and does not count it', async () => {
+    it('asks nothing for a code owner whose login form usabl does not read, and does not count it', async () => {
       const asked: string[] = [];
       const out = await enforcePolicy(
         policyResult,
         deps({
-          gitOver: { codeowners: '.usabl-evidence.json @bad_login\n' },
-          listReviews: async () => [{ userLogin: 'bad_login', state: 'APPROVED', commitId: 'abc' }],
+          gitOver: { codeowners: '.usabl-evidence.json @bad.login\n' },
+          listReviews: async () => [{ userLogin: 'bad.login', state: 'APPROVED', commitId: 'abc' }],
           readPermission: async (login) => {
             asked.push(login);
             return { permission: 'write' };
@@ -347,7 +348,33 @@ describe('enforcePolicy', () => {
       );
       expect(out.exitCode).toBe(2);
       expect(asked).toEqual([]);
-      expect(out.message).toContain('the approval from @bad_login does not count, because bad_login is not a GitHub login');
+      expect(out.message).toContain('the approval from @bad.login does not count, because usabl does not read this login form');
+    });
+
+    it('counts an approval from a managed user login, which holds an underscore', async () => {
+      const asked: string[] = [];
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @mona_acme\n' },
+          listReviews: async () => [{ userLogin: 'mona_acme', state: 'APPROVED', commitId: 'abc' }],
+          readPermission: async (login) => {
+            asked.push(login);
+            return { permission: 'write' };
+          },
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+      expect(asked).toEqual(['mona_acme']);
+    });
+
+    it('asks about a login only in a form GitHub uses', () => {
+      for (const login of ['mona', 'mona-lisa', 'mona_acme', 'm0n4', 'A1']) {
+        expect(isAskableLogin(login), login).toBe(true);
+      }
+      for (const login of ['a/b', 'a.b', 'a b', '', '_mona', '-mona', 'a'.repeat(101)]) {
+        expect(isAskableLogin(login), login).toBe(false);
+      }
     });
 
     it('passes when another code owner with write permission approved the head', async () => {

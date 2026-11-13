@@ -228,7 +228,7 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
     );
   }
   for (const [owner, permission] of [...notCounted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    reasons.push(`the approval from @${owner} does not count, because ${permissionText(owner, permission)}`);
+    reasons.push(`the approval from @${owner} does not count, because ${permissionText(permission)}`);
   }
   if (reasons.length > 0) {
     return { exitCode: 2, message: reasons.join('; ') };
@@ -387,8 +387,15 @@ function headApprovers(
 const PERMISSIONS = ['admin', 'write', 'read', 'none'] as const;
 type PermissionRead = (typeof PERMISSIONS)[number] | 'unread' | 'not-a-login';
 
-// GitHub's login form: letters, digits, and single hyphens inside, at most 39 characters.
-const GITHUB_LOGIN = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i;
+// The login forms usabl asks GitHub about: letters, digits, hyphens, and underscores, starting with
+// a letter or a digit. A managed user login has the form handle_shortcode. The bound keeps the URL
+// short; the login is also encoded into it.
+const GITHUB_LOGIN = /^[a-z0-9][a-z0-9_-]{0,99}$/i;
+
+/** Whether usabl asks GitHub for the permission of a login in this form. */
+export function isAskableLogin(login: string): boolean {
+  return GITHUB_LOGIN.test(login);
+}
 
 function countsAsWrite(permission: PermissionRead): boolean {
   return permission === 'admin' || permission === 'write';
@@ -400,7 +407,7 @@ function permissionReader(read: PolicyEnforceDeps['readPermission']): (login: st
   return (login) => {
     let found = cache.get(login);
     if (found === undefined) {
-      found = GITHUB_LOGIN.test(login) ? readOnePermission(read, login) : Promise.resolve('not-a-login');
+      found = isAskableLogin(login) ? readOnePermission(read, login) : Promise.resolve('not-a-login');
       cache.set(login, found);
     }
     return found;
@@ -417,9 +424,9 @@ async function readOnePermission(read: PolicyEnforceDeps['readPermission'], logi
   }
 }
 
-function permissionText(owner: string, permission: PermissionRead): string {
+function permissionText(permission: PermissionRead): string {
   if (permission === 'not-a-login') {
-    return `${owner} is not a GitHub login`;
+    return 'usabl does not read this login form';
   }
   if (permission === 'read' || permission === 'none') {
     return `GitHub reports that user's permission on this repository as ${permission}, and an approval counts only with write or admin`;
