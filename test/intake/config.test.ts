@@ -12,6 +12,7 @@ import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../..
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
+import { readGuardedEntry } from '../../src/trust/guard.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -618,6 +619,29 @@ describe('parseUsablConfig glob syntax', () => {
       }
       expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
       expect(message, entry).toMatch(reason);
+    }
+  });
+
+  it('refuses a .. after a segment with a stray }, which the guard counts as a pattern character', () => {
+    // The guard reads a .. after a pattern segment as the whole tree. It counts } as a pattern
+    // character, so config load counts it too, and a new config never holds such an entry.
+    for (const entry of ['a}/../x.json', 'policy/x}/../rule1.json']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toMatch(/\.\. after a wildcard/);
+    }
+  });
+
+  it('refuses every guardedPaths entry the guard reads wide', () => {
+    const readWide = ['/src/gate/', '../outside', 'policy/*/../x.json', 'policy/rule{1..3}.json', 'a}/../x.json'];
+    for (const entry of readWide) {
+      expect(readGuardedEntry(entry).some((reading) => reading.readWide !== null), entry).toBe(true);
+      expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).toThrow(/guardedPaths/);
     }
   });
 

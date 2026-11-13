@@ -98,6 +98,14 @@ function unmatchableForm(path: string): string | null {
 // A segment the matcher reads as a pattern, or one it cannot evaluate.
 const PATTERN_SEGMENT = /[*{}[\]()?\\]/;
 
+/**
+ * Whether the guard reads a segment as a pattern. Config load uses this same test, so it refuses
+ * every `..` the guard would read as following a wildcard.
+ */
+export function isPatternSegment(segment: string): boolean {
+  return PATTERN_SEGMENT.test(segment);
+}
+
 // The literal folder above the first segment that is a pattern. The empty string is the whole tree.
 function literalFolder(segments: string[]): string {
   const first = segments.findIndex((segment) => PATTERN_SEGMENT.test(segment));

@@ -18,6 +18,7 @@ import { configError } from './config-error.js';
 import { braceRangeIn, expandBraces, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
+import { isPatternSegment } from '../trust/guard.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -154,7 +155,7 @@ function checkGuardedPathForm(entry: string): void {
         continue;
       }
       depth++;
-      afterWildcard ||= segment.braced || /[*{]/.test(segment.text);
+      afterWildcard ||= segment.braced || isPatternSegment(segment.text);
     }
   }
 }
