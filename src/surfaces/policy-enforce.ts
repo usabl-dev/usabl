@@ -14,6 +14,9 @@ export interface PolicyReview {
   userLogin: string;
   state: string;
   commitId: string;
+  // The reviewer's association with the repository, as GitHub reports it with the review
+  // (`author_association`), or null when the review carries none.
+  authorAssociation: string | null;
 }
 
 export interface PolicyPr {
@@ -107,8 +110,11 @@ export function parseGithubReviews(body: unknown): PolicyReview[] {
     const login = isRecord(user) ? user['login'] : undefined;
     const state = entry['state'];
     const commitId = entry['commit_id'];
+    const association = entry['author_association'];
     if (typeof login === 'string' && typeof state === 'string' && typeof commitId === 'string') {
-      reviews.push({ userLogin: login, state, commitId });
+      // A review with no association is kept, so its CHANGES_REQUESTED still retracts. Its approval
+      // never counts.
+      reviews.push({ userLogin: login, state, commitId, authorAssociation: typeof association === 'string' ? association : null });
     }
   }
   return reviews;
@@ -198,9 +204,13 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
   // with no owner, a team or email owner, or an unknown last match) is a limit, and it reads as
   // one. Both refuse, so an unsatisfiable gate cannot pass for a busy one.
   const unapproved: string[] = [];
+  const notCounted = new Map<string, string | null>();
   for (const [path, owners] of limits.userOwners) {
     if (!ownerApprovedHead(owners, latest, author, deps.pr.headSha)) {
       unapproved.push(path);
+      for (const [owner, association] of approvalsWithoutAccess(owners, latest, author, deps.pr.headSha)) {
+        notCounted.set(owner, association);
+      }
     }
   }
 
@@ -209,6 +219,9 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
     reasons.push(
       `approval required: no CODEOWNERS user other than the PR author approved this head for ${unapproved.join(', ')}`,
     );
+  }
+  for (const [owner, association] of [...notCounted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    reasons.push(`the approval from @${owner} does not count, because ${associationText(association)}`);
   }
   if (reasons.length > 0) {
     return { exitCode: 2, message: reasons.join('; ') };
@@ -339,6 +352,27 @@ export function readCodeownersLimits(raw: string, paths: readonly string[]): Cod
   return { ok: true, reasons, userOwners };
 }
 
+/**
+ * The associations whose approval counts. On a public repository anyone can submit an approving
+ * review, and GitHub counts a code owner's review only from a reviewer with access. A login in
+ * CODEOWNERS that lost its access, or a name someone else registered, must not pass this check.
+ */
+const COUNTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+// The latest review by an owner other than the author, when it approves this head.
+function headApproval(
+  owner: string,
+  latest: Map<string, PolicyReview>,
+  author: string,
+  headSha: string,
+): PolicyReview | null {
+  if (owner === author) {
+    return null;
+  }
+  const review = latest.get(owner);
+  return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha ? review : null;
+}
+
 function ownerApprovedHead(
   owners: Set<string>,
   latest: Map<string, PolicyReview>,
@@ -346,12 +380,38 @@ function ownerApprovedHead(
   headSha: string,
 ): boolean {
   return [...owners].some((owner) => {
-    if (owner === author) {
-      return false;
-    }
-    const review = latest.get(owner);
-    return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha;
+    const review = headApproval(owner, latest, author, headSha);
+    return review !== null && review.authorAssociation !== null && COUNTED_ASSOCIATIONS.has(review.authorAssociation);
   });
+}
+
+// Each owner whose approval of this head did not count because of the association, with it.
+function approvalsWithoutAccess(
+  owners: Set<string>,
+  latest: Map<string, PolicyReview>,
+  author: string,
+  headSha: string,
+): Array<[string, string | null]> {
+  const found: Array<[string, string | null]> = [];
+  for (const owner of owners) {
+    const review = headApproval(owner, latest, author, headSha);
+    if (review !== null) {
+      found.push([owner, review.authorAssociation]);
+    }
+  }
+  return found;
+}
+
+// The association comes from the GitHub API. Only a value in GitHub's own form is printed.
+function associationText(association: string | null): string {
+  const counted = 'an owner, member, or collaborator of this repository';
+  if (association === null) {
+    return `GitHub did not say whether the reviewer is ${counted}`;
+  }
+  if (!/^[A-Z_]{1,40}$/.test(association)) {
+    return `GitHub lists the reviewer with an association usabl does not know, not as ${counted}`;
+  }
+  return `GitHub lists the reviewer as ${association}, not as ${counted}`;
 }
 
 function latestDecisiveReviewByUser(reviews: PolicyReview[]): Map<string, PolicyReview> {

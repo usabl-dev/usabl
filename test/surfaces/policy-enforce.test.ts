@@ -182,7 +182,7 @@ describe('enforcePolicy', () => {
     const out = await enforcePolicy(
       policyResult,
       deps({
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(0);
@@ -193,7 +193,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         pr: { authorLogin: 'alice', headSha: 'abc' },
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -203,7 +203,7 @@ describe('enforcePolicy', () => {
     const out = await enforcePolicy(
       policyResult,
       deps({
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'old' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'old', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -214,8 +214,8 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         listReviews: async () => [
-          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
-          { userLogin: 'alice', state: 'COMMENTED', commitId: 'abc' },
+          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+          { userLogin: 'alice', state: 'COMMENTED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
         ],
       }),
     );
@@ -227,12 +227,68 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         listReviews: async () => [
-          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
-          { userLogin: 'alice', state: 'CHANGES_REQUESTED', commitId: 'abc' },
+          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+          { userLogin: 'alice', state: 'CHANGES_REQUESTED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
         ],
       }),
     );
     expect(out.exitCode).toBe(2);
+  });
+
+  // On a public repository anyone can submit an approving review. A login in CODEOWNERS that lost
+  // its access, or a name someone else registered, would otherwise pass this check. So an approval
+  // counts only from a reviewer GitHub lists as an owner, a member, or a collaborator.
+  describe('the reviewer association', () => {
+    const approvedBy =
+      (authorAssociation: string | null) =>
+      async (): Promise<PolicyReview[]> => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation }];
+
+    for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+      it(`counts an approval from a CODEOWNERS user GitHub lists as ${association}`, async () => {
+        const out = await enforcePolicy(policyResult, deps({ listReviews: approvedBy(association) }));
+        expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+      });
+    }
+
+    for (const association of ['CONTRIBUTOR', 'NONE', 'FIRST_TIME_CONTRIBUTOR']) {
+      it(`does not count an approval from a CODEOWNERS user GitHub lists as ${association}, and says why`, async () => {
+        const out = await enforcePolicy(policyResult, deps({ listReviews: approvedBy(association) }));
+        expect(out.exitCode).toBe(2);
+        expect(out.message).toContain('approved this head for .usabl-evidence.json');
+        expect(out.message).toContain(
+          `the approval from @alice does not count, because GitHub lists the reviewer as ${association}, not as an owner, member, or collaborator of this repository`,
+        );
+      });
+    }
+
+    it('does not count an approval that names no association, and says why', async () => {
+      const out = await enforcePolicy(policyResult, deps({ listReviews: approvedBy(null) }));
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain(
+        'the approval from @alice does not count, because GitHub did not say whether the reviewer is an owner, member, or collaborator of this repository',
+      );
+    });
+
+    it('does not print an association value it does not know', async () => {
+      const out = await enforcePolicy(policyResult, deps({ listReviews: approvedBy('owner\u001b[2J') }));
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain('the approval from @alice does not count');
+      expect(out.message).not.toContain('\u001b');
+    });
+
+    it('passes when another owner with access approved the head', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice @bob\n' },
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'CONTRIBUTOR' },
+            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+          ],
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
   });
 
   it('uses the last matching CODEOWNERS rule for a path', async () => {
@@ -241,14 +297,14 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver,
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     const bobApproved = await enforcePolicy(
       policyResult,
       deps({
         gitOver,
-        listReviews: async () => [{ userLogin: 'bob', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'bob', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(aliceOnly.exitCode).toBe(2);
@@ -265,7 +321,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver,
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     const both = await enforcePolicy(
@@ -273,8 +329,8 @@ describe('enforcePolicy', () => {
       deps({
         gitOver,
         listReviews: async () => [
-          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
-          { userLogin: 'bob', state: 'APPROVED', commitId: 'abc' },
+          { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+          { userLogin: 'bob', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
         ],
       }),
     );
@@ -306,7 +362,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver: { codeowners: null },
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -318,7 +374,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver: { codeowners: '.usabl-evidence.json @usabl-dev/owners\n' },
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -330,7 +386,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver: { codeowners: 'usabl.config.json @bob\n' },
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -356,7 +412,7 @@ describe('enforcePolicy', () => {
 
   describe('code owners by the last matching rule', () => {
     const aliceApproved = async (): Promise<PolicyReview[]> => [
-      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
     ];
 
     it('passes when a team line matches no diverged guarded path', async () => {
@@ -487,8 +543,8 @@ describe('enforcePolicy', () => {
         deps({
           gitOver: gateChange('/src/gate/ @alice\ngate @bob\n'),
           listReviews: async () => [
-            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
-            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
           ],
         }),
       );
@@ -590,7 +646,7 @@ describe('enforcePolicy', () => {
       policyResult,
       deps({
         gitOver: { codeowners: 'src/**/*.ts @alice\n' },
-        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -646,7 +702,7 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       await repoDeps({
         dirty: 'src/gate/index.ts',
         author: 'outside-contributor',
-        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: head }],
+        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: head, authorAssociation: 'OWNER' }],
       }),
     );
     expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
@@ -658,7 +714,7 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       await repoDeps({
         dirty: 'src/trust/guard.ts',
         author: 'outside-contributor',
-        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: 'stale' }],
+        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: 'stale', authorAssociation: 'OWNER' }],
       }),
     );
     expect(out.exitCode).toBe(2);
@@ -690,7 +746,7 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
           .map((owner) => owner.slice(1)),
       ),
     ];
-    const reviews = logins.map((login) => ({ userLogin: login, state: 'APPROVED', commitId: head }));
+    const reviews = logins.map((login) => ({ userLogin: login, state: 'APPROVED', commitId: head, authorAssociation: 'COLLABORATOR' }));
 
     const unclearable: { path: string; message: string }[] = [];
     for (const entry of guarded) {
@@ -745,11 +801,11 @@ describe('collectReviews', () => {
         state: 'COMMENTED',
         commit_id: 'abc',
       })),
-      [{ user: { login: 'alice' }, state: 'APPROVED', commit_id: 'abc' }],
+      [{ user: { login: 'alice' }, state: 'APPROVED', commit_id: 'abc', author_association: 'COLLABORATOR' }],
     ];
     const reviews = await collectReviews(async (page) => pages[page - 1]);
     expect(reviews).toHaveLength(GITHUB_REVIEWS_PAGE_SIZE + 1);
-    expect(reviews.at(-1)).toEqual({ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' });
+    expect(reviews.at(-1)).toEqual({ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' });
   });
 
   it('fails closed when every page is full through the cap', async () => {
@@ -781,11 +837,25 @@ describe('parseGithubReviews', () => {
   it('keeps reviews with login, state, and commit_id', () => {
     expect(
       parseGithubReviews([
-        { user: { login: 'alice' }, state: 'APPROVED', commit_id: 'abc' },
+        { user: { login: 'alice' }, state: 'APPROVED', commit_id: 'abc', author_association: 'COLLABORATOR' },
         { user: { login: 'bob' }, state: 'COMMENTED' },
         { state: 'APPROVED', commit_id: 'abc' },
       ]),
-    ).toEqual([{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }]);
+    ).toEqual([{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' }]);
+  });
+
+  it('reads the reviewer association, and null when GitHub sends none', () => {
+    expect(
+      parseGithubReviews([
+        { user: { login: 'alice' }, state: 'APPROVED', commit_id: 'abc', author_association: 'COLLABORATOR' },
+        { user: { login: 'bob' }, state: 'APPROVED', commit_id: 'abc' },
+        { user: { login: 'carol' }, state: 'APPROVED', commit_id: 'abc', author_association: 7 },
+      ]),
+    ).toEqual([
+      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc', authorAssociation: 'COLLABORATOR' },
+      { userLogin: 'bob', state: 'APPROVED', commitId: 'abc', authorAssociation: null },
+      { userLogin: 'carol', state: 'APPROVED', commitId: 'abc', authorAssociation: null },
+    ]);
   });
 
   it('returns an empty list when the body is not an array', () => {

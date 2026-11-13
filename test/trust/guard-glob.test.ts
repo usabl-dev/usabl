@@ -470,7 +470,7 @@ async function policyCheckWith(
     trustedRef: 'main',
     pr: { authorLogin: 'author', headSha },
     git: makeGitReader({ cwd: root }),
-    listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha })),
+    listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha, authorAssociation: 'COLLABORATOR' })),
   });
 }
 

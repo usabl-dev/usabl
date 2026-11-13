@@ -56,7 +56,14 @@ import { gateBranchTarget, verifyBranchRule, type GhReader } from './install/bra
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
-import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
+import {
+  collectReviews,
+  enforceAccessibility,
+  enforcePolicy,
+  parsePullRequestEvent,
+  parseResultText,
+  type PolicyReview,
+} from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
@@ -160,7 +167,7 @@ function readEventPayload(): unknown {
   }
 }
 
-async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: string; state: string; commitId: string }>> {
+async function listPullReviews(pullNumber: number): Promise<PolicyReview[]> {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
   if (token === undefined || token.length === 0 || repo === undefined || repo.length === 0) {
