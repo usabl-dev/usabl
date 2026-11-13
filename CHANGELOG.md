@@ -331,6 +331,15 @@
 
 ### Fixed
 
+- A trusted commit that is not in the repository is an error, never an absent file. In a shallow
+  clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
+  read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
+  that the ref names a commit before it reports a file as absent, and otherwise says it cannot
+  read the ref and how to fetch it. `usabl debt --trusted-ref <commit>` exited 0 and said no
+  accessibility debt is accepted; it now exits 4 and names the ref. `serve-build` said the config
+  file was missing; it now names the ref. No gate path gave a false green before, because a later
+  git call at the same ref failed. `git show` also ends its options before the ref, so a ref that
+  starts with a dash is never read as an option.
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
   The line now counts changed paths only and adds "the requirements could not be loaded" when the
