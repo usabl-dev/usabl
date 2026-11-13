@@ -498,13 +498,48 @@ export interface WorkspacePackage {
   // ./ and holds no *. Node.js picks an exact key before any pattern key, so such a subpath loads
   // that one path. Empty when exports is not an object or holds no such entry.
   exactExports: Readonly<Record<string, string>>;
+  // Every subpath key of an `exports` object (one that starts with ./), sorted.
+  exportKeys: readonly string[];
+  // The subpath keys under which some string target, at any depth of a conditions object or an
+  // array, leaves the package folder once normalized, such as ./../other/x. A bundler may follow
+  // such a target into another package, so a subpath that matches one of these keys may load any
+  // file. Sorted.
+  leavingExportKeys: readonly string[];
+}
+
+interface ExportsReading {
+  hasExports: boolean;
+  exactExports: Record<string, string>;
+  exportKeys: string[];
+  leavingExportKeys: string[];
+}
+
+// Whether a string target of an exports entry leaves the package folder once normalized.
+function targetLeavesPackage(target: string): boolean {
+  const normalized = path.normalize(target);
+  return normalized === '..' || normalized.startsWith('../') || normalized.startsWith('/');
+}
+
+// Whether any string under an exports value, at any depth, leaves the package folder. The walk uses
+// its own list, so a deeply nested value cannot overflow the call stack.
+function valueLeavesPackage(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === 'string') {
+      if (targetLeavesPackage(current)) return true;
+    } else if (typeof current === 'object' && current !== null) {
+      pending.push(...Object.values(current as Record<string, unknown>));
+    }
+  }
+  return false;
 }
 
 // Whether a package.json has an exports field, and the entries of it usabl reads exactly. One that
 // cannot be read or parsed counts as having one with no such entry, so a subpath into it is never
 // followed by path.
-async function readExportsField(fs: FsGlob, dir: string): Promise<{ hasExports: boolean; exactExports: Record<string, string> }> {
-  const unread = { hasExports: true, exactExports: {} };
+async function readExportsField(fs: FsGlob, dir: string): Promise<ExportsReading> {
+  const unread: ExportsReading = { hasExports: true, exactExports: {}, exportKeys: [], leavingExportKeys: [] };
   const text = await fs.readFile(dir === '' ? 'package.json' : `${dir}/package.json`);
   if (text === null) return unread;
   let parsed: unknown;
@@ -514,15 +549,20 @@ async function readExportsField(fs: FsGlob, dir: string): Promise<{ hasExports: 
     return unread;
   }
   if (typeof parsed !== 'object' || parsed === null) return unread;
-  if (!('exports' in parsed)) return { hasExports: false, exactExports: {} };
+  if (!('exports' in parsed)) return { ...unread, hasExports: false };
   const exports: unknown = (parsed as Record<string, unknown>)['exports'];
   if (typeof exports !== 'object' || exports === null || Array.isArray(exports)) return unread;
-  const exactExports: Record<string, string> = {};
+  const reading: ExportsReading = { ...unread, exactExports: {} };
   for (const [key, value] of Object.entries(exports as Record<string, unknown>)) {
-    if (!key.startsWith('./') || key.includes('*') || typeof value !== 'string' || !value.startsWith('./') || value.includes('*')) continue;
-    exactExports[key] = value;
+    if (!key.startsWith('./')) continue;
+    reading.exportKeys.push(key);
+    if (valueLeavesPackage(value)) reading.leavingExportKeys.push(key);
+    if (key.includes('*') || typeof value !== 'string' || !value.startsWith('./') || value.includes('*')) continue;
+    reading.exactExports[key] = value;
   }
-  return { hasExports: true, exactExports };
+  reading.exportKeys.sort();
+  reading.leavingExportKeys.sort();
+  return reading;
 }
 
 /**

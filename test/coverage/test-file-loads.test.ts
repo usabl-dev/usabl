@@ -515,6 +515,33 @@ describe('a test file in a workspace package the app depends on', () => {
       expectWorkspaceGap(await coverageOf(css, tree, helpers));
     });
 
+    describe('a target that leaves the package', () => {
+      const other = 'packages/other/src/tests/helpers.tsx';
+      const twoPackages = (exports: Record<string, unknown>): Record<string, string> => ({
+        ...withExports(exports),
+        'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { '@acme/ui': '*', '@acme/other': '*', react: '^18.3.0' } }),
+        'packages/other/package.json': JSON.stringify({ name: '@acme/other', main: 'src/index.ts' }),
+        'packages/other/src/index.ts': 'export const o = 1;\n',
+        [other]: 'export const helper = 1;\n',
+      });
+      const screen = "import x from '@acme/ui/testing';";
+
+      it.each([
+        ['a plain string', { '.': './src/index.ts', './testing': './../other/src/tests/helpers.tsx' }],
+        ['a conditions object', { '.': './src/index.ts', './testing': { import: './../other/src/tests/helpers.tsx' } }],
+        ['an array inside a conditions object', { '.': './src/index.ts', './testing': { default: ['./src/Button.tsx', './../other/src/tests/helpers.tsx'] } }],
+        ['a pattern key', { '.': './src/index.ts', './*': './../other/src/tests/*.tsx' }],
+      ])('may load any file when %s leaves it', async (_, exports) => {
+        expectWorkspaceGap(await coverageOf(screen, twoPackages(exports), other), other);
+      });
+
+      it('keeps the reading of the package when every target of a conditions object stays inside it', async () => {
+        const tree = twoPackages({ '.': './src/index.ts', './testing': { import: './src/tests/helpers.ts', default: './src/Button.tsx' } });
+        expectWorkspaceGap(await coverageOf(screen, tree, helpers));
+        expectExcluded(await coverageOf(screen, tree, other), other);
+      });
+    });
+
     it('makes the test file it names a UI file with a gap, and leaves other test files excluded', async () => {
       const tree = withExports({ '.': './src/index.ts', './testing': './src/tests/helpers.ts' });
       const screen = "import { helper } from '@acme/ui/testing';";

@@ -74,7 +74,10 @@ export function describeLoad(entry: UnresolvableImport): string | null {
   }
   if (entry.kind === 'package-subpath') {
     if (entry.packageDir === null) {
-      return `${entry.importer} imports '${entry.specifier}', a path that leaves the folder of the workspace package it names, so it may load any file`;
+      return (
+        `${entry.importer} imports '${entry.specifier}', a path that leaves the folder of the workspace package it names, ` +
+        'or that an exports entry of that package maps to a target outside its folder, so it may load any file'
+      );
     }
     return (
       `${entry.importer} imports '${entry.specifier}', a path inside the workspace package in ${entry.packageDir} that usabl ` +

@@ -149,6 +149,22 @@ interface WorkspacePackageView {
   dir: string;
   hasExports: boolean;
   exactExports?: Readonly<Record<string, string>>;
+  exportKeys?: readonly string[];
+  leavingExportKeys?: readonly string[];
+}
+
+// The exports keys a subpath key such as ./testing matches: the key itself when exports has it, as
+// Node.js picks an exact key first, and otherwise every pattern key with one * whose text before
+// and after the * the subpath starts and ends with.
+function matchedExportKeys(keys: readonly string[], key: string): string[] {
+  if (keys.includes(key)) return [key];
+  return keys.filter((candidate) => {
+    const star = candidate.indexOf('*');
+    if (star === -1 || candidate.indexOf('*', star + 1) !== -1) return false;
+    const before = candidate.slice(0, star);
+    const after = candidate.slice(star + 1);
+    return key.length >= before.length + after.length && key.startsWith(before) && key.endsWith(after);
+  });
 }
 
 export interface ImportGraphView {
@@ -907,7 +923,7 @@ function readOnce(fs: FsGlob): FsGlob {
 function workspaceSubpath(
   specifier: string,
   packages: readonly WorkspacePackageView[],
-): { dir: string; subpath: string; hasExports: boolean; exportTarget: string | null } | null {
+): { dir: string; subpath: string; hasExports: boolean; exportTarget: string | null; exportLeaves: boolean } | null {
   const name = packageNameOf(specifier);
   const owner = packages.find((candidate) => candidate.name === name);
   if (owner === undefined || specifier.length <= name.length + 1) return null;
@@ -916,7 +932,9 @@ function workspaceSubpath(
   const key = `./${subpath}`;
   const exact = owner.exactExports ?? {};
   const exportTarget = owner.hasExports && Object.hasOwn(exact, key) ? (exact[key] ?? null) : null;
-  return { dir: owner.dir, subpath, hasExports: owner.hasExports, exportTarget };
+  const leaving = owner.leavingExportKeys ?? [];
+  const exportLeaves = owner.hasExports && matchedExportKeys(owner.exportKeys ?? [], key).some((matched) => leaving.includes(matched));
+  return { dir: owner.dir, subpath, hasExports: owner.hasExports, exportTarget, exportLeaves };
 }
 
 // The files a bare import resolves to under each baseUrl folder, sorted. Empty when none does,
@@ -984,6 +1002,12 @@ export async function buildImportGraph(
         // one, the resolver reads it in place of the folders, and a path that names no file there
         // may go through it too, so either may load any file of the package.
         // A path that leaves the package folder is not narrowed to it, so it may load any file.
+        // An exports entry with a target that leaves the package folder may lead a bundler into
+        // another package, so the import may load any file.
+        if (inPackage.exportLeaves) {
+          pushUniqueUnresolvable(unresolvable, { importer: file, specifier, kind: 'package-subpath', packageDir: null });
+          continue;
+        }
         // An exports entry usabl reads exactly is followed to the one file it names, when that file
         // is inside the package folder.
         if (inPackage.exportTarget !== null) {
