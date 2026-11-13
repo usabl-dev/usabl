@@ -253,6 +253,15 @@ describe('parseServeBuildArgs', () => {
       expect(parsed.message).toContain(mention);
     }
   });
+
+  // The main CLI refuses a --trusted-ref value that starts with any dash. serve-build refused only
+  // two, so a value such as -x reached git as the ref.
+  it.each([['-x'], ['-Ofile'], ['--output=written']])('refuses the trusted ref %s, as the CLI does', (ref) => {
+    expect(parseServeBuildArgs(['--dir', 'dist', '--trusted-ref', ref])).toEqual({
+      ok: false,
+      message: '--trusted-ref requires a value, such as --trusted-ref origin/main',
+    });
+  });
 });
 
 describe('runServeBuild', () => {
