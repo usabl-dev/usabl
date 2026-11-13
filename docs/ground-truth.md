@@ -3160,8 +3160,14 @@ an email, and on a `#` inside a pattern or owner (one that does not follow white
 GitHub may read such a line another way, so the last match is unknown. A `#` at the start of a
 line or after whitespace starts a comment. A team or email line that is not the last match for a
 changed guarded path does not block. Every other path needs an approval of the current head from
-one of its users who is not the author. `usabl doctor` reports the same limits in the same words
-under policy scope.
+one of its users who is not the author. The approval counts only when GitHub lists the reviewer
+as `OWNER`, `MEMBER`, or `COLLABORATOR` in the review's `author_association`. On a public
+repository anyone can submit an approving review, so a login in `CODEOWNERS` that lost its
+access, or a name someone else registered, would otherwise pass. An approval from any other
+association, or from a review that names none, does not count, and the output names the reviewer
+and the association. A `MEMBER` of the organization may still lack write access to the repository;
+the branch rule that requires a code owner's review is the check that knows. `usabl doctor`
+reports the same limits in the same words under policy scope.
 
 For the forms GitHub's CODEOWNERS documentation shows, a pattern matches the way the
 documentation says, and a test holds every documented example usabl supports. A leading slash
@@ -3196,20 +3202,33 @@ unbalanced brace guards the literal folder above the first segment the matcher c
 `policy/rule{1..3}.json` guards `policy/`. An expansion with no such folder guards the whole tree:
 one that starts with `/`, one with a `..` that leaves the root, and one with a `..` anywhere after
 a wildcard, since a wildcard can stand for any number of folders and a later `..` can climb above
-any of them, so `policy/*/../../x.json` guards the whole tree. The same reading is used at the
-trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's approval,
-and the pull request that repairs the entry can merge with one. `usabl enforce policy` names each
+any of them, so `policy/*/../../x.json` guards the whole tree. A brace expansion that is empty or
+names the root, as in `{,}`, guards the whole tree too. An entry with more than 256 brace
+expansions is not expanded, because the local guard lists the working tree once for each
+expansion: at 256 a check stays well under one second, and at 65,536 it took about 31 seconds,
+long enough for a Stop hook to time out. Such an entry guards the literal folder above its first
+brace group, so `policy/` followed by nine `{a,b}` groups guards `policy/`. It guards the whole
+tree when there is no such folder, or when an expansion can join two dots into a `..` that climbs
+out of it. The count is taken before anything is expanded, so an entry of any size is read at
+once. The same reading is used at the trusted ref, at HEAD, and on the working tree, so a change
+there needs a code owner's approval, and the pull request that repairs the entry can merge with
+one. `usabl enforce policy` names each
 entry read this way, in every outcome, and says how to write it; `usabl doctor` does too. A local
 run has no field for that sentence, so its Result names only the changed files.
 
 Config load refuses every form the guard can only read wide, so a new config never holds one. It
 refuses the glob forms above in every glob list and says to list the alternatives of a range with
 commas. In `guardedPaths` it also refuses an entry that starts with `/` (and shows the same path
-without it), one with a `..` that leaves the root, one with a `..` after a wildcard, and one with a
-`.` or `..` segment inside a brace alternative, and says how to write each. Entries that loaded and
+without it), one with a `..` that leaves the root, one with a `..` after a wildcard or a brace
+group, one with a `.` or `..` segment inside a brace alternative, one with a brace alternative that
+leaves the path empty, and one with more than 256 brace expansions, and says how to write each. It
+reads a segment as a pattern with the guard's own test, so a `..` after a segment with any pattern
+character, a stray `}` included, is refused, as in `a}/../x.json`. Entries that loaded and
 worked before still load and read in canonical form: `./src/gate/`, `src/gate//`, `.`, and
-`a/../b` outside braces and before any wildcard. An older config, or a trusted ref's config, can
-hold a refused form, and the guard reads it wide as above. An empty entry is the whole tree.
+`a/../b` outside braces and before any wildcard. An entry with more than 256 brace expansions
+loaded before and no longer does; split it into several entries. An older config, or a trusted
+ref's config, can hold a refused form, and the guard reads it wide as above. An empty entry is the
+whole tree.
 
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no

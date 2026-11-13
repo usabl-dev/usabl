@@ -467,9 +467,26 @@
   refuses a `guardedPaths` entry with white space at either end, which named no file and guarded
   nothing, and shows it in quotes. It also refuses a `guardedPaths` entry that starts with `/`
   (and shows the same path without it), one with a `..` that leaves the root, one with a `..`
-  after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and says how to
-  write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before any wildcard still load. Gate
-  effect: a config with such an entry no longer loads.
+  after a wildcard or a brace group, and one with a `.` or `..` segment inside a brace
+  alternative, and says how to write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before
+  any wildcard still load. Gate effect: a config with such an entry no longer loads.
+
+- Config load reads a `guardedPaths` segment as a pattern with the guard's own test. It counted
+  only `*` and `{`, while the guard also counts `}`, so `a}/../x.json` loaded and the guard read it
+  as the whole tree. Config load also refuses an entry with a brace alternative that leaves the
+  path empty, such as `{,}` or `{,policy}`, which the guard reads as the whole tree. The guard now
+  names such an entry in `usabl enforce policy` and `usabl doctor`; before, it guarded the whole
+  tree and said nothing. Gate effect: a config with such an entry no longer loads, and the policy
+  check names the entry where it was silent.
+
+- An entry in `guardedPaths` can name at most 256 paths through its brace groups. The local guard
+  lists the working tree once for each expansion, so an entry with 16 brace groups (65,536
+  expansions) took about 31 seconds and a larger one could make a Stop hook time out or crash.
+  Config load refuses an entry past the cap and says so. The guard reads such an entry from an
+  older or trusted ref's config as the literal folder above its first brace group, or as the whole
+  tree when an expansion could climb out of that folder or there is none, and names it. Both count
+  the expansions before they build any, so an entry of any size is read at once. Gate effect: a
+  config with such an entry no longer loads; at a trusted ref it guards more, never less.
 
 - The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
   expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed
@@ -1552,6 +1569,14 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- `usabl enforce policy` counts an approval only from a reviewer GitHub lists as `OWNER`,
+  `MEMBER`, or `COLLABORATOR` in the review's `author_association`. On a public repository anyone
+  can submit an approving review, so a login in `CODEOWNERS` that lost its access, or a name
+  someone else registered, passed the policy check. An approval from any other association, or
+  from a review that names none, does not count, and the output names the reviewer and says why.
+  A later request for changes still retracts an approval, whatever the association. Gate effect:
+  the policy check refuses where such an approval passed it.
 
 - Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
   `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`
