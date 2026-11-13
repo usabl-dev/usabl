@@ -94,6 +94,7 @@ async function policyCheckAt(root: string): Promise<{ exitCode: number; message:
     pr: { authorLogin: 'author', headSha },
     git: makeGitReader({ cwd: root }),
     listReviews: async () => [],
+    readPermission: async () => ({ permission: 'write' }),
   });
 }
 
@@ -470,7 +471,8 @@ async function policyCheckWith(
     trustedRef: 'main',
     pr: { authorLogin: 'author', headSha },
     git: makeGitReader({ cwd: root }),
-    listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha, authorAssociation: 'COLLABORATOR' })),
+    listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha })),
+    readPermission: async () => ({ permission: 'write' }),
   });
 }
 

@@ -14,9 +14,6 @@ export interface PolicyReview {
   userLogin: string;
   state: string;
   commitId: string;
-  // The reviewer's association with the repository, as GitHub reports it with the review
-  // (`author_association`), or null when the review carries none.
-  authorAssociation: string | null;
 }
 
 export interface PolicyPr {
@@ -34,6 +31,9 @@ export interface PolicyEnforceDeps {
   pr: PolicyPr;
   git: PolicyGit;
   listReviews: () => Promise<PolicyReview[]>;
+  // The body of GitHub's answer to GET /repos/{owner}/{repo}/collaborators/{login}/permission for
+  // one login. It throws when the read fails. The check reads only its `permission` field.
+  readPermission: (login: string) => Promise<unknown>;
 }
 
 export interface EnforceOutcome {
@@ -110,11 +110,8 @@ export function parseGithubReviews(body: unknown): PolicyReview[] {
     const login = isRecord(user) ? user['login'] : undefined;
     const state = entry['state'];
     const commitId = entry['commit_id'];
-    const association = entry['author_association'];
     if (typeof login === 'string' && typeof state === 'string' && typeof commitId === 'string') {
-      // A review with no association is kept, so its CHANGES_REQUESTED still retracts. Its approval
-      // never counts.
-      reviews.push({ userLogin: login, state, commitId, authorAssociation: typeof association === 'string' ? association : null });
+      reviews.push({ userLogin: login, state, commitId });
     }
   }
   return reviews;
@@ -204,12 +201,22 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
   // with no owner, a team or email owner, or an unknown last match) is a limit, and it reads as
   // one. Both refuse, so an unsatisfiable gate cannot pass for a busy one.
   const unapproved: string[] = [];
-  const notCounted = new Map<string, string | null>();
+  const notCounted = new Map<string, PermissionRead>();
+  const permissionOf = permissionReader(deps.readPermission);
   for (const [path, owners] of limits.userOwners) {
-    if (!ownerApprovedHead(owners, latest, author, deps.pr.headSha)) {
+    const approvers = headApprovers(owners, latest, author, deps.pr.headSha);
+    let approved = false;
+    for (const owner of approvers) {
+      if (countsAsWrite(await permissionOf(owner))) {
+        approved = true;
+        break;
+      }
+    }
+    if (!approved) {
       unapproved.push(path);
-      for (const [owner, association] of approvalsWithoutAccess(owners, latest, author, deps.pr.headSha)) {
-        notCounted.set(owner, association);
+      // Every approver of this path was read above, so these reads come from the cache.
+      for (const owner of approvers) {
+        notCounted.set(owner, await permissionOf(owner));
       }
     }
   }
@@ -220,8 +227,8 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
       `approval required: no CODEOWNERS user other than the PR author approved this head for ${unapproved.join(', ')}`,
     );
   }
-  for (const [owner, association] of [...notCounted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    reasons.push(`the approval from @${owner} does not count, because ${associationText(association)}`);
+  for (const [owner, permission] of [...notCounted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    reasons.push(`the approval from @${owner} does not count, because ${permissionText(owner, permission)}`);
   }
   if (reasons.length > 0) {
     return { exitCode: 2, message: reasons.join('; ') };
@@ -352,66 +359,72 @@ export function readCodeownersLimits(raw: string, paths: readonly string[]): Cod
   return { ok: true, reasons, userOwners };
 }
 
+// The owners other than the author whose latest decisive review approves this head, sorted.
+function headApprovers(
+  owners: Set<string>,
+  latest: Map<string, PolicyReview>,
+  author: string,
+  headSha: string,
+): string[] {
+  return [...owners]
+    .filter((owner) => {
+      if (owner === author) {
+        return false;
+      }
+      const review = latest.get(owner);
+      return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha;
+    })
+    .sort();
+}
+
 /**
- * The associations whose approval counts. On a public repository anyone can submit an approving
- * review, and GitHub counts a code owner's review only from a reviewer with access. A login in
- * CODEOWNERS that lost its access, or a name someone else registered, must not pass this check.
+ * On a public repository anyone can submit an approving review, and GitHub counts a code owner's
+ * review only from a person who can write to the repository. A login in CODEOWNERS that lost its
+ * access, or a name someone else registered, must not pass this check. So an approval counts only
+ * when GitHub reports the owner's permission on the repository as admin or write. A read that
+ * fails, or an answer outside GitHub's four values, never counts as write.
  */
-const COUNTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const PERMISSIONS = ['admin', 'write', 'read', 'none'] as const;
+type PermissionRead = (typeof PERMISSIONS)[number] | 'unread' | 'not-a-login';
 
-// The latest review by an owner other than the author, when it approves this head.
-function headApproval(
-  owner: string,
-  latest: Map<string, PolicyReview>,
-  author: string,
-  headSha: string,
-): PolicyReview | null {
-  if (owner === author) {
-    return null;
-  }
-  const review = latest.get(owner);
-  return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha ? review : null;
+// GitHub's login form: letters, digits, and single hyphens inside, at most 39 characters.
+const GITHUB_LOGIN = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i;
+
+function countsAsWrite(permission: PermissionRead): boolean {
+  return permission === 'admin' || permission === 'write';
 }
 
-function ownerApprovedHead(
-  owners: Set<string>,
-  latest: Map<string, PolicyReview>,
-  author: string,
-  headSha: string,
-): boolean {
-  return [...owners].some((owner) => {
-    const review = headApproval(owner, latest, author, headSha);
-    return review !== null && review.authorAssociation !== null && COUNTED_ASSOCIATIONS.has(review.authorAssociation);
-  });
-}
-
-// Each owner whose approval of this head did not count because of the association, with it.
-function approvalsWithoutAccess(
-  owners: Set<string>,
-  latest: Map<string, PolicyReview>,
-  author: string,
-  headSha: string,
-): Array<[string, string | null]> {
-  const found: Array<[string, string | null]> = [];
-  for (const owner of owners) {
-    const review = headApproval(owner, latest, author, headSha);
-    if (review !== null) {
-      found.push([owner, review.authorAssociation]);
+// Reads each login's permission at most once. A login that is not in GitHub's form is not asked.
+function permissionReader(read: PolicyEnforceDeps['readPermission']): (login: string) => Promise<PermissionRead> {
+  const cache = new Map<string, Promise<PermissionRead>>();
+  return (login) => {
+    let found = cache.get(login);
+    if (found === undefined) {
+      found = GITHUB_LOGIN.test(login) ? readOnePermission(read, login) : Promise.resolve('not-a-login');
+      cache.set(login, found);
     }
-  }
-  return found;
+    return found;
+  };
 }
 
-// The association comes from the GitHub API. Only a value in GitHub's own form is printed.
-function associationText(association: string | null): string {
-  const counted = 'an owner, member, or collaborator of this repository';
-  if (association === null) {
-    return `GitHub did not say whether the reviewer is ${counted}`;
+async function readOnePermission(read: PolicyEnforceDeps['readPermission'], login: string): Promise<PermissionRead> {
+  try {
+    const body = await read(login);
+    const permission = isRecord(body) ? body['permission'] : undefined;
+    return PERMISSIONS.find((known) => known === permission) ?? 'unread';
+  } catch {
+    return 'unread';
   }
-  if (!/^[A-Z_]{1,40}$/.test(association)) {
-    return `GitHub lists the reviewer with an association usabl does not know, not as ${counted}`;
+}
+
+function permissionText(owner: string, permission: PermissionRead): string {
+  if (permission === 'not-a-login') {
+    return `${owner} is not a GitHub login`;
   }
-  return `GitHub lists the reviewer as ${association}, not as ${counted}`;
+  if (permission === 'read' || permission === 'none') {
+    return `GitHub reports that user's permission on this repository as ${permission}, and an approval counts only with write or admin`;
+  }
+  return "usabl could not read that user's permission on this repository (the job's token needs read access to repository metadata)";
 }
 
 function latestDecisiveReviewByUser(reviews: PolicyReview[]): Map<string, PolicyReview> {
