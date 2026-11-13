@@ -7,6 +7,7 @@ import {
   enforceAccessibility,
   enforcePolicy,
   GITHUB_REVIEWS_PAGE_SIZE,
+  GithubAnswerError,
   isAskableLogin,
   parseGithubReviews,
   parsePullRequestEvent,
@@ -270,22 +271,29 @@ describe('enforcePolicy', () => {
       });
     }
 
-    const failures: Array<[string, () => Promise<unknown>]> = [
-      ['a network error', async () => Promise.reject(new Error('fetch failed'))],
-      ['a 403 answer', async () => Promise.reject(new Error('GitHub permission request failed (403)'))],
-      ['a 404 answer', async () => Promise.reject(new Error('GitHub permission request failed (404)'))],
-      ['a body that is not an object', async () => 'write'],
-      ['a body with no permission field', async () => ({ role_name: 'write' })],
-      ['a value outside the four', async () => ({ permission: 'maintain' })],
-      ['a value that is not a string', async () => ({ permission: 7 })],
+    // Each failure gets the reason a person can act on. None of them counts as write.
+    const notRead = "usabl could not read that user's permission on this repository";
+    const tokenHint = `${notRead} (the job's token needs read access to repository metadata)`;
+    const noUser = 'GitHub has no readable user by that login on this repository';
+    const failures: Array<[string, () => Promise<unknown>, string]> = [
+      ['a network error', async () => Promise.reject(new Error('fetch failed')), notRead],
+      ['a 401 answer', async () => Promise.reject(new GithubAnswerError(401)), tokenHint],
+      ['a 403 answer', async () => Promise.reject(new GithubAnswerError(403)), tokenHint],
+      ['a 404 answer', async () => Promise.reject(new GithubAnswerError(404)), noUser],
+      ['a 500 answer', async () => Promise.reject(new GithubAnswerError(500)), notRead],
+      ['a body that is not an object', async () => 'write', notRead],
+      ['a body with no permission field', async () => ({ role_name: 'write' }), notRead],
+      ['a value outside the four', async () => ({ permission: 'maintain' }), notRead],
+      ['a value that is not a string', async () => ({ permission: 7 }), notRead],
     ];
-    for (const [label, readPermission] of failures) {
-      it(`does not count an approval when the permission read fails with ${label}`, async () => {
+    for (const [label, readPermission, reason] of failures) {
+      it(`does not count an approval when the permission read fails with ${label}, and says why`, async () => {
         const out = await enforcePolicy(policyResult, deps({ listReviews: aliceApproves, readPermission }));
         expect(out.exitCode).toBe(2);
-        expect(out.message).toContain(
-          "the approval from @alice does not count, because usabl could not read that user's permission on this repository (the job's token needs read access to repository metadata)",
-        );
+        expect(out.message).toContain(`the approval from @alice does not count, because ${reason}`);
+        if (reason !== tokenHint) {
+          expect(out.message).not.toContain('token');
+        }
       });
     }
 

@@ -60,6 +60,7 @@ import {
   collectReviews,
   enforceAccessibility,
   enforcePolicy,
+  GithubAnswerError,
   parsePullRequestEvent,
   parseResultText,
   type PolicyReview,
@@ -211,7 +212,7 @@ async function readRepositoryPermission(login: string): Promise<unknown> {
     },
   });
   if (!response.ok) {
-    throw new Error(`GitHub permission request failed (${response.status})`);
+    throw new GithubAnswerError(response.status);
   }
   return response.json();
 }

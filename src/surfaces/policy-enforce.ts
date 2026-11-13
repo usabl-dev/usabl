@@ -32,8 +32,16 @@ export interface PolicyEnforceDeps {
   git: PolicyGit;
   listReviews: () => Promise<PolicyReview[]>;
   // The body of GitHub's answer to GET /repos/{owner}/{repo}/collaborators/{login}/permission for
-  // one login. It throws when the read fails. The check reads only its `permission` field.
+  // one login. It throws when the read fails, a GithubAnswerError when GitHub answered with an
+  // error status. The check reads only its `permission` field.
   readPermission: (login: string) => Promise<unknown>;
+}
+
+/** GitHub answered a request with an error status. Only the number is kept. */
+export class GithubAnswerError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub answered with status ${String(status)}`);
+  }
 }
 
 export interface EnforceOutcome {
@@ -385,7 +393,9 @@ function headApprovers(
  * fails, or an answer outside GitHub's four values, never counts as write.
  */
 const PERMISSIONS = ['admin', 'write', 'read', 'none'] as const;
-type PermissionRead = (typeof PERMISSIONS)[number] | 'unread' | 'not-a-login';
+// A failed read is no-user, no-token-access, or unread. A login in a form usabl does not read is
+// never asked. None of these counts as write.
+type PermissionRead = (typeof PERMISSIONS)[number] | 'no-user' | 'no-token-access' | 'unread' | 'not-a-login';
 
 // The login forms usabl asks GitHub about: letters, digits, hyphens, and underscores, starting with
 // a letter or a digit. A managed user login has the form handle_shortcode. The bound keeps the URL
@@ -419,7 +429,14 @@ async function readOnePermission(read: PolicyEnforceDeps['readPermission'], logi
     const body = await read(login);
     const permission = isRecord(body) ? body['permission'] : undefined;
     return PERMISSIONS.find((known) => known === permission) ?? 'unread';
-  } catch {
+  } catch (err) {
+    // Only the status is read from the failure, to say what a person can do about it.
+    if (err instanceof GithubAnswerError && err.status === 404) {
+      return 'no-user';
+    }
+    if (err instanceof GithubAnswerError && (err.status === 401 || err.status === 403)) {
+      return 'no-token-access';
+    }
     return 'unread';
   }
 }
@@ -431,7 +448,14 @@ function permissionText(permission: PermissionRead): string {
   if (permission === 'read' || permission === 'none') {
     return `GitHub reports that user's permission on this repository as ${permission}, and an approval counts only with write or admin`;
   }
-  return "usabl could not read that user's permission on this repository (the job's token needs read access to repository metadata)";
+  if (permission === 'no-user') {
+    return 'GitHub has no readable user by that login on this repository';
+  }
+  const notRead = "usabl could not read that user's permission on this repository";
+  if (permission === 'no-token-access') {
+    return `${notRead} (the job's token needs read access to repository metadata)`;
+  }
+  return notRead;
 }
 
 function latestDecisiveReviewByUser(reviews: PolicyReview[]): Map<string, PolicyReview> {
