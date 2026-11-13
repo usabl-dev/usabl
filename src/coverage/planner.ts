@@ -6,15 +6,11 @@
  */
 import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
-import {
-  aliasConfigConflictReason,
-  buildUnresolvedReason,
-  UNPLACED_FILE_FIX,
-  unresolvedImportsNaming,
-} from './discovery-diagnostics.js';
-import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
+import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
+import { buildImportGraph, inspectDirectImports } from './import-graph.js';
+import { excludedTestFileReason, isTestFile, loadedTestFileNote, placeTestFiles, testFileGapReason } from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
-import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
+import { packageSourceFiles, type TrustedRead, workspaceDependencies, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
@@ -23,40 +19,6 @@ import { matchGlob } from '../primitives/match-glob.js';
 
 function isWideBlastFile(file: string, globs: string[]): boolean {
   return globs.some((glob) => matchGlob(glob, file));
-}
-
-// A file named like a test, such as Button.test.tsx or Button.spec.tsx, is never a UI file.
-function isTestNamedFile(file: string): boolean {
-  return /\.(test|spec)\.[^/]+$/u.test(file);
-}
-
-// A folder named test, tests, or __tests__ usually holds test helpers, but a screen component can
-// live there too. A file in such a folder counts as a UI file only when a screen reaches it.
-function isInTestFolder(file: string): boolean {
-  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file);
-}
-
-function isTestFile(file: string): boolean {
-  return isInTestFolder(file) || isTestNamedFile(file);
-}
-
-const TEST_FOLDER_REASON =
-  'This file is in a test folder (test, tests, or __tests__) and usabl found no import of it, so ' +
-  'usabl reads it as test code and did not check it. This does not block. If a screen renders it, ' +
-  'import it from the route entry file of that screen, or add it to the files of a surface in ' +
-  'usabl.config.json.';
-
-function testFolderGapReason(entries: UnresolvableImport[]): string {
-  const imports = entries
-    .map((entry) => `'${entry.specifier}' in ${entry.importer}`)
-    .sort()
-    .join(', ');
-  return (
-    'This file is in a test folder (test, tests, or __tests__), and usabl could not resolve an import ' +
-    `that may load it: ${imports}. So usabl cannot tell whether a screen renders it, and did not check ` +
-    `it. ${UNPLACED_FILE_FIX} Or make the import resolve, for example by adding its alias to tsconfig ` +
-    'or the vite config.'
-  );
 }
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
@@ -254,56 +216,104 @@ export async function computeCoverage(
 
   const quotedFiles = changedFiles.filter(looksQuoted);
   const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
-  const globbedFiles = listedFiles.filter(
-    (file) => !isTestNamedFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
-  );
+  const globbedFiles = listedFiles.filter((file) => config.uiFileGlobs.some((glob) => matchGlob(glob, file)));
 
   const attributedRoutes = manifest.routes.filter(
     // Router fallback routes have entryFile: null, so they cannot truthfully
     // participate in route-graph closure matching.
     (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
   );
-  // The graph is built once, and only when something needs it: a file in a test folder asks
-  // whether a screen reaches it, and the screen mapping below asks which screens do.
+  // The graph is built once, and only when something needs it: a changed test file asks whether a
+  // screen reaches it, and the screen mapping below asks which screens do.
   let routeGraph: Promise<RouteGraph> | null = null;
   const loadRouteGraph = (): Promise<RouteGraph> => {
     routeGraph ??= buildRouteGraph(fs, attributedRoutes, config.discovery.routerFile);
     return routeGraph;
   };
 
-  // A file in a test folder that a screen reaches is a UI file like any other. One no screen
-  // reaches is disclosed as excluded, not a gap, so a change to test helpers alone stays nothing
-  // to check. A surface that lists the file in its files reaches it by the operator's word.
-  // One no screen reaches but an unresolved import may load is a gap, because "no screen reaches
-  // it" is then a guess.
-  const testFolderFiles = globbedFiles.filter(isInTestFolder);
-  const reachedTestFolderFiles = new Set<string>();
-  const testFolderGaps: CoverageGap[] = [];
+  // A changed test file, named like a test or in a test folder, is excluded only when usabl looked
+  // at every place that could load it and found none. One a surface lists, a route closure
+  // reaches, or a file outside the tests imports is a UI file like any other. One a load usabl
+  // cannot follow may reach is a gap, because "nothing loads it" is then a guess. The rest are
+  // disclosed as excluded, not gaps, so a change to tests alone stays nothing to check. See
+  // test-files.ts for the wider graph, built only when a changed test file needs it.
+  //
+  // A test file outside uiFileGlobs that sits in a workspace package the app depends on follows the
+  // same rule, with the source files of every workspace package the app depends on as more starts,
+  // so a package that imports it through a path inside its package counts too. It keeps its
+  // workspace gap when a file outside the tests loads it or a load usabl cannot follow may reach
+  // it, and it is excluded and listed otherwise.
+  const testFiles = [...globbedFiles.filter(isTestFile)].sort();
+  const globbedSet = new Set(globbedFiles);
+  const outsideTestFiles = listedFiles.filter((file) => isTestFile(file) && !globbedSet.has(file));
+  const { files: workspaceTests, dependedDirs } =
+    outsideTestFiles.length === 0 ? { files: [], dependedDirs: [] } : await workspaceDependencies(fs, config, outsideTestFiles, trustedRead);
+  const reachedTestFiles = new Set<string>();
+  // For a test file that counts as a UI file only because the wider graph found an importer
+  // outside the tests, what its gap says if no screen takes it.
+  const loadedTestFileNotes = new Map<string, string>();
+  const testFileGaps: CoverageGap[] = [];
+  const workspaceTestGaps: CoverageGap[] = [];
   const excludedFiles: ExcludedFile[] = [];
-  if (testFolderFiles.length > 0) {
-    const { graph, closures } = await loadRouteGraph();
-    for (const file of [...testFolderFiles].sort()) {
+  const placeable = workspaceTests.filter((entry) => entry.packageDir !== null);
+  workspaceTestGaps.push(...workspaceTests.filter((entry) => entry.packageDir === null).map((entry) => entry.gap));
+  if (testFiles.length > 0 || placeable.length > 0) {
+    const { aliasConfig, closures } = await loadRouteGraph();
+    const unreached: string[] = [];
+    for (const file of testFiles) {
       const listedBySurface = config.surfaces.some((surface) => surface.files.includes(file));
       if (listedBySurface || [...closures.values()].some((closure) => closure.has(file))) {
-        reachedTestFolderFiles.add(file);
-        continue;
-      }
-      const naming = unresolvedImportsNaming(file, graph.unresolvable);
-      if (naming.length > 0) {
-        testFolderGaps.push({ ref: file, state: 'unresolved', reason: testFolderGapReason(naming) });
+        reachedTestFiles.add(file);
       } else {
-        excludedFiles.push({ ref: file, reason: TEST_FOLDER_REASON });
+        unreached.push(file);
+      }
+    }
+    if (unreached.length > 0 || placeable.length > 0) {
+      const packageStarts: string[] = [];
+      if (placeable.length > 0) {
+        for (const dir of dependedDirs) packageStarts.push(...(await packageSourceFiles(fs, dir)));
+      }
+      const placements = await placeTestFiles(
+        fs,
+        config,
+        attributedRoutes.map((route) => route.entryFile),
+        aliasConfig,
+        [...unreached, ...placeable.map((entry) => entry.gap.ref)],
+        packageStarts,
+      );
+      for (const file of unreached) {
+        const placement = placements.get(file) ?? { state: 'none' };
+        if (placement.state === 'loaded') {
+          reachedTestFiles.add(file);
+          loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers));
+        } else if (placement.state === 'maybe') {
+          testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads) });
+        } else {
+          excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, isWideBlastFile(file, config.discovery.wideBlastGlobs)) });
+        }
+      }
+      for (const entry of placeable) {
+        const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
+        if (placement.state === 'none') {
+          const ref = entry.gap.ref;
+          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref, config.discovery.wideBlastGlobs)) });
+        } else {
+          workspaceTestGaps.push(entry.gap);
+        }
       }
     }
   }
-  const uiFiles = globbedFiles.filter((file) => !isInTestFolder(file) || reachedTestFolderFiles.has(file));
+  excludedFiles.sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
+  const uiFiles = globbedFiles.filter((file) => !isTestFile(file) || reachedTestFiles.has(file));
   // Omitted when empty, so a Coverage with nothing excluded has the same shape it always had.
   const excluded = excludedFiles.length === 0 ? {} : { excludedFiles };
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
   const otherFiles = listedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
-  const workspaceGaps = await workspaceDependencyGaps(fs, config, otherFiles, trustedRead);
+  const workspaceGaps = [...(await workspaceDependencyGaps(fs, config, otherFiles, trustedRead)), ...workspaceTestGaps].sort((a, b) =>
+    a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0,
+  );
   // A bump of the UI component library touches the app's package.json and the lockfile, and
   // neither matches uiFileGlobs, while the new version can change every screen. Such a change is
   // wide blast, with a reason that names each file. See dependency-changes.ts.
@@ -313,7 +323,7 @@ export async function computeCoverage(
   if (
     uiFiles.length === 0 &&
     quotedFiles.length === 0 &&
-    testFolderGaps.length === 0 &&
+    testFileGaps.length === 0 &&
     workspaceGaps.length === 0 &&
     dependencyReason === null
   ) {
@@ -322,10 +332,10 @@ export async function computeCoverage(
   const quotedGaps: CoverageGap[] = quotedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: QUOTED_PATH_REASON }));
   const unresolvedFiles: string[] = [
     ...quotedFiles,
-    ...testFolderGaps.map((gap) => gap.ref),
+    ...testFileGaps.map((gap) => gap.ref),
     ...workspaceGaps.map((gap) => gap.ref),
   ];
-  const gaps: CoverageGap[] = [...quotedGaps, ...testFolderGaps, ...workspaceGaps];
+  const gaps: CoverageGap[] = [...quotedGaps, ...testFileGaps, ...workspaceGaps];
   if (uiFiles.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false, ...excluded };
   }
@@ -470,7 +480,7 @@ export async function computeCoverage(
       gaps.push({
         ref: file,
         state: 'unresolved',
-        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited),
+        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited, loadedTestFileNotes.get(file)),
       });
     }
   }

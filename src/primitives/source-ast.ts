@@ -77,6 +77,34 @@ export function parseSource(code: string, syntax: { typescript: boolean; jsx: bo
   return withFlow.ok ? withFlow : first;
 }
 
+/**
+ * Where the comments of a module are, as start and end offsets, in source order. Null when the
+ * module does not parse with the same options parseSource uses, so a caller cannot tell a comment
+ * from code and must treat all of the text as code.
+ */
+export function commentRanges(code: string, syntax: { typescript: boolean; jsx: boolean }): Array<{ start: number; end: number }> | null {
+  const plugins: ParserPlugin[] = ['decorators-legacy'];
+  if (syntax.jsx) plugins.push('jsx');
+  if (syntax.typescript) plugins.push('typescript');
+  const attempts = syntax.typescript ? [plugins] : [plugins, [...plugins, 'flow' as ParserPlugin]];
+  for (const attempt of attempts) {
+    try {
+      const file = parse(code, { sourceType: 'module', plugins: attempt }) as unknown as { comments?: unknown };
+      const comments = Array.isArray(file.comments) ? file.comments : [];
+      const ranges: Array<{ start: number; end: number }> = [];
+      for (const comment of comments) {
+        if (isRecord(comment) && typeof comment['start'] === 'number' && typeof comment['end'] === 'number') {
+          ranges.push({ start: comment['start'], end: comment['end'] });
+        }
+      }
+      return ranges;
+    } catch {
+      // Try the next set of options, or give up.
+    }
+  }
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

@@ -14,6 +14,7 @@
  */
 import type { Result } from '../contracts/index.js';
 import { ownEntry, wholeNumberText } from './carried.js';
+import { listFileNotes } from './file-notes.js';
 
 export interface VerdictLine {
   symbol: string;
@@ -115,11 +116,16 @@ export function describeVerdict(result: Result): VerdictLine {
     };
   }
   if (result.verdict === null) {
+    // When the planner left changed files out on purpose, files under the UI globs did change, so
+    // "No UI files changed" would not be true.
+    const excludedAny = listFileNotes(result.coverage?.excludedFiles).count > 0;
     return {
       symbol: IDLE_SYMBOL,
       word: 'NO VERDICT: IDLE',
       exitCode: result.exitCode,
-      meaning: 'No UI files changed, so there was nothing to check. No pass, no fail.',
+      meaning: excludedAny
+        ? 'Every changed file usabl would check was left out on purpose. No pass, no fail.'
+        : 'No UI files changed, so there was nothing to check. No pass, no fail.',
       noVerdict: true,
     };
   }
