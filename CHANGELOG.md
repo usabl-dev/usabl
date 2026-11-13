@@ -345,8 +345,8 @@
   `git show`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
   `--output=<file>` is never read as an option; on `git diff` it wrote the listing to a file and
   read as no changed files. `serve-build --trusted-ref` refuses a value that starts with one
-  dash, as the main CLI does. usabl now needs Git 2.24 or later, the first release with
-  `--end-of-options`.
+  dash, as the main CLI does. usabl now needs Git 2.30 or later, the first release where
+  every git command usabl runs accepts `--end-of-options`.
 - A change to a test file that a screen can load is now checked, or is a gap, where it passed as
   nothing to check. A test file is a file under `uiFileGlobs` named like a test (`*.test.*`,
   `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
