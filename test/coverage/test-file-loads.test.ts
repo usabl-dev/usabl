@@ -301,7 +301,19 @@ describe('the options of an import.meta.glob call', () => {
     },
   );
 
-  it.each(['{ eager: true }', "{ eager: true, import: 'default' }", "{ query: '?raw', import: 'default' }", "{ 'eager': true, query: { url: true } }"])(
+  it('reads options longer than the bound as options that may set base, without reading them', async () => {
+    const coverage = await coverageOf(`const all = import.meta.glob('./pages/*.tsx', { eager: true${' '.repeat(200_000)} });`, tree);
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('may load any file');
+  });
+
+  it.each([
+    '{ eager: true }',
+    "{ eager: true, import: 'default' }",
+    "{ query: '?raw', import: 'default' }",
+    "{ 'eager': true, query: { url: true } }",
+    `{ eager:${' '.repeat(500)}true }`,
+  ])(
     'still reads the patterns when the options are plain values with no base: %s',
     async (options) => {
       expectExcluded(await coverageOf(`const all = import.meta.glob('./pages/*.tsx', ${options});`, tree));

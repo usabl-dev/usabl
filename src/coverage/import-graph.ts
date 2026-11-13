@@ -346,16 +346,25 @@ function readDynamicCall(source: string, start: number, open: number): LoaderCal
 // keys are the other options Vite knows, plain or quoted, and whose values are a plain string, a
 // number, true, false, or, for query, an object of those. Vite evaluates the options as code, so a
 // quoted key, a computed key, or a spread can set base too. Anything else may set it.
+// Each run of white space in the pattern is followed by a token that is not white space, and no two
+// runs sit side by side, so a failed match backtracks over each run only once. Options text longer
+// than MAX_GLOB_OPTIONS_TEXT is not read at all and may set base.
 const GLOB_STRING = String.raw`(?:'[^'\\\n]*'|"[^"\\\n]*")`;
 const GLOB_VALUE = String.raw`(?:true|false|-?\d+(?:\.\d+)?|${GLOB_STRING})`;
 const GLOB_QUERY_ENTRY = String.raw`(?:[A-Za-z_$][\w$]*|${GLOB_STRING})\s*:\s*${GLOB_VALUE}`;
-const GLOB_QUERY = String.raw`\{\s*(?:${GLOB_QUERY_ENTRY}(?:\s*,\s*${GLOB_QUERY_ENTRY})*\s*,?)?\s*\}`;
+const GLOB_QUERY = String.raw`\{\s*(?:${GLOB_QUERY_ENTRY}(?:\s*,\s*${GLOB_QUERY_ENTRY})*\s*(?:,\s*)?)?\}`;
 const GLOB_KEY = String.raw`(?:(?:eager|import|query|as|exhaustive)|'(?:eager|import|query|as|exhaustive)'|"(?:eager|import|query|as|exhaustive)")`;
 const GLOB_ENTRY = String.raw`${GLOB_KEY}\s*:\s*(?:${GLOB_VALUE}|${GLOB_QUERY})`;
 const OPTIONS_WITHOUT_BASE_RE = new RegExp(
-  String.raw`^,\s*(?:\{\s*(?:${GLOB_ENTRY}(?:\s*,\s*${GLOB_ENTRY})*\s*,?)?\s*\}\s*,?\s*)?$`,
+  String.raw`^,\s*(?:\{\s*(?:${GLOB_ENTRY}(?:\s*,\s*${GLOB_ENTRY})*\s*(?:,\s*)?)?\}\s*(?:,\s*)?)?$`,
   'u',
 );
+// The longest options text usabl reads. Real options are a few dozen characters.
+export const MAX_GLOB_OPTIONS_TEXT = 1000;
+
+function optionsSetNoBase(options: string): boolean {
+  return options.length <= MAX_GLOB_OPTIONS_TEXT && OPTIONS_WITHOUT_BASE_RE.test(options);
+}
 
 // The patterns of the import.meta.glob call that starts at `start`: one string or a list of
 // strings. Null when the argument is anything else, or when the options may set `base`, which
@@ -402,7 +411,7 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
   if (source.charAt(at) !== ',') return { kind: 'glob', text, patterns: null };
   const close = source.indexOf(')', at);
   const options = source.slice(at, close === -1 ? source.length : close);
-  return OPTIONS_WITHOUT_BASE_RE.test(options) ? { kind: 'glob', text, patterns } : { kind: 'glob', text, patterns: null, base: true };
+  return optionsSetNoBase(options) ? { kind: 'glob', text, patterns } : { kind: 'glob', text, patterns: null, base: true };
 }
 
 // A webpack require.context(folder, recursive, pattern) call. It loads files under the folder, so
