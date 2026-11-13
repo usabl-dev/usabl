@@ -264,8 +264,11 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     async show(ref, path) {
       assertReadableRef(ref);
       try {
-        // --end-of-options keeps a ref that starts with a dash from being read as an option.
-        const output = await runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`]);
+        // cat-file reads objects only. git show reads <ref>:<path> as a path when it names no
+        // object and a working tree file has that exact name, so a file a pull request commits
+        // could stand in for a trusted read. --end-of-options keeps a ref that starts with a dash
+        // from being read as an option.
+        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
         return output;
       } catch (err) {
         const code = readErrorCode(err);

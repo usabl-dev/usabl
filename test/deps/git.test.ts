@@ -373,6 +373,70 @@ describe('makeGitReader with a trusted commit that is not in the repository', { 
   });
 });
 
+// git show <ref>:<path> reads the argument as a path when it names no object and a file in the
+// working tree has that exact name. A pull request can commit a file named <ref>:<path>, so a
+// trusted read would print the pull request's own commit, or nothing, instead of failing. The
+// reader reads objects only, so such a file never changes what a trusted read returns.
+describe('makeGitReader reads a trusted file from git objects only', { timeout: 60_000 }, () => {
+  let repoPath = '';
+  let clonePath = '';
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+    if (clonePath !== '') await rm(clonePath, { recursive: true, force: true });
+    clonePath = '';
+  });
+
+  it('throws the missing ref error in a shallow clone that holds a file named <commit>:<path>', async () => {
+    await writeFile(join(repoPath, 'usabl.config.json'), '{"trusted":true}\n', 'utf8');
+    await runGit(repoPath, ['add', 'usabl.config.json']);
+    await runGit(repoPath, ['commit', '-m', 'base']);
+    const base = await runGit(repoPath, ['rev-parse', 'HEAD']);
+    await writeFile(join(repoPath, `${base}:usabl.config.json`), '{}\n', 'utf8');
+    await runGit(repoPath, ['add', `${base}:usabl.config.json`]);
+    await runGit(repoPath, ['commit', '-m', 'head adds a file named like the trusted read']);
+    clonePath = await mkdtemp(join(tmpdir(), 'usabl-git-shallow-'));
+    await runGit(clonePath, ['clone', '--quiet', '--depth', '1', `file://${repoPath}`, '.']);
+    const git = makeGitReader({ cwd: clonePath });
+    await expect(git.show(base, 'usabl.config.json')).rejects.toThrow(new RegExp(`git cannot read ${base}`));
+  });
+
+  it('throws the missing ref error when a file is named origin/main:<path> and origin/main does not exist', async () => {
+    await mkdir(join(repoPath, 'origin'), { recursive: true });
+    await writeFile(join(repoPath, 'origin/main:usabl.config.json'), '{}\n', 'utf8');
+    await runGit(repoPath, ['add', 'origin/main:usabl.config.json']);
+    await runGit(repoPath, ['commit', '-m', 'a file named like the trusted read']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('origin/main', 'usabl.config.json')).rejects.toThrow(/git cannot read origin\/main/);
+  });
+
+  it('reads a file as absent at a real commit when a file is named <ref>:<path>', async () => {
+    await writeFile(join(repoPath, 'main:.usabl-waivers.json'), '{}\n', 'utf8');
+    await runGit(repoPath, ['add', 'main:.usabl-waivers.json']);
+    await runGit(repoPath, ['commit', '-m', 'a file named like the trusted read']);
+    await expect(makeGitReader({ cwd: repoPath }).show('main', '.usabl-waivers.json')).resolves.toBeNull();
+  });
+
+  it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
+    const odd = 'café\tline\r\nno newline at the end ';
+    const large = 'x'.repeat(3 * 1024 * 1024);
+    await writeFile(join(repoPath, 'odd.txt'), odd, 'utf8');
+    await writeFile(join(repoPath, 'large.txt'), large, 'utf8');
+    await runGit(repoPath, ['add', 'odd.txt', 'large.txt']);
+    await runGit(repoPath, ['commit', '-m', 'odd and large']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD', 'screen.tsx')).resolves.toBe('first version\n');
+    await expect(git.show('HEAD', 'missing.tsx')).resolves.toBeNull();
+    await expect(git.show('HEAD', 'odd.txt')).resolves.toBe(odd);
+    await expect(git.show('HEAD', 'large.txt')).resolves.toBe(large);
+    await expect(git.show('HEAD', 'src/gate/index.ts')).resolves.toBe('export const gate = true;\n');
+  });
+});
+
 // A git ref name cannot start with a dash, be empty, or hold a colon, *, ?, [, a backslash, white
 // space, or a control character. git reads such a value another way: as an option, as a path inside
 // a commit, or as a pathspec that filters HEAD. Each of those can come back as a file state, such as
@@ -613,7 +677,8 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     await git.lsFilesUnder('main', ['src/gate']);
     await git.lsFilesUnder('HEAD', ['']);
     const all = await calls();
-    expectEndBefore(all, 'main:screen.tsx', 'show');
+    // show reads the blob with git cat-file.
+    expectEndBefore(all, 'main:screen.tsx', 'cat-file');
     expectEndBefore(all, `${ABSENT_COMMIT}^{commit}`, 'rev-parse');
     expectEndBefore(all, 'main...HEAD', 'diff');
     const listings = all.filter((args) => args[0] === 'ls-tree');
