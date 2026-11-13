@@ -36,12 +36,15 @@ re-baseline to green.
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
-  An approval counts only when the review's `author_association` is `OWNER`, `MEMBER`, or
-  `COLLABORATOR`. On a public repository anyone can submit an approving review, so before, a
-  CODEOWNERS login that lost its access, or a name someone else registered, passed the check. An
-  approval from any other association, or with none, does not count, and the output says so.
-  Residual: a `MEMBER` of the organization may lack write access to the repository. The branch
-  rule that requires a code owner's review still blocks that merge on GitHub's side.
+  An approval counts only when GitHub reports the approving code owner's permission on the
+  repository as `admin` or `write`, read once per login from the collaborator permission
+  endpoint. On a public repository anyone can submit an approving review, so before, a CODEOWNERS
+  login that lost its access, or a name someone else registered, passed the check. An approval
+  from a user with `read` or `none` does not count, and a failed read never counts as write; the
+  output names the reviewer and says why. The review's `author_association` is not used, because
+  it hides private organization membership, so a code owner with write access can read as
+  `CONTRIBUTOR`. Residual: the permission is the one GitHub reports when the check runs. When the
+  job's token cannot read it, every approval is refused until the token can, which fails closed.
   Owners come from the last rule that matches each dirty guarded path. That path fails closed
   when no rule matches it, when its last rule names no owner, or when its last rule names an org
   team or an email, because usabl cannot resolve team membership or match an email to a login. A

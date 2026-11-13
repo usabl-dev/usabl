@@ -1570,13 +1570,15 @@
 
 ### Security
 
-- `usabl enforce policy` counts an approval only from a reviewer GitHub lists as `OWNER`,
-  `MEMBER`, or `COLLABORATOR` in the review's `author_association`. On a public repository anyone
-  can submit an approving review, so a login in `CODEOWNERS` that lost its access, or a name
-  someone else registered, passed the policy check. An approval from any other association, or
-  from a review that names none, does not count, and the output names the reviewer and says why.
-  A later request for changes still retracts an approval, whatever the association. Gate effect:
-  the policy check refuses where such an approval passed it.
+- `usabl enforce policy` counts an approval only from a code owner whose permission on the
+  repository GitHub reports as `admin` or `write`. It reads the permission once for each
+  approving code owner. On a public repository anyone can submit an approving review, so a login
+  in `CODEOWNERS` that lost its access, or a name someone else registered, passed the policy
+  check. An approval from a user with `read` or `none` does not count. A read that fails never
+  counts as write, and the output says the job's token needs read access to repository metadata.
+  The output names each reviewer whose approval did not count and says why. A later request for
+  changes still retracts an approval. Gate effect: the policy check refuses where such an approval
+  passed it.
 
 - Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
   `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`

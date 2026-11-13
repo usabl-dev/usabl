@@ -3160,14 +3160,19 @@ an email, and on a `#` inside a pattern or owner (one that does not follow white
 GitHub may read such a line another way, so the last match is unknown. A `#` at the start of a
 line or after whitespace starts a comment. A team or email line that is not the last match for a
 changed guarded path does not block. Every other path needs an approval of the current head from
-one of its users who is not the author. The approval counts only when GitHub lists the reviewer
-as `OWNER`, `MEMBER`, or `COLLABORATOR` in the review's `author_association`. On a public
-repository anyone can submit an approving review, so a login in `CODEOWNERS` that lost its
-access, or a name someone else registered, would otherwise pass. An approval from any other
-association, or from a review that names none, does not count, and the output names the reviewer
-and the association. A `MEMBER` of the organization may still lack write access to the repository;
-the branch rule that requires a code owner's review is the check that knows. `usabl doctor`
-reports the same limits in the same words under policy scope.
+one of its users who is not the author. The approval counts only when GitHub reports that user's
+permission on the repository as `admin` or `write`, read from
+`GET /repos/{owner}/{repo}/collaborators/{login}/permission` once for each approving code owner.
+On a public repository anyone can submit an approving review, so a login in `CODEOWNERS` that lost
+its access, or a name someone else registered, would otherwise pass. An approval from a user with
+`read` or `none` does not count, and the output names the reviewer and the permission. A read that
+fails for any reason (network, a 403 or 404 answer, a body usabl cannot read, a value outside the
+four) never counts as write: the output names the reviewer and says the job's token needs read
+access to repository metadata. A code owner whose login is not in GitHub's form is not asked about
+and does not count. A later request for changes still retracts an approval. The permission is the
+one GitHub reports when the check runs, not when the review was given. GitHub maps the maintain
+role to `write` and the triage role to `read`. `usabl doctor` reports the same limits in the same
+words under policy scope.
 
 For the forms GitHub's CODEOWNERS documentation shows, a pattern matches the way the
 documentation says, and a test holds every documented example usabl supports. A leading slash
