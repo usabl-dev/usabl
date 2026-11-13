@@ -3257,7 +3257,8 @@ every file under it, as a folder; the whole tree matches every file. A glob entr
 Node's dot rule: a wildcard does not match a name that starts with a dot, as `fs.glob` does. A dot
 written in the pattern still matches. So a dot-named file under a glob entry, such as
 `policy/.override.json` under `policy/*.json`, is not guarded, locally or in CI. Under a literal
-entry a dot-named file is guarded, because git lists it.
+entry a dot-named file is guarded, in CI because git lists it, and locally also when it is new
+and untracked, because the local guard lists the dot names there.
 
 The two places select from different lists:
 
@@ -3267,14 +3268,16 @@ The two places select from different lists:
   It then adds, as found, what `fs.glob` finds on the working tree for each entry and for
   everything under it. That adds files on disk that no commit holds, such as a new untracked file
   under a guarded folder. The HEAD listing holds a file deleted locally, so that file is still
-  compared. For an entry read wide, it also lists the dot-named files and the files in dot-named
-  folders under the folder it guards, which `fs.glob` skips under `**`, so a wide reading guards
-  them on the working tree as the git listings do. It leaves out `.git/`, which git never tracks.
+  compared. For a literal entry and for an entry read wide, it also lists the dot-named files and
+  the files in dot-named folders under the folder it guards, which `fs.glob` skips under `**`, so
+  such an entry guards them on the working tree as the git listings do. It leaves out `.git/` in
+  that dot listing, because git never tracks it.
 
 For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
 mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
 selects on the working tree. For a literal folder the matcher also selects the dot-named files
-under it, which `fs.glob` skips.
+under it, which `fs.glob` skips under `**`, and the local guard lists them with patterns that name
+the dot.
 
 A literal entry that matches nothing is compared as its own canonical path, so a guarded file
 absent everywhere is still checked. A glob entry is never compared as a path, and neither is the

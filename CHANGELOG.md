@@ -488,11 +488,12 @@
   the expansions before they build any, so an entry of any size is read at once. Gate effect: a
   config with such an entry no longer loads; at a trusted ref it guards more, never less.
 
-- The local guard lists the dot-named files and dot-named folders under an entry it reads wide.
-  It listed the folder with `fs.glob`, which skips them under `**`, so a new untracked file such
-  as `policy/.x` under a wide entry was not reported, while git listings, and so CI, held it. It
-  leaves out `.git/`, which git never tracks. Gate effect: such a file is `approval_required`
-  where the local guard passed it.
+- The local guard lists the dot-named files and dot-named folders under a literal entry, such as
+  `src/gate`, and under an entry it reads wide. It listed the folder with `fs.glob`, which skips
+  them under `**`, so a new untracked file such as `src/gate/.x` or `policy/.x` was not reported,
+  while git listings, and so CI, held it once committed. That dot listing leaves out `.git/`,
+  which git never tracks. Gate effect: such a file is `approval_required` where the local guard
+  passed it.
 
 - The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
   expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed

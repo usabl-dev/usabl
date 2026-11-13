@@ -415,10 +415,11 @@ the tool errored, not because the page is accessible.
   it guards the literal folder above its first brace group, or the whole tree when an expansion
   could climb out of that folder or there is none. Before, each expansion was read on its own, so
   an entry with 16 brace groups took the local guard about 31 seconds, and a larger one could make
-  a Stop hook time out or crash, which an assistant may treat as an allow. A wide reading guards
-  the dot-named files and dot-named folders under its folder on the working tree too, as the git
-  listings do; before, the local guard listed the folder with `fs.glob`, which skips them under
-  `**`, so a new untracked dot file there was not reported.
+  a Stop hook time out or crash, which an assistant may treat as an allow. A literal entry and a
+  wide reading guard the dot-named files and dot-named folders under their folder on the working
+  tree too, as the git listings do; before, the local guard listed the folder with `fs.glob`,
+  which skips them under `**`, so a new untracked dot file there, such as `src/gate/.x`, was not
+  reported.
   This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
   ref's config. A change there needs a code owner's approval, which a review can give, so the pull
   request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each
