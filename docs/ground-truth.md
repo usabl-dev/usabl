@@ -1648,8 +1648,10 @@ in this order:
      included), the file's path below that folder matches the pattern. So `/tests/**/*.tsx` covers
      `tests/a.tsx`, `src/tests/a.tsx`, and `apps/web/src/tests/x/a.tsx`, and `/src/pages/**/*.tsx`
      does not cover `src/tests/helper.ts`. This holds for any Vite root inside the repository. It
-     also means a glob in one app covers the same folders in another app. A leading `..` after the
-     `/` is dropped, since the folder above is also read. The rules below apply to the pattern below
+     also means a glob in one app covers the same folders in another app. Every leading `/` is
+     taken off, since Vite joins the rest of the pattern to its root, so `//tests/*.tsx` reads as
+     `/tests/*.tsx`. A leading `..` after that is dropped, since the folder above is also read. The
+     rules below apply to the pattern below
      each folder. Patterns are matched with usabl's own glob matcher. Every literal pattern in the call is read, an array of patterns too, and a
      negative pattern is left out, which can only name more files. A pattern with syntax the
      matcher does not evaluate, such as `?`, `[ ]`, `( )`, or a brace range, covers every file in
@@ -1663,7 +1665,7 @@ in this order:
      set it. usabl reads the patterns only when the options are an object whose keys are `eager`,
      `import`, `query`, `as`, or `exhaustive`, plain or quoted, and whose values are a plain string,
      a number, `true`, `false`, or, for `query`, an object of those. Any other options may set
-     `base`;
+     `base`, and so may options text longer than 1000 characters, which usabl does not read;
    - an `import()` or `require()` whose argument is a template literal or is not a literal, and a
      webpack `require.context(folder, ...)`. The fixed text before the first `${`, or the folder, is
      a prefix, resolved from the importer's folder (or through an alias, or under a `baseUrl` for a
@@ -1695,10 +1697,14 @@ in this order:
      `exports` is an object with a key that equals the subpath, such as `./styles.css` for
      `@acme/ui/styles.css`, and that key's value is a string that starts with `./`, holds no `*`,
      and names a file inside the package folder, the import is followed to that one file. An exact
-     key wins over a pattern key, as in Node.js. Every other path into the package may load any
-     file of that package: a conditions object, an array, a key with `*` that would be needed to
-     match, a string `exports`, an entry that leaves the package or names no file, and a
-     package.json that cannot be parsed. Without `exports`, a path that names a file under
+     key wins over a pattern key, as in Node.js. When any string target under the key the subpath
+     matches (the exact key, or else each pattern key that matches it), at any depth of a conditions
+     object or an array, leaves the package folder once normalized, such as
+     `./../other/src/tests/helpers.tsx`, the import may load any file, because a bundler can follow
+     such a target into another package. Every other path into the package may load any file of
+     that package: a conditions object, an array, a key with `*` that would be needed to match, a
+     string `exports`, an entry that names no file, and a package.json that cannot be parsed.
+     Without `exports`, a path that names a file under
      the package folder, such as `@acme/ui/src/tests/helpers`, is followed to it like any import,
      and one that names no file there may load any file of that package. A path that leaves the
      package folder, such as `@acme/ui/../other/x`, may load any file.

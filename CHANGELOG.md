@@ -349,12 +349,13 @@
   resolves to it, or a bare import no package explains (a `#` import, or a name that is not a
   Node.js built-in as a whole and whose package no package.json declares) that names it. usabl
   reads these loads narrowly only where it can read the text exactly: a glob's brace alternatives
-  are expanded and resolved one by one, a glob that starts with `/` is read under every folder,
-  because usabl cannot know the folder Vite runs from (so `/tests/**/*.tsx` covers
-  `src/tests/a.tsx`, and `/src/pages/**/*.tsx` does not cover `src/tests/helper.ts`), a pattern
-  with syntax usabl does not evaluate covers only the folder above that syntax, a glob whose
-  options may set `base` (any options other than plain values of the other known keys) may load
-  any file, a load inside a comment is skipped, a string with a backslash escape is read as the
+  are expanded and resolved one by one, a glob that starts with `/`, or with more than one `/`, is
+  read under every folder, because usabl cannot know the folder Vite runs from (so
+  `/tests/**/*.tsx` covers `src/tests/a.tsx`, and `/src/pages/**/*.tsx` does not cover
+  `src/tests/helper.ts`), a pattern with syntax usabl does not evaluate covers only the folder
+  above that syntax, a glob whose options may set `base` (any options other than plain values of
+  the other known keys, or options text longer than 1000 characters) may load any file, a load
+  inside a comment is skipped, a string with a backslash escape is read as the
   string it is, and a Vite alias key written without quotes is read. A Vite root above the
   repository root is not covered. The gap reason names the importer and says to narrow the load
   there, or to list the file in a surface. The import graph also follows a name like
@@ -363,8 +364,10 @@
   A bare import of a path inside a workspace package is followed to the file it names when the
   package has no `exports` field. With one, it is followed to one file only when `exports` has a
   key that equals the subpath, such as `./styles.css`, whose value is a string that starts with
-  `./`, holds no `*`, and names a file inside the package. Otherwise, or when it names no file, it
-  may load any file of the package, and one that leaves the package folder may load any file. A
+  `./`, holds no `*`, and names a file inside the package. When any target under the key the
+  subpath matches leaves the package folder, as a plain string or inside a conditions object or an
+  array, it may load any file. Otherwise, or when it names no file, it may load any file of the
+  package, and one that leaves the package folder may load any file. A
   change to a test file that
   nothing usabl reads
   imports, and that no such load can reach, stays nothing to check, and is now listed as excluded
