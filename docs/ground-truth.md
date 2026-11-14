@@ -1064,16 +1064,49 @@ the path, and a screen that crashed on mount read as seen. An empty transcript i
 either way, so it is not unseen.
 
 A page with nothing to Tab to, such as a page of text, has a walk that stays on the body too,
-and it rendered. Only a readiness signal can tell it from a page that never rendered. So the
-detector alone never marks a screen unseen when the screen declares a `reachedWhen` selector
-that held and every other declared part held too. A declared response alone does not count: an
-application can fetch its data and then throw while it renders it, so the answer says nothing
-about what is on the page. A body-only screen without a selector stays unseen, because nothing
-confirms it rendered, and its gap says to declare a `reachedWhen` selector for an element only
-that screen renders. A body-only screen whose selector did not hold stays unseen, and its gap
-names the selector. The limit of the signal holds here too: a selector that matches only the app
-shell also holds on a screen whose content did not mount, so point it at the screen's own
-content (see "Absent is a fix only with evidence" in section 9).
+and it rendered. A selector alone cannot tell it from a page that never rendered: one that names
+the app shell or an empty mount point, such as `reachedWhen: '#app'` on `<body id="app">`,
+matches on a blank document. So a body-only screen reads as seen only when both hold:
+
+- the screen declares a `reachedWhen` selector that held, and every other declared part held;
+- the page shows text: at least one character of rendered text that is not white space.
+
+Otherwise it stays unseen. A declared response alone does not count: an application can fetch
+its data and then throw while it renders it, so the answer says nothing about what is on the
+page. A body-only screen without a selector stays unseen, and its gap says to declare a
+`reachedWhen` selector for an element only that screen renders. One whose selector did not hold
+stays unseen, and its gap names the selector. One whose selector held on a page that shows no
+text stays unseen, and its gap says the selector matched but usabl found no rendered text, so
+nothing confirms the screen rendered, and to point the selector at the screen's own content.
+
+The text read (`Page.pageShowsText`) runs in an isolated world after the checks, and only when
+every keyboard stop stayed on the body, so the scan of any other page keeps its shape. The scan
+carries the answer as `textShown`. It is measurement for this check only: no draft, finding, or
+verdict is made from it, and the gate never reads it. `innerText` does not reach into a shadow
+root, and design system components render their text there, so the read walks the nodes itself.
+A text node counts when it holds a character that is not white space, the element that holds it
+passes the browser's `checkVisibility` (not `display: none`, not `visibility: hidden`, not
+`opacity: 0`), and it is laid out in a box with a width and a height. What it does for each case:
+
+- text in the document, and text inside an open shadow root: counted;
+- text inside a same-origin frame: counted, when the frame itself is visible;
+- text inside a closed shadow root, or a frame from another origin: not counted, because the read
+  cannot see it;
+- text hidden with CSS as above: not counted. Text that is visually hidden but laid out, such as
+  text clipped to one pixel for screen readers, is counted;
+- a page that is only images: no text, because alternative text is not rendered text;
+- `script`, `style`, and `template` content, and the document title: not counted.
+
+A read that fails, or that passes 200,000 nodes without finding text, reads as no text shown, so
+the screen stays unseen. `checkPage` takes the same read and applies the same rule through the
+same function.
+
+This rule accepts a false gap: a page with no text and nothing to Tab to, such as a page that is
+only images, stays unseen even when its selector held. The way out is a surface whose page has a
+control or text. The limit of the signal also stays: a selector that matches only the app shell,
+on a screen whose shell shows text and has nothing to Tab to, still reads as seen when the content
+did not mount, so point the selector at the screen's own content (see "Absent is a fix only with
+evidence" in section 9).
 
 `checkPage` collects no transcript of its own. The keyboard walk returns the stops it reached,
 the body stop included, with whether its end rule confirmed the end (`WalkRecord`), and
@@ -4429,7 +4462,9 @@ holds the page to that signal the way the CLI does, with the CLI's own wait and 
 for the page to settle and for the selector to match, for at most `signalTimeoutMs` after the
 page first settled, within `readyTimeoutMs`. If the selector did not hold, or a declared
 response was not seen, the result is a `not-covered` gap with ref `readiness:<screenId>` that
-names the part, worded as the CLI words it, and no provider runs. Each part is measured again
+names the part, worded as the CLI words it, and no provider runs. A page that does not settle
+during that wait is the same gap, and it keeps only the first line of the browser's error,
+neutralized, as the settle gap does. Each part is measured again
 after the checks, and a part that no longer holds drops the drafts and becomes the same gap. An
 adopted page records only the requests sent after `checkPage` was called, so a response the page
 received while it loaded is not seen, and a screen that declares a response is always a gap

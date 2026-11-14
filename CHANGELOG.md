@@ -345,14 +345,20 @@
   `not_covered`, with a `readiness:<screenId>` gap worded as the CLI words it. The CLI result is
   unchanged. A walk that was cut short is already not covered by its own draft, and with
   `keyboardWalk: false` there are no stops, so `checkPage` makes no blank-page claim.
-- A page with nothing to Tab to is seen when its readiness selector holds. A page of text has a
-  keyboard walk that stays on the body, so it read as unseen even when its `reachedWhen` selector
-  matched. Gate effect: such a screen is now checked, in the CLI and in `checkPage`, and can read
-  `verified`, when its declared selector held and every other declared part held too. A response
-  alone does not count. Without a selector the screen stays `not_covered`, and its gap now says to
-  declare a `reachedWhen` selector for an element only that screen renders. A selector that
-  matches only the app shell also holds on a screen whose content did not mount, so point it at
-  the screen's own content.
+- A page with nothing to Tab to is seen when its readiness selector holds and it shows text. A
+  page of text has a keyboard walk that stays on the body, so it read as unseen even when its
+  `reachedWhen` selector matched. Gate effect: such a screen is now checked, in the CLI and in
+  `checkPage`, and can read `verified`, when its declared selector held, every other declared part
+  held too, and the page shows rendered text that is not white space. The text read counts text in
+  open shadow roots and same-origin frames, not text hidden with CSS, in a closed shadow root, or
+  in a frame from another origin, and a failed read counts as no text. A blank page whose selector
+  matched, such as `<body id="app">` with `reachedWhen: '#app'`, stays `not_covered`, and its gap
+  says the page shows no text. A response alone does not count. Without a selector the screen
+  stays `not_covered`, and its gap now says to declare a `reachedWhen` selector for an element only
+  that screen renders. A page with no text and nothing to Tab to, such as a page of only images,
+  stays `not_covered` even when its selector held. A selector that matches only the app shell, on
+  a shell that shows text, also holds on a screen whose content did not mount, so point it at the
+  screen's own content.
 - A script that puts focus on the body in the middle of the page no longer makes the keyboard
   walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
   focus on the body, and the next Tab landed on the first control, as at the real end of the
@@ -360,9 +366,9 @@
   walked; it is now `not_covered`, with a `keyboard-walk-truncated` draft that says a script moved
   focus to the document body. A `focus-order` requirement on such a page was a fail on a control
   the walk never reached; it is now needs review.
-- The `checkPage` gap for a page that did not settle before its address was read keeps only the
-  first line of the browser's error, neutralized. The later lines can be a call log that quotes
-  the page's markup. No gate effect.
+- The `checkPage` gaps for a page that did not settle, before its address was read or while
+  readiness waited for its declared signal, keep only the first line of the browser's error,
+  neutralized. The later lines can be a call log that quotes the page's markup. No gate effect.
 - A trusted commit that is not in the repository is an error, never an absent file. In a shallow
   clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
   read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
