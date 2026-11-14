@@ -415,7 +415,14 @@
   reaches it, or a file outside the tests imports it; it is an `unresolved` gap when a load usabl
   cannot follow may reach it; and only otherwise is it excluded and listed. Gate effect: a run that
   was `not_covered` only because such a file changed now reads as nothing to check, with the file
-  listed as excluded.
+  listed as excluded. One exception keeps stories as before: Storybook loads stories through its
+  own `stories` setting, which usabl does not read, so when a surface's `url` or a route's `url` is
+  a Storybook page, a `*.stories.*` file stays a UI file. It is checked when a surface lists it, and
+  otherwise it is a gap that says to list it in the surface's `files`. usabl recognises the two
+  standard Storybook url forms: a path that ends with `/iframe.html` with an `id` query parameter,
+  and a `path` query parameter that starts with `/story/` or `/docs/`. A Storybook served under
+  another url shape is not recognised, so a team that scans one should list its stories in the
+  surface's `files`.
 
 - An `exports` key that ends with `/`, such as `"./t/": "./../other/src/tests/"`, is now matched
   when the subpath starts with it. Node.js removed such folder keys, but Vite still reads one and
