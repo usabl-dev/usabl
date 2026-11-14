@@ -15,7 +15,7 @@ import type {
 } from '../../contracts/index.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
-import { walkEndConfirmed, type WalkStopIdentity } from './walk-end.js';
+import { readWalkEnd, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
 
 const INTERACTIVE_ROLES = new Set([
   'button',
@@ -156,8 +156,10 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 // focus went back to a stop it had already reached without passing through the body, so the walk
 // never reached the rest of the page. 'end-unconfirmed' means focus reached the body, but one more
 // Tab did not go back to the start of the focus order, so a script dropped focus in the middle of the
-// page. The others mean evidence is missing: the budget ran out, or focus moved somewhere the walk
-// cannot tell one control from another.
+// page. 'body-focused' means a script put focus on the body itself, or the page could not say
+// whether it did, so the walk cannot tell where the focus order ends. The others mean evidence is
+// missing: the budget ran out, or focus moved somewhere the walk cannot tell one control from
+// another.
 type StopReason =
   | 'complete'
   | 'wall-clock'
@@ -165,7 +167,14 @@ type StopReason =
   | 'focus-trap'
   | 'modal-dialog'
   | 'end-unconfirmed'
+  | 'body-focused'
   | FocusUnreadable;
+
+const STOP_REASON_OF_END: Record<WalkEnd, StopReason> = {
+  confirmed: 'complete',
+  unconfirmed: 'end-unconfirmed',
+  'body-focused': 'body-focused',
+};
 
 const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) => string> = {
   'wall-clock': (stops) =>
@@ -184,6 +193,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
     `After ${stops} tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.`,
   'end-unconfirmed': (stops) =>
     `After ${stops} tab stop(s), focus moved to the document body, but one more Tab did not go back to a control the keyboard walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the controls after that point may never have been walked.`,
+  'body-focused': (stops) =>
+    `After ${stops} tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.`,
 };
 
 const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
@@ -201,6 +212,8 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
   'end-unconfirmed':
     'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, so Tab moves through every control to the end of the page, then check the screen again.',
+  'body-focused':
+    'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
 };
 
 function truncatedWalkDraft(
@@ -301,7 +314,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // unnamed focusable element. A script that blurs a control, or stops Tab and drops focus,
         // also leaves focus on the body, in the middle of the page, so one more Tab confirms it.
         if (await ctx.page.activeElementIs('body')) {
-          stopReason = (await walkEndConfirmed(ctx.page, walked)) ? 'complete' : 'end-unconfirmed';
+          stopReason = STOP_REASON_OF_END[await readWalkEnd(ctx.page, walked)];
           break;
         }
 

@@ -12,9 +12,16 @@ export interface WalkStopIdentity {
   key: string | null;
 }
 
+// How a walk that reached the body ended. 'confirmed': the focus order ended there. 'unconfirmed':
+// one more Tab did not go back to a stop the walk reached, so a script dropped focus mid-page.
+// 'body-focused': a script put focus on the body itself, or the page could not say whether it did,
+// so the end cannot be told. Only 'confirmed' makes a walk complete.
+export type WalkEnd = 'confirmed' | 'unconfirmed' | 'body-focused';
+
 /**
  * Whether focus on the body is the end of the focus order. In Chromium, Tab after the last control
- * moves focus to the body, and the next Tab goes back to the first control. So one more Tab must land
+ * leaves no element with focus, so document.activeElement reads as the body, and the next Tab goes
+ * back to the first control. So the body must not hold focus itself, and one more Tab must land
  * on a stop the walk already reached. Any walked stop counts, not only the first, and a stop counts
  * when the element is the same. A first control that went away during the walk, such as a timed
  * banner, moves every control after it, so the control the Tab lands on has a new path and is still
@@ -26,9 +33,23 @@ export interface WalkStopIdentity {
  * transcript the CLI collects, and in checkPage the stops the keyboard walk returns. If the next Tab
  * lands on a control instead, a script dropped focus before the walk reached it.
  */
-export async function walkEndConfirmed(page: Page, walked: readonly WalkStopIdentity[]): Promise<boolean> {
-  await page.tab();
-  const confirmed = await landedOnWalkedStop(page, walked);
+export async function readWalkEnd(page: Page, walked: readonly WalkStopIdentity[]): Promise<WalkEnd> {
+  // At the end of the focus order no element has focus, and document.activeElement only falls back
+  // to the body. A script that calls focus() on a body with a tabindex puts focus on the body
+  // itself, in the middle of the page, and the next Tab from there starts again at the first
+  // control, so one more Tab would confirm an end that is not there. That case is told apart first,
+  // and a read that fails is read the same way, because the end cannot then be told.
+  let bodyFocused: boolean;
+  try {
+    bodyFocused = await page.bodyHoldsFocus();
+  } catch {
+    bodyFocused = true;
+  }
+  let end: WalkEnd = 'body-focused';
+  if (!bodyFocused) {
+    await page.tab();
+    end = (await landedOnWalkedStop(page, walked)) ? 'confirmed' : 'unconfirmed';
+  }
   // Flows and voice contracts run after the walk on the same page and start from wherever focus
   // is. Before the end was confirmed, the walk left focus on the body, so the next Tab went to the
   // first control. The extra Tab moved focus off the body and may have made a focus handler write
@@ -36,7 +57,7 @@ export async function walkEndConfirmed(page: Page, walked: readonly WalkStopIden
   // back to the body, so the next check starts where it always did and hears nothing the walk did.
   await page.drainAnnouncements();
   await page.focusBody();
-  return confirmed;
+  return end;
 }
 
 async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[]): Promise<boolean> {

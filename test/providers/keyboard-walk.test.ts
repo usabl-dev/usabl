@@ -467,6 +467,47 @@ describe('makeKeyboardWalkProvider', () => {
     );
   });
 
+  // A script that focuses a body with a tabindex in the middle of the page leaves focus on the body,
+  // and the next Tab starts from the body and lands on the first control, as at the real end of the
+  // focus order. Read as the end, the controls after that point were never walked and the walk
+  // read as complete.
+  it('discloses truncation when a script put focus on the body itself in the middle of the page', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => page.activeElementIs('body');
+
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', evidenceClass: 'deterministic', elementPath: '' });
+    expect(drafts[0]?.why).toBe(
+      'After 2 tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.',
+    );
+    expect(drafts[0]?.fix).toBe(
+      'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
+    );
+    expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(false);
+  });
+
+  it('discloses truncation when the page cannot say whether the body itself has focus', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => {
+      throw new Error('the browser could not read focus');
+    };
+
+    expect(rules(draftsOf(await provider.run(makeContext(page))))).toEqual(['keyboard-walk-truncated']);
+  });
+
+  it('still ends complete when Tab moved past the last control and no element holds focus', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => false;
+
+    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+  });
+
   it('discloses truncation when one more Tab after the body leaves focus on the body', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: BODY_PATH });

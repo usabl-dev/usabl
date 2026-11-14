@@ -957,6 +957,11 @@ export interface Page {
   press(key: string): Promise<void>;
   click(selector: string): Promise<void>;
   activeElementIs(selector: string): Promise<boolean>;
+  // Whether the document body is itself the focused element, as it is after a script calls focus()
+  // on a body that has a tabindex. False when no element has focus and document.activeElement only
+  // falls back to the body, as it does after Tab moves past the last control. The walk's end rule
+  // reads it, because the next Tab from a focused body starts again at the first control.
+  bodyHoldsFocus(): Promise<boolean>;
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   // Waits for the page to react to one action: the element count holds and the network is quiet,

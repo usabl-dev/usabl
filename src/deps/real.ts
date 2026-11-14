@@ -802,6 +802,14 @@ const ACTIVE_ELEMENT_IS_FUNCTION = `function (query) {
   return document.querySelector(query) === document.activeElement;
 }`;
 
+// Whether the body is itself the focused element. document.activeElement also returns the body
+// when no element has focus, as after Tab moves past the last control, so the read asks the
+// browser's own :focus state, which matches only the element that holds focus.
+const BODY_HOLDS_FOCUS_FUNCTION = `function () {
+  const body = document.body;
+  return body instanceof HTMLElement && document.activeElement === body && body.matches(':focus');
+}`;
+
 // Whether the focused element is the first element a selector matches or sits inside it.
 const ACTIVE_ELEMENT_WITHIN_FUNCTION = `function (query) {
   const root = document.querySelector(query);
@@ -2651,6 +2659,9 @@ function wrapPage(
     },
     async activeElementIs(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_IS_FUNCTION, [selector])) === true;
+    },
+    async bodyHoldsFocus(): Promise<boolean> {
+      return (await callInWorld(cdp, READ_WORLD, 'read focus', BODY_HOLDS_FOCUS_FUNCTION)) === true;
     },
     async activeElementWithin(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;

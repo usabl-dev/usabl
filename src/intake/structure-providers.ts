@@ -30,7 +30,7 @@ import { DESIGN_AX_TREE_NODE_LIMIT } from '../deps/ax-tree.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
 import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
-import { walkEndConfirmed, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
+import { readWalkEnd, type WalkStopIdentity } from '../providers/keyboard-walk/walk-end.js';
 import {
   findByRole,
   perceivedWithRole,
@@ -488,8 +488,11 @@ type FocusWalk =
   | { kind: 'node-unreadable'; stop: number }
   // The walk ended before the end of the focus order was confirmed. 'end-unconfirmed': focus fell to
   // the body, and one more Tab did not go back to a walked control. 'cycle': focus came back to a
-  // control it already walked without passing the body. `names` is what the walk read before that.
-  | { kind: 'cut-short'; reason: 'end-unconfirmed' | 'cycle'; names: string[] };
+  // control it already walked without passing the body. 'body-focused': a script put focus on the
+  // body itself, or the page could not say whether it did. `names` is what the walk read before that.
+  | { kind: 'cut-short'; reason: CutShortReason; names: string[] };
+
+type CutShortReason = 'end-unconfirmed' | 'body-focused' | 'cycle';
 
 // Whether focus is on a control the walk already reached. The browser's key for the element decides
 // when both keys are known, so a list that renders again and puts a new element at a walked path is
@@ -513,9 +516,11 @@ async function walkFocus(page: Page): Promise<FocusWalk> {
       return { kind: 'unreadable', reason: unreadable };
     }
     if (await page.activeElementIs('body')) {
-      return (await walkEndConfirmed(page, walked))
-        ? { kind: 'walked', names }
-        : { kind: 'cut-short', reason: 'end-unconfirmed', names };
+      const end = await readWalkEnd(page, walked);
+      if (end === 'confirmed') {
+        return { kind: 'walked', names };
+      }
+      return { kind: 'cut-short', reason: end === 'unconfirmed' ? 'end-unconfirmed' : 'body-focused', names };
     }
     const path = await page.activePath();
     if (path === '') {
@@ -535,16 +540,20 @@ async function walkFocus(page: Page): Promise<FocusWalk> {
   return { kind: 'cap' };
 }
 
-const CUT_SHORT_WHY: Readonly<Record<'end-unconfirmed' | 'cycle', (stops: number) => string>> = {
+const CUT_SHORT_WHY: Readonly<Record<CutShortReason, (stops: number) => string>> = {
   'end-unconfirmed': (stops) =>
     `After ${stops} focus stop(s), focus moved to the document body, but one more Tab did not go back to a control the walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the rest of the order was not read.`,
+  'body-focused': (stops) =>
+    `After ${stops} focus stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the walk cannot tell where the focus order ends. The rest of the order was not read.`,
   cycle: (stops) =>
     `After ${stops} focus stop(s), focus went back to a control the walk had already reached, without reaching the end of the page. Focus may be trapped, or part of the page may have rendered again, so the rest of the order was not read.`,
 };
 
-const CUT_SHORT_FIX: Readonly<Record<'end-unconfirmed' | 'cycle', string>> = {
+const CUT_SHORT_FIX: Readonly<Record<CutShortReason, string>> = {
   'end-unconfirmed':
     'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, then check the screen again, or check this order by hand.',
+  'body-focused':
+    'Find the script on this screen that moves focus to the document body, then check the screen again, or check this order by hand.',
   cycle: 'Check this order by hand. If focus is trapped, let Tab move out of the group to the rest of the page.',
 };
 
