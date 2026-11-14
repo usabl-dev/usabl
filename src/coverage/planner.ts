@@ -21,6 +21,7 @@ import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { packageSourceFiles, type TrustedRead, workspaceDependencies, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
+import { docsPageUrl } from './docs-planner.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
 import { configError } from '../intake/config-error.js';
 import { matchGlob } from '../primitives/match-glob.js';
@@ -54,6 +55,28 @@ function routeUrl(baseUrl: string, routePath: string): string {
     throw configError`route url must stay on app origin: ${routePath}`;
   }
   return resolved.toString();
+}
+
+/**
+ * Every url the policy makes usabl open: each surface url, each route url joined with appBaseUrl,
+ * each docs page url joined with docsBaseUrl as the docs scan joins it, and the two base urls. A
+ * route or page url that the join refuses is kept as written, since reading more urls can only add
+ * gaps. Requirements, flows, and voice checks run on these screens and name no url of their own.
+ */
+function openedUrls(config: UsablConfig, manifest: RouteManifest, docs: DocsManifest | null): string[] {
+  const joined = (join: () => string, written: string): string => {
+    try {
+      return join();
+    } catch {
+      return written;
+    }
+  };
+  return [
+    config.appBaseUrl,
+    ...config.surfaces.map((surface) => surface.url),
+    ...manifest.routes.map((route) => joined(() => routeUrl(config.appBaseUrl, route.url), route.url)),
+    ...(docs === null ? [] : [docs.docsBaseUrl, ...docs.pages.map((page) => joined(() => docsPageUrl(docs.docsBaseUrl, page.url), page.url))]),
+  ];
 }
 
 function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScreen): void {
@@ -223,11 +246,10 @@ export async function computeCoverage(
   assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
   // A story tool loads stories, setup files, mocks, and helpers through its own config, which usabl
-  // does not read. So when a surface or a route is a story tool page, the test file set is only the
+  // does not read. So when a url usabl opens is a story tool page, the test file set is only the
   // base names and folders, and the other names are UI files, checked when a surface lists them
   // and a gap otherwise.
-  const storyToolPage =
-    config.surfaces.some((surface) => isStoryToolPageUrl(surface.url)) || manifest.routes.some((route) => isStoryToolPageUrl(route.url));
+  const storyToolPage = openedUrls(config, manifest, docs).some(isStoryToolPageUrl);
   const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
 
   const quotedFiles = changedFiles.filter(looksQuoted);

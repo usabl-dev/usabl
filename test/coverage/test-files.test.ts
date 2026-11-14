@@ -440,6 +440,23 @@ describe('a story or test support file when the config names a story tool page',
     expect(coverage.gaps[0]?.reason).toContain('loads stories through its own config');
   });
 
+  it('is a gap when a page in usabl.docs.json is the story tool page', async () => {
+    const docs = {
+      format: 'storybook',
+      docsBaseUrl: 'http://127.0.0.1:6006',
+      builtRoot: 'storybook-static',
+      buildCommand: null,
+      pages: [{ pageId: 'button-docs', url: '/?path=/docs/button--docs', assemblyFile: 'src/Button.mdx', sources: ['src/Button.mdx'] }],
+      sharedGlobs: [],
+    };
+    const tree = { ...files, 'src/Button.mdx': '# Button\n', 'usabl.docs.json': `${JSON.stringify(docs)}\n` };
+    const coverage = await computeCoverage(fsOf(tree), config, [story]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[story, 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain('the config names a story tool page');
+  });
+
   it('makes a fixture that only the story imports a UI file, as on main', async () => {
     const fixture = 'src/tests/fixtures/data.ts';
     const tree = { ...files, [story]: "import { rows } from './tests/fixtures/data';\n", [fixture]: 'export const rows = [];\n' };

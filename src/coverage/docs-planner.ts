@@ -9,7 +9,7 @@ import type { DocsManifest } from './docs-manifest.js';
 import { matchGlob } from '../primitives/match-glob.js';
 import { configError } from '../intake/config-error.js';
 
-function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
+export function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
   const base = new URL(docsBaseUrl);
   const joinBase = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
   // Page paths start with '/'. Strip the leading slash so URL resolves relative to the
