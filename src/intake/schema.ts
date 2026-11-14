@@ -250,7 +250,9 @@ const targetSizeAssertionSchema = z
     target: targetSchema,
     minCssPx: z
       .number({ required_error: 'minCssPx is required: the smallest width and height, in CSS pixels, such as 24' })
-      .positive('minCssPx must be more than 0')
+      // The hit test needs a box at least 2 pixels on each side for its points, and skips a smaller
+      // one. A minimum of 2 or more fails such a box on size, so it can never pass without a hit test.
+      .min(2, 'minCssPx must be at least 2 CSS pixels')
       .max(200, 'minCssPx must be at most 200 CSS pixels'),
   })
   .strict();

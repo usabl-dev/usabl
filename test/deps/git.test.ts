@@ -306,6 +306,68 @@ describe('makeGitReader in a repository with no commits', () => {
     expect(bare).toContain('git remote show origin');
     expect(bare).not.toContain('origin main');
   });
+
+  // The CI workflow passes the base commit. git fetch cannot be shown as one fixed command for
+  // it, and a shallow checkout is the usual reason it is missing, so the hint says to fetch more
+  // history and gives no git fetch example.
+  it('gives a missing commit id the history hint, not a branch fetch', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    for (const sha of ['abc1234', '0123456789ab']) {
+      const message = await git.show(sha, 'usabl.config.json').catch((err: Error) => err.message);
+      expect(message).toContain(`git cannot read ${sha}`);
+      expect(message).toContain('fetch-depth: 0');
+      expect(message).not.toContain('git fetch');
+      expect(message).not.toContain('git remote show origin');
+    }
+  });
+
+  // For a full 40 character id git says the path "does not exist in" or "exists on disk, but not
+  // in" that commit, never "invalid object name", so this hint is reached only through the check
+  // that the ref names a commit. The workflow passes the base commit as a full id.
+  it('gives a full commit id that is not in the repository the history hint, for a present and an absent path', async () => {
+    await writeFile(join(emptyRepo, 'usabl.config.json'), '{}\n', 'utf8');
+    const git = makeGitReader({ cwd: emptyRepo });
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    for (const path of ['usabl.config.json', 'missing.json']) {
+      const message = await git.show(sha, path).catch((err: Error) => err.message);
+      expect(message).toContain(`git cannot read ${sha}. usabl reads trusted policy from that commit.`);
+      expect(message).toContain('so fetch more history, such as fetch-depth: 0 in actions/checkout');
+      expect(message).not.toContain('git fetch');
+    }
+  });
+
+  // A branch named feature/foo is not the branch foo on a remote called feature. When the first
+  // part names no remote, the example fetches the branch by its whole name.
+  it('fetches a branch with a slash by its whole name when the first part is not a remote', async () => {
+    await runGit(emptyRepo, ['remote', 'add', 'origin', 'https://example.test/app.git']);
+    const git = makeGitReader({ cwd: emptyRepo });
+    const message = await git.show('feature/foo', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(message).toContain('git fetch origin feature/foo:feature/foo');
+    expect(message).not.toContain('git fetch feature foo');
+  });
+
+  // With no remote to compare against, the hint gives both readings of the ref. The ref alone is
+  // capped, never the fixed text around it, so the hint is never cut off.
+  it('gives both readings in full when the repository has no remote', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    for (const ref of ['feature/foo', 'cafe/babe']) {
+      const message = await git.show(ref, 'usabl.config.json').catch((err: Error) => err.message);
+      const [first, rest] = ref.split('/');
+      expect(message).toContain(
+        `(for example git fetch ${first} ${rest} if ${first} is a remote, or git fetch origin ${ref}:${ref} if ${ref} is a branch on origin), then run usabl again.`,
+      );
+      expect(message).not.toContain('(truncated)');
+    }
+  });
+
+  it('fetches a remote-tracking ref from its remote when the first part is a remote', async () => {
+    await runGit(emptyRepo, ['remote', 'add', 'origin', 'https://example.test/app.git']);
+    await runGit(emptyRepo, ['remote', 'add', 'upstream', 'https://example.test/upstream.git']);
+    const git = makeGitReader({ cwd: emptyRepo });
+    const message = await git.show('upstream/develop', 'usabl.config.json').catch((err: Error) => err.message);
+    expect(message).toContain('git fetch upstream develop');
+    expect(message).not.toContain('upstream/develop:');
+  });
 });
 
 // A shallow clone can lack the trusted commit. For a full commit id git then says the path "does not
@@ -334,7 +396,7 @@ describe('makeGitReader with a trusted commit that is not in the repository', { 
         (err: unknown) => err,
       );
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toMatch(new RegExp(`git cannot read ${ABSENT_COMMIT}.*fetch it`, 's'));
+      expect((error as Error).message).toMatch(new RegExp(`git cannot read ${ABSENT_COMMIT}.*fetch more history`, 's'));
     }
   });
 
@@ -456,10 +518,31 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     expect(text).not.toContain('decoy');
   });
 
-  it('still throws for a submodule path', async () => {
+  it('still throws for a submodule path whose commit is not in the repository', async () => {
     await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
     await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub')).rejects.toThrow();
+  });
+
+  // A submodule path is a commit entry, which git cat-file blob refuses. When that commit is in
+  // the repository, git show prints it, and the guard compared that text as before, so a moved
+  // submodule reads as changed.
+  it('reads a submodule path whose commit is in the repository as git show prints it', async () => {
+    const pinned = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${pinned},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
+    const { stdout: expected } = await execFileAsync('git', ['show', 'HEAD:sub'], { cwd: repoPath, encoding: 'utf8' });
+    expect(expected).toContain(`commit ${pinned}`);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(expected);
+    // The submodule moves to another commit, so the two reads differ.
+    const moved = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
+    await runGit(repoPath, ['update-index', '--cacheinfo', `160000,${moved},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'the submodule moves']);
+    const before = await git.show('HEAD~1', 'sub');
+    const after = await git.show('HEAD', 'sub');
+    expect(after).toContain(`commit ${moved}`);
+    expect(after).not.toBe(before);
   });
 
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
@@ -718,10 +801,12 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     expect(end).toBeLessThan(args.indexOf(refArg));
   }
 
-  it('puts --end-of-options before the ref in show, the commit check, the diff, and each tree listing', async () => {
+  it('puts --end-of-options before the ref in show, the commit check, the folder read, the diff, and each tree listing', async () => {
     const git = makeGitReader({ cwd: repoPath });
     await git.show('main', 'screen.tsx');
     await git.show(ABSENT_COMMIT, 'missing.tsx').catch(() => undefined);
+    // A folder: cat-file blob refuses it, cat-file -t names it a tree, and git show lists it.
+    await git.show('main', 'src/gate');
     await git.diffNameOnly('main');
     await git.lsTree('main', ['screen.tsx']);
     await git.lsFiles('main', 'src/gate');
@@ -731,6 +816,11 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     // show reads the blob with git cat-file.
     expectEndBefore(all, 'main:screen.tsx', 'cat-file');
     expectEndBefore(all, `${ABSENT_COMMIT}^{commit}`, 'rev-parse');
+    const typeCheck = all.find((args) => args[0] === 'cat-file' && args[1] === '-t' && args.includes('main:src/gate'));
+    expect(typeCheck, 'a git cat-file -t call for the folder').toBeDefined();
+    expect(typeCheck?.indexOf('--end-of-options') ?? -1, `--end-of-options in git ${(typeCheck ?? []).join(' ')}`).toBeGreaterThan(-1);
+    expect(typeCheck?.indexOf('--end-of-options')).toBeLessThan(typeCheck?.indexOf('main:src/gate') ?? -1);
+    expectEndBefore(all, 'main:src/gate', 'show');
     expectEndBefore(all, 'main...HEAD', 'diff');
     const listings = all.filter((args) => args[0] === 'ls-tree');
     expect(listings).toHaveLength(4);

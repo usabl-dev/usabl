@@ -73,10 +73,11 @@ const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 </main></body></html>`;
 
 // Controls whose box is at least 24 CSS pixels each way, but part of which a pointer cannot hit.
-// None of them may pass. Each sits in a row of its own, so no case covers another. The two scaled
-// cases are the shapes the named limits miss: the clip edge is read in layout pixels while the box
-// is scaled, so only the hit test sees that half of the button is cut off. The last one is hidden
-// below a scaled box that hides its overflow: only a scroll a person cannot make shows it.
+// None of them may pass. Each sits in a row of its own, so no case covers another. In the two scaled
+// cases the clipping box is scaled, or sits inside a scaled element, so its clip edge must be read
+// in the units of the scaled box: the overflow limit and the hit test both see that part of the
+// button is cut off. The last one is hidden below a scaled box that hides its overflow: only a
+// scroll a person cannot make shows it.
 const ROW = 'height:80px';
 const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Missed</title></head><body style="margin:0"><main>
   <div style="${ROW}"><div style="height:40px;overflow:hidden;transform:scale(0.5);transform-origin:0 0"><button id="scaled-clip" aria-label="Scaled clip" style="width:60px;height:60px;padding:0;border:0"></button></div></div>
@@ -312,9 +313,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         expect({ selector, missed: box?.unmeasurable.includes('hit-test-missed') }).toEqual({ selector, missed: true });
         expect({ selector, confidence: await targetSizeConfidence(page, name, '/missed.html') }).toEqual({ selector, confidence: ['unverified'] });
       }
-      // No named limit sees a scaled clip: the hit test is what stops it.
-      expect((await page.boundingBox('#scaled-clip'))?.unmeasurable).toEqual(['hit-test-missed']);
-      expect((await page.boundingBox('#scaled-above'))?.unmeasurable).toEqual(['hit-test-missed']);
+      // The clip edge is read in the units of the scaled box, so the overflow limit names a scaled
+      // clip, and the hit test misses it too.
+      expect((await page.boundingBox('#scaled-clip'))?.unmeasurable).toEqual(['overflow-clipped', 'hit-test-missed']);
+      expect((await page.boundingBox('#scaled-above'))?.unmeasurable).toEqual(['overflow-clipped', 'hit-test-missed']);
     });
   });
 

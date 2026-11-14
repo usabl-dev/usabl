@@ -92,8 +92,9 @@ function parseImportArgs(args: readonly string[]): ImportArgs | string {
       owner = value.trim();
     } else {
       const size = Number(value);
-      if (!Number.isFinite(size) || size <= 0 || size > 200) {
-        return 'usabl import: --min-target takes a size from 1 to 200 CSS pixels, such as --min-target 24';
+      // The same range as minCssPx in a requirement, so every draft it writes loads.
+      if (!Number.isFinite(size) || size < 2 || size > 200) {
+        return 'usabl import: --min-target takes a size from 2 to 200 CSS pixels, such as --min-target 24';
       }
       minTarget = size;
     }
