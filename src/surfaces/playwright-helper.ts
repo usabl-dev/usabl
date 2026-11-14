@@ -23,7 +23,7 @@ import type {
   WalkRecord,
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
-import { markUnseenScreens } from '../coverage/unseen.js';
+import { markUnseenScreens, walkStayedOnBody } from '../coverage/unseen.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
 import { readStorageStateEnv } from '../deps/session.js';
@@ -38,6 +38,7 @@ import {
   measureReachability,
   measureReadiness,
   readApiResponses,
+  readContentShown,
   readinessSignalOf,
   selectorHeldBeforeWalk,
   signalTimeoutMsFor,
@@ -458,7 +459,13 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       before === null || signal === null || config === null
         ? null
         : { signal, measured: heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl)) };
-    const unseen = unseenGap(screenId, readiness, walk);
+    // checkPage reports a blank page, and only a blank page: the walk ran to its confirmed end, every
+    // stop stayed on the body, and the page shows no content. A page with nothing to Tab to that
+    // shows text or an image is checked, as before. What the page shows is read once, here, after
+    // the walk and the checks.
+    const blank =
+      walk?.complete === true && walkStayedOnBody(walk.stops) && !(await readContentShown(page)) ? walk : undefined;
+    const unseen = unseenGap(screenId, readiness, blank);
     return unseen === null ? finish(drafts, gaps, notes) : finish([], [...gaps, unseen]);
   } finally {
     // Releases the CDP session and the listeners adoption added. The caller's page stays open.
@@ -693,9 +700,10 @@ function readinessRef(screenId: string): string {
 /**
  * The CLI's unseen-screen gap, or null when the page is seen. Built by markUnseenScreens itself,
  * so the two surfaces word and decide it the same way. It reads the readiness measurement when the
- * screen declares a signal, and the stops of the keyboard walk when the walk ran to its confirmed
- * end. A walk that did not run, or was cut short, gives no stops, so the blank-page detector makes
- * no claim either way: a cut-short walk is already not covered by its own truncation draft.
+ * screen declares a signal, and the stops of the keyboard walk when the caller found a blank page.
+ * A walk that did not run, was cut short, or met a page that shows content gives no stops, so the
+ * blank-page detector makes no claim: a cut-short walk is already not covered by its own truncation
+ * draft.
  */
 function unseenGap(
   screenId: string,

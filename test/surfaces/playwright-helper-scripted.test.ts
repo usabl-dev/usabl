@@ -161,10 +161,19 @@ describe('checkPage on a page with nothing rendered', () => {
     expect(result.verdict).toBe('verified');
   });
 
-  it('checks a labeled page of text with nothing to Tab to when its readiness selector holds, by the CLI rule', async () => {
+  it('checks a page with nothing to Tab to that shows content, with no readiness signal, as on main', async () => {
+    adopted.page = scriptedPage([], { pageShowsContent: async () => true });
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('checks a labeled page with nothing to Tab to that shows content when its readiness selector holds', async () => {
     adopted.page = scriptedPage([], {
       queryAll: async (selector) => (selector === 'main article' ? [{ selector: 'main article' }] : []),
-      pageShowsText: async () => true,
+      pageShowsContent: async () => true,
     });
 
     const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('main article'), tabCap: 10 });
@@ -173,18 +182,50 @@ describe('checkPage on a page with nothing rendered', () => {
     expect(result.verdict).toBe('verified');
   });
 
-  it('is not covered for a blank page whose selector names its empty mount point, by the CLI rule', async () => {
+  it('still gaps a page that shows content when its declared readiness selector does not hold, as on main', async () => {
+    adopted.page = scriptedPage([], { pageShowsContent: async () => true });
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('#orders'), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
+    expect(result.gaps[0]?.reason).toContain('#orders');
+  });
+
+  it('is not covered, with the CLI gap for a blank page, when the selector names its empty mount point and held', async () => {
     adopted.page = scriptedPage([], {
       queryAll: async (selector) => (selector === '#app' ? [{ selector: '#app' }] : []),
-      pageShowsText: async () => false,
+      pageShowsContent: async () => false,
     });
 
     const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('#app'), tabCap: 10 });
 
     expect(result.verdict).toBe('not_covered');
     expect(result.drafts).toEqual([]);
-    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
-    expect(result.gaps[0]?.reason).toContain('The reachedWhen selector #app matched, but usabl found no rendered text on the page');
+    expect(result.gaps).toEqual([{ ref: 'readiness:clusters', state: 'not-covered', reason: cliBlankPageReason() }]);
+  });
+
+  it('reads a content read that fails as no content, so a blank page stays not covered', async () => {
+    adopted.page = scriptedPage([], {
+      pageShowsContent: async () => {
+        throw new Error('the browser could not read what the page shows');
+      },
+    });
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:page']);
+  });
+
+  it('does not read what the page shows when the walk reached a control', async () => {
+    const read = vi.fn(async () => false);
+    adopted.page = scriptedPage(['#save'], { pageShowsContent: read });
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
+
+    expect(read).not.toHaveBeenCalled();
+    expect(result.verdict).toBe('verified');
   });
 
   it('keeps only the first line of the error, neutralized, when the page does not settle before the address read', async () => {

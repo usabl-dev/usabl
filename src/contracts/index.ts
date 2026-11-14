@@ -964,11 +964,14 @@ export interface Page {
   // falls back to the body, as it does after Tab moves past the last control. The walk's end rule
   // reads it, because the next Tab from a focused body starts again at the first control.
   bodyHoldsFocus(): Promise<boolean>;
-  // Whether the page shows any rendered text that is not white space: in the document, in open
-  // shadow roots, and in same-origin frames. Text that CSS hides is not counted, and neither is
-  // text in a closed shadow root or a frame from another origin, because the read cannot see it.
-  // Read in an isolated world. The unseen check reads it for a page with nothing to Tab to.
-  pageShowsText(): Promise<boolean>;
+  // Whether the page shows content: rendered text that is not white space, or a rendered img, svg,
+  // canvas, video, picture, object, or embed element, or an element whose role is img, with a box
+  // that has a width and a height. It reads the document, open shadow roots, and same-origin
+  // frames. Content that CSS hides is not counted, and neither is a CSS background image or content
+  // in a closed shadow root or a frame from another origin. Read in an isolated world. checkPage
+  // reads it only when the keyboard walk stayed on the body, to tell a blank page from a page with
+  // nothing to Tab to. Measurement only: no draft, finding, or verdict is made from it.
+  pageShowsContent(): Promise<boolean>;
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   // Waits for the page to react to one action: the element count holds and the network is quiet,

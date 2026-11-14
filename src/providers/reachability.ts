@@ -300,13 +300,13 @@ export function heldThroughout(
 }
 
 /**
- * Whether the page shows rendered text, for a page with nothing to Tab to. The unseen check counts a
- * selector that held on such a page only when this is true. A read that fails cannot tell, and a
- * guess must not let a blank page through, so it reads as no text shown. Measurement only.
+ * Whether the page shows content, for checkPage on a page whose walk stayed on the body. A read
+ * that fails cannot tell, and a guess must not let a blank page through, so it reads as no content
+ * shown. Measurement only.
  */
-export async function readTextShown(page: Page): Promise<boolean> {
+export async function readContentShown(page: Page): Promise<boolean> {
   try {
-    return (await page.pageShowsText()) === true;
+    return (await page.pageShowsContent()) === true;
   } catch {
     return false;
   }

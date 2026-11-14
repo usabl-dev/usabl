@@ -90,29 +90,41 @@ async function readFixture(name: string): Promise<string> {
 // page, so a scan that starts before the answer lands finishes before it too.
 const SLOW_ANSWER_MS = 4_000;
 
-// Pages with nothing to Tab to, for the text read the unseen check uses on such a page.
-function textPage(title: string, body: string, bodyAttributes = ''): string {
+// Pages with nothing to Tab to, for the read checkPage uses to tell a blank page from one that
+// shows content.
+function contentPage(title: string, body: string, bodyAttributes = ''): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>${title}</title></head><body${bodyAttributes}>${body}</body></html>`;
 }
 const GIF = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
-const TEXT_PAGES: Record<string, string> = {
+const CONTENT_PAGES: Record<string, string> = {
   // An application that never rendered into its mount point. The title is text, but not shown.
-  '/blank-app.html': textPage('App', '', ' id="app"'),
-  '/plain-text.html': textPage('Terms', '<main id="terms"><h1>Terms</h1><p>These terms apply to every account.</p></main>'),
-  '/open-shadow-text.html': textPage(
+  '/blank-app.html': contentPage('App', '', ' id="app"'),
+  '/plain-text.html': contentPage('Terms', '<main id="terms"><h1>Terms</h1><p>These terms apply to every account.</p></main>'),
+  '/image-only.html': contentPage('Images', `<div id="gallery"><img src="${GIF}" alt="A chart" width="40" height="40" /></div>`),
+  '/svg-only.html': contentPage(
+    'Chart',
+    '<div id="chart"><svg width="40" height="40" role="img" aria-label="Chart"><rect width="40" height="40" fill="navy" /></svg></div>',
+  ),
+  '/open-shadow-text.html': contentPage(
     'Shadow',
     '<x-card id="card"></x-card><script>customElements.define("x-card", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = "<p>Text inside an open shadow root</p>"; } });</script>',
   ),
-  '/closed-shadow-text.html': textPage(
+  '/closed-shadow-text.html': contentPage(
     'Closed',
     '<x-closed id="card"></x-closed><script>customElements.define("x-closed", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "closed" }).innerHTML = "<p>Text inside a closed shadow root</p>"; } });</script>',
   ),
-  '/frame-text.html': textPage('Frame', '<iframe id="frame" title="Inner" srcdoc="<p>Text inside a same-origin frame</p>"></iframe>'),
-  '/hidden-text.html': textPage(
-    'Hidden',
-    '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p><p style="opacity: 0">Hidden by opacity</p></div>',
+  '/frame-text.html': contentPage('Frame', '<iframe id="frame" title="Inner" srcdoc="<p>Text inside a same-origin frame</p>"></iframe>'),
+  // A data: address is a document from another origin, so the read cannot reach into it.
+  '/cross-origin-frame-text.html': contentPage(
+    'Frame',
+    `<iframe id="frame" title="Inner" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame from another origin</p>')}"></iframe>`,
   ),
-  '/images-only.html': textPage('Images', `<div id="gallery"><img src="${GIF}" alt="A chart" width="40" height="40" /></div>`),
+  '/hidden-content.html': contentPage(
+    'Hidden',
+    '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
+      `<p style="opacity: 0">Hidden by opacity</p><img src="${GIF}" alt="Hidden chart" width="40" height="40" style="display: none" /></div>`,
+  ),
+  '/background-only.html': contentPage('Banner', `<div id="banner" style="width: 200px; height: 100px; background-image: url(${GIF})"></div>`),
 };
 
 async function makeFixtureServer(): Promise<FixtureServer> {
@@ -134,7 +146,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
     '/partial-render.html': await readFixture('partial-render.html'),
     '/details-after-signal.html': await readFixture('details-after-signal.html'),
-    ...TEXT_PAGES,
+    ...CONTENT_PAGES,
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -895,22 +907,25 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     });
   }
 
-  // What the text read answers on pages with nothing to Tab to. The unseen check counts a selector
-  // that held on such a page only when the page shows text.
+  // What the content read answers on pages with nothing to Tab to. checkPage reports such a page
+  // as blank only when it shows no content.
   for (const [path, shows] of [
     ['/blank-app.html', false],
     ['/plain-text.html', true],
+    ['/image-only.html', true],
+    ['/svg-only.html', true],
     ['/open-shadow-text.html', true],
     ['/closed-shadow-text.html', false],
     ['/frame-text.html', true],
-    ['/hidden-text.html', false],
-    ['/images-only.html', false],
+    ['/cross-origin-frame-text.html', false],
+    ['/hidden-content.html', false],
+    ['/background-only.html', false],
   ] as const) {
-    it(`reads ${path} as ${shows ? 'showing' : 'not showing'} text`, async () => {
+    it(`reads ${path} as ${shows ? 'showing' : 'not showing'} content`, async () => {
       const page = await driver.open(new URL(path, fixture.url).toString());
       try {
         await page.gotoReady();
-        expect(await page.pageShowsText()).toBe(shows);
+        expect(await page.pageShowsContent()).toBe(shows);
       } finally {
         await page.close();
       }

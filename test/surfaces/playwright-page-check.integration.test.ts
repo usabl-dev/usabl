@@ -60,7 +60,7 @@ const BLANK_APP_HTML = `<!doctype html>
   <body id="app"></body>
 </html>`;
 
-// A page of text with nothing to Tab to. It rendered, and only a readiness signal can say so.
+// A page of text with nothing to Tab to. It shows content, so checkPage checks it as on main.
 const TEXT_ONLY_HTML = `<!doctype html>
 <html lang="en">
   <head>
@@ -156,14 +156,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
     }
   });
 
-  it('is not_covered for a page of text with no readiness signal, and the gap says to declare one', async () => {
+  it('checks a page of text with nothing to Tab to and no readiness signal, as on main', async () => {
     const { context, page } = await openPage(TEXT_ONLY_HTML);
     try {
       const result = await checkPage(page, { tabCap: 10 });
 
-      expect(result.verdict).toBe('not_covered');
-      expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:page']);
-      expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+      expect(result.gaps).toEqual([]);
+      expect(result.needsReview).toEqual([]);
+      expect(result.verdict).toBe('verified');
     } finally {
       await context.close();
     }
@@ -818,10 +818,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
     expect(result.verdict).toBe('not_covered');
     expect(result.drafts).toEqual([]);
     expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
-    expect(result.gaps[0]?.reason).toContain('found no rendered text on the page');
+    expect(result.gaps[0]?.reason).toContain('Every keyboard stop stayed on the document body');
   });
 
-  it('checks a page whose only text is inside an open shadow root when its selector holds', async () => {
+  it('checks a page whose only content is inside an open shadow root when its selector holds', async () => {
     const shadow =
       '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Clusters</title></head><body><main>' +
       '<x-card id="card"></x-card></main><script>customElements.define("x-card", class extends HTMLElement { constructor() { super();' +
@@ -829,6 +829,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
     const result = await check(shadow, '#card');
 
     expect(result.gaps).toEqual([]);
+    expect(result.needsReview).toEqual([]);
+    expect(result.drafts.map((draft) => draft.rule)).not.toContain('keyboard-walk-truncated');
+    expect(result.verdict).toBe('verified');
   });
 
   it('checks a page with a control when the declared selector holds, and the walk adds no gap', async () => {

@@ -810,22 +810,38 @@ const BODY_HOLDS_FOCUS_FUNCTION = `function () {
   return body instanceof HTMLElement && document.activeElement === body && body.matches(':focus');
 }`;
 
-// Whether the page shows rendered text that is not white space. innerText does not reach into a
-// shadow root, and design system components render their text there, so the read walks the nodes
-// itself: the document from the body, each open shadow root, and each same-origin frame. A text
-// node counts when it holds a character that is not white space, the element that holds it passes
-// the browser's checkVisibility (not display none, not visibility hidden, not opacity 0), and it
-// is laid out in at least one box with a width and a height. Node types are compared by number,
-// because a frame's nodes come from another realm. A closed shadow root and a frame from another
-// origin cannot be read, so their text is not counted. A walk past the node limit has not found
-// text, and says so.
-const PAGE_SHOWS_TEXT_FUNCTION = `function () {
+/**
+ * Whether the page shows content: rendered text that is not white space, or a rendered image or
+ * media element. innerText does not reach into a shadow root, and design system components render
+ * there, so the read walks the nodes itself: the document from the body, each open shadow root, and
+ * each same-origin frame.
+ *
+ * A text node counts when it holds a character that is not white space, the element that holds it
+ * passes the browser's checkVisibility (not display none, not visibility hidden, not opacity 0), and
+ * it is laid out in at least one box with a width and a height. An img, svg, canvas, video, picture,
+ * object, or embed element, or an element whose role is img, counts when it passes the same
+ * visibility test and its box has a width and a height. A CSS background image is not content: the
+ * element that shows it is empty.
+ *
+ * Node types are compared by number, because a frame's nodes come from another realm. A closed
+ * shadow root and a frame from another origin cannot be read, so what they show is not counted. A
+ * walk past the node limit has not found content, and says so. Exported for its tests.
+ */
+export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
   const NODE_LIMIT = 200000;
   const FRAME_DEPTH_LIMIT = 8;
+  const MEDIA_TAGS = ['img', 'svg', 'canvas', 'video', 'picture', 'object', 'embed'];
   let visited = 0;
   const visible = (element) =>
     typeof element.checkVisibility !== 'function' ||
     element.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+  const mediaShows = (element) => {
+    const role = (element.getAttribute('role') || '').trim().split(' ')[0];
+    if (!MEDIA_TAGS.includes(element.localName) && role !== 'img') return false;
+    if (!visible(element)) return false;
+    const box = element.getBoundingClientRect();
+    return box.width > 0 && box.height > 0;
+  };
   const textShows = (text) => {
     if (text.data.trim().length === 0) return false;
     const parent = text.parentNode;
@@ -852,6 +868,7 @@ const PAGE_SHOWS_TEXT_FUNCTION = `function () {
       if (node.nodeType === 1) {
         const tag = node.localName;
         if (tag === 'script' || tag === 'style' || tag === 'template') continue;
+        if (mediaShows(node)) return true;
         if (node.shadowRoot) pending.push(node.shadowRoot);
         if ((tag === 'iframe' || tag === 'frame') && depth < FRAME_DEPTH_LIMIT && visible(node)) {
           let inner = null;
@@ -2746,8 +2763,8 @@ function wrapPage(
     async bodyHoldsFocus(): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', BODY_HOLDS_FOCUS_FUNCTION)) === true;
     },
-    async pageShowsText(): Promise<boolean> {
-      return (await callInWorld(cdp, READ_WORLD, 'read the text the page shows', PAGE_SHOWS_TEXT_FUNCTION)) === true;
+    async pageShowsContent(): Promise<boolean> {
+      return (await callInWorld(cdp, READ_WORLD, 'read what the page shows', PAGE_SHOWS_CONTENT_FUNCTION)) === true;
     },
     async activeElementWithin(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;

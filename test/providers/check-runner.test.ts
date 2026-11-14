@@ -910,7 +910,7 @@ describe('makeCheckRunner and what a body-only page shows', () => {
     const read = vi.fn(async () => true);
     const page = Object.assign(await makeScriptedPage({ activePaths: ['#app', '#app', '#app'], activeNodes: [null, null, null] }), {
       activeElementIs: async (selector: string) => selector === 'body',
-      pageShowsText: read,
+      pageShowsContent: read,
     });
     const scan = await makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },
