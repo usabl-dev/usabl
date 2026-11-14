@@ -917,32 +917,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     });
   }
 
-  // A body-only screen is seen only when its selector held and the page shows text.
-  for (const [name, path, selector, unseen] of [
-    ['a blank page whose selector names its empty mount point', '/blank-app.html', '#app', true],
-    ['a page whose only text is inside an open shadow root', '/open-shadow-text.html', '#card', false],
-    ['a page of plain text', '/plain-text.html', '#terms', false],
-  ] as const) {
-    it(`reads ${name}, with a selector that held, as ${unseen ? 'unseen' : 'seen'} in the CLI path`, async () => {
-      const url = new URL(path, fixture.url).toString();
-      const runner = makeCheckRunner({
-        browser: driver,
-        providers: [],
-        config: testConfig({ surfaces: [{ id: 'text-screen', url, files: [], reachedWhen: selector }] }),
-        allowedCapabilities: ['live'],
-        stepRunner: makeStepRunner(),
-        transcriptTabCap: 3,
-      });
-      const scan = await runner.scan({ id: 'text-screen', url });
-      expect(scan.reachedSelectorPresent).toBe(true);
-      expect(scan.stops.every((stop) => stop.onBody === true)).toBe(true);
-      const pass = markUnseenScreens([scan]);
-      expect(pass.unseenScreenIds).toEqual(unseen ? ['text-screen'] : []);
-      if (unseen) {
-        expect(pass.screens[0]?.gaps[0]?.reason).toContain('found no rendered text on the page');
-      }
+  // In the CLI a screen whose walk stayed on the body is unseen whatever its readiness signal says.
+  it('reads a blank page whose selector names its empty mount point and held as unseen in the CLI path', async () => {
+    const url = new URL('/blank-app.html', fixture.url).toString();
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({ surfaces: [{ id: 'blank-screen', url, files: [], reachedWhen: '#app' }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 3,
     });
-  }
+    const scan = await runner.scan({ id: 'blank-screen', url });
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.stops.every((stop) => stop.onBody === true)).toBe(true);
+    const pass = markUnseenScreens([scan]);
+    expect(pass.unseenScreenIds).toEqual(['blank-screen']);
+    expect(pass.screens[0]?.gaps[0]?.reason).toContain('Every keyboard stop stayed on the document body');
+  });
 
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {
     const deniedProviderRun = vi.fn(async () => []);

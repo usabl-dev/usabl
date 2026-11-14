@@ -357,15 +357,16 @@ describe('unseen screens', () => {
   });
 });
 
-// A screen with nothing to Tab to, such as a page of text, has a walk that stays on the body. Only a
-// readiness selector that held, on a page that shows text, tells it from a page that never rendered.
-describe('a body-only screen and its readiness signal', () => {
+// A screen with nothing to Tab to has a walk that stays on the body. In the CLI no readiness signal
+// can tell a page that rendered from one that did not, so the screen is not covered whatever the
+// signal says.
+describe('a body-only screen is not covered whatever its readiness signal says', () => {
   const walked = {
     jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
     inventories: { screenId: 'inventories', url: config.surfaces[2]!.url, stops: realStops('a:nth-child(3)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
   };
 
-  function textOnlyScreen(readiness: Partial<ScreenScan>): ScreenScan {
+  function bodyOnlyScreen(readiness: Partial<ScreenScan>): ScreenScan {
     return {
       screenId: 'overview',
       url: config.surfaces[0]!.url,
@@ -382,39 +383,18 @@ describe('a body-only screen and its readiness signal', () => {
     return run(makeFakeDeps({ ...guardOk, changed: changedAll, scans: { overview, ...walked } }), config);
   }
 
-  it('verifies a text-only page whose declared selector held', async () => {
-    // The same holds for a selector that matches only the app shell, on a shell that shows text,
-    // on a screen whose content did not mount. That is the stated limit in the ground truth.
-    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: 'main article', textShown: true }));
-
-    expect(r.verdict).toBe('verified');
-    expect(r.exitCode).toBe(0);
-    expect(r.coverage.gaps).toEqual([]);
-  });
-
-  it('does not cover a blank page whose declared selector held, and the gap says the page shows no text', async () => {
-    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: '#app', textShown: false }));
+  it('does not cover a blank page whose selector names its empty mount point and held', async () => {
+    const r = await runWith(bodyOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: '#app' }));
 
     expect(r.verdict).toBe('not_covered');
     expect(r.exitCode).toBe(3);
     expect(r.receipt).toBeNull();
     const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
-    expect(gap?.reason).toContain('The reachedWhen selector #app matched, but usabl found no rendered text on the page');
-    expect(gap?.reason).toContain("Point reachedWhen at an element of the screen's own content");
-  });
-
-  it('does not cover the same page with no readiness signal, and the gap says to declare one', async () => {
-    const r = await runWith(textOnlyScreen({}));
-
-    expect(r.verdict).toBe('not_covered');
-    expect(r.receipt).toBeNull();
-    const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
     expect(gap?.reason).toContain('keyboard stop');
-    expect(gap?.reason).toContain('declare a reachedWhen selector for it in usabl.config.json');
   });
 
   it('does not cover a blank page whose declared selector did not hold', async () => {
-    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: false, reachedWhenSelector: 'main article' }));
+    const r = await runWith(bodyOnlyScreen({ reachedSelectorPresent: false, reachedWhenSelector: 'main article' }));
 
     expect(r.verdict).toBe('not_covered');
     expect(r.receipt).toBeNull();
@@ -423,7 +403,7 @@ describe('a body-only screen and its readiness signal', () => {
   });
 
   it('does not cover a blank page whose only signal is a response that arrived', async () => {
-    const r = await runWith(textOnlyScreen({ reachedResponseSeen: true, reachedWhenResponse: '/api/overview' }));
+    const r = await runWith(bodyOnlyScreen({ reachedResponseSeen: true, reachedWhenResponse: '/api/overview' }));
 
     expect(r.verdict).toBe('not_covered');
     expect(r.receipt).toBeNull();

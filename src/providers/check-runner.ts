@@ -22,7 +22,6 @@ import type {
   StepRunner,
   UsablConfig,
 } from '../contracts/index.js';
-import { walkStayedOnBody } from '../coverage/unseen.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
 import { attachRowScopeToDrafts } from './row-scope.js';
 import {
@@ -30,7 +29,6 @@ import {
   measureReadiness,
   readApiResponses,
   readinessSignalOf,
-  readTextShown,
   selectorHeldBeforeWalk,
   signalTimeoutMsFor,
   signalWait,
@@ -336,10 +334,6 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             { selectorPresent: landing.reachedSelectorPresent, responseSeen: landing.reachedResponseSeen ?? null },
             await measureReadiness(page, signal, deps.config.appBaseUrl),
           );
-          // A page whose walk stayed on the body has nothing to Tab to. Whether it shows text is read
-          // here, on the live page, for the unseen check only. Any other page is not read, so its
-          // scan keeps exactly the shape it had.
-          const text = walkStayedOnBody(stops) ? { textShown: await readTextShown(page) } : {};
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
           // after a stable shell appears, so an application that sends its identity request later
@@ -377,7 +371,6 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               reachedSelectorPresent: readiness.selectorPresent,
               reachedWhenSelector: signal?.selector ?? null,
               ...responseFields(signal, readiness.responseSeen),
-              ...text,
               ...images,
             };
           }

@@ -197,13 +197,6 @@ export interface ScreenScan {
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
   reachedWhenResponse?: string | null;
-  // Whether the page showed rendered text that is not white space, read after the checks and only
-  // when every keyboard stop stayed on the body. A readiness selector can match an empty mount point
-  // or the app shell on a page that never rendered, so for such a page a selector that held counts
-  // only when the page shows text too. A failed read is false. Absent means it was not read.
-  // Measurement for the unseen check in coverage/unseen.ts only: no draft, no finding, and no
-  // verdict is made from it anywhere else, and the gate never reads it.
-  textShown?: boolean;
   // 'off' when the page was scanned in a browser that usabl started without Chromium's sandbox,
   // because the system could not provide one. Absent means usabl did not report it off: the
   // browser ran with its sandbox, or the page came from a caller's own browser. Disclosure only:

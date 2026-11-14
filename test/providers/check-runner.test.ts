@@ -903,16 +903,16 @@ describe('makeCheckRunner and the walk record', () => {
   });
 });
 
-describe('makeCheckRunner and the text a body-only page shows', () => {
-  async function blankPage(overrides: Partial<Page> = {}): Promise<Page> {
-    return Object.assign(await makeScriptedPage({ activePaths: ['#app', '#app', '#app'], activeNodes: [null, null, null] }), {
+describe('makeCheckRunner and what a body-only page shows', () => {
+  // The CLI reads a screen whose walk stayed on the body as not covered whatever it shows, so it
+  // never reads what the page shows, and its scan keeps the shape it has on main.
+  it('does not read what a blank page shows, and adds no field to the scan', async () => {
+    const read = vi.fn(async () => true);
+    const page = Object.assign(await makeScriptedPage({ activePaths: ['#app', '#app', '#app'], activeNodes: [null, null, null] }), {
       activeElementIs: async (selector: string) => selector === 'body',
-      ...overrides,
+      pageShowsText: read,
     });
-  }
-
-  const scanOf = async (page: Page) =>
-    makeCheckRunner({
+    const scan = await makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },
       providers: [],
       config: testConfig(),
@@ -921,32 +921,10 @@ describe('makeCheckRunner and the text a body-only page shows', () => {
       transcriptTabCap: 3,
     }).scan(SCREEN);
 
-  it('reads whether a page whose walk stayed on the body shows text, and carries it on the scan', async () => {
-    expect((await scanOf(await blankPage({ pageShowsText: async () => true }))).textShown).toBe(true);
-    expect((await scanOf(await blankPage({ pageShowsText: async () => false }))).textShown).toBe(false);
-  });
-
-  it('reads no text shown when the read fails', async () => {
-    const scan = await scanOf(
-      await blankPage({
-        pageShowsText: async () => {
-          throw new Error('the browser could not read the page text');
-        },
-      }),
-    );
-    expect(scan.textShown).toBe(false);
-    expect(scan.gaps).toEqual([]);
-  });
-
-  it('does not read text on a page whose walk reached a control, so its scan keeps its shape', async () => {
-    const read = vi.fn(async () => true);
-    const page = Object.assign(
-      await makeScriptedPage({ activePaths: ['#save', '#save'], activeNodes: [{ name: 'Save', role: 'button', states: {} }, null] }),
-      { pageShowsText: read },
-    );
-    const scan = await scanOf(page);
     expect(read).not.toHaveBeenCalled();
-    expect('textShown' in scan).toBe(false);
+    expect(Object.keys(scan).sort()).toEqual(
+      ['applicability', 'drafts', 'gaps', 'notes', 'reachedSelectorPresent', 'reachedWhenSelector', 'screenId', 'stops', 'url'],
+    );
   });
 });
 
