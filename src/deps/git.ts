@@ -346,12 +346,18 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
           }
           throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
-        // cat-file blob refuses a folder. git show prints its listing, which is never the bytes of
-        // a file, so the guard reads a policy file that became a folder, or the reverse, as a
-        // change an approval can clear. The closing -- makes git read the argument as an object
-        // name only, so a working tree file with that name is never read in its place.
-        if (code !== null && /bad file/i.test(stderr) && (await objectType(cwd, `${ref}:${path}`)) === 'tree') {
-          return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+        // cat-file blob refuses a folder and a submodule entry. git show prints a folder's listing,
+        // or the submodule's commit when that commit is in the repository, which is never the
+        // bytes of a file. So the guard reads a policy file that became a folder, or the reverse,
+        // and a moved submodule, as a change an approval can clear. A submodule whose commit is
+        // not here has no type git can read, so it still throws. The closing -- makes git read the
+        // argument as an object name only, so a working tree file with that name is never read in
+        // its place.
+        if (code !== null && /bad file/i.test(stderr)) {
+          const type = await objectType(cwd, `${ref}:${path}`);
+          if (type === 'tree' || type === 'commit') {
+            return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+          }
         }
         throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
       }

@@ -518,10 +518,31 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     expect(text).not.toContain('decoy');
   });
 
-  it('still throws for a submodule path', async () => {
+  it('still throws for a submodule path whose commit is not in the repository', async () => {
     await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
     await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub')).rejects.toThrow();
+  });
+
+  // A submodule path is a commit entry, which git cat-file blob refuses. When that commit is in
+  // the repository, git show prints it, and the guard compared that text as before, so a moved
+  // submodule reads as changed.
+  it('reads a submodule path whose commit is in the repository as git show prints it', async () => {
+    const pinned = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${pinned},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
+    const { stdout: expected } = await execFileAsync('git', ['show', 'HEAD:sub'], { cwd: repoPath, encoding: 'utf8' });
+    expect(expected).toContain(`commit ${pinned}`);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(expected);
+    // The submodule moves to another commit, so the two reads differ.
+    const moved = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
+    await runGit(repoPath, ['update-index', '--cacheinfo', `160000,${moved},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'the submodule moves']);
+    const before = await git.show('HEAD~1', 'sub');
+    const after = await git.show('HEAD', 'sub');
+    expect(after).toContain(`commit ${moved}`);
+    expect(after).not.toBe(before);
   });
 
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
