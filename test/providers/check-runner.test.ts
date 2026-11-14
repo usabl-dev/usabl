@@ -16,6 +16,7 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { renderEvidenceOf } from '../../src/gate/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
+import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
@@ -872,6 +873,33 @@ describe('makeCheckRunner', () => {
 
     expect(scan.reachedSelectorPresent).toBe(false);
     expect(scan.gaps).toEqual([]);
+  });
+});
+
+describe('makeCheckRunner and the walk record', () => {
+  // The keyboard walk hands its stops to the caller for checkPage's blank-page check. The CLI reads
+  // its own transcript, so the scan it builds must be exactly the scan it built before.
+  it('builds the same scan of a blank page with the keyboard walk as without it', async () => {
+    const blankPage = async (): Promise<Page> =>
+      Object.assign(await makeScriptedPage({ activePaths: ['#app', '#app', '#app'], activeNodes: [null, null, null] }), {
+        activeElementIs: async (selector: string) => selector === 'body',
+      });
+    const scanWith = async (providers: Provider[]) =>
+      makeCheckRunner({
+        browser: { open: async () => blankPage(), close: async () => {} },
+        providers,
+        config: testConfig(),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 3,
+      }).scan(SCREEN);
+
+    const withWalk = await scanWith([makeKeyboardWalkProvider({ tabCap: 5 })]);
+    const withoutWalk = await scanWith([]);
+
+    expect(withWalk).toStrictEqual(withoutWalk);
+    expect('walk' in withWalk).toBe(false);
+    expect(withWalk.stops).toEqual([{ index: 0, elementPath: '#app', announcement: [], onBody: true }]);
   });
 });
 

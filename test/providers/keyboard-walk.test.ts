@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AxNode, FocusUnreadable, Page, ProviderContext, Step } from '../../src/contracts/index.js';
+import type { AxNode, Draft, FocusUnreadable, Page, ProviderContext, ProviderOutput, Step, WalkRecord } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -627,5 +627,63 @@ describe('makeKeyboardWalkProvider', () => {
 
     expect(second).toEqual(first);
     expect(first[0]?.evidence.extra?.['cycle']).toEqual(['#b', '#c']);
+  });
+});
+
+// checkPage collects no transcript of its own, so the walk hands back the stops it reached, for the
+// blank-page check only.
+describe('the walk record the keyboard walk returns', () => {
+  function walkOf(output: Draft[] | ProviderOutput): WalkRecord | undefined {
+    return Array.isArray(output) ? undefined : output.walk;
+  }
+
+  it('records each stop it reached, the body stop at the end, and that the walk was complete', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2 });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(walkOf(output)?.complete).toBe(true);
+    expect(walkOf(output)?.stops.map((stop) => [stop.index, stop.elementPath, stop.onBody])).toEqual([
+      [0, '#a', undefined],
+      [1, '#b', undefined],
+      [2, BODY_PATH, true],
+    ]);
+  });
+
+  it('records one stop on the body for a page with nothing to Tab to', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(unnamedLinkPage(['#app']));
+    page.activeElementIs = async (selector) => selector === 'body';
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(walkOf(output)).toEqual({
+      stops: [expect.objectContaining({ index: 0, elementPath: '#app', onBody: true })],
+      complete: true,
+    });
+  });
+
+  it('says the walk was not complete when it was cut short', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 2 });
+    const page = await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#c']));
+
+    const output = await provider.run(makeContext(page));
+
+    expect(rules(draftsOf(output))).toContain('keyboard-walk-truncated');
+    expect(walkOf(output)?.complete).toBe(false);
+    expect(walkOf(output)?.stops.map((stop) => stop.elementPath)).toEqual(['#a', '#b']);
+  });
+
+  it('says the walk was not complete when one more Tab after the body did not confirm the end', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage([BODY_PATH]), bodyAt: 0, afterBody: '#second' });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-truncated']);
+    expect(walkOf(output)?.complete).toBe(false);
   });
 });

@@ -3,7 +3,16 @@
  * It must never mint a verdict, and it must never guess when the AX node is missing.
  * Missing focus metadata stays unverified so the gate can disclose uncertainty honestly.
  */
-import type { AxNode, Draft, Fact, FocusUnreadable, Page, Provider } from '../../contracts/index.js';
+import type {
+  AxNode,
+  Draft,
+  Fact,
+  FocusUnreadable,
+  Page,
+  Provider,
+  ProviderOutput,
+  TranscriptStop,
+} from '../../contracts/index.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
 import { walkEndConfirmed, type WalkStopIdentity } from './walk-end.js';
@@ -232,7 +241,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
     // This walk traverses the real focus order, which only describes what a keyboard user meets
     // when it starts from the page as loaded. An opened or dismissed widget rewrites that order.
     requiresPristinePage: true,
-    async run(ctx): Promise<Draft[]> {
+    async run(ctx): Promise<ProviderOutput> {
       await ctx.page.focusBody();
 
       // The budget is anchored per run, not per provider. One instance walks every screen in a
@@ -244,6 +253,8 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       const drafts: Draft[] = [];
       const seenPaths = new Set<string>();
       const walked: WalkedStop[] = [];
+      // Every stop Tab reached, the body stop included, for checkPage's blank-page check only.
+      const transcript: TranscriptStop[] = [];
       let stopsWalked = 0;
       // Falling out of the loop means the cap ran out, so that is the honest default.
       let stopReason: StopReason = 'tab-cap';
@@ -255,6 +266,9 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         }
 
         const stops = await stepRunner.run(ctx.page, [{ do: 'tab' }]);
+        for (const stop of stops) {
+          transcript.push({ ...stop, index: i });
+        }
         // Inside a closed shadow root or a frame the walk cannot read, every control has the path
         // of the host or the frame, so a repeated path proves nothing. The walk ends there and says
         // so, rather than read the second control as a completed cycle.
@@ -311,7 +325,9 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         drafts.push(truncatedWalkDraft(ctx.screen.id, stopReason, stopsWalked));
       }
 
-      return drafts;
+      // The record is measurement for checkPage's blank-page check. It is not a draft and decides
+      // nothing here. A walk that was cut short says so, and that check then does not read it.
+      return { drafts, walk: { stops: transcript, complete: stopReason === 'complete' } };
     },
   };
 }

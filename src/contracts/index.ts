@@ -1293,6 +1293,23 @@ export interface ProviderOutput {
   gaps?: CoverageGap[];
   // Disclosures that never reach the gate. See ProviderNote. Absent means nothing to disclose.
   notes?: ProviderNote[];
+  // The keyboard walk's record of where Tab took focus. See WalkRecord. Absent means the provider
+  // did not walk the page.
+  walk?: WalkRecord;
+}
+
+/**
+ * Where a Tab walk took focus on one page: each stop, in the order Tab reached it, and whether the
+ * walk's end rule confirmed the end of the focus order. checkPage has no transcript of its own, so
+ * this is how it reads the stops the blank-page detector in coverage/unseen.ts reads.
+ *
+ * Measurement for that check only. No draft, no finding, and no verdict is made from it anywhere
+ * else. The gate never reads it, no scan carries it, and it mints nothing. A walk cut short has a
+ * partial record, so the detector does not read one that is not complete.
+ */
+export interface WalkRecord {
+  stops: TranscriptStop[];
+  complete: boolean;
 }
 
 export interface ProviderRunResult {
@@ -1300,6 +1317,9 @@ export interface ProviderRunResult {
   gaps: CoverageGap[];
   applicability: RuleApplicability[];
   notes: ProviderNote[];
+  // The first walk record a provider returned. Absent when no provider returned one: the walk was
+  // turned off, denied, skipped, or threw.
+  walk?: WalkRecord;
 }
 
 // ---- gate I/O ----
