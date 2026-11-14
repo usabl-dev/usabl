@@ -832,9 +832,11 @@ export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
   const FRAME_DEPTH_LIMIT = 8;
   const MEDIA_TAGS = ['img', 'svg', 'canvas', 'video', 'picture', 'object', 'embed'];
   let visited = 0;
+  // A browser that cannot say whether an element is visible gets no benefit of the doubt: a wrong
+  // guess must read as no content, never as content.
   const visible = (element) =>
-    typeof element.checkVisibility !== 'function' ||
-    element.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+    typeof element.checkVisibility === 'function' &&
+    element.checkVisibility({ visibilityProperty: true, opacityProperty: true }) === true;
   const mediaShows = (element) => {
     const role = (element.getAttribute('role') || '').trim().split(' ')[0];
     if (!MEDIA_TAGS.includes(element.localName) && role !== 'img') return false;

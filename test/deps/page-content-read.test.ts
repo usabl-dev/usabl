@@ -123,6 +123,11 @@ describe('the read of whether a page shows content', () => {
     expect(showsContent(el('body', [el('div', [], { box: { width: 300, height: 200 } })]))).toBe(false);
   });
 
+  it('counts an element as hidden when the browser cannot say whether it is visible', () => {
+    expect(showsContent(el('body', [el('p', [text('Terms of use')], { noCheckVisibility: true })]))).toBe(false);
+    expect(showsContent(el('body', [el('img', [], { noCheckVisibility: true })]))).toBe(false);
+  });
+
   it('reads an open shadow root', () => {
     expect(showsContent(el('body', [el('x-card', [], { shadowRoot: shadowRoot([text('Inside the card')]) })]))).toBe(true);
     expect(showsContent(el('body', [el('x-card', [], { shadowRoot: shadowRoot([el('img')]) })]))).toBe(true);

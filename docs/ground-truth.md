@@ -993,7 +993,9 @@ the extra Tab leaves focus on the body, and that page is then left to the blank-
 below. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
 more Tab did not go back to a control the walk had reached. Focus can also reach the body
 because a page script called `focus()` on a body that has a `tabindex`, in the middle of the
-page. The next Tab from a focused body starts again at the first control, so the extra Tab
+page. usabl's own `focusBody`, which starts the walk, gives the body `tabindex="-1"` when it has
+none, so a page's `document.body.focus()` moves focus to the body mid walk even on a page that set
+no `tabindex` itself. The next Tab from a focused body starts again at the first control, so the extra Tab
 alone would read that as the end. At the real end no element has focus, and
 `document.activeElement` only falls back to the body. So before the extra Tab, the end rule
 reads whether the body itself holds focus (`Page.bodyHoldsFocus`, the browser's own `:focus`
