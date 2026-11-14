@@ -44,6 +44,10 @@ re-baseline to green.
   control characters include U+0080 to U+009F. git would read such a value as an option, a
   negative or range revision, a path inside a commit, or a pathspec, and it could come back as an
   empty or absent file. The git reader also passes each ref after `--end-of-options`.
+- `usabl enforce policy` checks the head SHA at its source too. It reads `pull_request.head.sha`
+  from the event file that `GITHUB_EVENT_PATH` names and refuses a value that is not 7 to 40 hex
+  characters before any git call, with exit 2 and a message that names the field and does not
+  repeat the value. Before, the value went to the git reader with no check of its own.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
@@ -1381,7 +1385,13 @@ What runs where, and what each job holds:
 - **`gate-comment`** and **`usabl-policy`** check the Result against `result_digest` before they
   read it. Neither runs head code. Both read the base commit the event names. On a pull request
   from a fork the run's token cannot write to the pull request, so `gate-comment` writes the
-  comment to the run summary instead. The comment decides nothing either way.
+  comment to the run summary instead. The comment decides nothing either way. Its token can edit
+  any comment on the pull request, so the sticky comment step updates only a comment that holds
+  the usabl marker and that `github-actions[bot]` wrote. Before, it took the first comment by any
+  bot that held the marker, so another app's comment that quoted it, for example one that copies
+  the pull request description, was overwritten with the usabl report. Such a comment is now left
+  alone and the step writes its own. `usabl-policy` reads the head SHA from the event file and
+  refuses one that is not 7 to 40 hex characters before any git call (see Threat 1).
 - **`usabl-required`** is the required status check. It runs with `if: always()` and is red
   unless every job has the exact shape for the event and the judge's `verdict` output is
   `pass`. On `pull_request` all five jobs must succeed. On `pull_request_review` the build and
