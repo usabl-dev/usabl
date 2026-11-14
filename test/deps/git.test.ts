@@ -367,7 +367,7 @@ describe('makeGitReader with a trusted commit that is not in the repository', { 
         (err: unknown) => err,
       );
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toMatch(new RegExp(`git cannot read ${ABSENT_COMMIT}.*fetch it`, 's'));
+      expect((error as Error).message).toMatch(new RegExp(`git cannot read ${ABSENT_COMMIT}.*fetch more history`, 's'));
     }
   });
 

@@ -51,10 +51,12 @@ async function missingRefError(ref: string, stderr: string, listRemotes: () => P
   if (!/invalid object name/i.test(stderr)) {
     return null;
   }
-  return refNotFoundError(ref);
+  return refNotFoundError(ref, listRemotes);
 }
 
-function refNotFoundError(ref: string): Error {
+// The remote names are read only for a ref whose hint may name a remote: never for HEAD or a
+// commit id.
+async function refNotFoundError(ref: string, listRemotes: () => Promise<string[]>): Promise<Error> {
   if (ref === 'HEAD') {
     return new Error(NO_HEAD_MESSAGE);
   }
@@ -337,7 +339,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
           if (await namesCommit(cwd, ref)) {
             return null;
           }
-          throw refNotFoundError(ref);
+          throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
         // cat-file blob refuses a folder. git show prints its listing, which is never the bytes of
         // a file, so the guard reads a policy file that became a folder, or the reverse, as a
