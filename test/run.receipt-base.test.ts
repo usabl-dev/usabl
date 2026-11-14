@@ -46,6 +46,23 @@ describe('run binds the starting commit into the receipt', () => {
     });
   });
 
+  // run() lists only the uncommitted changes when it gets no list, so a starting commit given
+  // without one is not where its changes came from, and the receipt must not claim it.
+  it('records no starting commit when it was given one but no changed list', async () => {
+    const files = {
+      'usabl.config.json': JSON.stringify(config),
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+    };
+    const uncommitted = makeFakeDeps({
+      files,
+      headContents: { ...files },
+      changed: [{ path: 'fixtures/app/src/ClustersPage.tsx', code: ' M' }],
+    });
+    const result = await run(uncommitted, config, { baseRevision: BASE });
+    expect(result.verdict).toBe('verified');
+    expect(result.receipt?.baseRevision).toBeNull();
+  });
+
   it('records no starting commit when it was given none', async () => {
     const result = await run(deps(), config, { changedFiles: ['fixtures/app/src/ClustersPage.tsx'] });
     expect(result.verdict).toBe('verified');
