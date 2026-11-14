@@ -483,6 +483,86 @@ describe('focus order requirement', () => {
     expect(drafts[0]?.why).toContain('"Submit" is on 2 focus stops');
   });
 
+  // A name on two stops is an open question only when the rest of the check passes. A name that
+  // focus never reaches fails, as it does everywhere else in this check.
+  it('fails when a name is missing, even when another name is on two focus stops', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Export'] }), tabbingPage(['Save', 'Save']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Focus never reached "Export". The design puts it after "Save". Focus went: Save, Save.',
+    );
+  });
+
+  it('fails when the order is wrong on every reading, even when a name is on two focus stops', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Export'] }), tabbingPage(['Export', 'Save', 'Save']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toContain('Focus reached "Export" before "Save".');
+  });
+
+  // Every design of up to three distinct names from a small alphabet, against every Tab walk of up
+  // to four stops, compared with a brute-force reading of the rule. Each name takes one of its exact
+  // stops, or, with none, a stop whose name differs from it only in hidden white space and that is
+  // no name's exact stop. The check fails when no strictly increasing choice exists. It passes when
+  // one exists and every name has exactly one exact stop. Otherwise it is needs review.
+  it('matches a brute-force reading of the rule on every small case, so a missing name always fails', async () => {
+    const NBSP = ' ';
+    const ZWSP = '​';
+    // "B" with a zero width space is a design name only, so plain "B" in a walk is its near stop.
+    const designAlphabet = ['A', `A${NBSP}`, `B${ZWSP}`];
+    const walkAlphabet = ['A', `A${NBSP}`, 'B', `B${ZWSP}`];
+    const loose = (name: string): string => name.replace(/[ ​]/g, '');
+    const sequences = (alphabet: readonly string[], max: number, distinct: boolean): string[][] => {
+      const out: string[][] = [[]];
+      let layer: string[][] = [[]];
+      for (let length = 1; length <= max; length += 1) {
+        layer = layer.flatMap((prefix) =>
+          alphabet.filter((name) => !distinct || !prefix.includes(name)).map((name) => [...prefix, name]),
+        );
+        out.push(...layer);
+      }
+      return out;
+    };
+    const expected = (design: readonly string[], walk: readonly string[]): Draft['confidence'] | 'pass' => {
+      const exact = design.map((wanted) => walk.flatMap((name, stop) => (name === wanted ? [stop] : [])));
+      const taken = new Set(exact.flat());
+      const choices = design.map((wanted, index) =>
+        (exact[index] ?? []).length > 0
+          ? (exact[index] ?? [])
+          : walk.flatMap((name, stop) => (!taken.has(stop) && loose(name) === loose(wanted) ? [stop] : [])),
+      );
+      const feasible = (index: number, previous: number): boolean =>
+        index === design.length || (choices[index] ?? []).some((stop) => stop > previous && feasible(index + 1, stop));
+      if (!feasible(0, -1)) return 'fail';
+      return exact.every((at) => at.length === 1) ? 'pass' : 'unverified';
+    };
+    const designs = sequences(designAlphabet, 3, true).filter((design) => design.length > 0);
+    const walks = sequences(walkAlphabet, 4, false);
+    const started = Date.now();
+    let cases = 0;
+    const wrong: string[] = [];
+    const config = testConfig();
+    for (const design of designs) {
+      const provider = designCheckProvider(req({ type: 'focus-order', sequence: design }));
+      if (provider === null) throw new Error('no provider');
+      for (const walk of walks) {
+        cases += 1;
+        const output = await provider.run({ page: tabbingPage(walk), screen: SCREEN, config });
+        if (gapsOf(output).length > 0) wrong.push(`${JSON.stringify(design)} with ${JSON.stringify(walk)}: a gap`);
+        const drafts = draftsOf(output);
+        const got = drafts.length === 0 ? 'pass' : (drafts[0]?.confidence ?? 'none');
+        const want = expected(design, walk);
+        const missing = design.some((wanted) => !walk.some((name) => loose(name) === loose(wanted)));
+        if (got !== want || (missing && got !== 'fail') || drafts.length > 1) {
+          wrong.push(`${JSON.stringify(design)} with ${JSON.stringify(walk)}: got ${got}, want ${want}`);
+        }
+      }
+    }
+    expect(cases).toBe(designs.length * walks.length);
+    expect(cases).toBe(15 * 341);
+    expect({ wrong: wrong.length, first: wrong.slice(0, 5) }).toEqual({ wrong: 0, first: [] });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it('is unconfirmed, never a pass or a fail, when focus cycles without reaching the end of the page', async () => {
     // A focus trap, or a part of the page that rendered again: the walk never reached the end, so
     // the rest of the order is unknown.

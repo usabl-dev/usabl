@@ -604,18 +604,10 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   const names = walk.names;
   const extra = { heard: names };
   // Where each expected name sits in the walk. A name on two stops could mean either stop, and
-  // picking one would be a guess.
+  // picking one would be a guess, so that is asked about only once the rest of the check passes.
   const positions = sequence.map((wanted) =>
     names.flatMap((name, index) => (sameName(name, wanted) ? [index] : [])),
   );
-  const repeatedAt = positions.findIndex((at) => at.length > 1);
-  if (repeatedAt !== -1) {
-    return unconfirmed(
-      `"${sequence[repeatedAt] ?? ''}" is on ${positions[repeatedAt]?.length ?? 0} focus stops, so usabl cannot tell which one the design means, and it does not guess.`,
-      'Give each control in the design a name no other focus stop has, or check this order by hand.',
-      extra,
-    );
-  }
 
   const fail = (whatUserExperiences: string): Draft[] => [
     draft(requirement, 'focus-order', 'fail', {
@@ -651,8 +643,8 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   }
   // The order holds when one stop can be chosen for each name, each later than the one before.
   // The earliest stop that works is always the best choice, so one pass decides it. When no choice
-  // works, the result fails whichever stop a near match truly is: either the order is wrong, or the
-  // name is missing.
+  // works, the result fails whichever stop a near match or a name on two stops truly is: either the
+  // order is wrong, or the name is missing.
   let previous = -1;
   for (let index = 0; index < sequence.length; index += 1) {
     const at = candidates[index] ?? [];
@@ -668,9 +660,20 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
     previous = next;
   }
 
-  // Every other part of the check passes, so the hidden white space is the only open question. A
-  // stop whose name differs from the design only in hidden white space is most likely the control
-  // the design means, so this asks for review and names the character, as the name check does.
+  // Every other part of the check passes, so what is left is which stop a name means. A name on two
+  // stops could mean either one, and usabl does not guess.
+  const repeatedAt = positions.findIndex((at) => at.length > 1);
+  if (repeatedAt !== -1) {
+    return unconfirmed(
+      `"${sequence[repeatedAt] ?? ''}" is on ${positions[repeatedAt]?.length ?? 0} focus stops, so usabl cannot tell which one the design means, and it does not guess.`,
+      'Give each control in the design a name no other focus stop has, or check this order by hand.',
+      extra,
+    );
+  }
+
+  // A stop whose name differs from the design only in hidden white space is most likely the
+  // control the design means, so this asks for review and names the character, as the name check
+  // does.
   const nearAt = positions.findIndex((at) => at.length === 0);
   if (nearAt !== -1) {
     const wanted = sequence[nearAt] ?? '';
