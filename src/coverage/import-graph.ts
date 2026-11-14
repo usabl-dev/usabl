@@ -154,11 +154,14 @@ interface WorkspacePackageView {
 }
 
 // The exports keys a subpath key such as ./testing matches: the key itself when exports has it, as
-// Node.js picks an exact key first, and otherwise every pattern key with one * whose text before
-// and after the * the subpath starts and ends with.
+// Node.js picks an exact key first. Otherwise every pattern key with one * whose text before and
+// after the * the subpath starts and ends with, and every folder key, one that ends with /, that the
+// subpath starts with. Node.js removed folder keys, but a bundler such as Vite still reads one and
+// appends the rest of the subpath to its target.
 function matchedExportKeys(keys: readonly string[], key: string): string[] {
   if (keys.includes(key)) return [key];
   return keys.filter((candidate) => {
+    if (candidate.endsWith('/') && key.startsWith(candidate)) return true;
     const star = candidate.indexOf('*');
     if (star === -1 || candidate.indexOf('*', star + 1) !== -1) return false;
     const before = candidate.slice(0, star);
@@ -496,7 +499,9 @@ function isBuiltinModule(specifier: string): boolean {
  * package, or a name that is neither a Node.js built-in module nor a package a package.json usabl
  * reads declares. Always false in the default reading.
  */
-function unexplainedBare(specifier: string, packages: ReadonlySet<string> | null): boolean {
+function unexplainedBare(written: string, packages: ReadonlySet<string> | null): boolean {
+  // A query or hash is not part of the package name, so lodash?x and lodash#x name lodash.
+  const specifier = withoutQueryOrHash(written);
   if (packages === null) return false;
   if (specifier.startsWith('#')) return true;
   return !isBuiltinModule(specifier) && !packages.has(packageNameOf(specifier));
@@ -682,9 +687,12 @@ function dynamicEntry(importer: string, call: Extract<LoaderCall, { kind: 'built
   if (call.prefix === null) {
     return { importer, specifier: call.text, kind: 'dynamic-import', prefixes: null };
   }
-  const prefixes = resolveLoaderPaths(importer, call.prefix, aliases, baseUrlDirs, 'prefix');
-  const nameStart = call.prefix.replace(/^#/u, '');
-  const byName = prefixes !== null && isBareStart(call.prefix, aliases) && !startNamesKnownPackage(call.prefix, packages);
+  // A query or hash in the fixed start, as in `./tests/Widget?${q}`, is not part of the path, so
+  // the start is read without it, as an import is.
+  const start = withoutQueryOrHash(call.prefix);
+  const prefixes = resolveLoaderPaths(importer, start, aliases, baseUrlDirs, 'prefix');
+  const nameStart = start.replace(/^#/u, '');
+  const byName = prefixes !== null && isBareStart(start, aliases) && !startNamesKnownPackage(start, packages);
   if (byName && nameStart === '') {
     return { importer, specifier: call.text, kind: 'dynamic-import', prefixes: null };
   }
@@ -762,7 +770,8 @@ function importName(file: string): string {
 // The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
 // `@/tests/Dashboard.js` both name a file called Dashboard.
 function importLastSegments(specifier: string): string[] {
-  const last = specifier.split('/').pop() ?? '';
+  // A query or hash is not part of the name, so @/tests/Widget?raw names Widget.
+  const last = withoutQueryOrHash(specifier).split('/').pop() ?? '';
   return [last, last.replace(/\.[^.]*$/u, '')];
 }
 
@@ -788,6 +797,17 @@ function hasKnownExtension(specifier: string): boolean {
 
 function resolveBaseFile(importer: string, specifier: string): string {
   return path.normalize(path.join(path.dirname(importer), specifier));
+}
+
+// A specifier without its query or hash, such as ./styles.css for ./styles.css?inline or
+// ./styles.css#x. Vite cuts the path at the first ? or # before it looks up the path or the exports
+// field, and loads the file the rest names. A # as the first character starts a package.json
+// imports specifier, such as #tests/Widget, so it is kept, and a later # still ends the path.
+export function withoutQueryOrHash(specifier: string): string {
+  const query = specifier.indexOf('?');
+  const hash = specifier.indexOf('#', 1);
+  const ends = [query, hash].filter((at) => at !== -1);
+  return ends.length === 0 ? specifier : specifier.slice(0, Math.min(...ends));
 }
 
 async function existingCandidates(fs: FsGlob, base: string, suffixes: string[]): Promise<string[]> {
@@ -850,7 +870,7 @@ async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<Resoluti
 }
 
 async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<Resolution> {
-  const base = resolveBaseFile(importer, specifier);
+  const base = resolveBaseFile(importer, withoutQueryOrHash(specifier));
   return resolveFileAtPath(fs, base);
 }
 
@@ -882,7 +902,9 @@ async function resolveAliasImport(
   specifier: string,
   aliasConfig: AliasConfig,
 ): Promise<{ targets: string[]; disclosure: UnresolvableImport | null }> {
-  const aliasPaths = resolveAliasSpecifierEachWay(specifier, aliasConfig);
+  // The file lookup uses the path without its query or hash. The disclosure keeps the import as
+  // written.
+  const aliasPaths = resolveAliasSpecifierEachWay(withoutQueryOrHash(specifier), aliasConfig);
   if (aliasPaths.length === 0) {
     const kind = aliasConfig.hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured';
     return { targets: [], disclosure: { importer, specifier, kind } };
@@ -933,10 +955,12 @@ function workspaceSubpath(
   specifier: string,
   packages: readonly WorkspacePackageView[],
 ): { dir: string; subpath: string; hasExports: boolean; exportTarget: string | null; exportLeaves: boolean } | null {
-  const name = packageNameOf(specifier);
+  // A query or hash is not part of the subpath, for the exports lookup and for the path lookup alike.
+  const bare = withoutQueryOrHash(specifier);
+  const name = packageNameOf(bare);
   const owner = packages.find((candidate) => candidate.name === name);
-  if (owner === undefined || specifier.length <= name.length + 1) return null;
-  const subpath = specifier.slice(name.length + 1);
+  if (owner === undefined || bare.length <= name.length + 1) return null;
+  const subpath = bare.slice(name.length + 1);
   // The exports entry whose key is this subpath exactly, as Node.js picks it before any pattern key.
   const key = `./${subpath}`;
   const exact = owner.exactExports ?? {};
@@ -951,7 +975,7 @@ function workspaceSubpath(
 async function baseUrlCandidates(fs: FsGlob, specifier: string, baseUrlDirs: readonly string[]): Promise<string[]> {
   const found = new Set<string>();
   for (const dir of baseUrlDirs) {
-    const base = path.normalize(path.join(dir, specifier));
+    const base = path.normalize(path.join(dir, withoutQueryOrHash(specifier)));
     if (base === '..' || base.startsWith('../')) continue;
     for (const target of edgeTargets(await resolveFileAtPath(fs, base))) found.add(target);
   }
@@ -994,7 +1018,10 @@ export async function buildImportGraph(
     for (const specifier of complete ? extractEverySpecifier(source, calls) : extractSpecifiers(source)) {
       // The complete reading also follows a bare import that a configured alias maps, whatever its
       // prefix, as the bundler does.
-      if (isAliasLikeSpecifier(specifier) || (complete && !isRelativeSpecifier(specifier) && resolveAliasSpecifierEachWay(specifier, aliases).length > 0)) {
+      if (
+        isAliasLikeSpecifier(specifier) ||
+        (complete && !isRelativeSpecifier(specifier) && resolveAliasSpecifierEachWay(withoutQueryOrHash(specifier), aliases).length > 0)
+      ) {
         const { targets, disclosure } = await resolveAliasImport(fs, file, specifier, aliases);
         if (disclosure !== null) pushUniqueUnresolvable(unresolvable, disclosure);
         for (const target of targets) {

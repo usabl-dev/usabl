@@ -128,7 +128,7 @@ describe('a test file that only files no route reaches import', () => {
       {
         'package.json': PACKAGE_JSON,
         [fixture]: 'export const rows = [];\n',
-        'src/Button.stories.tsx': "import { rows } from './tests/fixtures/data';\n",
+        'src/demo/ButtonDemo.tsx': "import { rows } from '../tests/fixtures/data';\n",
         'src/mocks/handlers.ts': "import { rows } from '../tests/fixtures/data';\n",
       },
       fixture,
@@ -136,7 +136,7 @@ describe('a test file that only files no route reaches import', () => {
     expectGap(coverage, fixture);
     const reason = coverage.gaps[0]?.reason ?? '';
     expect(reason).toMatch(/^This UI file is not in any route closure/);
-    expect(reason).toContain('src/Button.stories.tsx, src/mocks/handlers.ts');
+    expect(reason).toContain('src/demo/ButtonDemo.tsx, src/mocks/handlers.ts');
     expect(reason).toContain('no route closure reaches');
   });
 
@@ -474,7 +474,7 @@ describe('a test file in a workspace package the app depends on', () => {
     expectWorkspaceGap(await coverageOf("import { helper } from '@acme/ui/src/tests/helpers';", workspace, helpers));
   });
 
-  it('is a workspace gap when a screen imports a package subpath that usabl cannot find as a file', async () => {
+  it('is a workspace gap when a screen imports an exports entry that names a test file that re-exports it', async () => {
     const tree = {
       ...workspace,
       'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', exports: { '.': './src/index.ts', './testing': './src/tests/index.ts' } }),
@@ -505,6 +505,30 @@ describe('a test file in a workspace package the app depends on', () => {
     it('is followed to its one file, so a test-only change in the package stays idle', async () => {
       const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
       expectExcluded(await coverageOf(css, tree, helpers), helpers);
+    });
+
+    it.each(['?inline', '?url', '?raw'])('reads the subpath without its query, so a test-only change stays idle: %s', async (query) => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf(`import css from '@acme/ui/styles.css${query}';`, tree, helpers), helpers);
+    });
+
+    it('reads the subpath without a #, so a test-only change stays idle', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf("import css from '@acme/ui/styles.css#x';", tree, helpers), helpers);
+    });
+
+    it('still makes the test file a subpath with a query names a UI file', async () => {
+      const tree = withExports({ '.': './src/index.ts', './testing': './src/tests/helpers.ts' });
+      const coverage = await coverageOf("import helper from '@acme/ui/testing?raw';", tree, helpers);
+      expectWorkspaceGap(coverage);
+      expect(coverage.gaps[0]?.reason).not.toContain('cannot follow by path');
+      expectExcluded(await coverageOf("import helper from '@acme/ui/testing?raw';", tree, 'packages/ui/src/Button.test.tsx'), 'packages/ui/src/Button.test.tsx');
+    });
+
+    it('reads the path without its query in a package with no exports field', async () => {
+      const tree = { ...workspace, 'packages/ui/styles.css': 'a{}\n' };
+      expectExcluded(await coverageOf("import css from '@acme/ui/styles.css?inline';", tree, helpers), helpers);
+      expectWorkspaceGap(await coverageOf("import helper from '@acme/ui/src/tests/helpers?raw';", tree, helpers));
     });
 
     it('wins over a pattern key, as in Node.js', async () => {
@@ -545,6 +569,18 @@ describe('a test file in a workspace package the app depends on', () => {
         ['a pattern key', { '.': './src/index.ts', './*': './../other/src/tests/*.tsx' }],
       ])('may load any file when %s leaves it', async (_, exports) => {
         expectWorkspaceGap(await coverageOf(screen, twoPackages(exports), other), other);
+      });
+
+      it('may load any file when a folder key that the subpath starts with leaves it', async () => {
+        const tree = twoPackages({ '.': './src/index.ts', './t/': './../other/src/tests/' });
+        expectWorkspaceGap(await coverageOf("import x from '@acme/ui/t/helpers.tsx';", tree, other), other);
+      });
+
+      it('keeps the reading of the package for a folder key that stays inside it', async () => {
+        const tree = twoPackages({ '.': './src/index.ts', './t/': './src/tests/' });
+        const folderScreen = "import x from '@acme/ui/t/helpers.ts';";
+        expectWorkspaceGap(await coverageOf(folderScreen, tree, helpers));
+        expectExcluded(await coverageOf(folderScreen, tree, other), other);
       });
 
       it('keeps the reading of the package when every target of a conditions object stays inside it', async () => {
@@ -596,6 +632,88 @@ describe('a test file in a workspace package the app depends on', () => {
     const tree = { ...workspace, 'packages/ui/src/Button.tsx': "const all = import.meta.glob('./tests/*.ts');\nexport const Button = () => <button />;\n" };
     const coverage = await coverageOf(screen, tree, 'packages/ui/src/tests/helpers.ts');
     expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/ui/src/tests/helpers.ts', 'not-covered']]);
+  });
+});
+
+describe('an import with a query', () => {
+  it.each(['?raw', '?url', '?inline'])('maps the file a relative import names to the screen: %s', async (query) => {
+    const coverage = await coverageOf(`import w from './tests/Widget${query}';`);
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a gap for an alias import with a query when no alias config maps it', async () => {
+    const coverage = await coverageOf("import w from '@/tests/Widget?raw';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'@/tests/Widget?raw'");
+  });
+
+  it('maps the file a configured alias import with a query names to the screen', async () => {
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const coverage = await coverageOf("import w from '@/tests/Widget?raw';", { 'package.json': PACKAGE_JSON, 'tsconfig.json': tsconfig });
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a gap for a bare import with a query that a baseUrl resolves to the file', async () => {
+    const coverage = await coverageOf("import w from 'tests/Widget?raw';", {
+      'package.json': PACKAGE_JSON,
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: 'src' } }),
+    });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('baseUrl');
+  });
+
+  it('is a gap for a dynamic import whose fixed start ends in a query', async () => {
+    expectGap(await coverageOf('export const load = (q: string) => import(`./tests/Widget?${q}`);', { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('keeps a # import whole, and still reads its query as no part of the name', async () => {
+    const coverage = await coverageOf("import w from '#tests/Widget?raw';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'#tests/Widget?raw'");
+  });
+
+  it('maps the file a relative import with a # names to the screen', async () => {
+    const coverage = await coverageOf("import w from './tests/Widget#x';");
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('reads an alias import with a # without it, mapped or not', async () => {
+    expectGap(await coverageOf("import w from '@/tests/Widget#x';", { 'package.json': PACKAGE_JSON }));
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const coverage = await coverageOf("import w from '@/tests/Widget#x';", { 'package.json': PACKAGE_JSON, 'tsconfig.json': tsconfig });
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters']);
+    expect(coverage.gaps).toEqual([]);
+  });
+
+  it('keeps a leading # and reads a later # as the end of the path', async () => {
+    const coverage = await coverageOf("import w from '#tests/Widget#x';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'#tests/Widget#x'");
+  });
+
+  it('is a gap for a dynamic import whose fixed start ends in a #', async () => {
+    expectGap(await coverageOf('export const load = (h: string) => import(`./tests/Widget#${h}`);', { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('reads a ? in a glob pattern as glob syntax, as before', async () => {
+    const tree = { 'package.json': PACKAGE_JSON };
+    const coverage = await coverageOf("const all = import.meta.glob('./tests/?idget.tsx');", tree);
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/');
+    expectExcluded(await coverageOf("const pages = import.meta.glob('./pages/?ndex.tsx');", tree));
+    expectExcluded(await coverageOf("const pages = import.meta.glob('./pages/#x/*.tsx');", tree));
+  });
+
+  it('maps a stylesheet imported with a query to the screen', async () => {
+    const coverage = await coverageOf("import css from './styles.css?inline';", { 'src/styles.css': 'a{}\n' }, 'src/styles.css');
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters']);
+    expect(coverage.gaps).toEqual([]);
   });
 });
 
