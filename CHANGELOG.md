@@ -401,7 +401,10 @@
   `import css from '@acme/ui/styles.css?inline'` no longer makes every test-only change in the
   package a gap. A relative import with a query now links the file it names. Before, a relative
   import with a query and no extension, such as `./tests/Widget?raw`, linked nothing, so a change
-  to that test file read as nothing to check while the screen loaded it.
+  to that test file read as nothing to check while the screen loaded it. The same holds for alias
+  imports, `baseUrl` lookups, the name an unresolved import is matched by, the fixed start of an
+  `import()` built at run time, and a bare package name, so `@/tests/Widget?raw` names `Widget`
+  and `lodash?x` names `lodash`. A `?` in an `import.meta.glob` pattern stays glob syntax.
 
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
