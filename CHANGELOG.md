@@ -39,7 +39,9 @@
   match fails, except that in the name, heading, named landmark, and focus order checks a name
   that differs only in white space a person cannot see is needs review, and the reason names the
   character and where it is. That white space is every character `\s` matches, plus the zero
-  width space and the word joiner, from one list. When usabl cannot tell, the result
+  width space and the word joiner, from one list. The rest of the check still runs: such a heading
+  at another level fails, and so does a focus order with a name missing or out of order elsewhere,
+  or with two names that only one stop could stand for. When usabl cannot tell, the result
   is needs review, never a guess: two elements share the name, the page's accessibility tree has a
   match the document search could not read (such as one in a closed shadow root or with a role
   set through ElementInternals), the tree has more than 20000 nodes, the browser's tree answer has
@@ -350,7 +352,9 @@
   string otherwise. For the same reason the diff listing ends its revisions with `--`; a file
   named `<ref>...HEAD` made the diff of a missing ref list no changed files. A path that is a
   folder at the ref reads as it did before: the listing `git show` prints for it, with the
-  argument read as an object name only, so a file that becomes a folder still needs approval.
+  argument read as an object name only, so a file that becomes a folder still needs approval. A
+  submodule path whose commit is in the repository also reads as before, as the commit `git show`
+  prints, so a moved submodule still needs approval; one whose commit is absent is an error.
   The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
   refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
   value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White
@@ -442,8 +446,9 @@
 - Path aliases for check are read from the nearest tsconfig and the nearest Vite config at or
   above the router file, found on their own, and from the repository root configs as before. An
   import the two sets map to different places links every file found. It is disclosed in
-  `coverage.discoveryNotes`, printed as discovery notes, when it reaches a changed UI file, and
-  otherwise as an `alias-conflict` line in the discovery detail. Gate effect: a change to a file
+  `coverage.discoveryNotes`, printed as discovery notes, when it reaches a changed UI file. It can
+  also show as an `alias-conflict` line in the gap reason of a changed UI file that maps to no
+  screen. A conflict that reaches no changed UI file is not shown. Gate effect: a change to a file
   that a screen imports through a root alias maps to that screen again, where an app folder that
   held only a Vite config or only a tsconfig dropped the other config and left the screen unchecked.
   More screens can be checked when the two sets disagree.
@@ -466,12 +471,16 @@
   note says the folder is a link and which folder the draft uses. git reports a changed file at
   its real path, so the old draft under the link path matched no change. A link loop or a path
   through a file gets the same refusal as a folder with no files, with exit 2, where it printed a
-  raw `ELOOP` or `ENOTDIR` error. Gate effect: none on a written config; a new draft for a linked
-  app folder checks the app's changes, where every run read as nothing to check.
+  raw `ELOOP` or `ENOTDIR` error. Every folder `init` prints, in its notes and its refusals, has
+  each control character shown as a label such as `<U+001B>`, so a folder name read from the file
+  system never reaches the terminal raw and never reads as a clean name. Gate effect: none on a
+  written config; a new draft for a linked app folder checks the app's changes, where every run
+  read as nothing to check.
 
-- The CI judge's refusal of an empty `uiFileGlobs` list adds that in CI the config is read from
-  the base branch, so a pull request that fixes the list still gets exit 4, and the fix takes
-  effect once it is merged there. Gate effect: none; the exit code is unchanged.
+- The CI judge's refusal of an empty `uiFileGlobs` list adds that the config is read from the
+  trusted ref, which is the base branch in the workflow `usabl install` writes, so a pull request
+  that fixes the list still gets exit 4, and the fix takes effect once it is merged there. Gate
+  effect: none; the exit code is unchanged.
 
 - The dev server overlay reads the `usabl.docs.json` that lets an empty `uiFileGlobs` list load
   from the plugin's `cwd`, the folder its run reads files from, where it read the folder the dev
@@ -1573,7 +1582,8 @@
   anything. The message names the fix. The CI judge
   (`check --ci --trusted-ref <ref> --isolated-browser`) applies the same rule to the config at
   the trusted ref and exits 4, where it used to exit 0, and says the fix takes effect once it is
-  merged into the base branch. The Stop hook blocks such a config once
+  merged into the trusted ref, the base branch in the workflow `usabl install` writes. The Stop
+  hook blocks such a config once
   as approval required, where it used to say idle and let the stop through. `usabl doctor`
   reports it as drifted. A documentation-only repository still loads when its
   `usabl.docs.json` loads and names at least one page. Each path reads that manifest from where
