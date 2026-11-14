@@ -338,6 +338,26 @@
 
 ### Fixed
 
+- The sticky comment step in the gate that `usabl install --ci` and `usabl install --docs-ci`
+  write updates only a comment that GitHub Actions wrote and that starts with the usabl marker.
+  It took the first comment by any bot that held the marker anywhere, so it could overwrite
+  another app's comment that quoted the marker, because the job token can edit any comment. It
+  now requires the `github-actions[bot]` login and a body that starts with the marker, which the
+  renderer always writes first, and writes a new comment when no such comment exists. Every
+  workflow in a repository posts under that login, so a comment another workflow writes that
+  starts with the marker is still taken. The comment decides nothing, so no verdict changed.
+  Install still recognises the unedited gate that the first 0.3.0 builds wrote, and rewrites it.
+  A gate written by a build of main from after the change that names the default branch and
+  before this fix is not recognised: install refuses it as edited and says "Reconcile it by
+  hand; usabl never overwrites a hand-tuned security workflow." To take this draft, move that
+  file out of `.github/workflows/` and run `usabl install --ci` (or `--docs-ci`) again, then set
+  the engine pin it held if the new file names another commit, or copy the comment lookup from
+  this draft into it by hand.
+- `usabl enforce policy` refuses a head SHA from the event file that is not a full commit id. The
+  value in `pull_request.head.sha` went to git with no check of its own. It must now be exactly
+  40 or 64 lowercase hex characters, or the command exits 2 before any git call, with a message
+  that names the field and does not repeat the value. A shorter value is refused because it can
+  also be a branch name, which git reads as that branch.
 - The Stop hook checks what CI will check: every file changed since the branch left the default
   branch git records for origin (`refs/remotes/origin/HEAD`), plus staged, unstaged, and untracked
   changes. It lists the committed part with the same function `usabl check --trusted-ref` uses in
