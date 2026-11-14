@@ -7,6 +7,8 @@ import {
   enforceAccessibility,
   enforcePolicy,
   GITHUB_REVIEWS_PAGE_SIZE,
+  GithubAnswerError,
+  isAskableLogin,
   parseGithubReviews,
   parsePullRequestEvent,
   parseResultJson,
@@ -152,6 +154,7 @@ describe('enforcePolicy', () => {
       pr: { authorLogin: 'carol', headSha: 'abc' },
       git: policyGit(gitOver),
       listReviews: async () => [],
+      readPermission: async () => ({ permission: 'write' }),
       ...rest,
     };
   };
@@ -233,6 +236,169 @@ describe('enforcePolicy', () => {
       }),
     );
     expect(out.exitCode).toBe(2);
+  });
+
+  // On a public repository anyone can submit an approving review. A login in CODEOWNERS that lost
+  // its access, or a name someone else registered, would otherwise pass this check. So an approval
+  // counts only when GitHub reports the code owner's permission on the repository as write or admin.
+  describe('the code owner permission', () => {
+    const aliceApproves = async (): Promise<PolicyReview[]> => [
+      { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+    ];
+    const permissionIs = (permission: unknown) => async (): Promise<unknown> => ({ permission });
+
+    for (const permission of ['write', 'admin']) {
+      it(`counts an approval from a code owner with ${permission} permission`, async () => {
+        const out = await enforcePolicy(
+          policyResult,
+          deps({ listReviews: aliceApproves, readPermission: permissionIs(permission) }),
+        );
+        expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+      });
+    }
+
+    for (const permission of ['read', 'none']) {
+      it(`does not count an approval from a code owner with ${permission} permission, and says why`, async () => {
+        const out = await enforcePolicy(
+          policyResult,
+          deps({ listReviews: aliceApproves, readPermission: permissionIs(permission) }),
+        );
+        expect(out.exitCode).toBe(2);
+        expect(out.message).toContain('approved this head for .usabl-evidence.json');
+        expect(out.message).toContain(
+          `the approval from @alice does not count, because GitHub reports that user's permission on this repository as ${permission}, and an approval counts only with write or admin`,
+        );
+      });
+    }
+
+    // Each failure gets the reason a person can act on. None of them counts as write.
+    const notRead = "usabl could not read that user's permission on this repository";
+    const tokenHint = `${notRead} (the job's token needs read access to repository metadata)`;
+    const noUser = 'GitHub has no readable user by that login on this repository';
+    const failures: Array<[string, () => Promise<unknown>, string]> = [
+      ['a network error', async () => Promise.reject(new Error('fetch failed')), notRead],
+      ['a 401 answer', async () => Promise.reject(new GithubAnswerError(401)), tokenHint],
+      ['a 403 answer', async () => Promise.reject(new GithubAnswerError(403)), tokenHint],
+      ['a 404 answer', async () => Promise.reject(new GithubAnswerError(404)), noUser],
+      ['a 500 answer', async () => Promise.reject(new GithubAnswerError(500)), notRead],
+      ['a body that is not an object', async () => 'write', notRead],
+      ['a body with no permission field', async () => ({ role_name: 'write' }), notRead],
+      ['a value outside the four', async () => ({ permission: 'maintain' }), notRead],
+      ['a value that is not a string', async () => ({ permission: 7 }), notRead],
+    ];
+    for (const [label, readPermission, reason] of failures) {
+      it(`does not count an approval when the permission read fails with ${label}, and says why`, async () => {
+        const out = await enforcePolicy(policyResult, deps({ listReviews: aliceApproves, readPermission }));
+        expect(out.exitCode).toBe(2);
+        expect(out.message).toContain(`the approval from @alice does not count, because ${reason}`);
+        if (reason !== tokenHint) {
+          expect(out.message).not.toContain('token');
+        }
+      });
+    }
+
+    it('retracts an approval on a later request for changes, also when the permission read fails', async () => {
+      const asked: string[] = [];
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'alice', state: 'CHANGES_REQUESTED', commitId: 'abc' },
+          ],
+          readPermission: async (login) => {
+            asked.push(login);
+            throw new Error('fetch failed');
+          },
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(out.message).not.toContain('does not count');
+      expect(asked).toEqual([]);
+    });
+
+    it('reads the permission once per login, and never for a reviewer who is not a code owner', async () => {
+      const asked: string[] = [];
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: {
+            codeowners: '.usabl-evidence.json @alice\nusabl.config.json @alice\n',
+            head: { 'usabl.config.json': '{"guardedPaths":[],"tampered":true}' },
+          },
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'mallory', state: 'APPROVED', commitId: 'abc' },
+          ],
+          readPermission: async (login) => {
+            asked.push(login);
+            return { permission: 'read' };
+          },
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(asked).toEqual(['alice']);
+      expect(out.message.split('the approval from @alice does not count')).toHaveLength(2);
+    });
+
+    it('asks nothing for a code owner whose login form usabl does not read, and does not count it', async () => {
+      const asked: string[] = [];
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @bad.login\n' },
+          listReviews: async () => [{ userLogin: 'bad.login', state: 'APPROVED', commitId: 'abc' }],
+          readPermission: async (login) => {
+            asked.push(login);
+            return { permission: 'write' };
+          },
+        }),
+      );
+      expect(out.exitCode).toBe(2);
+      expect(asked).toEqual([]);
+      expect(out.message).toContain('the approval from @bad.login does not count, because usabl does not read this login form');
+    });
+
+    it('counts an approval from a managed user login, which holds an underscore', async () => {
+      const asked: string[] = [];
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @mona_acme\n' },
+          listReviews: async () => [{ userLogin: 'mona_acme', state: 'APPROVED', commitId: 'abc' }],
+          readPermission: async (login) => {
+            asked.push(login);
+            return { permission: 'write' };
+          },
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+      expect(asked).toEqual(['mona_acme']);
+    });
+
+    it('asks about a login only in a form GitHub uses', () => {
+      for (const login of ['mona', 'mona-lisa', 'mona_acme', 'm0n4', 'A1']) {
+        expect(isAskableLogin(login), login).toBe(true);
+      }
+      for (const login of ['a/b', 'a.b', 'a b', '', '_mona', '-mona', 'a'.repeat(101)]) {
+        expect(isAskableLogin(login), login).toBe(false);
+      }
+    });
+
+    it('passes when another code owner with write permission approved the head', async () => {
+      const out = await enforcePolicy(
+        policyResult,
+        deps({
+          gitOver: { codeowners: '.usabl-evidence.json @alice @bob\n' },
+          listReviews: async () => [
+            { userLogin: 'alice', state: 'APPROVED', commitId: 'abc' },
+            { userLogin: 'bob', state: 'APPROVED', commitId: 'abc' },
+          ],
+          readPermission: async (login) => ({ permission: login === 'bob' ? 'write' : 'read' }),
+        }),
+      );
+      expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+    });
   });
 
   it('uses the last matching CODEOWNERS rule for a path', async () => {
@@ -637,6 +803,7 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
         },
       },
       listReviews: async () => over.reviews ?? [],
+      readPermission: async () => ({ permission: 'write' }),
     };
   }
 

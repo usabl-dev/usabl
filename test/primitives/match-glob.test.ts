@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { matchGlob } from '../../src/primitives/match-glob.js';
+import { countBraceExpansions, expandBraces, matchGlob } from '../../src/primitives/match-glob.js';
+
+describe('countBraceExpansions', () => {
+  it('counts what expandBraces returns, and is null exactly when expandBraces is', () => {
+    const patterns = [
+      'policy/x.json',
+      'policy/{a,b}.json',
+      '{a,b}/{c,d,e}/x',
+      '{,}',
+      'src/App.{tsx}',
+      '{x}/{a,b}',
+      'a}/x',
+      '{a,b',
+      '{a,{b,c}}',
+      '{a,b}{c,d}{e,f}',
+      'p/{a,b,,c}',
+    ];
+    for (const pattern of patterns) {
+      expect(countBraceExpansions(pattern), pattern).toBe(expandBraces(pattern)?.length ?? null);
+    }
+  });
+
+  it('counts a very large expansion without building it', () => {
+    expect(countBraceExpansions('p/' + '{a,b}'.repeat(64))).toBe(2 ** 64);
+    expect(countBraceExpansions('{a,b}'.repeat(64) + '{c')).toBeNull();
+  });
+});
 
 describe('matchGlob', () => {
   it('matches src/**/*.tsx against src/App.tsx', () => {

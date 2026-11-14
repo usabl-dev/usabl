@@ -56,7 +56,15 @@ import { gateBranchTarget, verifyBranchRule, type GhReader } from './install/bra
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
-import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
+import {
+  collectReviews,
+  enforceAccessibility,
+  enforcePolicy,
+  GithubAnswerError,
+  parsePullRequestEvent,
+  parseResultText,
+  type PolicyReview,
+} from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
@@ -121,6 +129,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
         lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
       },
       listReviews: () => listPullReviews(pr.number),
+      readPermission: (login) => readRepositoryPermission(login),
     });
     process.stdout.write(`${outcome.message}\n`);
     return outcome.exitCode;
@@ -160,7 +169,7 @@ function readEventPayload(): unknown {
   }
 }
 
-async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: string; state: string; commitId: string }>> {
+async function listPullReviews(pullNumber: number): Promise<PolicyReview[]> {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
   if (token === undefined || token.length === 0 || repo === undefined || repo.length === 0) {
@@ -181,6 +190,31 @@ async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: s
     }
     return response.json();
   });
+}
+
+/**
+ * One login's permission on this repository, as GitHub's answer body. Any failure throws, and the
+ * policy check reads a failed read as no write access. The login is encoded into the path.
+ */
+async function readRepositoryPermission(login: string): Promise<unknown> {
+  const token = process.env.GITHUB_TOKEN;
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (token === undefined || token.length === 0 || repo === undefined || repo.length === 0) {
+    throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY are required for enforce policy');
+  }
+  const url = `https://api.github.com/repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'usabl',
+    },
+  });
+  if (!response.ok) {
+    throw new GithubAnswerError(response.status);
+  }
+  return response.json();
 }
 
 const execFileAsync = promisify(execFile);
