@@ -190,8 +190,9 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
 };
 
-// The problems a fetch alone does not clear, because origin/HEAD itself names the wrong ref.
-const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>(['not-remote-branch']);
+// The problems a fetch alone does not clear, because origin/HEAD itself names the wrong ref. After
+// a default branch rename, origin/HEAD still names the old branch, and a fetch does not move it.
+const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>(['not-remote-branch', 'branch-missing']);
 
 /**
  * The next step for a scope gap, shared by the Stop hook and `usabl check --branch-scope`.

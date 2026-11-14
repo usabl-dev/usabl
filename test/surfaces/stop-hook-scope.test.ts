@@ -21,7 +21,13 @@ import {
   runStopHookFromStdin,
   type StopHookRunnerPorts,
 } from '../../src/surfaces/stop-hook-runner.js';
-import { findStartingCommit, type ScopeGit, type ScopeGitResult } from '../../src/surfaces/stop-hook-scope.js';
+import {
+  branchScopeGapText,
+  findStartingCommit,
+  type ScopeGit,
+  type ScopeGitResult,
+  type ScopeProblem,
+} from '../../src/surfaces/stop-hook-scope.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
@@ -348,8 +354,24 @@ describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, ()
 
     const h = hook();
     await runStopHookFromStdin('{}', h.ports);
-    const text = expectScopeGap(h, 'this clone has no commit for it');
+    // After a default branch rename, origin/HEAD still names the old branch and a fetch does not
+    // move it, so the step names git remote set-head origin --auto first.
+    const text = expectScopeGap(
+      h,
+      'this clone has no commit for it',
+      'Next: run git remote set-head origin --auto, which records the default branch of origin again, then fetch the trusted branch',
+    );
     expect(insideFrame(text, 'trusted branch: origin/gone')).toBe(true);
+  });
+
+  it('names git remote set-head origin --auto first in the check text for a missing branch, and only there', () => {
+    const gap = (problem: ScopeProblem) => branchScopeGapText({ kind: 'gap', problem, branch: 'origin/gone', detail: null });
+    expect(gap('branch-missing')).toContain(
+      'Next: run git remote set-head origin --auto, which records the default branch of origin again, then fetch the trusted branch',
+    );
+    expect(gap('branch-missing')).toContain('then run usabl check --branch-scope again.');
+    expect(gap('no-common-commit')).toContain('Next: fetch the trusted branch');
+    expect(gap('no-common-commit')).not.toContain('set-head');
   });
 
   // Only a branch of origin is a trusted branch. origin/HEAD pointed at a local branch or a tag
