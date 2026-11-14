@@ -161,6 +161,17 @@ describe('checkPage on a page with nothing rendered', () => {
     expect(result.verdict).toBe('verified');
   });
 
+  it('checks a labeled page with nothing to Tab to when its readiness signal holds, by the CLI rule', async () => {
+    adopted.page = scriptedPage([], {
+      queryAll: async (selector) => (selector === 'main article' ? [{ selector: 'main article' }] : []),
+    });
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('main article'), tabCap: 10 });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
   it('checks a labeled page with one control whose readiness signal holds', async () => {
     adopted.page = scriptedPage(['#save'], {
       queryAll: async (selector) => (selector === '#orders' ? [{ selector: '#orders' }] : []),

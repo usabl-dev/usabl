@@ -197,12 +197,11 @@ describe('markUnseenScreens', () => {
     expect(notCovered[0]?.reason).toContain('#app-root');
   });
 
-  it('still marks a body-only screen unseen even when its reachability selector matched', () => {
-    // The two signals are independent. reachedSelectorPresent true only means "do not raise the
-    // reachedWhen gap", never "cancel the body-only gap". A selector aimed at a persistent app shell
-    // element (header, nav, footer) matches on every route, including a login wall or a screen that
-    // threw on mount while the shell survived. Those screens are still body-only, so they stay unseen
-    // and their drafts are dropped. Suppressing the body-only gap here would mint a false green.
+  it('reads a body-only screen as seen when its declared selector held', () => {
+    // A page with nothing to Tab to, such as a page of text, is body-only and still rendered. The
+    // declared selector holding is the positive evidence that it rendered. A selector that matches
+    // only the app shell also holds on a screen whose content did not mount; that is the stated
+    // limit of the readiness signal.
     const pass = markUnseenScreens([
       scan({
         screenId: 'overview',
@@ -210,12 +209,87 @@ describe('markUnseenScreens', () => {
         stops: [bodyStop('html > body:nth-child(2)')],
         drafts: [draft('overview')],
         reachedSelectorPresent: true,
+        reachedWhenSelector: 'main article',
+      }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual([]);
+    expect(pass.screens[0]?.drafts).toHaveLength(1);
+    expect(pass.screens[0]?.gaps).toEqual([]);
+  });
+
+  it('tells the operator to declare a selector when a body-only screen has no readiness signal', () => {
+    const pass = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('#app')], drafts: [draft('overview')] }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual(['overview']);
+    expect(pass.screens[0]?.gaps[0]?.reason).toBe(
+      'usabl did not see this screen, so its findings were dropped. Every keyboard stop stayed on the document body, so the ' +
+        'page had nothing to walk; a page that never rendered, one behind a login, and one that threw on mount all look ' +
+        'like this. If this screen has no control to Tab to, such as a page of text, declare a reachedWhen selector for ' +
+        'it in usabl.config.json that matches an element only this screen renders, so usabl can confirm it rendered. ' +
+        'Check the URL and any sign-in this run needs before trusting a verdict for it.',
+    );
+  });
+
+  it('keeps a body-only screen unseen when its declared selector did not hold, and does not ask for a selector again', () => {
+    const pass = markUnseenScreens([
+      scan({
+        screenId: 'overview',
+        url: 'http://app/overview',
+        stops: [bodyStop('#app')],
+        drafts: [draft('overview')],
+        reachedSelectorPresent: false,
+        reachedWhenSelector: 'main article',
       }),
     ]);
     expect(pass.unseenScreenIds).toEqual(['overview']);
-    expect(pass.screens[0]?.drafts).toEqual([]);
-    const gap = pass.screens[0]?.gaps.find((g) => g.state === 'not-covered');
-    expect(gap?.reason).toContain('keyboard stop');
+    const reason = pass.screens[0]?.gaps[0]?.reason ?? '';
+    expect(reason).toContain('Every keyboard stop stayed on the document body');
+    expect(reason).toContain('main article');
+    expect(reason).not.toContain('declare a reachedWhen selector');
+  });
+
+  it('keeps a body-only screen unseen when its selector held and its declared response did not', () => {
+    const pass = markUnseenScreens([
+      scan({
+        screenId: 'orders',
+        url: 'http://app/orders',
+        stops: [bodyStop('#app')],
+        drafts: [draft('orders')],
+        reachedSelectorPresent: true,
+        reachedWhenSelector: 'main article',
+        reachedResponseSeen: false,
+        reachedWhenResponse: '/api/orders',
+      }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual(['orders']);
+    const reason = pass.screens[0]?.gaps[0]?.reason ?? '';
+    expect(reason).toContain('Every keyboard stop stayed on the document body');
+    expect(reason).toContain('/api/orders');
+  });
+
+  it('keeps a body-only screen unseen when only a response was declared, because a response is not proof anything rendered', () => {
+    // An application can fetch its data and then throw while it renders it. The answered request
+    // says the data arrived, not that any element of the screen is on the page.
+    const pass = markUnseenScreens([
+      scan({
+        screenId: 'orders',
+        url: 'http://app/orders',
+        stops: [bodyStop('#app')],
+        drafts: [draft('orders')],
+        reachedResponseSeen: true,
+        reachedWhenResponse: '/api/orders',
+      }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual(['orders']);
+    expect(pass.screens[0]?.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+  });
+
+  it('keeps a body-only screen unseen when a selector was declared and never measured', () => {
+    const pass = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('#app')], reachedWhenSelector: 'main article' }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual(['overview']);
   });
 
   it('strips applicability as well as drafts from a screen it cannot claim it saw', () => {

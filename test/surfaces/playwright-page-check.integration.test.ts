@@ -60,6 +60,21 @@ const BLANK_APP_HTML = `<!doctype html>
   <body id="app"></body>
 </html>`;
 
+// A page of text with nothing to Tab to. It rendered, and only a readiness signal can say so.
+const TEXT_ONLY_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Terms</title>
+  </head>
+  <body>
+    <main>
+      <h1>Terms</h1>
+      <p>These terms apply to every account.</p>
+    </main>
+  </body>
+</html>`;
+
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Playwright page', () => {
   let browser: Browser;
 
@@ -136,6 +151,19 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
       expect(result.gaps).toHaveLength(1);
       expect(result.gaps[0]).toMatchObject({ ref: 'readiness:page', state: 'not-covered' });
       expect(result.gaps[0]?.reason).toContain('Every keyboard stop stayed on the document body');
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('is not_covered for a page of text with no readiness signal, and the gap says to declare one', async () => {
+    const { context, page } = await openPage(TEXT_ONLY_HTML);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:page']);
+      expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
     } finally {
       await context.close();
     }
