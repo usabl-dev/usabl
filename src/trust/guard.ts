@@ -6,7 +6,7 @@
 import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
 import { operatorText } from '../intake/config-error.js';
-import { braceRangeIn, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
 const CONFIG_PATH = 'usabl.config.json';
 const ALWAYS_GUARDED = [
@@ -85,7 +85,7 @@ function unmatchableForm(path: string): string | null {
   if (character !== undefined) {
     return `it uses "${character}", which the guard cannot match`;
   }
-  if (path.includes('{') && expandBraces(path) === null) {
+  if (path.includes('{') && countBraceExpansions(path) === null) {
     return 'it uses a nested or unbalanced brace';
   }
   const range = braceRangeIn(path);
@@ -97,6 +97,14 @@ function unmatchableForm(path: string): string | null {
 
 // A segment the matcher reads as a pattern, or one it cannot evaluate.
 const PATTERN_SEGMENT = /[*{}[\]()?\\]/;
+
+/**
+ * Whether the guard reads a segment as a pattern. Config load uses this same test, so it refuses
+ * every `..` the guard would read as following a wildcard.
+ */
+export function isPatternSegment(segment: string): boolean {
+  return PATTERN_SEGMENT.test(segment);
+}
 
 // The literal folder above the first segment that is a pattern. The empty string is the whole tree.
 function literalFolder(segments: string[]): string {
@@ -132,19 +140,61 @@ export interface GuardedEntry {
  * is read wide: it guards the literal folder above the first segment the matcher cannot evaluate.
  * A form with no such folder guards the whole tree: one that starts with `/`, one with a `..` that
  * leaves the root, and one with a `..` anywhere after a wildcard, which can climb above any folder.
- * Config load refuses these forms, but the guard also reads a trusted ref's config, which config
- * load never checked.
+ * An entry with more than MAX_BRACE_EXPANSIONS expansions is read wide too, as the literal folder
+ * above its first brace group, and is never expanded. Config load refuses these forms, but the
+ * guard also reads a trusted ref's config, which config load never checked.
  */
 export function readGuardedEntry(entry: string, literal = false): GuardedEntry[] {
   if (literal || !entry.includes('{')) {
     return [readForm(entry, entry, literal, false)];
   }
-  const expansions = expandBraces(entry);
+  // The count comes first, because the expansions of a short entry can exhaust memory.
+  const count = countBraceExpansions(entry);
+  if (count !== null && count > MAX_BRACE_EXPANSIONS) {
+    return [readPastCap(entry)];
+  }
+  const expansions = count === null ? null : expandBraces(entry);
   if (expansions === null) {
     // A bad brace has no expansion. The form check names it, and the entry is read wide.
     return [readForm(entry, entry, false, true)];
   }
   return expansions.map((form) => readForm(entry, form, false, true));
+}
+
+/**
+ * The most brace expansions the guard reads one by one for a single entry. The local guard lists
+ * the working tree once for each expansion. At 256 a check took about 0.4 seconds on an idle
+ * machine and up to 1.5 seconds on a loaded one; at 65,536 it took about 31 seconds, long enough
+ * for a Stop hook to time out and let the stop through. The time depends on the machine.
+ */
+export const MAX_BRACE_EXPANSIONS = 256;
+
+// Whether an expansion of the text can hold a `..`. Two dots end up side by side only when they
+// are written together, or when the text between them is all left out. That text then starts and
+// ends with brace syntax, so one dot comes right before a brace or comma and one right after.
+function canJoinDots(text: string): boolean {
+  return text.includes('..') || (/\.[{,}]/.test(text) && /[{,}]\./.test(text));
+}
+
+/**
+ * An entry past the cap, read as the literal folder above its first brace group. Every expansion
+ * starts with the text before that group, so the folder holds every path the entry names, unless
+ * an expansion can climb out of it with a `..`. Then, and when there is no such folder, the entry
+ * guards the whole tree.
+ */
+function readPastCap(entry: string): GuardedEntry {
+  // Where the segment that holds the first brace group starts. Text before it is the same in every
+  // expansion; text from it on can join into a `..` segment.
+  const start = entry.slice(0, entry.indexOf('{')).lastIndexOf('/') + 1;
+  const folder = canJoinDots(entry.slice(start))
+    ? ''
+    : literalFolder(readForm(entry, entry.slice(0, start), false, false).path.split('/'));
+  return {
+    text: entry,
+    path: folder,
+    glob: false,
+    readWide: `its brace groups expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, more than the guard reads one by one`,
+  };
 }
 
 // One form of an entry, in canonical form. A form that came from a brace group is a glob reading
@@ -178,6 +228,11 @@ function readForm(entry: string, form: string, literal: boolean, braced: boolean
   const path = segments.join('/');
   if (literal) {
     return { text: entry, path, glob: false, readWide: null };
+  }
+  // An empty brace alternative, as in `{,}`, can leave nothing: the whole tree, which the entry
+  // does not say. It is read wide, so the entry is named.
+  if (braced && path === '') {
+    return wide('', 'one of its brace expansions names the repository root');
   }
   const problem = unmatchableForm(path);
   if (problem !== null) {
@@ -298,6 +353,35 @@ function workingTreeGlobs(entry: GuardedEntry): string[] {
   return entry.path === '' ? ['**'] : [entry.path, entry.path + '/**'];
 }
 
+// The dot names under an entry that guards every file under its path: a literal entry and a wide
+// reading. The matcher and the git listings take dot-named files there, but fs.glob skips a dot
+// name under `**` unless the pattern names one. A glob reading keeps Node's dot rule, so it has
+// none. Under a file the patterns match nothing.
+function workingTreeDotGlobs(entry: GuardedEntry): string[] {
+  if (entry.glob && entry.readWide === null) {
+    return [];
+  }
+  const under = entry.path === '' ? '' : entry.path + '/';
+  return [under + '**/.*', under + '**/.*/**'];
+}
+
+// Git never tracks a path with a `.git` segment, so such a path is git's own data and never
+// guarded content. The dot listing would otherwise list every file in `.git/`.
+function trackablePaths(paths: string[]): string[] {
+  return paths.filter((path) => !path.split('/').includes('.git'));
+}
+
+// What fs.glob finds for one entry: the plain listing as found, as before, joined with the dot
+// listing less git's own data. Listing more can only report more.
+async function workingTreeFiles(deps: Deps, entry: GuardedEntry): Promise<string[]> {
+  const dotGlobs = workingTreeDotGlobs(entry);
+  const [plain, dots] = await Promise.all([
+    deps.fs.glob(workingTreeGlobs(entry)),
+    dotGlobs.length === 0 ? Promise.resolve([]) : deps.fs.glob(dotGlobs),
+  ]);
+  return [...new Set([...plain, ...trackablePaths(dots)])].sort();
+}
+
 /**
  * Guarded entries are expanded from what git and the file system hold: the files the matcher
  * selects from the listings at the trusted ref and at HEAD (each listed once, with -z), joined with
@@ -334,7 +418,7 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
   const [refListings, workingByEntry] = await Promise.all([
     Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
-    Promise.all(entries.map((entry) => deps.fs.glob(workingTreeGlobs(entry)))),
+    Promise.all(entries.map((entry) => workingTreeFiles(deps, entry))),
   ]);
   return selectGuarded(entries, refListings.flat(), workingByEntry);
 }
