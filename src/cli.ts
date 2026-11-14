@@ -107,8 +107,10 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === 'object' && error !== null && 'code' in error;
 }
 
-// A commit id as the event file carries the pull request head: 7 to 40 hex characters, nothing else.
-const HEAD_COMMIT_ID = /^[0-9a-f]{7,40}$/i;
+// A full commit id, as GitHub writes the pull request head into the event file: exactly 40 or 64
+// lowercase hex characters, the same rule as the generated workflow's BASE_SHA check. A shorter
+// value can also be a branch name, and git resolves a branch of that name before a commit.
+const HEAD_COMMIT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 async function runEnforce(opts: CliOptions): Promise<number> {
   try {
@@ -135,9 +137,9 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     // range, or a path, so it is refused here, before any git call. The value is not printed.
     if (!HEAD_COMMIT_ID.test(pr.headSha)) {
       process.stderr.write(
-        'usabl: pull_request.head.sha in the event file that GITHUB_EVENT_PATH names is not a commit id ' +
-          '(7 to 40 hex characters), so usabl did not pass it to git. Run enforce policy on a pull_request ' +
-          'or pull_request_review event.\n',
+        'usabl: pull_request.head.sha in the event file that GITHUB_EVENT_PATH names is not a full commit id ' +
+          '(40 or 64 hex characters), so usabl did not pass it to git. GitHub writes a full commit id there, ' +
+          'so this event file is not one GitHub wrote for a pull request. Check where GITHUB_EVENT_PATH points.\n',
       );
       return 2;
     }

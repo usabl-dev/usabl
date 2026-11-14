@@ -1,8 +1,8 @@
 /**
  * `usabl enforce policy` reads the pull request head SHA from the event file that
  * GITHUB_EVENT_PATH names and passes it to git as a ref. The CLI refuses a value that is not a
- * commit id, 7 to 40 hex characters, before any git call, with exit 2 and a message that names the
- * event file field. These tests replace the git reader with a recorder, so they read no git
+ * full commit id, exactly 40 or 64 lowercase hex characters, before any git call, with exit 2 and
+ * a message that names the event file field and does not repeat the value. These tests replace the git reader with a recorder, so they read no git
  * repository and show that a refused value never reaches git.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,6 +38,8 @@ const { main } = await import('../../src/cli.js');
 
 const TRUSTED = '0123456789abcdef0123456789abcdef01234567';
 const VALID_HEAD = 'fedcba9876543210fedcba9876543210fedcba98';
+// A SHA-256 commit id, as a repository in git's SHA-256 object format names its commits.
+const SHA256_HEAD = 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210';
 
 const RESULT = JSON.stringify({
   schemaVersion: 'usabl.result.v1',
@@ -96,9 +98,16 @@ describe('enforce policy refuses a head SHA that is not a commit id', () => {
     ['an empty value', ''],
     ['a value that starts with a dash', '-abcdef0'],
     ['6 hex characters', 'abcdef'],
+    // A short value can also be a branch name, and git resolves a branch of that name first.
+    ['7 hex characters', VALID_HEAD.slice(0, 7)],
+    ['39 hex characters', VALID_HEAD.slice(0, 39)],
     ['41 hex characters', `${VALID_HEAD}0`],
+    ['63 hex characters', SHA256_HEAD.slice(0, 63)],
+    ['65 hex characters', `${SHA256_HEAD}0`],
+    ['an uppercase 40 character id', VALID_HEAD.toUpperCase()],
     ['a value with a newline', `${VALID_HEAD.slice(0, 20)}\n${VALID_HEAD.slice(20)}`],
     ['a commit id with a newline at the end', `${VALID_HEAD.slice(0, 39)}\n`],
+    ['a full commit id with a newline at the end', `${VALID_HEAD}\n`],
   ];
 
   for (const [name, sha] of refused) {
@@ -107,15 +116,22 @@ describe('enforce policy refuses a head SHA that is not a commit id', () => {
       expect(out.code).toBe(2);
       expect(out.stderr).toContain('pull_request.head.sha');
       expect(out.stderr).toContain('GITHUB_EVENT_PATH');
+      expect(out.stderr).toContain('a full commit id (40 or 64 hex characters)');
+      if (sha.trim() !== '') expect(out.stderr).not.toContain(sha.trim());
       expect(readersMade).toBe(0);
       expect(gitCalls).toEqual([]);
     });
   }
 
-  it('passes a 40 character commit id on to git', async () => {
-    const out = await enforceWithHead(VALID_HEAD);
-    expect(out.stderr).not.toContain('pull_request.head.sha');
-    expect(readersMade).toBe(1);
-    expect(gitCalls.some((call) => call.ref === VALID_HEAD)).toBe(true);
-  });
+  for (const [name, sha] of [
+    ['a 40 character commit id', VALID_HEAD],
+    ['a 64 character commit id', SHA256_HEAD],
+  ] as const) {
+    it(`passes ${name} on to git`, async () => {
+      const out = await enforceWithHead(sha);
+      expect(out.stderr).not.toContain('pull_request.head.sha');
+      expect(readersMade).toBe(1);
+      expect(gitCalls.some((call) => call.ref === sha)).toBe(true);
+    });
+  }
 });
