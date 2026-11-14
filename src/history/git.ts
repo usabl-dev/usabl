@@ -9,6 +9,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { assertReadableRef } from '../deps/git.js';
 import type { HistoryWriter } from './append.js';
 import { HISTORY_REMOTE_REF } from './record.js';
 
@@ -67,6 +68,8 @@ export function makeHistoryGit(options: { cwd?: string; ref?: string } = {}): Hi
   const ancestors = new Map<string, Promise<Set<string>>>();
 
   async function resolveCommit(name: string): Promise<string | null> {
+    // A value such as ^main or HEAD:pol can resolve to a commit or a blob it does not name.
+    assertReadableRef(name);
     try {
       const out = await git(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`]);
       const sha = out.trim();

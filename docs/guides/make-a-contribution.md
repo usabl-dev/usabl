@@ -28,7 +28,7 @@ If the sentence has two independent outcomes, split the work into two pull reque
 
 ## 2. Set up the repository
 
-You need Node.js 22, npm, Git, and Python 3 for pre-commit.
+You need Node.js 22, npm, Git 2.30 or later, and Python 3 for pre-commit.
 
 1. Clone the repository and install:
 

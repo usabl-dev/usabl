@@ -71,4 +71,16 @@ describe('makeHistoryGit', () => {
     expect(await port.isAncestor(head!, parent!)).toBe(false);
     expect(await port.isAncestor(head!, head!)).toBe(true);
   });
+
+  // The debt command resolves its base ref here. git resolves ^main to main and HEAD:pol^{commit}
+  // to a blob id when a file has that name, so a value that names no commit could resolve.
+  it('refuses a value it cannot use as a ref before it calls git', async () => {
+    await writeFile(join(repo, 'pol^{commit}'), 'odd name\n', 'utf8');
+    await git(repo, ['add', 'pol^{commit}']);
+    await git(repo, ['commit', '-m', 'odd name']);
+    const port = makeHistoryGit({ cwd: repo });
+    for (const ref of ['^main', 'HEAD:pol', 'main..HEAD', '-x']) {
+      await expect(port.resolveCommit(ref)).rejects.toThrow(/usabl cannot use .* as a git ref/s);
+    }
+  });
 });
