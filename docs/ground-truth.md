@@ -3145,7 +3145,7 @@ edit.
 ### CI (trusted-ref policy read)
 
 CI requires `--trusted-ref` (a forge-supplied base revision). Config, evidence,
-waivers, and rules are read via `git show <ref>:<path>` from the trusted base, never
+waivers, and rules are read via `git cat-file blob <ref>:<path>` from the trusted base, never
 from the PR working tree. Combined with CODEOWNERS + branch protection (when the host allows it), a PR author
 cannot influence what policy they are judged against.
 
