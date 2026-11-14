@@ -8,7 +8,7 @@
  * that records which screens it was asked to scan.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -27,7 +27,10 @@ const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
   uiFileGlobs: ['src/**'],
   discovery: { routerFile: 'src/routes.tsx', wideBlastGlobs: [] },
-  surfaces: [{ id: 'home', url: 'http://127.0.0.1:5173/', files: ['src/App.tsx'] }],
+  surfaces: [
+    { id: 'home', url: 'http://127.0.0.1:5173/', files: ['src/App.tsx'] },
+    { id: 'other', url: 'http://127.0.0.1:5173/other', files: ['src/Other.tsx'] },
+  ],
   guardedPaths: [],
 };
 
@@ -48,10 +51,19 @@ async function write(path: string, text: string): Promise<void> {
   await writeFile(join(repo, path), text);
 }
 
-// The trusted branch as a clone records it: origin/main, named by refs/remotes/origin/HEAD.
+// The trusted branch as a clone records it: origin/main at the local main, named by
+// refs/remotes/origin/HEAD.
 function recordTrustedBranch(): void {
-  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('update-ref', 'refs/remotes/origin/main', 'main');
   git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+}
+
+function commitOf(ref: string): string {
+  return git('rev-parse', ref).trim();
+}
+
+async function storedReceipt(): Promise<{ baseRevision: unknown }> {
+  return JSON.parse(await readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')) as { baseRevision: unknown };
 }
 
 beforeEach(async () => {
@@ -138,5 +150,48 @@ describe('the Stop hook checks what CI will check', () => {
     await runStopHookFromStdin('{}', h.ports);
     expect(h.scanned).toEqual([]);
     expect(h.stderr()).toContain('IDLE');
+  });
+});
+
+describe('the receipt binds the starting commit', () => {
+  it('records the commit where the branch left the trusted branch in the receipt it saves', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.stderr()).toContain('VERIFIED');
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('main'));
+  });
+
+  // The false green this closes: a receipt minted while the stop checked only uncommitted
+  // changes matched the same tree on a later stop that also checks committed work, so that work
+  // was never scanned.
+  it('does not take a receipt minted for a narrower set of changes as proof for a wider one', async () => {
+    git('switch', '-q', '-c', 'feature');
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the other screen');
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    // No trusted branch yet, so this stop checks only the uncommitted change.
+    const first = hook();
+    await runStopHookFromStdin('{}', first.ports);
+    expect(first.scanned).toEqual(['home']);
+    expect(first.stderr()).toContain('VERIFIED');
+    expect((await storedReceipt()).baseRevision).toBeNull();
+
+    recordTrustedBranch();
+    const second = hook();
+    await runStopHookFromStdin('{}', second.ports);
+    expect(second.stderr()).not.toContain('not re-scanned');
+    expect([...second.scanned].sort()).toEqual(['home', 'other']);
+    expect(second.stderr()).toContain(
+      'The stored receipt for this tree did not verify, so this stop ran a full check instead of using it. ' +
+        'Why: the receipt was minted for changes since a different commit on the trusted branch',
+    );
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('main'));
   });
 });

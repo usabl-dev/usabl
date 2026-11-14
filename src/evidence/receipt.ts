@@ -4,7 +4,8 @@
  * Only `run()` calls this inside usabl, and only after the gate returned verified. It is also
  * exported, so it checks the ids it is handed (see checkReceiptInput).
  *
- * Five bindings: sourceTree (current Git working tree), policyHash (guarded-path
+ * Six bindings: sourceTree (current Git working tree), baseRevision (the commit the changed
+ * list was taken from, or null for uncommitted changes only), policyHash (guarded-path
  * blobs at HEAD), runnerVersion, scannerVersions (axe-core, Playwright, Chromium, and the
  * version of each optional commercial engine the config turned on), and
  * historyHead (the debt history commit, which can lower the debt a run accepts).
@@ -48,6 +49,8 @@ export interface ReceiptArgs {
   // run() always passes it, so the receipt binds the tree the scan saw. When absent, mint reads the
   // tree itself, which is right only for a caller that knows nothing changed since its check.
   sourceTree?: string;
+  // The commit the run's changed list was taken from, or null when the run listed only changes
+  // that are not committed. Verification compares it. See verifyReceipt.
   baseRevision?: string | null;
   // The debt history commit the run read, or null when it read none. See currentHistoryHead.
   historyHead?: string | null;
@@ -451,6 +454,8 @@ const FIELD_REASONS: Record<string, string> = {
   policyHash: "the committed policy changed since the receipt was minted",
   runnerVersion: "a different usabl engine minted the receipt",
   historyHead: "the debt history moved since the receipt was minted",
+  baseRevision:
+    "the receipt was minted for changes since a different commit on the trusted branch, so it does not stand for the changes this stop checks",
   scannerVersions: "the scanners differ from the ones that minted the receipt, or a version could not be read",
 };
 
@@ -470,12 +475,18 @@ export function receiptFailureReasons(receipt: Receipt, failedFields: readonly s
  * Verification expands guarded directories before hashing so newly added policy files
  * also move the receipt fingerprint. Without expansion, self-edits under a guarded
  * directory could re-verify against an incomplete path list.
+ *
+ * `currentBaseRevision` is the commit the caller would list changes from now, or null when it
+ * would list only changes that are not committed. A receipt stands for the changes listed from
+ * the commit it records, so the same tree checked from another commit, or from none, is a
+ * different set of changes and does not verify. A caller that passes nothing compares with null.
  */
 export async function verifyReceipt(
   deps: Deps,
   config: UsablConfig,
   receipt: Receipt,
   currentSourceTree: string,
+  currentBaseRevision: string | null = null,
 ): Promise<ReceiptVerification> {
   const failedFields: string[] = [];
   const expandedGuardedPaths = await expandConfigGuardedSet(deps, config);
@@ -488,6 +499,12 @@ export async function verifyReceipt(
   }
   if (receipt.sourceTree !== currentSourceTree) {
     failedFields.push("sourceTree");
+  }
+  // A receipt minted before this binding was checked records null, as a stop with no trusted
+  // branch does. It verifies only where a stop still checks uncommitted changes alone. Anywhere
+  // else the stop runs one full check and saves a receipt that records the commit.
+  if (receipt.baseRevision !== currentBaseRevision) {
+    failedFields.push("baseRevision");
   }
   if (receipt.policyHash !== policyHash) {
     failedFields.push("policyHash");

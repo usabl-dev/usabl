@@ -521,15 +521,17 @@ async function verifyStoredReceipt(
   deps: Deps,
   config: UsablConfig,
   pins: StoredReceiptPinState,
+  baseRevision: string | null,
 ): Promise<{ verified: boolean; details: string; notice: string | null }> {
   const receipt = await loadReceipt(ports.fs);
   if (receipt === null) {
     return { verified: false, details: 'no local receipt found', notice: null };
   }
 
-  // Fast-path verification reuses the same verifier as run() so trust rules cannot diverge.
+  // Fast-path verification reuses the same verifier as run() so trust rules cannot diverge. The
+  // starting commit is this stop's, so a receipt for another set of changes does not verify.
   const currentSourceTree = await deps.git.writeTree();
-  const verification = await verifyReceipt(deps, config, receipt, currentSourceTree);
+  const verification = await verifyReceipt(deps, config, receipt, currentSourceTree, baseRevision);
   if (verification.valid) {
     return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree, pins), notice: null };
   }
@@ -783,6 +785,9 @@ async function emitConfigBlock(
 /** What one stop checks, as the options its run gets. */
 interface StopScope {
   runOptions: RunOptions;
+  // The commit the changed list was taken from, or null for uncommitted changes only. The receipt
+  // records it, and a stored receipt verifies only for the same one.
+  baseRevision: string | null;
 }
 
 /**
@@ -794,13 +799,16 @@ interface StopScope {
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
-    return { runOptions: {} };
+    return { runOptions: {}, baseRevision: null };
   }
   const start = await ports.findStartingCommit();
   if (start.kind !== 'found') {
-    return { runOptions: {} };
+    return { runOptions: {}, baseRevision: null };
   }
-  return { runOptions: { changedFiles: await listChangedFiles(deps.git, start.commit) } };
+  return {
+    runOptions: { changedFiles: await listChangedFiles(deps.git, start.commit), baseRevision: start.commit },
+    baseRevision: start.commit,
+  };
 }
 
 // usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
@@ -962,7 +970,7 @@ export async function runStopHook(
       const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
-      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
+      }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
         await emitProtocolAllow(
