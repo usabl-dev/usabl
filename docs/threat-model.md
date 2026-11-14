@@ -31,6 +31,18 @@ re-baseline to green.
   requirements YAML from `--trusted-ref`, not working tree bytes.
 - The requirements root is also read from trusted-ref `usabl.config.json`, so a
   PR cannot rewrite the requirements path to bypass baseline intake providers.
+- A trusted ref that is not in the repository, such as a base commit a shallow clone lacks, is an
+  error, never an absent file, so missing policy is never read as no policy. The git reader reads
+  a trusted file with `git cat-file blob`, which reads git objects only. `git show` read
+  `<ref>:<path>` as a path when a working tree file had that exact name, so a file a pull request
+  commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
+  same reason. The git reader, the history reader, and the ledger reader accept none of these
+  values as a ref, and refuse them before any git call: an empty value, a value that starts with
+  `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
+  character. White space includes non-ASCII spaces that git itself allows in a ref name, and
+  control characters include U+0080 to U+009F. git would read such a value as an option, a
+  negative or range revision, a path inside a commit, or a pathspec, and it could come back as an
+  empty or absent file. The git reader also passes each ref after `--end-of-options`.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only

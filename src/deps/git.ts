@@ -51,6 +51,10 @@ function missingRefError(ref: string, stderr: string): Error | null {
   if (!/invalid object name/i.test(stderr)) {
     return null;
   }
+  return refNotFoundError(ref);
+}
+
+function refNotFoundError(ref: string): Error {
   if (ref === 'HEAD') {
     return new Error(NO_HEAD_MESSAGE);
   }
@@ -69,6 +73,32 @@ function fetchExample(ref: string): string {
     return `for example git fetch ${remoteBranch[1]} ${remoteBranch[2]}`;
   }
   return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
+}
+
+// usabl accepts no ref that is empty, starts with a dash or a caret, or holds two dots, a colon,
+// *, ?, [, a backslash, white space, or a control character. White space here includes non-ASCII
+// spaces that git itself allows in a ref name, and control characters include U+0080 to U+009F.
+// git reads such a value another way: a dash starts an option, a leading caret or two dots make a
+// negative or range revision, a colon starts a path inside a commit, and a glob character makes
+// git show HEAD filtered by a pathspec. Each of those can come back as an empty or absent file
+// for a ref usabl never read. So every function that takes a ref from a person refuses one of
+// these before it calls git.
+const UNREADABLE_REF = /^[-^]|\.\.|[:*?[\\\s\u0000-\u001f\u007f-\u009f]/u;
+
+/** The error for a value usabl cannot use as a ref. Its message names the value and the fix. */
+export class RefRefusedError extends Error {
+  override name = 'RefRefusedError';
+}
+
+/** Throws when git would read the ref as something other than a ref. Call it before any git call. */
+export function assertReadableRef(ref: string): void {
+  if (ref.length === 0 || UNREADABLE_REF.test(ref)) {
+    throw new RefRefusedError(
+      `usabl cannot use "${operatorText(ref)}" as a git ref. A ref name cannot be empty, start with a dash ` +
+        'or a caret, or hold two dots, a colon, *, ?, [, a backslash, white space, or a control character. ' +
+        'Name a branch, a tag, or a commit id, then run usabl again.',
+    );
+  }
 }
 
 // HEAD does not exist, so the working tree cannot be read against it. A new repository with no
@@ -200,6 +230,20 @@ async function runListing(
   }
 }
 
+// True when the ref names a commit in this repository. With --verify --quiet, git exits 1 and
+// prints nothing when it does not. Any other failure is not an answer, so it is thrown.
+async function namesCommit(cwd: string, ref: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+    return true;
+  } catch (err) {
+    if (readErrorCode(err) === 1) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}): GitReader {
   const cwd = options.cwd ?? process.cwd();
   // The buffer size is an option only so tests can reach the over-limit path with a small repository.
@@ -214,42 +258,66 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       return parseStatus(output);
     },
     async diffNameOnly(ref) {
+      assertReadableRef(ref);
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      const output = await runListing(cwd, ['diff', '--name-only', '-z', `${ref}...HEAD`], maxBuffer);
+      // The closing -- keeps git from reading <ref>...HEAD as a path when a file has that name.
+      const output = await runListing(
+        cwd,
+        ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`, '--'],
+        maxBuffer,
+      );
       return parseNameOnly(output);
     },
     async show(ref, path) {
+      assertReadableRef(ref);
       try {
-        const output = await runGit(cwd, ['show', `${ref}:${path}`]);
+        // cat-file reads objects only. git show reads <ref>:<path> as a path when it names no
+        // object and a working tree file has that exact name, so a file a pull request commits
+        // could stand in for a trusted read. --end-of-options keeps a ref that starts with a dash
+        // from being read as an option.
+        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
         return output;
       } catch (err) {
         const code = readErrorCode(err);
         const stderr = readErrorStderr(err);
         if (code !== null && isMissingShow(stderr)) {
-          return null;
+          // For a full commit id git gives the missing-file text even when the commit itself is
+          // not in the repository, as in a shallow clone. The file is absent only when the ref
+          // names a commit here. Otherwise usabl could not read the ref at all.
+          if (await namesCommit(cwd, ref)) {
+            return null;
+          }
+          throw refNotFoundError(ref);
         }
         throw missingRefError(ref, stderr) ?? err;
       }
     },
     async lsTree(ref, paths) {
+      assertReadableRef(ref);
       if (paths.length === 0) {
         return {};
       }
-      const output = await runListing(cwd, ['ls-tree', '-z', ref, '--', ...paths], maxBuffer);
+      const output = await runListing(cwd, ['ls-tree', '-z', '--end-of-options', ref, '--', ...paths], maxBuffer);
       return parseLsTree(output);
     },
     async lsFiles(ref, prefix) {
-      const output = await runListing(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix], maxBuffer);
+      assertReadableRef(ref);
+      const output = await runListing(
+        cwd,
+        ['ls-tree', '-r', '--name-only', '-z', '--end-of-options', ref, '--', prefix],
+        maxBuffer,
+      );
       return parseLsFiles(output);
     },
     async lsFilesUnder(ref, prefixes) {
       // One listing for every prefix, so a ref is read once however many guarded entries share it.
       // ls-tree matches each prefix as a path or a folder, never as a pattern.
+      assertReadableRef(ref);
       if (prefixes.length === 0) {
         return [];
       }
       const unique = [...new Set(prefixes)].sort();
-      const args = ['ls-tree', '-r', '--name-only', '-z', ref];
+      const args = ['ls-tree', '-r', '--name-only', '-z', '--end-of-options', ref];
       if (!unique.includes('')) {
         args.push('--', ...unique);
       }

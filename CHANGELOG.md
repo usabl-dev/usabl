@@ -331,6 +331,31 @@
 
 ### Fixed
 
+- A trusted commit that is not in the repository is an error, never an absent file. In a shallow
+  clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
+  read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
+  that the ref names a commit before it reports a file as absent, and otherwise says it cannot
+  read the ref and how to fetch it. `usabl debt --trusted-ref <commit>` exited 0 and said no
+  accessibility debt is accepted; it now exits 4 and names the ref. `serve-build` said the config
+  file was missing; it now names the ref. No gate path gave a false green before, because a later
+  git call at the same ref failed. A trusted file is now read with `git cat-file blob`, which
+  reads git objects only. `git show` read `<ref>:<path>` as a path when a working tree file had
+  that exact name, so a committed file named `<commit>:usabl.config.json` made a trusted read
+  return the head commit's own text. For the same reason the diff listing ends its revisions with
+  `--`; a file named `<ref>...HEAD` made the diff of a missing ref list no changed files. The git
+  reader, the history reader, and the ledger reader accept none of these values as a ref, and
+  refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
+  value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White
+  space includes non-ASCII spaces that git itself allows in a ref name, and control characters
+  include U+0080 to U+009F. git read `nosuch*` as a pathspec over HEAD and `^main` or `main..HEAD` as a negative
+  or range revision, so a trusted file that exists read as empty. It read `HEAD:pol` as a path, so
+  a file could read as absent, and `usabl debt ledger --trusted-ref HEAD:pol` said no commit had
+  ever held the floor; it now exits 4 and names the value. In the git reader, `git cat-file`,
+  `git rev-parse`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
+  `--output=<file>` is never read as an option; on `git diff` it wrote the listing to a file and
+  read as no changed files. `serve-build --trusted-ref` refuses a value that starts with one
+  dash, as the main CLI does. usabl now needs Git 2.30 or later, the first release where
+  every git command usabl runs accepts `--end-of-options`.
 - A change to a test file that a screen can load is now checked, or is a gap, where it passed as
   nothing to check. A test file is a file under `uiFileGlobs` named like a test (`*.test.*`,
   `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
