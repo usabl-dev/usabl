@@ -258,7 +258,7 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
   // The guard reads only the file system and git, compares, and decides nothing. Its answer here
   // only says which manifests the local run would read as missing.
   const guardDeps = { fs, git } as unknown as Deps;
-  const diverged = await checkGuard(guardDeps, config, LOCAL_REF);
+  const diverged = await checkGuard(guardDeps, LOCAL_REF);
   const coverage = localCoverageFs(fs, diverged);
   const coverageFs = coverage.fs;
 

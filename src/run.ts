@@ -109,7 +109,7 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // file written while the check runs can never be bound into a receipt that did not see it.
     const treeBeforePlanning = await deps.git.writeTree();
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
-    const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
+    const guardDivergedPaths = await checkGuard(deps, opts.trustedRef ?? 'HEAD');
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);

@@ -346,7 +346,7 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
  * Every diverged guarded path is returned. The gate needs the full list so
  * CODEOWNERS approval cannot be satisfied by the config owner alone.
  */
-export async function checkGuard(deps: Deps, config: UsablConfig, trustedRef = 'HEAD'): Promise<string[]> {
+export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<string[]> {
   const [workingConfig, trustedConfig] = await Promise.all([
     deps.fs.readFile(CONFIG_PATH),
     deps.git.show(trustedRef, CONFIG_PATH),

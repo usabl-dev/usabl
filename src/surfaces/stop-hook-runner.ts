@@ -814,7 +814,7 @@ export async function runStopHook(
     }
     deps = await ports.buildDeps(config);
     const guardDeps = deps;
-    const dirtyGuardedPaths = await guarded(() => checkGuard(guardDeps, config));
+    const dirtyGuardedPaths = await guarded(() => checkGuard(guardDeps));
 
     // Session pins are compared before the receipt fast path. A receipt binds the committed policy
     // as it is when the receipt was minted, so a policy weakened and committed during the session,
