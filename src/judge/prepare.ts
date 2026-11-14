@@ -67,7 +67,8 @@ export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJu
     // The config comes from the trusted ref, so a pull request that fixes the list is still
     // refused. Say so, or the author reads the exit code as a fix that did not work.
     const whenFixed =
-      'In CI, usabl reads this config from the base branch, so a fix to uiFileGlobs takes effect once it is merged there.';
+      'The CI judge reads this config from the trusted ref, which is the base branch in the workflow usabl install writes, ' +
+      'so a fix to uiFileGlobs takes effect once it is merged there.';
     return { ok: false, message: `${refusal} ${whenFixed}`, exitCode: 4 };
   }
   const origins = allowedOriginsFrom(configRaw, docsRaw);

@@ -90,7 +90,8 @@ describe('check --isolated-browser with a trusted ref', () => {
     expect(code).toBe(4);
     expect(stderr.join('')).toContain('usabl.config.json has an empty uiFileGlobs list');
     expect(stderr.join('')).toContain(
-      'In CI, usabl reads this config from the base branch, so a fix to uiFileGlobs takes effect once it is merged there.',
+      'The CI judge reads this config from the trusted ref, which is the base branch in the workflow usabl install writes, ' +
+        'so a fix to uiFileGlobs takes effect once it is merged there.',
     );
   }, 60_000);
 
