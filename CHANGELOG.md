@@ -341,24 +341,17 @@
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
-  them with the blank-page detector the CLI runs on its transcript. Gate effect: such a page is now
-  `not_covered`, with a `readiness:<screenId>` gap worded as the CLI words it. The CLI result is
-  unchanged. A walk that was cut short is already not covered by its own draft, and with
-  `keyboardWalk: false` there are no stops, so `checkPage` makes no blank-page claim.
-- A page with nothing to Tab to is seen when its readiness selector holds and it shows text. A
-  page of text has a keyboard walk that stays on the body, so it read as unseen even when its
-  `reachedWhen` selector matched. Gate effect: such a screen is now checked, in the CLI and in
-  `checkPage`, and can read `verified`, when its declared selector held, every other declared part
-  held too, and the page shows rendered text that is not white space. The text read counts text in
-  open shadow roots and same-origin frames, not text hidden with CSS, in a closed shadow root, or
-  in a frame from another origin, and a failed read counts as no text. A blank page whose selector
-  matched, such as `<body id="app">` with `reachedWhen: '#app'`, stays `not_covered`, and its gap
-  says the page shows no text. A response alone does not count. Without a selector the screen
-  stays `not_covered`, and its gap now says to declare a `reachedWhen` selector for an element only
-  that screen renders. A page with no text and nothing to Tab to, such as a page of only images,
-  stays `not_covered` even when its selector held. A selector that matches only the app shell, on
-  a shell that shows text, also holds on a screen whose content did not mount, so point it at the
-  screen's own content.
+  them with the blank-page detector the CLI runs on its transcript. When the walk was complete and
+  every stop stayed on the body, `checkPage` reads once whether the page shows content: rendered
+  text that is not white space, or a rendered `img`, `svg`, `canvas`, `video`, `picture`,
+  `object`, `embed`, or `role="img"` element with a box, in the document, an open shadow root, or
+  a same-origin frame. A CSS background image, hidden content, a closed shadow root, and a frame
+  from another origin do not count, and a failed read counts as no content. Gate effect: a page
+  that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
+  words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
+  to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
+  covered by its own draft, and with `keyboardWalk: false` there are no stops, so `checkPage`
+  makes no blank-page claim.
 - A script that puts focus on the body in the middle of the page no longer makes the keyboard
   walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
   focus on the body, and the next Tab landed on the first control, as at the real end of the

@@ -854,7 +854,9 @@ outside every table as the control in an accepted row. Either way a new barrier 
   world, before the extra Tab, and that walk ends with the truncation draft too. A walk that
   reaches no stop is complete only when the extra Tab leaves focus on the body, and that page is
   left to the blank-page detector. In `checkPage` the detector reads the stops the keyboard walk
-  returns, so a blank page is a gap there too, unless the caller turned the walk off.
+  returns, and a page whose walk stayed on the body and that shows no content is a gap there
+  too, unless the caller turned the walk off. A page there with nothing to Tab to that shows text
+  or an image is checked as before.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from

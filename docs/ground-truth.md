@@ -1065,65 +1065,55 @@ id as its path, so `<body id="app">` never read as the body when the detector re
 the path, and a screen that crashed on mount read as seen. An empty transcript is no evidence
 either way, so it is not unseen.
 
-A page with nothing to Tab to, such as a page of text, has a walk that stays on the body too,
-and it rendered. A selector alone cannot tell it from a page that never rendered: one that names
-the app shell or an empty mount point, such as `reachedWhen: '#app'` on `<body id="app">`,
-matches on a blank document. So a body-only screen reads as seen only when both hold:
+In `checkPage` the same detector reports a blank page, and only a blank page. `checkPage`
+collects no transcript of its own. The keyboard walk returns the stops it reached, the body stop
+included, with whether its end rule confirmed the end (`WalkRecord`), and `runProviders` passes
+the first such record to the caller. The record is measurement for this check only: no draft,
+finding, or verdict is made from it, the gate never reads it, and no CLI scan carries it, so a
+CLI result is the same as before. `checkPage` makes the blank-page gap only when both hold:
 
-- the screen declares a `reachedWhen` selector that held, and every other declared part held;
-- the page shows text: at least one character of rendered text that is not white space.
+- the walk was complete and every stop stayed on the body (`walkStayedOnBody`, the one body-only
+  detector, which the CLI's unseen pass runs too);
+- the page shows no content.
 
-Otherwise it stays unseen. A declared response alone does not count: an application can fetch
-its data and then throw while it renders it, so the answer says nothing about what is on the
-page. A body-only screen without a selector stays unseen, and its gap says to declare a
-`reachedWhen` selector for an element only that screen renders. One whose selector did not hold
-stays unseen, and its gap names the selector. One whose selector held on a page that shows no
-text stays unseen, and its gap says the selector matched but usabl found no rendered text, so
-nothing confirms the screen rendered, and to point the selector at the screen's own content.
+Then the gap is a `not-covered` gap with ref `readiness:<screenId>`, built by the CLI's own
+function (`markUnseenScreens`), so it has the CLI's wording, with or without a readiness signal.
+A page with nothing to Tab to that shows content is checked as before, with or without a
+readiness signal, and its findings are kept: a page of text, or a page that is only an image,
+handed to `checkPage` with no readiness signal is checked as it was. A declared readiness signal
+works as before: one that does not hold is still a gap.
 
-The text read (`Page.pageShowsText`) runs in an isolated world after the checks, and only when
-every keyboard stop stayed on the body, so the scan of any other page keeps its shape. The scan
-carries the answer as `textShown`. It is measurement for this check only: no draft, finding, or
-verdict is made from it, and the gate never reads it. `innerText` does not reach into a shadow
-root, and design system components render their text there, so the read walks the nodes itself.
-A text node counts when it holds a character that is not white space, the element that holds it
-passes the browser's `checkVisibility` (not `display: none`, not `visibility: hidden`, not
-`opacity: 0`), and it is laid out in a box with a width and a height. What it does for each case:
+What the page shows is read once, after the walk and the checks, and only when every stop stayed
+on the body (`Page.pageShowsContent`, in an isolated world). `innerText` does not reach into a
+shadow root, and design system components render there, so the read walks the nodes itself: the
+document from the body, each open shadow root, and each same-origin frame. A page shows content
+when it has either of these:
 
-- text in the document, and text inside an open shadow root: counted;
-- text inside a same-origin frame: counted, when the frame itself is visible;
-- text inside a closed shadow root, or a frame from another origin: not counted, because the read
-  cannot see it;
-- text hidden with CSS as above: not counted. Text that is visually hidden but laid out, such as
-  text clipped to one pixel for screen readers, is counted;
-- a page that is only images: no text, because alternative text is not rendered text;
-- `script`, `style`, and `template` content, and the document title: not counted.
+- a text node with a character that is not white space, whose element passes the browser's
+  `checkVisibility` (not `display: none`, not `visibility: hidden`, not `opacity: 0`) and that is
+  laid out in a box with a width and a height;
+- an `img`, `svg`, `canvas`, `video`, `picture`, `object`, or `embed` element, or an element whose
+  role is `img`, that passes the same visibility test and whose box has a width and a height.
 
-A read that fails, or that passes 200,000 nodes without finding text, reads as no text shown, so
-the screen stays unseen. `checkPage` takes the same read and applies the same rule through the
-same function.
+What does not count: a CSS background image (the element that shows it is empty), content hidden
+with CSS as above, content in a closed shadow root or in a frame from another origin (the read
+cannot see it), `script`, `style`, and `template` content, and the document title. Text that is
+visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
+browser that cannot say whether an element is visible gets no benefit of the doubt: the element
+counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
+as no content, so the page is reported blank.
 
-This rule accepts a false gap: a page with no text and nothing to Tab to, such as a page that is
-only images, stays unseen even when its selector held. The way out is a surface whose page has a
-control or text. The limit of the signal also stays: a selector that matches only the app shell,
-on a screen whose shell shows text and has nothing to Tab to, still reads as seen when the content
-did not mount, so point the selector at the screen's own content (see "Absent is a fix only with
-evidence" in section 9).
+A walk that was cut short gives no stops to read, and its own `keyboard-walk-truncated` draft
+already keeps the page from verifying. A walk that did not run, because the caller passed
+`keyboardWalk: false`, gives no stops either, so `checkPage` makes no blank-page claim and the
+page reads as its other checks found it. A blank page checked that way is caught only by a
+`reachedWhen` readiness signal that the page fails.
 
-`checkPage` collects no transcript of its own. The keyboard walk returns the stops it reached,
-the body stop included, with whether its end rule confirmed the end (`WalkRecord`), and
-`runProviders` passes the first such record to the caller. The record is measurement for this
-check only: no draft, finding, or verdict is made from it, the gate never reads it, and no CLI
-scan carries it, so a CLI result is the same as before. `checkPage` reads a complete walk's stops
-with the same function the CLI runs (`markUnseenScreens`), so a blank or crashed page handed to
-it is a `not-covered` gap with ref `readiness:<screenId>` and the CLI's wording, and a page of
-text follows the readiness rule above. A walk that was cut short gives no stops to read, and its
-own `keyboard-walk-truncated` draft already keeps the page from verifying. A walk that did not
-run, because the caller passed `keyboardWalk: false`, gives no stops either, so `checkPage` makes
-no blank-page claim and the page reads as its other checks found it. A blank page checked that
-way is caught only by a `reachedWhen` readiness signal that the page fails.
-
-Known limits of what the scan sees. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
+Known limits of what the scan sees. A page with no tabbable control has a walk that stays on the
+body, so the CLI reads it as unseen. A readiness signal that holds does not change that, because
+the two detectors are independent (`coverage/unseen.ts`). The way out is to check such a page
+with `checkPage` in a Playwright test: there the same page reads as checked when it shows
+content, as described above. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
 and that wait is a wall-clock limit: a menu or dialog that opens later is read as one that did
 not open, which is an `unverified` draft when the toggle or trigger promised it and nothing
 otherwise. The live-region
