@@ -43,7 +43,13 @@ import {
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
-import { branchScopeGapText, findStartingCommit, resolveBranchScope, scopeGit } from './surfaces/stop-hook-scope.js';
+import {
+  branchScopeGapText,
+  checkCommandFor,
+  findStartingCommit,
+  resolveBranchScope,
+  scopeGit,
+} from './surfaces/stop-hook-scope.js';
 import { scrubString } from './surfaces/scrub.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -945,7 +951,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // browser. A CI run saves none. The write never follows a symbolic link.
     const receipt = receiptToSave(result, { ci: opts.ci });
     if (receipt !== null) {
-      const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt);
+      const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt, checkCommandFor(baseRevision));
       if (saved.status === 'refused') {
         process.stderr.write(`usabl: ${saved.message}\n`);
       }

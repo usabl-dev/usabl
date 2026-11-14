@@ -8,11 +8,11 @@
  * that records which screens it was asked to scan.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Deps, UsablConfig } from '../../src/contracts/index.js';
+import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
@@ -543,4 +543,119 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
     });
     await expect(findStartingCommit(git)).resolves.toEqual({ kind: 'found', branch: 'origin/main', commit: COMMIT });
   });
+});
+
+// A plain usabl check receipt never answers a stop that has a starting commit, so advice to run a
+// check names the one whose receipt does: usabl check --branch-scope. A stop with no starting
+// commit keeps usabl check. Which stops block and which allow does not change.
+describe('the advice names the check that answers the next stop', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  type Shape = Partial<Pick<Result, 'verdict' | 'exitCode' | 'accessibilityVerdict'>>;
+
+  // A branch with one committed UI change. With the trusted branch recorded, the stop has a
+  // starting commit; without it, the stop keeps the uncommitted scope.
+  async function branch(withStart: boolean): Promise<void> {
+    if (withStart) {
+      recordTrustedBranch();
+    }
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    await write('src/App.tsx', 'export const App = 3;\n');
+  }
+
+  // The hook with the engine's Result reshaped, so each kind of stop can be reached on real git.
+  function hookWith(shape: Shape | 'throws') {
+    const h = hook();
+    const runEngine = h.ports.runEngine;
+    h.ports.runEngine = async (deps, loaded, opts) => {
+      if (shape === 'throws') {
+        throw new Error('the engine stopped');
+      }
+      return { ...(await runEngine(deps, loaded, opts)), ...shape };
+    };
+    return h;
+  }
+
+  async function stopWith(shape: Shape | 'throws', withStart: boolean, active: boolean) {
+    await branch(withStart);
+    const h = hookWith(shape);
+    expect(await runStopHookFromStdin(JSON.stringify({ stop_hook_active: active }), h.ports)).toBe(0);
+    const blocked = h.stdout().includes('"decision":"block"');
+    return { blocked, text: blocked ? blockReason(h.stdout()) : h.stderr() };
+  }
+
+  const UNRECOGNIZED: Shape = { verdict: 'mystery' as unknown as Result['verdict'], exitCode: 1 };
+  const REGRESSION: Shape = { verdict: 'regression', exitCode: 1, accessibilityVerdict: 'regression' };
+  const FAILED: Shape = { verdict: null, exitCode: 4 };
+
+  const kinds: Array<{ name: string; shape: Shape | 'throws'; active: boolean; blocks: boolean; step: (check: string) => string }> = [
+    {
+      name: 'a block on a verdict usabl does not recognize',
+      shape: UNRECOGNIZED,
+      active: false,
+      blocks: true,
+      step: (check) => `Next: run ${check} again and stop when it reports a verdict.`,
+    },
+    {
+      name: 'an allow on a verdict usabl does not recognize, continuation active',
+      shape: UNRECOGNIZED,
+      active: true,
+      blocks: false,
+      step: (check) => `Next: run ${check} again before you tell the user this change is accessible.`,
+    },
+    {
+      name: 'an allow on a regression, continuation active',
+      shape: REGRESSION,
+      active: true,
+      blocks: false,
+      step: (check) => `Next: fix each barrier usabl reported, then run ${check} before you tell the user`,
+    },
+    {
+      name: 'an allow on a run that did not finish',
+      shape: FAILED,
+      active: false,
+      blocks: false,
+      step: (check) => `Next: run ${check} again, or check the change by hand, before you call this change accessible.`,
+    },
+    {
+      name: 'an allow on a stop hook error',
+      shape: 'throws',
+      active: false,
+      blocks: false,
+      step: (check) => `Next: run ${check}, or check the change by hand, before you call this change accessible.`,
+    },
+  ];
+
+  for (const kind of kinds) {
+    it(`${kind.name} names usabl check --branch-scope when the stop had a starting commit`, async () => {
+      const stop = await stopWith(kind.shape, true, kind.active);
+      expect(stop.blocked).toBe(kind.blocks);
+      expect(stop.text).toContain(kind.step('usabl check --branch-scope'));
+    });
+
+    it(`${kind.name} keeps usabl check when the stop had no starting commit`, async () => {
+      const stop = await stopWith(kind.shape, false, kind.active);
+      expect(stop.blocked).toBe(kind.blocks);
+      expect(stop.text).toContain(kind.step('usabl check'));
+      expect(stop.text).not.toContain('--branch-scope');
+    });
+  }
+
+  // The receipt notice follows a verified allow. A receipt path that is a link is refused.
+  for (const withStart of [true, false]) {
+    const check = withStart ? 'usabl check --branch-scope' : 'usabl check';
+    it(`a receipt that could not be saved says to run ${check} or stop again`, async () => {
+      await branch(withStart);
+      await mkdir(join(repo, '.usabl'), { recursive: true });
+      await symlink(join(repo, 'README.md'), join(repo, '.usabl', 'receipt.json'));
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      expect(h.stderr()).toContain('NOT saved - usabl did not save the receipt for this run');
+      expect(h.stderr()).toContain(`then run ${check} or stop again.`);
+      if (!withStart) {
+        expect(h.stderr()).not.toContain('--branch-scope');
+      }
+    });
+  }
 });

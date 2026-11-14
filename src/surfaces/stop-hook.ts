@@ -19,6 +19,7 @@ import {
   unrecognizedRunLine,
 } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
+import type { CheckCommand } from './stop-hook-scope.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -29,6 +30,9 @@ export interface HookContext {
   // The guarded files the hook's own guard found diverged before the run. A run that crashed
   // carries none of its own, so the hook passes what it found. Absent means none.
   guardDivergedPaths?: string[];
+  // The check the advice names. A stop with a starting commit names usabl check --branch-scope,
+  // because only its receipt answers such a stop. Absent means usabl check. See checkCommandFor.
+  checkCommand?: CheckCommand;
 }
 
 // The note an allow line carries when the session drift comparison did not run.
@@ -77,10 +81,11 @@ const BLOCK_STEPS: NextSteps = {
 
 // What the model should do when usabl does not recognize the run's state. A fix to the change
 // cannot clear it, because nothing was checked, so the step is to run the check again.
-const UNRECOGNIZED_BLOCK_STEP =
-  'Next: run usabl check again and stop when it reports a verdict. If it still reports none usabl knows, tell the user, and check the change by hand before you call it accessible.';
-const UNRECOGNIZED_CONTINUATION_STEP =
-  'Next: run usabl check again before you tell the user this change is accessible. If it still reports no verdict usabl knows, tell the user.';
+// Each step that names a check takes it from HookContext.checkCommand.
+const unrecognizedBlockStep = (check: CheckCommand): string =>
+  `Next: run ${check} again and stop when it reports a verdict. If it still reports none usabl knows, tell the user, and check the change by hand before you call it accessible.`;
+const unrecognizedContinuationStep = (check: CheckCommand): string =>
+  `Next: run ${check} again before you tell the user this change is accessible. If it still reports no verdict usabl knows, tell the user.`;
 
 /**
  * The same guidance for the run that is let through because continuation is already active.
@@ -92,18 +97,16 @@ const UNRECOGNIZED_CONTINUATION_STEP =
  * This path used to tell every blocking verdict to fix the barriers, which is wrong when
  * guarded files are the only thing standing and wrong again when the work is resolving gaps.
  */
-const CONTINUATION_STEPS: NextSteps = {
-  regression:
-    'Next: fix each barrier usabl reported, then run usabl check before you tell the user this change is accessible.',
-  notCovered:
-    'Next: resolve every reason usabl reported under Not evaluated, then run usabl check before you tell the user this change is accessible.',
+const continuationSteps = (check: CheckCommand): NextSteps => ({
+  regression: `Next: fix each barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  notCovered: `Next: resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
   approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithRegression:
     'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithGaps:
     'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
-};
+});
 
 /**
  * The step for one Result, from one set of wordings.
@@ -306,7 +309,8 @@ function divergedPolicyDecision(result: Result, diverged: string[], continuation
     `${formatVerdictWord(verdict)}: NOT verified. ` +
     (continuation ? 'usabl let this stop through without blocking again (continuation already active). ' : '') +
     `Guarded policy files changed, so this change needs approval whatever the run found. The run said: ${verdict.meaning}`;
-  const steps = continuation ? CONTINUATION_STEPS : BLOCK_STEPS;
+  // approvalOnly names no check, so the check this wording set takes does not matter here.
+  const steps = continuation ? continuationSteps('usabl check') : BLOCK_STEPS;
   const scaffold = [opening, steps.approvalOnly];
   const pieces = [summaryPiece(result)];
   const guarded = guardedFileLines({ ...result, dirtyGuardedPaths: diverged });
@@ -333,6 +337,7 @@ export function evaluateStopDecision(
 ): StopDecision {
   const safe = scrubResult(result);
   const passNote = ctx.sessionDriftChecked === false ? DRIFT_NOT_CHECKED : undefined;
+  const check = ctx.checkCommand ?? 'usabl check';
 
   // Diverged guarded policy blocks whatever the exit code. The blocking verdicts carry it in their
   // own message, and an unrecognized verdict blocks below, so this catches every other state.
@@ -379,7 +384,7 @@ export function evaluateStopDecision(
       message: assembleBoundedMessage({
         scaffold: [
           `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
-          'Next: run usabl check again, or check the change by hand, before you call this change accessible.',
+          `Next: run ${check} again, or check the change by hand, before you call this change accessible.`,
         ],
         keep: 2,
         pieces: [summaryPiece(safe)],
@@ -427,7 +432,7 @@ export function evaluateStopDecision(
     return {
       block: !ctx.stopHookActive,
       message: assembleBoundedMessage({
-        scaffold: [opening, ctx.stopHookActive ? UNRECOGNIZED_CONTINUATION_STEP : UNRECOGNIZED_BLOCK_STEP],
+        scaffold: [opening, ctx.stopHookActive ? unrecognizedContinuationStep(check) : unrecognizedBlockStep(check)],
         keep: 2,
         pieces: [summaryPiece(safe)],
         keepPieces: 1,
@@ -452,7 +457,7 @@ export function evaluateStopDecision(
         'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
       ),
     ];
-    const step = chooseNextStep(safe, CONTINUATION_STEPS);
+    const step = chooseNextStep(safe, continuationSteps(check));
     if (step !== undefined) {
       scaffold.push(step);
     }

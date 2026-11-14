@@ -171,6 +171,18 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
 };
 
+/** The check a message tells the reader to run. */
+export type CheckCommand = 'usabl check' | 'usabl check --branch-scope';
+
+/**
+ * The check whose receipt answers the next stop. A stop with a starting commit verifies a receipt
+ * only when it binds that commit, and a plain usabl check binds none, so advice on such a stop
+ * names usabl check --branch-scope. A stop with no starting commit keeps usabl check.
+ */
+export function checkCommandFor(baseRevision: string | null): CheckCommand {
+  return baseRevision === null ? 'usabl check' : 'usabl check --branch-scope';
+}
+
 /**
  * What `usabl check --branch-scope` prints when it cannot tell which changes to check. It gives
  * the reason the Stop hook gives, and the branch name and git's error go inside the untrusted

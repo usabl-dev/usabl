@@ -30,11 +30,13 @@ import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guarded
 import { firstLine } from '../primitives/first-line.js';
 import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import {
+  checkCommandFor,
   findStartingCommit,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
   scopeGit,
   type BranchScope,
+  type CheckCommand,
   type StartingCommit,
 } from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
@@ -879,6 +881,8 @@ export async function runStopHook(
 ): Promise<number> {
   let deps: Deps | null = null;
   let pinNotice: PinNotice | null = null;
+  // The check the advice names. It stays usabl check until the stop finds a starting commit.
+  let checkCommand: CheckCommand = 'usabl check';
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
@@ -1028,6 +1032,7 @@ export async function runStopHook(
       }
       return 0;
     }
+    checkCommand = checkCommandFor(scope.baseRevision);
 
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
@@ -1053,7 +1058,7 @@ export async function runStopHook(
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
     if (receipt !== null) {
-      const saved = await saveReceipt(ports.fs, receipt);
+      const saved = await saveReceipt(ports.fs, receipt, checkCommand);
       // A refused save changes no verdict. It is said after the decision, so the decision line
       // still comes first.
       receiptNotice = saved.status === 'refused' ? saved.message : null;
@@ -1064,6 +1069,7 @@ export async function runStopHook(
     const ctx: HookContext = {
       stopHookActive: input.stopHookActive,
       guardDivergedPaths: dirtyGuardedPaths,
+      checkCommand,
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
@@ -1113,7 +1119,7 @@ export async function runStopHook(
           [
             'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
               'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-            'Next: run usabl check, or check the change by hand, before you call this change accessible.',
+            `Next: run ${checkCommand}, or check the change by hand, before you call this change accessible.`,
           ],
           [`error: ${message}`],
         ),
