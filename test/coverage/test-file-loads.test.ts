@@ -507,6 +507,25 @@ describe('a test file in a workspace package the app depends on', () => {
       expectExcluded(await coverageOf(css, tree, helpers), helpers);
     });
 
+    it.each(['?inline', '?url', '?raw'])('reads the subpath without its query, so a test-only change stays idle: %s', async (query) => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf(`import css from '@acme/ui/styles.css${query}';`, tree, helpers), helpers);
+    });
+
+    it('still makes the test file a subpath with a query names a UI file', async () => {
+      const tree = withExports({ '.': './src/index.ts', './testing': './src/tests/helpers.ts' });
+      const coverage = await coverageOf("import helper from '@acme/ui/testing?raw';", tree, helpers);
+      expectWorkspaceGap(coverage);
+      expect(coverage.gaps[0]?.reason).not.toContain('cannot follow by path');
+      expectExcluded(await coverageOf("import helper from '@acme/ui/testing?raw';", tree, 'packages/ui/src/Button.test.tsx'), 'packages/ui/src/Button.test.tsx');
+    });
+
+    it('reads the path without its query in a package with no exports field', async () => {
+      const tree = { ...workspace, 'packages/ui/styles.css': 'a{}\n' };
+      expectExcluded(await coverageOf("import css from '@acme/ui/styles.css?inline';", tree, helpers), helpers);
+      expectWorkspaceGap(await coverageOf("import helper from '@acme/ui/src/tests/helpers?raw';", tree, helpers));
+    });
+
     it('wins over a pattern key, as in Node.js', async () => {
       const tree = withExports({ '.': './src/index.ts', './*': './src/tests/*.ts', './styles.css': './styles.css' });
       expectExcluded(await coverageOf(css, tree, helpers), helpers);
@@ -608,6 +627,21 @@ describe('a test file in a workspace package the app depends on', () => {
     const tree = { ...workspace, 'packages/ui/src/Button.tsx': "const all = import.meta.glob('./tests/*.ts');\nexport const Button = () => <button />;\n" };
     const coverage = await coverageOf(screen, tree, 'packages/ui/src/tests/helpers.ts');
     expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/ui/src/tests/helpers.ts', 'not-covered']]);
+  });
+});
+
+describe('a relative import with a query', () => {
+  it.each(['?raw', '?url', '?inline'])('maps the file it names to the screen: %s', async (query) => {
+    const coverage = await coverageOf(`import w from './tests/Widget${query}';`);
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('maps a stylesheet imported with a query to the screen', async () => {
+    const coverage = await coverageOf("import css from './styles.css?inline';", { 'src/styles.css': 'a{}\n' }, 'src/styles.css');
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters']);
+    expect(coverage.gaps).toEqual([]);
   });
 });
 

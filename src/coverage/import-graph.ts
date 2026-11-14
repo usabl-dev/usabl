@@ -793,6 +793,14 @@ function resolveBaseFile(importer: string, specifier: string): string {
   return path.normalize(path.join(path.dirname(importer), specifier));
 }
 
+// A specifier without its query, such as ./styles.css for ./styles.css?inline. A bundler such as
+// Vite takes the query off before it looks up the path or the exports field, and loads the file the
+// rest names.
+function withoutQuery(specifier: string): string {
+  const query = specifier.indexOf('?');
+  return query === -1 ? specifier : specifier.slice(0, query);
+}
+
 async function existingCandidates(fs: FsGlob, base: string, suffixes: string[]): Promise<string[]> {
   const hits: string[] = [];
   for (const suffix of suffixes) {
@@ -853,7 +861,7 @@ async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<Resoluti
 }
 
 async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<Resolution> {
-  const base = resolveBaseFile(importer, specifier);
+  const base = resolveBaseFile(importer, withoutQuery(specifier));
   return resolveFileAtPath(fs, base);
 }
 
@@ -936,10 +944,12 @@ function workspaceSubpath(
   specifier: string,
   packages: readonly WorkspacePackageView[],
 ): { dir: string; subpath: string; hasExports: boolean; exportTarget: string | null; exportLeaves: boolean } | null {
-  const name = packageNameOf(specifier);
+  // The query is not part of the subpath, for the exports lookup and for the path lookup alike.
+  const bare = withoutQuery(specifier);
+  const name = packageNameOf(bare);
   const owner = packages.find((candidate) => candidate.name === name);
-  if (owner === undefined || specifier.length <= name.length + 1) return null;
-  const subpath = specifier.slice(name.length + 1);
+  if (owner === undefined || bare.length <= name.length + 1) return null;
+  const subpath = bare.slice(name.length + 1);
   // The exports entry whose key is this subpath exactly, as Node.js picks it before any pattern key.
   const key = `./${subpath}`;
   const exact = owner.exactExports ?? {};
