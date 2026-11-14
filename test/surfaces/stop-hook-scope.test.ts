@@ -372,6 +372,16 @@ describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, ()
     expect(insideFrame(text, 'error: fatal: bad object deadbeef')).toBe(true);
   });
 
+  it('reports a gap when the lookup itself throws', async () => {
+    const h = hook();
+    h.ports.findStartingCommit = async () => {
+      throw new Error('spawn git EAGAIN');
+    };
+    await runStopHookFromStdin('{}', h.ports);
+    const text = expectScopeGap(h, 'git failed while it looked for that commit');
+    expect(insideFrame(text, 'error: spawn git EAGAIN')).toBe(true);
+  });
+
   // A listing that fails is never read as nothing to check, and never as a run that failed open.
   it('reports a gap when git cannot list the changes since the starting commit', async () => {
     recordTrustedBranch();

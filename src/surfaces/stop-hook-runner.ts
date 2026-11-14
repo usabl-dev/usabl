@@ -833,7 +833,15 @@ async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopSc
   if (ports.findStartingCommit === undefined) {
     return { kind: 'scan', runOptions: {}, baseRevision: null, note: null };
   }
-  const start = await ports.findStartingCommit();
+  // A lookup that throws is a git failure, never the narrower scope.
+  const start = await ports.findStartingCommit().catch(
+    (err: unknown): StartingCommit => ({
+      kind: 'not-found',
+      branch: 'origin/HEAD',
+      problem: 'git-failed',
+      detail: firstLine(errorMessage(err)),
+    }),
+  );
   if (start.kind === 'not-found') {
     return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
   }
@@ -975,9 +983,9 @@ export async function runStopHook(
     let guardDeps: Deps;
     let dirtyGuardedPaths: string[];
     try {
-      guardDeps = await ports.buildDeps(config);
-      deps = guardDeps;
-      const built = guardDeps;
+      const built = await ports.buildDeps(config);
+      deps = built;
+      guardDeps = built;
       dirtyGuardedPaths = await guarded(() => checkGuard(built));
     } catch (err) {
       const blocksAsGuardFailure = err instanceof GuardFailure && err.message !== NO_HEAD_MESSAGE;
