@@ -321,6 +321,21 @@ describe('makeGitReader in a repository with no commits', () => {
     }
   });
 
+  // For a full 40 character id git says the path "does not exist in" or "exists on disk, but not
+  // in" that commit, never "invalid object name", so this hint is reached only through the check
+  // that the ref names a commit. The workflow passes the base commit as a full id.
+  it('gives a full commit id that is not in the repository the history hint, for a present and an absent path', async () => {
+    await writeFile(join(emptyRepo, 'usabl.config.json'), '{}\n', 'utf8');
+    const git = makeGitReader({ cwd: emptyRepo });
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    for (const path of ['usabl.config.json', 'missing.json']) {
+      const message = await git.show(sha, path).catch((err: Error) => err.message);
+      expect(message).toContain(`git cannot read ${sha}. usabl reads trusted policy from that commit.`);
+      expect(message).toContain('so fetch more history, such as fetch-depth: 0 in actions/checkout');
+      expect(message).not.toContain('git fetch');
+    }
+  });
+
   // A branch named feature/foo is not the branch foo on a remote called feature. When the first
   // part names no remote, the example fetches the branch by its whole name.
   it('fetches a branch with a slash by its whole name when the first part is not a remote', async () => {
