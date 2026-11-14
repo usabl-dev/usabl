@@ -36,7 +36,8 @@ re-baseline to green.
   a trusted file with `git cat-file blob`, which reads git objects only. `git show` read
   `<ref>:<path>` as a path when a working tree file had that exact name, so a file a pull request
   commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
-  same reason. The git reader, the history reader, and the ledger reader accept none of these
+  same reason. A path that is a folder at the ref is read with `git show <ref>:<path> --`, which
+  also reads the argument as an object name only. The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
   character. White space includes non-ASCII spaces that git itself allows in a ref name, and

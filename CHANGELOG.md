@@ -341,9 +341,12 @@
   git call at the same ref failed. A trusted file is now read with `git cat-file blob`, which
   reads git objects only. `git show` read `<ref>:<path>` as a path when a working tree file had
   that exact name, so a committed file named `<commit>:usabl.config.json` made a trusted read
-  return the head commit's own text. For the same reason the diff listing ends its revisions with
-  `--`; a file named `<ref>...HEAD` made the diff of a missing ref list no changed files. The git
-  reader, the history reader, and the ledger reader accept none of these values as a ref, and
+  return the head commit's own text when that commit added or changed the file, and an empty
+  string otherwise. For the same reason the diff listing ends its revisions with `--`; a file
+  named `<ref>...HEAD` made the diff of a missing ref list no changed files. A path that is a
+  folder at the ref reads as it did before: the listing `git show` prints for it, with the
+  argument read as an object name only, so a file that becomes a folder still needs approval.
+  The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
   refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
   value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White
   space includes non-ASCII spaces that git itself allows in a ref name, and control characters
