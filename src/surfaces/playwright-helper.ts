@@ -54,6 +54,8 @@ import {
   type LandingObservation,
 } from '../providers/redirected.js';
 import { attachRowScopeToDrafts } from '../providers/row-scope.js';
+import { firstLine } from '../primitives/first-line.js';
+import { neutralize } from '../primitives/neutralize.js';
 import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
@@ -618,9 +620,12 @@ async function settleBeforeAddressRead(page: Page, screenId: string): Promise<Co
     await page.gotoReady();
     return null;
   } catch (error: unknown) {
+    // A browser error's later lines can be a call log that quotes the page's markup, so the gap
+    // keeps only the first line.
+    const cause = neutralize(firstLine(errorMessage(error))) || 'the error had no message';
     return landingGap(
       screenId,
-      `checkPage waited for the page to settle before it read the page's address, and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+      `checkPage waited for the page to settle before it read the page's address, and the page did not settle, so it was not checked: ${cause}`,
     );
   }
 }
