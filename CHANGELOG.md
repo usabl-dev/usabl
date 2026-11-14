@@ -331,6 +331,31 @@
 
 ### Fixed
 
+- `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
+  nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
+  walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
+  them with the blank-page detector the CLI runs on its transcript. Gate effect: such a page is now
+  `not_covered`, with a `readiness:<screenId>` gap worded as the CLI words it. The CLI result is
+  unchanged. A walk that was cut short is already not covered by its own draft, and with
+  `keyboardWalk: false` there are no stops, so `checkPage` makes no blank-page claim.
+- A page with nothing to Tab to is seen when its readiness selector holds. A page of text has a
+  keyboard walk that stays on the body, so it read as unseen even when its `reachedWhen` selector
+  matched. Gate effect: such a screen is now checked, in the CLI and in `checkPage`, and can read
+  `verified`, when its declared selector held and every other declared part held too. A response
+  alone does not count. Without a selector the screen stays `not_covered`, and its gap now says to
+  declare a `reachedWhen` selector for an element only that screen renders. A selector that
+  matches only the app shell also holds on a screen whose content did not mount, so point it at
+  the screen's own content.
+- A script that puts focus on the body in the middle of the page no longer makes the keyboard
+  walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
+  focus on the body, and the next Tab landed on the first control, as at the real end of the
+  focus order. Gate effect: such a screen was `verified` with the controls after that point never
+  walked; it is now `not_covered`, with a `keyboard-walk-truncated` draft that says a script moved
+  focus to the document body. A `focus-order` requirement on such a page was a fail on a control
+  the walk never reached; it is now needs review.
+- The `checkPage` gap for a page that did not settle before its address was read keeps only the
+  first line of the browser's error, neutralized. The later lines can be a call log that quotes
+  the page's markup. No gate effect.
 - A trusted commit that is not in the repository is an error, never an absent file. In a shallow
   clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
   read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
