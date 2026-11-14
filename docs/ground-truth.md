@@ -3382,8 +3382,11 @@ Six bindings are compared on re-verification, plus the waiver end below:
   another starting commit, or from none, is a different set of changes, so the receipt does not
   verify and the stop runs a full check. Before this was compared, a receipt minted while the
   hook checked only uncommitted changes verified on a later stop of the same tree that also
-  checked committed work, so that work was never scanned. `usabl check` passes no starting
-  commit, so its receipt records null and is not used by a stop that has one. A receipt minted
+  checked committed work, so that work was never scanned. A plain `usabl check` passes no
+  starting commit, so its receipt records null and is not used by a stop that has one. `usabl
+  check --branch-scope` lists the changes through the same function as the hook and passes the
+  same starting commit, so its receipt answers the next stop of the same tree and starting
+  commit (section 11.2). A receipt minted
   before this comparison records null too, so it verifies only where a stop still checks
   uncommitted changes alone; anywhere else it costs one full check. The schema version stays 2,
   because a null value read under the new rule can only fail to verify where the scope widened.
@@ -3501,6 +3504,11 @@ lines.
 **Typical uses:**
 
 - Local: `usabl check` (the default) on changed files or named surfaces.
+- Local with the Stop hook's scope: `usabl check --branch-scope` checks every change since the
+  branch left the trusted branch, plus uncommitted changes, and binds the same starting commit
+  into its receipt. It is the way to finish a check a stop could not finish; a plain `usabl
+  check` receipt is not used by a stop with a starting commit (section 11.2). It is refused next
+  to `--ci`, `--trusted-ref`, or `--isolated-browser`.
 - First-run policy drafts: `usabl init` infers and writes `usabl.config.json` and
   `usabl.routes.json` only. `--app <dir>` drafts one app folder in a repository that holds
   several (see section 12). It never calls the gate and never consumes the files it just
@@ -3703,6 +3711,31 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     usabl found no trusted branch to compare this branch with ... Work already committed on this
     branch was not checked on this stop." and the `git remote set-head origin --auto` step. In
     Claude Code the note reaches the person through `systemMessage`.
+- `usabl check --branch-scope` is the way to finish a check a stop could not finish, for example a
+  stop that ran out of time. It finds the starting commit and lists the changes with
+  `resolveBranchScope`, the function the hook calls, so it checks the same changes and passes the
+  same `changedFiles` and `baseRevision` to `run()`. Everything else is the plain local check:
+  the same policy reads, output, and exit codes. Its receipt verifies on the next stop of the same
+  tree with the same starting commit. One more commit or one more UI edit changes the tree, so
+  that stop runs the full check. A plain `usabl check` receipt is not used by a stop with a
+  starting commit.
+  - No trusted branch: it checks the uncommitted changes and prints the same note as the hook on
+    stderr, with the `git remote set-head origin --auto` step.
+  - A starting commit it cannot find or use: it scans nothing and saves no receipt. It prints the
+    hook's reason on stderr, "usabl: NOT verified - not covered: usabl could not find where this
+    branch left the trusted branch ...", with the branch name and git's error inside the untrusted
+    frame and the step to fetch the branch and run it again, and exits 4, the code of a run that
+    could not check. It never exits 0, `--self-check` included.
+  - It is refused with exit 2 next to `--ci`, `--trusted-ref`, or `--isolated-browser`, and the
+    message names the flag to drop. `check` takes no named surface or file list.
+- Advice names that check. On a stop with a starting commit, each hook message that tells the
+  reader to run a check says `usabl check --branch-scope`: the step after a verdict usabl does not
+  recognize (block and continuation), the continuation steps for a regression and for gaps, a run
+  that did not finish, a hook error after the scope was found, and a receipt that could not be
+  saved. A stop with no starting commit keeps `usabl check`. The messages written before the stop
+  finds its scope keep `usabl check`: a guard failure, a folder outside a work tree, input the
+  hook could not read, and the scope gap itself. Which stops block and which allow does not
+  change.
 - Stop time. A wider scope scans more screens on a long branch. A stored receipt still answers
   a stop of an unchanged tree with the same starting commit without a scan. Nothing in the hook
   bounds its own time: the generated Claude Code hook sets no `timeout`, so Claude Code's

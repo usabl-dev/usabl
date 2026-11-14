@@ -345,7 +345,16 @@
   that also checks committed work. Gate effect: such a stop runs a full check where it allowed
   from the stored receipt. A receipt saved before this release records no starting commit, so in a
   repository with a trusted branch it does not verify once and the next stop runs one full check.
-  A receipt from `usabl check` records none either, so a stop does not use it there.
+  A receipt from a plain `usabl check` records none either, so a stop does not use it there.
+- `usabl check --branch-scope` checks what the Stop hook checks: it lists the changes through the
+  same function as the hook and binds the same starting commit into its receipt. It is the way to
+  finish a check a stop could not finish, because its receipt answers the next stop of the same
+  tree and starting commit, and a plain `usabl check` receipt does not. With no trusted branch it
+  checks uncommitted changes and prints the hook's note. When the starting commit cannot be found
+  it checks nothing, prints the hook's reason, and exits 4. It is refused next to `--ci`,
+  `--trusted-ref`, or `--isolated-browser`. On a stop with a starting commit, every hook message
+  that tells the reader to run a check now names `usabl check --branch-scope`; a stop without one
+  keeps `usabl check`. Gate effect: none; no stop changes between block and allow.
 - When git names a trusted branch but the Stop hook cannot find the commit where this branch left
   it (the clone has no commit for the branch, a shallow clone holds no shared commit, the commit is
   not an ancestor of HEAD, or git fails), or cannot list the changes since it, the stop is a
