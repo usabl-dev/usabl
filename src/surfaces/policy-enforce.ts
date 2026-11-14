@@ -31,6 +31,17 @@ export interface PolicyEnforceDeps {
   pr: PolicyPr;
   git: PolicyGit;
   listReviews: () => Promise<PolicyReview[]>;
+  // The body of GitHub's answer to GET /repos/{owner}/{repo}/collaborators/{login}/permission for
+  // one login. It throws when the read fails, a GithubAnswerError when GitHub answered with an
+  // error status. The check reads only its `permission` field.
+  readPermission: (login: string) => Promise<unknown>;
+}
+
+/** GitHub answered a request with an error status. Only the number is kept. */
+export class GithubAnswerError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub answered with status ${String(status)}`);
+  }
 }
 
 export interface EnforceOutcome {
@@ -198,9 +209,23 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
   // with no owner, a team or email owner, or an unknown last match) is a limit, and it reads as
   // one. Both refuse, so an unsatisfiable gate cannot pass for a busy one.
   const unapproved: string[] = [];
+  const notCounted = new Map<string, PermissionRead>();
+  const permissionOf = permissionReader(deps.readPermission);
   for (const [path, owners] of limits.userOwners) {
-    if (!ownerApprovedHead(owners, latest, author, deps.pr.headSha)) {
+    const approvers = headApprovers(owners, latest, author, deps.pr.headSha);
+    let approved = false;
+    for (const owner of approvers) {
+      if (countsAsWrite(await permissionOf(owner))) {
+        approved = true;
+        break;
+      }
+    }
+    if (!approved) {
       unapproved.push(path);
+      // Every approver of this path was read above, so these reads come from the cache.
+      for (const owner of approvers) {
+        notCounted.set(owner, await permissionOf(owner));
+      }
     }
   }
 
@@ -209,6 +234,9 @@ async function decidePolicy(dirtyGuardedPaths: string[], deps: PolicyEnforceDeps
     reasons.push(
       `approval required: no CODEOWNERS user other than the PR author approved this head for ${unapproved.join(', ')}`,
     );
+  }
+  for (const [owner, permission] of [...notCounted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    reasons.push(`the approval from @${owner} does not count, because ${permissionText(permission)}`);
   }
   if (reasons.length > 0) {
     return { exitCode: 2, message: reasons.join('; ') };
@@ -339,19 +367,95 @@ export function readCodeownersLimits(raw: string, paths: readonly string[]): Cod
   return { ok: true, reasons, userOwners };
 }
 
-function ownerApprovedHead(
+// The owners other than the author whose latest decisive review approves this head, sorted.
+function headApprovers(
   owners: Set<string>,
   latest: Map<string, PolicyReview>,
   author: string,
   headSha: string,
-): boolean {
-  return [...owners].some((owner) => {
-    if (owner === author) {
-      return false;
+): string[] {
+  return [...owners]
+    .filter((owner) => {
+      if (owner === author) {
+        return false;
+      }
+      const review = latest.get(owner);
+      return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha;
+    })
+    .sort();
+}
+
+/**
+ * On a public repository anyone can submit an approving review, and GitHub counts a code owner's
+ * review only from a person who can write to the repository. A login in CODEOWNERS that lost its
+ * access, or a name someone else registered, must not pass this check. So an approval counts only
+ * when GitHub reports the owner's permission on the repository as admin or write. A read that
+ * fails, or an answer outside GitHub's four values, never counts as write.
+ */
+const PERMISSIONS = ['admin', 'write', 'read', 'none'] as const;
+// A failed read is no-user, no-token-access, or unread. A login in a form usabl does not read is
+// never asked. None of these counts as write.
+type PermissionRead = (typeof PERMISSIONS)[number] | 'no-user' | 'no-token-access' | 'unread' | 'not-a-login';
+
+// The login forms usabl asks GitHub about: letters, digits, hyphens, and underscores, starting with
+// a letter or a digit. A managed user login has the form handle_shortcode. The bound keeps the URL
+// short; the login is also encoded into it.
+const GITHUB_LOGIN = /^[a-z0-9][a-z0-9_-]{0,99}$/i;
+
+/** Whether usabl asks GitHub for the permission of a login in this form. */
+export function isAskableLogin(login: string): boolean {
+  return GITHUB_LOGIN.test(login);
+}
+
+function countsAsWrite(permission: PermissionRead): boolean {
+  return permission === 'admin' || permission === 'write';
+}
+
+// Reads each login's permission at most once. A login that is not in GitHub's form is not asked.
+function permissionReader(read: PolicyEnforceDeps['readPermission']): (login: string) => Promise<PermissionRead> {
+  const cache = new Map<string, Promise<PermissionRead>>();
+  return (login) => {
+    let found = cache.get(login);
+    if (found === undefined) {
+      found = isAskableLogin(login) ? readOnePermission(read, login) : Promise.resolve('not-a-login');
+      cache.set(login, found);
     }
-    const review = latest.get(owner);
-    return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha;
-  });
+    return found;
+  };
+}
+
+async function readOnePermission(read: PolicyEnforceDeps['readPermission'], login: string): Promise<PermissionRead> {
+  try {
+    const body = await read(login);
+    const permission = isRecord(body) ? body['permission'] : undefined;
+    return PERMISSIONS.find((known) => known === permission) ?? 'unread';
+  } catch (err) {
+    // Only the status is read from the failure, to say what a person can do about it.
+    if (err instanceof GithubAnswerError && err.status === 404) {
+      return 'no-user';
+    }
+    if (err instanceof GithubAnswerError && (err.status === 401 || err.status === 403)) {
+      return 'no-token-access';
+    }
+    return 'unread';
+  }
+}
+
+function permissionText(permission: PermissionRead): string {
+  if (permission === 'not-a-login') {
+    return 'usabl does not read this login form';
+  }
+  if (permission === 'read' || permission === 'none') {
+    return `GitHub reports that user's permission on this repository as ${permission}, and an approval counts only with write or admin`;
+  }
+  if (permission === 'no-user') {
+    return 'GitHub has no readable user by that login on this repository';
+  }
+  const notRead = "usabl could not read that user's permission on this repository";
+  if (permission === 'no-token-access') {
+    return `${notRead} (the job's token needs read access to repository metadata)`;
+  }
+  return notRead;
 }
 
 function latestDecisiveReviewByUser(reviews: PolicyReview[]): Map<string, PolicyReview> {

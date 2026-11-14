@@ -3160,8 +3160,22 @@ an email, and on a `#` inside a pattern or owner (one that does not follow white
 GitHub may read such a line another way, so the last match is unknown. A `#` at the start of a
 line or after whitespace starts a comment. A team or email line that is not the last match for a
 changed guarded path does not block. Every other path needs an approval of the current head from
-one of its users who is not the author. `usabl doctor` reports the same limits in the same words
-under policy scope.
+one of its users who is not the author. The approval counts only when GitHub reports that user's
+permission on the repository as `admin` or `write`, read from
+`GET /repos/{owner}/{repo}/collaborators/{login}/permission` once for each approving code owner.
+On a public repository anyone can submit an approving review, so a login in `CODEOWNERS` that lost
+its access, or a name someone else registered, would otherwise pass. An approval from a user with
+`read` or `none` does not count, and the output names the reviewer and the permission. A read that
+fails for any reason (network, an error answer, a body usabl cannot read, a value outside the
+four) never counts as write, and the output names the reviewer and the cause: for a 404, GitHub
+has no readable user by that login on this repository; for a 401 or 403, the job's token needs
+read access to repository metadata; otherwise, the permission could not be read. A code owner
+login is asked about only when it holds letters, digits, hyphens, and underscores, starts with a
+letter or a digit, and has at most 100 characters, so a managed user login such as `mona_acme` is
+read. A login in another form is not asked about and does not count. A later request for changes still retracts an approval. The permission is the
+one GitHub reports when the check runs, not when the review was given. GitHub maps the maintain
+role to `write` and the triage role to `read`. `usabl doctor` reports the same limits in the same
+words under policy scope.
 
 For the forms GitHub's CODEOWNERS documentation shows, a pattern matches the way the
 documentation says, and a test holds every documented example usabl supports. A leading slash
@@ -3196,20 +3210,34 @@ unbalanced brace guards the literal folder above the first segment the matcher c
 `policy/rule{1..3}.json` guards `policy/`. An expansion with no such folder guards the whole tree:
 one that starts with `/`, one with a `..` that leaves the root, and one with a `..` anywhere after
 a wildcard, since a wildcard can stand for any number of folders and a later `..` can climb above
-any of them, so `policy/*/../../x.json` guards the whole tree. The same reading is used at the
-trusted ref, at HEAD, and on the working tree, so a change there needs a code owner's approval,
-and the pull request that repairs the entry can merge with one. `usabl enforce policy` names each
+any of them, so `policy/*/../../x.json` guards the whole tree. A brace expansion that is empty or
+names the root, as in `{,}`, guards the whole tree too. An entry with more than 256 brace
+expansions is not expanded, because the local guard lists the working tree once for each
+expansion. At 256 a local check took about 0.4 seconds on an idle machine and up to 1.5 seconds
+on a heavily loaded one, and at 65,536 it took about 31 seconds, long enough for a Stop hook to
+time out. The time depends on the machine. Such an entry guards the literal folder above its first
+brace group, so `policy/` followed by nine `{a,b}` groups guards `policy/`. It guards the whole
+tree when there is no such folder, or when an expansion can join two dots into a `..` that climbs
+out of it. The count is taken before anything is expanded, so an entry of any size is read at
+once. The same reading is used at the trusted ref, at HEAD, and on the working tree, so a change
+there needs a code owner's approval, and the pull request that repairs the entry can merge with
+one. `usabl enforce policy` names each
 entry read this way, in every outcome, and says how to write it; `usabl doctor` does too. A local
 run has no field for that sentence, so its Result names only the changed files.
 
 Config load refuses every form the guard can only read wide, so a new config never holds one. It
 refuses the glob forms above in every glob list and says to list the alternatives of a range with
 commas. In `guardedPaths` it also refuses an entry that starts with `/` (and shows the same path
-without it), one with a `..` that leaves the root, one with a `..` after a wildcard, and one with a
-`.` or `..` segment inside a brace alternative, and says how to write each. Entries that loaded and
+without it), one with a `..` that leaves the root, one with a `..` after a wildcard or a brace
+group, one with a `.` or `..` segment inside a brace alternative, one with a brace alternative that
+leaves the path empty, and one with more than 256 brace expansions, and says how to write each. It
+reads a segment as a pattern with the guard's own test, so a `..` after a segment with any pattern
+character, a stray `}` included, is refused, as in `a}/../x.json`. Entries that loaded and
 worked before still load and read in canonical form: `./src/gate/`, `src/gate//`, `.`, and
-`a/../b` outside braces and before any wildcard. An older config, or a trusted ref's config, can
-hold a refused form, and the guard reads it wide as above. An empty entry is the whole tree.
+`a/../b` outside braces and before any wildcard. An entry with more than 256 brace expansions
+loaded before and no longer does; split it into several entries. An older config, or a trusted
+ref's config, can hold a refused form, and the guard reads it wide as above. An empty entry is the
+whole tree.
 
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
@@ -3229,7 +3257,8 @@ every file under it, as a folder; the whole tree matches every file. A glob entr
 Node's dot rule: a wildcard does not match a name that starts with a dot, as `fs.glob` does. A dot
 written in the pattern still matches. So a dot-named file under a glob entry, such as
 `policy/.override.json` under `policy/*.json`, is not guarded, locally or in CI. Under a literal
-entry a dot-named file is guarded, because git lists it.
+entry a dot-named file is guarded, in CI because git lists it, and locally also when it is new
+and untracked, because the local guard lists the dot names there.
 
 The two places select from different lists:
 
@@ -3239,12 +3268,16 @@ The two places select from different lists:
   It then adds, as found, what `fs.glob` finds on the working tree for each entry and for
   everything under it. That adds files on disk that no commit holds, such as a new untracked file
   under a guarded folder. The HEAD listing holds a file deleted locally, so that file is still
-  compared.
+  compared. For a literal entry and for an entry read wide, it also lists the dot-named files and
+  the files in dot-named folders under the folder it guards, which `fs.glob` skips under `**`, so
+  such an entry guards them on the working tree as the git listings do. It leaves out `.git/` in
+  that dot listing, because git never tracks it.
 
 For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
 mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
 selects on the working tree. For a literal folder the matcher also selects the dot-named files
-under it, which `fs.glob` skips.
+under it, which `fs.glob` skips under `**`, and the local guard lists them with patterns that name
+the dot.
 
 A literal entry that matches nothing is compared as its own canonical path, so a guarded file
 absent everywhere is still checked. A glob entry is never compared as a path, and neither is the

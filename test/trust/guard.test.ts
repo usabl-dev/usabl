@@ -8,6 +8,9 @@ import {
   computeSessionPins,
   diffSessionPins,
   expandGuardedSet,
+  MAX_BRACE_EXPANSIONS,
+  readGuardedEntry,
+  readWideNotice,
 } from '../../src/trust/guard.js';
 
 const configFixture: UsablConfig = {
@@ -191,5 +194,89 @@ describe('trust guard', () => {
     expect(previous['src/gate/index.ts']).toBe(sha256('committed'));
     expect(previous['.usabl-evidence.json']).toBe(sha256(''));
     expect(diffSessionPins(previous, next)).toEqual(['src/gate/index.ts', 'src/gate/new-module.ts']);
+  });
+});
+
+describe('a guardedPaths entry with an empty brace expansion', () => {
+  // `{,}` expands to two empty paths, which the guard reads as the whole tree. The entry does not
+  // say so, so the guard reads it wide, and the policy check and doctor name it.
+  it('reads an expansion that names the repository root wide', () => {
+    for (const entry of ['{,}', '{,}/', '.{,}']) {
+      const readings = readGuardedEntry(entry);
+      expect(readings.length, entry).toBeGreaterThan(0);
+      for (const reading of readings) {
+        expect(reading, entry).toEqual({ text: entry, path: '', glob: false, readWide: expect.any(String) });
+      }
+      expect(readWideNotice(readings[0]!), entry).toContain('as the whole repository');
+    }
+  });
+
+  it('reads only the empty expansion wide when the others name a path', () => {
+    expect(readGuardedEntry('{,policy}')).toEqual([
+      { text: '{,policy}', path: '', glob: false, readWide: expect.any(String) },
+      { text: '{,policy}', path: 'policy', glob: true, readWide: null },
+    ]);
+    expect(readGuardedEntry('policy/{rules.json,}').every((reading) => reading.readWide === null)).toBe(true);
+  });
+});
+
+/**
+ * Each brace expansion is one reading, and the local guard lists the working tree once per reading.
+ * An entry with 16 brace groups has 65,536 readings and took about 31 seconds, so a Stop hook could
+ * time out and the assistant then lets the stop through. Past a fixed count the guard reads the
+ * entry wide instead, and never drops an expansion.
+ */
+describe('a guardedPaths entry with many brace expansions', () => {
+  const CAP = 256;
+  const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+  it('caps the expansions of one entry at 256', () => {
+    expect(MAX_BRACE_EXPANSIONS).toBe(CAP);
+  });
+
+  it('reads an entry at the cap one expansion at a time', () => {
+    const readings = readGuardedEntry(`policy/{${alternatives(CAP)}}.json`);
+    expect(readings).toHaveLength(CAP);
+    expect(readings.every((reading) => reading.readWide === null)).toBe(true);
+    expect(readings[0]).toEqual({ text: `policy/{${alternatives(CAP)}}.json`, path: 'policy/f0.json', glob: true, readWide: null });
+  });
+
+  it('reads an entry one past the cap as the folder above its first brace group, and names it', () => {
+    const entry = `policy/sub/x{${alternatives(CAP + 1)}}.json`;
+    const readings = readGuardedEntry(entry);
+    expect(readings).toEqual([{ text: entry, path: 'policy/sub', glob: false, readWide: expect.any(String) }]);
+    const notice = readWideNotice(readings[0]!);
+    expect(notice).toContain('as the folder policy/sub/');
+    expect(notice).toContain('more than 256');
+  });
+
+  it('reads an entry far past the cap wide without building its expansions', () => {
+    const entry = 'policy/' + '{a,b}'.repeat(64) + '.json';
+    expect(readGuardedEntry(entry)).toEqual([{ text: entry, path: 'policy', glob: false, readWide: expect.any(String) }]);
+  });
+
+  it('reads a bad brace far past the cap wide without building its expansions', () => {
+    for (const entry of ['policy/' + '{a,b}'.repeat(64) + '{c', 'policy/' + '{a,b}'.repeat(64) + '{c,{d,e}}']) {
+      expect(readGuardedEntry(entry), entry).toEqual([
+        { text: entry, path: 'policy', glob: false, readWide: expect.any(String) },
+      ]);
+    }
+  });
+
+  it('reads the whole tree past the cap when no folder holds every expansion', () => {
+    const groups = '{a,b}'.repeat(9);
+    const entries = [
+      groups,
+      `x${groups}/y.json`,
+      `/policy/${groups}`,
+      `policy/*/../${groups}`,
+      `policy/${groups}/../../x.json`,
+      `policy/{.,a}{.,b}${groups}`,
+      `policy/x/.{,a}.${groups}`,
+      `policy/x/..{,a}${groups}`,
+    ];
+    for (const entry of entries) {
+      expect(readGuardedEntry(entry), entry).toEqual([{ text: entry, path: '', glob: false, readWide: expect.any(String) }]);
+    }
   });
 });

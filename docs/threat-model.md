@@ -36,6 +36,15 @@ re-baseline to green.
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
+  An approval counts only when GitHub reports the approving code owner's permission on the
+  repository as `admin` or `write`, read once per login from the collaborator permission
+  endpoint. On a public repository anyone can submit an approving review, so before, a CODEOWNERS
+  login that lost its access, or a name someone else registered, passed the check. An approval
+  from a user with `read` or `none` does not count, and a failed read never counts as write; the
+  output names the reviewer and says why. The review's `author_association` is not used, because
+  it hides private organization membership, so a code owner with write access can read as
+  `CONTRIBUTOR`. Residual: the permission is the one GitHub reports when the check runs. When the
+  job's token cannot read it, every approval is refused until the token can, which fails closed.
   Owners come from the last rule that matches each dirty guarded path. That path fails closed
   when no rule matches it, when its last rule names no owner, or when its last rule names an org
   team or an email, because usabl cannot resolve team membership or match an email to a login. A
@@ -394,12 +403,23 @@ the tool errored, not because the page is accessible.
   refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
   `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses a `guardedPaths` entry
   with white space at either end, one that starts with `/`, one with a `..` that leaves the root
-  or comes after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and
-  says how to write it. The guard expands a brace group first and reads each expansion on its own,
-  so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what an entry says and
-  never guards less because it cannot read one. An expansion in a form the matcher cannot evaluate
-  guards the literal folder above the first segment it cannot evaluate; one that starts with `/`,
-  has a `..` that leaves the root, or has a `..` anywhere after a wildcard guards the whole tree.
+  or comes after a wildcard or a brace group, one with a `.` or `..` segment inside a brace
+  alternative, one with a brace alternative that leaves the path empty, and one with more than 256
+  brace expansions, and says how to write it. It reads a segment as a pattern with the guard's own
+  test, so `a}/../x.json` is refused too. The guard expands a brace group first and reads each
+  expansion on its own, so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what
+  an entry says and never guards less because it cannot read one. An expansion in a form the
+  matcher cannot evaluate guards the literal folder above the first segment it cannot evaluate; one
+  that starts with `/`, is empty, has a `..` that leaves the root, or has a `..` anywhere after a
+  wildcard guards the whole tree. An entry with more than 256 brace expansions is never expanded:
+  it guards the literal folder above its first brace group, or the whole tree when an expansion
+  could climb out of that folder or there is none. Before, each expansion was read on its own, so
+  an entry with 16 brace groups took the local guard about 31 seconds, and a larger one could make
+  a Stop hook time out or crash, which an assistant may treat as an allow. A literal entry and a
+  wide reading guard the dot-named files and dot-named folders under their folder on the working
+  tree too, as the git listings do; before, the local guard listed the folder with `fs.glob`,
+  which skips them under `**`, so a new untracked dot file there, such as `src/gate/.x`, was not
+  reported.
   This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
   ref's config. A change there needs a code owner's approval, which a review can give, so the pull
   request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each

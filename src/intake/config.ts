@@ -15,9 +15,10 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { braceRangeIn, expandBraces, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
+import { isPatternSegment, MAX_BRACE_EXPANSIONS } from '../trust/guard.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -54,7 +55,7 @@ function checkGlobSupported(pattern: string, label: string): void {
   }
   // A nested or unbalanced brace cannot be expanded, so matchGlob would treat the braces
   // as literal text while discovery would not. Refuse it for the same reason.
-  if (pattern.includes('{') && expandBraces(pattern) === null) {
+  if (pattern.includes('{') && countBraceExpansions(pattern) === null) {
     throw configError`${label} pattern "${pattern}" uses an unsupported brace form. usabl globs support only *, **, and single-level {a,b} brace groups.`;
   }
   // Node's glob expands a brace range such as {1..3}, and matchGlob reads it as text, so the two
@@ -130,7 +131,13 @@ function checkGuardedPathForm(entry: string): void {
     const fixed = entry.replace(/^\/+/, '') || '.';
     throw configError`guardedPaths entry "${entry}" starts with /, so it names no path from the repository root. Write it as a path from the repository root without the leading slash: "${fixed}".`;
   }
-  for (const segments of bracedSegments(entry)) {
+  // The guard reads each expansion on its own and lists the working tree once for each, so it reads
+  // an entry past the cap as a wider folder. The count is taken before anything is expanded.
+  if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
+    throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
+  }
+  const expansions = bracedSegments(entry);
+  for (const segments of expansions) {
     if (segments.length > 1 && segments[0]?.text === '' && entry.charAt(0) === '{') {
       throw configError`guardedPaths entry "${entry}" has a brace alternative that starts the path with /, so it names no path from the repository root. Write each alternative as a path from the repository root.`;
     }
@@ -145,7 +152,7 @@ function checkGuardedPathForm(entry: string): void {
       }
       if (segment.text === '..') {
         if (afterWildcard) {
-          throw configError`guardedPaths entry "${entry}" has a .. after a wildcard, so it can name a path anywhere in the repository. Write it without .. segments, as a path from the repository root.`;
+          throw configError`guardedPaths entry "${entry}" has a .. after a wildcard or a brace group, so it can name a path anywhere in the repository. Write it without .. segments, as a path from the repository root.`;
         }
         if (depth === 0) {
           throw configError`guardedPaths entry "${entry}" has a .. segment that leaves the repository root, so it names no path in the repository. Write it as a path from the repository root without .. segments.`;
@@ -154,7 +161,12 @@ function checkGuardedPathForm(entry: string): void {
         continue;
       }
       depth++;
-      afterWildcard ||= segment.braced || /[*{]/.test(segment.text);
+      afterWildcard ||= segment.braced || isPatternSegment(segment.text);
+    }
+    // An empty brace alternative, as in {,}, can leave no path at all, which the guard reads as the
+    // whole repository. The entry does not say that, so it is refused.
+    if (depth === 0 && expansions.length > 1) {
+      throw configError`guardedPaths entry "${entry}" has a brace alternative that leaves the path empty, so it names the whole repository. Write each alternative as a path from the repository root, or write . to guard the whole repository.`;
     }
   }
 }
