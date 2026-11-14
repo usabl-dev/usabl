@@ -23,6 +23,7 @@ import {
 } from '../../src/surfaces/stop-hook-runner.js';
 import { findStartingCommit, type ScopeGit, type ScopeGitResult } from '../../src/surfaces/stop-hook-scope.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -131,7 +132,9 @@ function hook() {
   return { ports, scanned, stdout: () => stdout.join(''), stderr: () => stderr.join('') };
 }
 
-describe('the Stop hook checks what CI will check', () => {
+// Each stop below runs several real git processes, and some tests stop two or three times, so
+// they take the shared budget for tests that wait on a real process. See test/support/timing.ts.
+describe('the Stop hook checks what CI will check', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   it('scans a UI change the agent committed before it stopped', async () => {
     recordTrustedBranch();
     git('switch', '-q', '-c', 'feature');
@@ -171,7 +174,7 @@ describe('the Stop hook checks what CI will check', () => {
   });
 });
 
-describe('the receipt binds the starting commit', () => {
+describe('the receipt binds the starting commit', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   it('records the commit where the branch left the trusted branch in the receipt it saves', async () => {
     recordTrustedBranch();
     git('switch', '-q', '-c', 'feature');
@@ -214,7 +217,50 @@ describe('the receipt binds the starting commit', () => {
   });
 });
 
-describe('no starting commit, no guess', () => {
+describe('no trusted branch at all', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const NOTE =
+    'Note: usabl found no trusted branch to compare this branch with, because git records no default branch for origin ' +
+    '(refs/remotes/origin/HEAD is not set). So this stop checked only the changes that are not committed. ' +
+    'Work already committed on this branch was not checked on this stop.';
+
+  // With no trusted branch there is nothing to compare with, so the stop keeps the uncommitted
+  // scope, and says so on every stop, so nothing to check never reads as the whole branch.
+  it('checks the uncommitted changes and says that committed work was not checked', async () => {
+    git('switch', '-q', '-c', 'feature');
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the other screen');
+
+    const idle = hook();
+    await runStopHookFromStdin('{}', idle.ports);
+    expect(idle.scanned).toEqual([]);
+    expect(idle.stderr()).toContain('IDLE');
+    expect(idle.stderr()).toContain(NOTE);
+    const shown = JSON.parse(idle.stdout().trim()) as { systemMessage?: string };
+    expect(shown.systemMessage).toContain(NOTE);
+
+    await write('src/App.tsx', 'export const App = 2;\n');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    expect(h.stderr()).toContain('VERIFIED');
+    expect(h.stderr()).toContain(NOTE);
+    expect(h.stderr()).toContain('git remote set-head origin --auto');
+    expect((await storedReceipt()).baseRevision).toBeNull();
+  });
+
+  it('says so on a stored receipt allow too', async () => {
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await runStopHookFromStdin('{}', hook().ports);
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual([]);
+    expect(h.stderr()).toContain('stored receipt, not re-scanned');
+    expect(h.stderr()).toContain(NOTE);
+  });
+});
+
+describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   function expectScopeGap(h: ReturnType<typeof hook>, reason: string): string {
     const text = blockReason(h.stdout());
     expect(text.startsWith('NOT verified - not covered: usabl could not find where this branch left the trusted branch')).toBe(true);
@@ -318,7 +364,7 @@ describe('no starting commit, no guess', () => {
   });
 });
 
-describe('the scope in the cases that look like a missing starting commit', () => {
+describe('the scope in the cases that look like a missing starting commit', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   // A detached HEAD still has a merge base with the trusted branch, so the stop checks every
   // change since HEAD left it, as on a branch.
   it('checks every change since HEAD left the trusted branch on a detached HEAD', async () => {

@@ -30,7 +30,13 @@ import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guarded
 import { firstLine } from '../primitives/first-line.js';
 import { listChangedFiles } from './cli.js';
 import { GUARDED_FILES_LABEL } from './model-pieces.js';
-import { findStartingCommit, scopeGit, type StartingCommit, type StartingCommitProblem } from './stop-hook-scope.js';
+import {
+  findStartingCommit,
+  scopeGit,
+  TRUSTED_BRANCH_POINTER,
+  type StartingCommit,
+  type StartingCommitProblem,
+} from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -683,7 +689,10 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
     loadConfig: async (text: string) => parseConfigText(text),
     buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
     runEngine: async (deps: Deps, config: UsablConfig, opts?: RunOptions) => run(deps, config, opts ?? {}),
-    findStartingCommit: async () => findStartingCommit(scopeGit(root)),
+    // Outside a work tree the hook stops before it looks (see configStep), and there is no branch
+    // and no committed work to compare. Inside one, git answers.
+    findStartingCommit: async () =>
+      inRepository ? findStartingCommit(scopeGit(root)) : { kind: 'no-trusted-branch' as const },
     evaluateDecision: evaluateStopDecision,
   };
 }
@@ -763,6 +772,10 @@ function pinNotices(notice: PinNotice | null): string[] {
   return notice === null ? [] : [notice.message];
 }
 
+function scopeNotes(scope: { note: string | null }): string[] {
+  return scope.note === null ? [] : [scope.note];
+}
+
 /**
  * A config block lets one continuation through while stop_hook_active is set, as every other
  * block does, so a person who edits the config on purpose is never looped.
@@ -792,8 +805,20 @@ type ScopeProblem = StartingCommitProblem | 'listing-failed';
  * check, so it checks nothing and blocks.
  */
 type StopScope =
-  | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null }
+  | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null; note: string | null }
   | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null };
+
+/**
+ * The note for a stop in a repository with no trusted branch to compare with. The stop keeps the
+ * uncommitted scope, and this note follows every decision, so nothing to check or a verified line
+ * never reads as a check of the whole branch. It is usabl's own text.
+ */
+const NO_TRUSTED_BRANCH_NOTE =
+  'Note: usabl found no trusted branch to compare this branch with, because git records no default branch for origin ' +
+  `(${TRUSTED_BRANCH_POINTER} is not set). So this stop checked only the changes that are not committed. ` +
+  'Work already committed on this branch was not checked on this stop. To check it on every stop, run ' +
+  'git remote set-head origin --auto, which records the default branch of origin. A repository with no remote ' +
+  'named origin needs one that holds the trusted branch first.';
 
 /**
  * What this stop checks. CI checks every file changed since the pull request left its base branch,
@@ -806,14 +831,15 @@ type StopScope =
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
-    return { kind: 'scan', runOptions: {}, baseRevision: null };
+    return { kind: 'scan', runOptions: {}, baseRevision: null, note: null };
   }
   const start = await ports.findStartingCommit();
   if (start.kind === 'not-found') {
     return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
   }
-  if (start.kind !== 'found') {
-    return { kind: 'scan', runOptions: {}, baseRevision: null };
+  if (start.kind === 'no-trusted-branch') {
+    // Nothing to compare with: the uncommitted changes, as before, and the note says so.
+    return { kind: 'scan', runOptions: {}, baseRevision: null, note: NO_TRUSTED_BRANCH_NOTE };
   }
   let changedFiles: string[];
   try {
@@ -821,7 +847,12 @@ async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopSc
   } catch (err) {
     return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: firstLine(errorMessage(err)) };
   }
-  return { kind: 'scan', runOptions: { changedFiles, baseRevision: start.commit }, baseRevision: start.commit };
+  return {
+    kind: 'scan',
+    runOptions: { changedFiles, baseRevision: start.commit },
+    baseRevision: start.commit,
+    note: null,
+  };
 }
 
 const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
@@ -1049,7 +1080,7 @@ export async function runStopHook(
       if (receiptCheck.verified) {
         await emitProtocolAllow(
           ports,
-          { message: receiptCheck.details, notices: pinNotices(pinNotice), quiet: true },
+          { message: receiptCheck.details, notices: [...scopeNotes(scope), ...pinNotices(pinNotice)], quiet: true },
           options,
         );
         return 0;
@@ -1080,6 +1111,8 @@ export async function runStopHook(
       // without a stored receipt.
       ...(receiptNotUsed === null || result.verdict === null ? [] : [receiptNotUsed]),
       ...(receiptNotice === null ? [] : [receiptNotice]),
+      // What this stop did not check goes with every decision, the idle one included.
+      ...scopeNotes(scope),
       ...pinNotices(pinNotice),
     ];
     if (decision.block) {
