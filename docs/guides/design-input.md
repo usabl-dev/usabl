@@ -105,9 +105,10 @@ Once approved, each check gives one of these:
   button has the name, so its size cannot be measured. A name that differs from the design only in
   white space a person cannot see, such as a no-break space, a zero width space, or a word joiner,
   is needs review too, in the name, heading, landmark, and focus order checks. The reason names the
-  character, for example: a button on this screen is named "Refresh" followed by a no-break
-  space. usabl never
-  guesses. A run with a needs review finding is not verified.
+  character, for example: a button on this screen is named "Refresh" followed by a no-break space.
+  The rest of the check still runs, so such a heading at the wrong level fails, and so does a focus
+  order with a name missing or out of order elsewhere. usabl never guesses. A run with a needs
+  review finding is not verified.
 
 One case usabl cannot see: an element inside a closed shadow root that is itself inside a child
 frame. Neither of its counts reaches there, so on a page with child frames, a second element with

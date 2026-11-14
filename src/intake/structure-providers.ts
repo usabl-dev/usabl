@@ -302,6 +302,47 @@ function headingLevel(node: AxNode): number | null {
   return typeof level === 'number' && Number.isInteger(level) && level >= 1 && level <= 6 ? level : null;
 }
 
+/**
+ * The fail for headings whose names differ from the design only in hidden white space, when every
+ * one of them has a level usabl can read and none has the design's level. The check fails
+ * whichever heading the design means: if it is one of them, its level is wrong, and if it is none
+ * of them, the heading is missing. Null when any of them could be the heading at the right level,
+ * and the caller then asks for review.
+ */
+async function nearHeadingAtWrongLevel(requirement: Requirement, assertion: HeadingAssertion, page: Page): Promise<Draft | null> {
+  const wanted = looseName(assertion.name);
+  const search = await findByRole(page, 'heading');
+  const near = search.matches.filter((match) => match.node.name !== null && looseName(match.node.name) === wanted);
+  const levels = near.map((match) => headingLevel(match.node));
+  if (near.length === 0 || levels.some((level) => level === null || level === assertion.level)) {
+    return null;
+  }
+  const design = spelledName(assertion.name);
+  const fix = `Change the heading to level ${assertion.level}, and use the same white space in its name as the design.`;
+  const why =
+    'Heading levels tell screen reader users how the page is organized. The name also differs from the design in white space that cannot be seen.';
+  const [only] = near;
+  const actual = levels[0];
+  if (near.length === 1 && only !== undefined && typeof actual === 'number') {
+    return draft(requirement, 'heading', 'fail', {
+      elementPath: only.selector,
+      node: only.node,
+      whatUserExperiences: `The heading named ${spelledName(only.node.name ?? '')} is level ${actual}. The design names it ${design} and says level ${assertion.level}.`,
+      why,
+      fix,
+      extra: { expectedLevel: assertion.level, actualLevel: actual },
+    });
+  }
+  return draft(requirement, 'heading', 'fail', {
+    elementPath: SCREEN_PATH,
+    node: null,
+    whatUserExperiences: `${near.length} headings have names that differ from ${design} only in white space that cannot be seen, and none is level ${assertion.level}, the level the design says.`,
+    why,
+    fix,
+    extra: { expectedLevel: assertion.level, sameButForWhiteSpace: near.length },
+  });
+}
+
 async function checkHeading(
   requirement: Requirement,
   assertion: HeadingAssertion,
@@ -311,6 +352,10 @@ async function checkHeading(
   const target: RoleTarget = { role: 'heading', name: assertion.name };
   const found = await resolveTarget(page, target, tree);
   if (found.kind === 'none') {
+    const wrongLevel = await nearHeadingAtWrongLevel(requirement, assertion, page);
+    if (wrongLevel !== null) {
+      return [wrongLevel];
+    }
     const near = await hiddenSpaceDraft(requirement, 'heading', page, target);
     if (near !== null) {
       return [near];
@@ -583,27 +628,57 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
     }),
   ];
 
-  const missingAt = positions.findIndex((at) => at.length === 0);
-  if (missingAt !== -1) {
-    // A stop whose name differs from the design only in hidden white space is most likely the
-    // control the design means, so this asks for review and names the character, as the name check
-    // does, instead of saying focus never reached it.
-    const wanted = sequence[missingAt] ?? '';
-    const near = names.filter((name) => looseName(name) === looseName(wanted));
-    if (near.length > 0) {
-      return unconfirmed(hiddenSpaceWhy('A focus stop', 'focus stops', 'control', near, wanted), HIDDEN_SPACE_FIX, {
-        ...extra,
-        sameButForWhiteSpace: near.length,
-      });
+  // A name with no exact stop may still be on a stop whose name differs from it only in hidden
+  // white space. Each such stop is a tentative position, never a stop already matched exactly to
+  // another name, so one control never stands for two names. The missing and order checks then run
+  // over every name, so a hidden white space never hides a failure elsewhere in the sequence.
+  const exactStops = new Set(positions.flatMap((at) => at));
+  const candidates = positions.map((at, index) => {
+    if (at.length > 0) {
+      return at;
     }
-    const where = missingAt === 0 ? 'The design puts it first.' : `The design puts it after "${sequence[missingAt - 1] ?? ''}".`;
-    return fail(`Focus never reached "${sequence[missingAt] ?? ''}". ${where}`);
+    const wanted = looseName(sequence[index] ?? '');
+    return names.flatMap((name, stop) => (!exactStops.has(stop) && looseName(name) === wanted ? [stop] : []));
+  });
+  const neverReached = (index: number): Draft[] => {
+    const where = index === 0 ? 'The design puts it first.' : `The design puts it after "${sequence[index - 1] ?? ''}".`;
+    return fail(`Focus never reached "${sequence[index] ?? ''}". ${where}`);
+  };
+
+  const missingAt = candidates.findIndex((at) => at.length === 0);
+  if (missingAt !== -1) {
+    return neverReached(missingAt);
   }
-  for (let index = 1; index < sequence.length; index += 1) {
-    if ((positions[index]?.[0] ?? 0) < (positions[index - 1]?.[0] ?? 0)) {
+  // The order holds when one stop can be chosen for each name, each later than the one before.
+  // The earliest stop that works is always the best choice, so one pass decides it. When no choice
+  // works, the result fails whichever stop a near match truly is: either the order is wrong, or the
+  // name is missing.
+  let previous = -1;
+  for (let index = 0; index < sequence.length; index += 1) {
+    const at = candidates[index] ?? [];
+    const next = at.find((stop) => stop > previous);
+    if (next === undefined) {
+      if (!at.some((stop) => stop < previous)) {
+        // The only stop is the one the name before it took.
+        return neverReached(index);
+      }
       const earlier = sequence[index - 1] ?? '';
       return fail(`Focus reached "${sequence[index] ?? ''}" before "${earlier}". The design puts "${earlier}" first.`);
     }
+    previous = next;
+  }
+
+  // Every other part of the check passes, so the hidden white space is the only open question. A
+  // stop whose name differs from the design only in hidden white space is most likely the control
+  // the design means, so this asks for review and names the character, as the name check does.
+  const nearAt = positions.findIndex((at) => at.length === 0);
+  if (nearAt !== -1) {
+    const wanted = sequence[nearAt] ?? '';
+    const near = (candidates[nearAt] ?? []).map((stop) => names[stop] ?? '');
+    return unconfirmed(hiddenSpaceWhy('A focus stop', 'focus stops', 'control', near, wanted), HIDDEN_SPACE_FIX, {
+      ...extra,
+      sameButForWhiteSpace: near.length,
+    });
   }
   return [];
 }

@@ -680,6 +680,63 @@ describe('hidden white space in every check that looks a name up', () => {
     const drafts = await run(req({ type: 'focus-order', sequence: ['Create user', 'Refresh'] }), tabbingPage(['Create user', 'Reload']));
     expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
   });
+
+  // A near match is only a tentative position. The rest of the check still runs, so a name that is
+  // missing or an order that is wrong fails, whichever stop the near match turns out to be.
+  const NBSP = ' ';
+  const ZWSP = '​';
+
+  it('still fails a focus order that is wrong elsewhere when one stop differs only in white space', async () => {
+    const r = req({ type: 'focus-order', sequence: ['Create user', 'Delete', 'Refresh'] });
+    const drafts = await run(r, tabbingPage(['Delete', 'Create user', `Refresh${NBSP}`]));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toContain('Focus reached "Delete" before "Create user".');
+  });
+
+  it('still fails a focus order with a missing name when another stop differs only in white space', async () => {
+    const r = req({ type: 'focus-order', sequence: ['Refresh', 'Export'] });
+    const drafts = await run(r, tabbingPage([`Refresh${NBSP}`, 'Create user']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toContain('Focus never reached "Export". The design puts it after "Refresh".');
+  });
+
+  it('never lets two design names share one focus stop', async () => {
+    // The only stop near "Save" plus a no-break space is the stop already matched to "Save".
+    const exact = await run(req({ type: 'focus-order', sequence: ['Save', `Save${NBSP}`] }), tabbingPage(['Save']));
+    expect(exact.map((d) => d.confidence)).toEqual(['fail']);
+    expect(exact[0]?.whatUserExperiences).toContain(`Focus never reached "Save${NBSP}". The design puts it after "Save".`);
+    // Two names that are each near the one stop cannot both be that stop.
+    const near = await run(req({ type: 'focus-order', sequence: [`Save${NBSP}`, `Save${ZWSP}`] }), tabbingPage(['Save']));
+    expect(near.map((d) => d.confidence)).toEqual(['fail']);
+    expect(near[0]?.whatUserExperiences).toContain(`Focus never reached "Save${ZWSP}".`);
+  });
+
+  it('asks for review when some choice of the near stops passes, even if another choice fails', async () => {
+    const r = req({ type: 'focus-order', sequence: ['Name', 'Refresh', 'Submit'] });
+    const drafts = await run(r, tabbingPage([`Refresh${NBSP}`, 'Name', `Refresh${ZWSP}`, 'Submit']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('2 focus stops have names that differ from "Refresh" only in white space that cannot be seen');
+  });
+
+  it('still fails a heading whose name differs only in white space when its level differs', async () => {
+    const page = pageWith({ '#h': { name: `Users${NBSP}`, role: 'heading', states: { level: 3 } } });
+    const drafts = await run(req({ type: 'heading', name: 'Users', level: 1 }), page);
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'The heading named "Users" followed by a no-break space is level 3. The design names it "Users" and says level 1.',
+    );
+    expect(drafts[0]?.elementPath).toBe('#h');
+    expect(drafts[0]?.evidence.extra).toEqual({ expectedLevel: 1, actualLevel: 3 });
+  });
+
+  it('asks for review on a heading near match when one of them could be at the right level', async () => {
+    const page = pageWith({
+      '#a': { name: `Users${NBSP}`, role: 'heading', states: { level: 3 } },
+      '#b': { name: `Users${ZWSP}`, role: 'heading', states: { level: 1 } },
+    });
+    const drafts = await run(req({ type: 'heading', name: 'Users', level: 1 }), page);
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+  });
 });
 
 describe('target size requirement', () => {
