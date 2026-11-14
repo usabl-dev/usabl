@@ -1703,12 +1703,15 @@ in this order:
      `@acme/ui/styles.css`, and that key's value is a string that starts with `./`, holds no `*`,
      and names a file inside the package folder, the import is followed to that one file. An exact
      key wins over a pattern key, as in Node.js. When any string target under the key the subpath
-     matches (the exact key, or else each pattern key that matches it), at any depth of a conditions
-     object or an array, leaves the package folder once normalized, such as
+     matches (the exact key, or else each pattern key that matches it and each folder key that ends
+     with `/` and that the subpath starts with, such as `./t/` for `@acme/ui/t/helpers.tsx`), at any
+     depth of a conditions object or an array, leaves the package folder once normalized, such as
      `./../other/src/tests/helpers.tsx`, the import may load any file, because a bundler can follow
-     such a target into another package. Every other path into the package may load any file of
-     that package: a conditions object, an array, a key with `*` that would be needed to match, a
-     string `exports`, an entry that names no file, and a package.json that cannot be parsed.
+     such a target into another package. Node.js removed folder keys, but a bundler such as Vite
+     still reads one and appends the rest of the subpath to its target. Every other path into the
+     package may load any file of that package: a conditions object, an array, a key with `*` or a
+     folder key that would be needed to match, a string `exports`, an entry that names no file, and
+     a package.json that cannot be parsed.
      Without `exports`, a path that names a file under
      the package folder, such as `@acme/ui/src/tests/helpers`, is followed to it like any import,
      and one that names no file there may load any file of that package. A path that leaves the

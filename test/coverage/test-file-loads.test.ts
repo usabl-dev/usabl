@@ -547,6 +547,18 @@ describe('a test file in a workspace package the app depends on', () => {
         expectWorkspaceGap(await coverageOf(screen, twoPackages(exports), other), other);
       });
 
+      it('may load any file when a folder key that the subpath starts with leaves it', async () => {
+        const tree = twoPackages({ '.': './src/index.ts', './t/': './../other/src/tests/' });
+        expectWorkspaceGap(await coverageOf("import x from '@acme/ui/t/helpers.tsx';", tree, other), other);
+      });
+
+      it('keeps the reading of the package for a folder key that stays inside it', async () => {
+        const tree = twoPackages({ '.': './src/index.ts', './t/': './src/tests/' });
+        const folderScreen = "import x from '@acme/ui/t/helpers.ts';";
+        expectWorkspaceGap(await coverageOf(folderScreen, tree, helpers));
+        expectExcluded(await coverageOf(folderScreen, tree, other), other);
+      });
+
       it('keeps the reading of the package when every target of a conditions object stays inside it', async () => {
         const tree = twoPackages({ '.': './src/index.ts', './testing': { import: './src/tests/helpers.ts', default: './src/Button.tsx' } });
         expectWorkspaceGap(await coverageOf(screen, tree, helpers));

@@ -154,11 +154,14 @@ interface WorkspacePackageView {
 }
 
 // The exports keys a subpath key such as ./testing matches: the key itself when exports has it, as
-// Node.js picks an exact key first, and otherwise every pattern key with one * whose text before
-// and after the * the subpath starts and ends with.
+// Node.js picks an exact key first. Otherwise every pattern key with one * whose text before and
+// after the * the subpath starts and ends with, and every folder key, one that ends with /, that the
+// subpath starts with. Node.js removed folder keys, but a bundler such as Vite still reads one and
+// appends the rest of the subpath to its target.
 function matchedExportKeys(keys: readonly string[], key: string): string[] {
   if (keys.includes(key)) return [key];
   return keys.filter((candidate) => {
+    if (candidate.endsWith('/') && key.startsWith(candidate)) return true;
     const star = candidate.indexOf('*');
     if (star === -1 || candidate.indexOf('*', star + 1) !== -1) return false;
     const before = candidate.slice(0, star);
