@@ -382,19 +382,30 @@ describe('a story tool page url', () => {
     'http://127.0.0.1:6006/?path=/story/button--primary',
     'http://127.0.0.1:6006/index.html?path=/docs/button--docs&globals=theme:dark#x',
     '/?path=/story/button--primary',
+    // A path that ends with /iframe.html counts with or without a query.
+    'http://127.0.0.1:6006/iframe.html',
+    'http://127.0.0.1:6006/iframe.html?viewMode=story',
+    'http://127.0.0.1:6006/iframe.html#?id=button--primary',
+    // A viewMode parameter on any page.
+    'http://127.0.0.1:6006/?viewMode=story&id=button--primary',
+    // Storybook 5.
+    'http://127.0.0.1:6006/?selectedKind=Button&selectedStory=Primary',
+    // Ladle.
+    'http://127.0.0.1:61000/?story=button--primary',
   ])('counts %s', (url) => {
     expect(isStoryToolPageUrl(url)).toBe(true);
   });
 
   it.each([
-    'http://127.0.0.1:6006/iframe.html',
-    'http://127.0.0.1:6006/iframe.html?viewMode=story',
+    'http://127.0.0.1:6006/',
     'http://127.0.0.1:6006/story/button--primary',
+    'http://127.0.0.1:6006/stories/Button',
+    'http://127.0.0.1:6006/#/story/button--primary',
     'http://127.0.0.1:6006/?other=/story/button--primary',
     'http://127.0.0.1:6006/?path=/stories/button',
+    'http://127.0.0.1:5173/?path=/settings',
     'http://127.0.0.1:6006/iframe.htmlx?id=button--primary',
     'http://127.0.0.1:6006/index.html?id=button--primary',
-    'http://127.0.0.1:6006/iframe.html#?id=button--primary',
     'http://127.0.0.1:5173/clusters?q=iframe.html&id=1',
     'http://[::1',
   ])('does not count %s', (url) => {
@@ -464,6 +475,13 @@ describe('a story or test support file when the config names a story tool page',
     expect(coverage.excludedFiles ?? []).toEqual([]);
     expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[fixture, 'unresolved']]);
     expect(coverage.gaps[0]?.reason).toContain(`because ${story} imports it`);
+  });
+
+  it('reads a surface that lists a story as a story tool page, whatever its url', async () => {
+    const listsStory: UsablConfig = { ...config, surfaces: [{ ...storybookSurface, url: `${BASE}/button`, files: ['src/Button.tsx', story] }] };
+    const coverage = await computeCoverage(fsOf(files), listsStory, ['src/setupTests.ts']);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/setupTests.ts', 'unresolved']]);
   });
 
   it('stays excluded with no Storybook page in the config', async () => {

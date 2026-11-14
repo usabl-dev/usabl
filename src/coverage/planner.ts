@@ -10,10 +10,10 @@ import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-di
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import {
   excludedTestFileReason,
-  isStoryToolPageUrl,
   isTestFile,
   loadedTestFileNote,
   placeTestFiles,
+  scansStoryToolPages,
   storyToolNote,
   testFileGapReason,
 } from './test-files.js';
@@ -246,10 +246,10 @@ export async function computeCoverage(
   assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
   // A story tool loads stories, setup files, mocks, and helpers through its own config, which usabl
-  // does not read. So when a url usabl opens is a story tool page, the test file set is only the
-  // base names and folders, and the other names are UI files, checked when a surface lists them
-  // and a gap otherwise.
-  const storyToolPage = openedUrls(config, manifest, docs).some(isStoryToolPageUrl);
+  // does not read. So when the config scans a story tool page, the test file set is only the base
+  // names and folders, and the other names are UI files, checked when a surface lists them and a
+  // gap otherwise.
+  const storyToolPage = scansStoryToolPages(openedUrls(config, manifest, docs), config.surfaces);
   const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
 
   const quotedFiles = changedFiles.filter(looksQuoted);

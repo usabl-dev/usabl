@@ -72,10 +72,11 @@ export function isTestFile(file: string, storyToolPage = false): boolean {
 const URL_BASE = 'http://usabl.invalid';
 
 /**
- * Whether a url is a story tool page, in one of the two standard Storybook forms: a path that ends
- * with /iframe.html and a query with an id parameter, or a query whose path parameter starts with
- * /story/ or /docs/. The url is parsed, not searched as text, and one that does not parse does not
- * count.
+ * Whether a url is a story tool page. Reading a url as one can only add gaps, so the test is
+ * generous. A url counts when its path ends with /iframe.html, with or without a query, or when its
+ * query has a viewMode parameter, a path parameter that starts with /story/ or /docs/, a
+ * selectedKind parameter (Storybook 5), or a story parameter (Ladle). The url is parsed, not
+ * searched as text, and one that does not parse does not count. A hash is not read.
  */
 export function isStoryToolPageUrl(url: string): boolean {
   let parsed: URL;
@@ -84,9 +85,19 @@ export function isStoryToolPageUrl(url: string): boolean {
   } catch {
     return false;
   }
-  if (parsed.pathname.endsWith('/iframe.html') && parsed.searchParams.has('id')) return true;
-  const storyPath = parsed.searchParams.get('path');
+  if (parsed.pathname.endsWith('/iframe.html')) return true;
+  const query = parsed.searchParams;
+  if (query.has('viewMode') || query.has('selectedKind') || query.has('story')) return true;
+  const storyPath = query.get('path');
   return storyPath !== null && (storyPath.startsWith('/story/') || storyPath.startsWith('/docs/'));
+}
+
+/**
+ * Whether the config scans story tool pages: a url usabl opens is one (see isStoryToolPageUrl), or
+ * a surface lists a story in its files.
+ */
+export function scansStoryToolPages(urls: readonly string[], surfaces: readonly { files: readonly string[] }[]): boolean {
+  return urls.some(isStoryToolPageUrl) || surfaces.some((surface) => surface.files.some(isStoryFile));
 }
 
 /**
