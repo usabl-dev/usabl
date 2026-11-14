@@ -1,5 +1,6 @@
 /**
- * Changed test files: files under uiFileGlobs that are named like a test or sit in a test folder.
+ * Changed test files: files under uiFileGlobs that are named like a test file or sit in a test
+ * folder. Stories, test setup files, mocks, and test helper files count, by the names listed below.
  *
  * Such a file usually holds tests or test helpers, but a screen can render it too. So it is
  * excluded only when usabl has looked at every place that could load it and found none. "No
@@ -25,14 +26,24 @@ import { declaredPackageNames, workspacePackages } from './workspace-packages.js
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
 
-// A file named like a test, such as Button.test.tsx or Button.spec.tsx.
+// The test file set. These are the files test tools load: tests, stories, test setup files, mocks,
+// and test helpers. Each one follows the same rule as any other test file. The names: a file
+// such as Button.test.tsx, Button.spec.tsx, Button.stories.tsx, setupTests.ts, or test-utils.tsx.
+// The folders: test, tests, __tests__, __mocks__, and test-utils. The two lists after each pattern
+// are the words the reasons use, so keep each pattern and its list in step.
+const TEST_NAME = /(\.(test|spec|stories)\.|(^|\/)(setupTests|test-utils)\.)[^/]+$/u;
+const TEST_NAMES = '.test., .spec., .stories., setupTests, or test-utils';
+const TEST_FOLDER = /(^|\/)(test|tests|__tests__|__mocks__|test-utils)(\/|$)/u;
+const TEST_FOLDERS = 'test, tests, __tests__, __mocks__, or test-utils';
+
+// A file named like a test file, such as Button.test.tsx or Button.stories.tsx.
 export function isTestNamedFile(file: string): boolean {
-  return /\.(test|spec)\.[^/]+$/u.test(file);
+  return TEST_NAME.test(file);
 }
 
-// A file in a folder named test, tests, or __tests__.
+// A file in a test folder, such as src/__tests__/ or src/__mocks__/.
 export function isInTestFolder(file: string): boolean {
-  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file);
+  return TEST_FOLDER.test(file);
 }
 
 export function isTestFile(file: string): boolean {
@@ -46,8 +57,8 @@ const NOT_FOUND =
   'so usabl reads it as test code and did not check it. This does not block. If a screen renders it, import it ' +
   'from that screen, or add it to the files of a surface in usabl.config.json.';
 
-const TEST_NAMED_REASON = `This file is named like a test (.test. or .spec.). ${NOT_FOUND}`;
-const TEST_FOLDER_REASON = `This file is in a test folder (test, tests, or __tests__). ${NOT_FOUND}`;
+const TEST_NAMED_REASON = `This file is named like a test file (${TEST_NAMES}). ${NOT_FOUND}`;
+const TEST_FOLDER_REASON = `This file is in a test folder (${TEST_FOLDERS}). ${NOT_FOUND}`;
 
 // A test file that wideBlastGlobs match is still read as a test file, so the reason says the match
 // did not make it a file usabl checks.
@@ -65,7 +76,7 @@ export function excludedTestFileReason(file: string, matchesWideBlast = false): 
 }
 
 function kindOf(file: string): string {
-  return isTestNamedFile(file) ? 'is named like a test (.test. or .spec.)' : 'is in a test folder (test, tests, or __tests__)';
+  return isTestNamedFile(file) ? `is named like a test file (${TEST_NAMES})` : `is in a test folder (${TEST_FOLDERS})`;
 }
 
 // One unresolved import, as a clause.
@@ -93,16 +104,16 @@ export function testFileGapReason(file: string, loads: readonly UnresolvableImpo
 
 /**
  * The sentence a test file's unplaced gap adds when the file counts as a UI file only because files
- * outside the tests that no route closure reaches import it, such as a story, a setup file, or a
- * mock. It says who imports the file, so a reader can tell test support from a screen.
+ * outside the tests that no route closure reaches import it, such as a mock request handler in a
+ * mocks folder. It says who imports the file, so a reader can tell test support from a screen.
  */
 export function loadedTestFileNote(file: string, importers: readonly string[]): string {
   const who = importers.length === 0 ? 'files outside the tests' : importers.join(', ');
   const verb = importers.length === 1 ? 'imports' : 'import';
   return (
     `It ${kindOf(file)}, and usabl counts it as a UI file because ${who} ${verb} it, but no route closure reaches ` +
-    `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, such as stories, setup files, ` +
-    'or mocks, this gap stays until they are named like a test or sit in a test folder. If a screen renders this file, ' +
+    `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, this gap stays until they are ` +
+    `named like a test file (${TEST_NAMES}) or sit in a test folder (${TEST_FOLDERS}). If a screen renders this file, ` +
     'list it in the files of a surface in usabl.config.json.'
   );
 }

@@ -1609,8 +1609,11 @@ surface is queued under its own id, with its own readiness signal and requiremen
 does not determine which screen renders. A surface that overrides a discovered route
 (`overridesDiscoveredRoute`) has the route's id, so the two are one entry.
 
-**Test files.** A test file is a file under `uiFileGlobs` that is named like a test (`*.test.*` or
-`*.spec.*`) or sits in a folder named `test`, `tests`, or `__tests__`. Both kinds follow one rule:
+**Test files.** A test file is a file under `uiFileGlobs` that test tools load. It is named like a
+test file (`*.test.*`, `*.spec.*`, a story `*.stories.*`, a test setup file `setupTests.*`, or a
+test helper file `test-utils.*`) or sits in a folder named `test`, `tests`, `__tests__`,
+`__mocks__`, or `test-utils`. Stories, setup files, mocks, and test helpers follow the same rule as
+tests, with no shortcut for their names. Both kinds follow one rule:
 a test file is excluded only when usabl has looked at every place that could load it and found
 none. "No import found" is evidence only when the search was complete. For each changed test file,
 in this order:
@@ -1629,9 +1632,11 @@ in this order:
    file reads nothing more. A test file that is a UI file is planned like any other UI file: a
    route closure maps it, a surface rescues it, or it is an `unresolved` gap. So a screen component
    kept in `src/tests/`, or in a file named `Widget.spec.tsx` that a screen imports, is checked when
-   it changes. When such a gap comes only from importers no route closure reaches, such as a story,
-   a setup file, or a mock that imports a fixture, the reason names those importers and says so,
-   and says that the gap stays until they are named like a test or sit in a test folder.
+   it changes. A story, a setup file, or a mock that a screen imports is checked the same way. When
+   such a gap comes only from importers no route closure reaches, such as a mock request handler in
+   `src/mocks/` that imports a fixture, the reason names those importers and says so, and says that
+   the gap stays until they are named like a test file or sit in a test folder. A story that imports
+   a fixture is itself a test file, so it does not make the fixture a UI file.
 2. **It is an `unresolved` gap** when a load usabl cannot follow, in any file the wider graph
    followed, may load it:
    - an import usabl could not resolve whose last path segment, with or without its extension,
@@ -1722,11 +1727,12 @@ in this order:
    so its pattern or path start does not cover test folders, or make it a plain import usabl can
    resolve; or, if a screen does render the file, list it in the `files` of a surface.
 3. **Otherwise it is excluded**, listed in `coverage.excludedFiles` with a reason for its kind (named
-   like a test, or in a test folder) that says usabl found no import of it in the files it follows
+   like a test file, or in a test folder, with the names or folders listed) that says usabl found no import of it in the files it follows
    from this configuration, and no load it could not follow could reach it. Those files are the
    ones the wider graph reads, so the limits below apply to that sentence. Such as
    `src/test/setup.ts`, a helper in `src/__tests__/`, a mock request handler in `src/test/`, or a
-   `Button.test.tsx` that only the tests import. It is not a gap, so a pull request that edits only
+   `Button.test.tsx`, a `Button.stories.tsx`, a `src/setupTests.ts`, or a file in `src/__mocks__/`
+   that only the tests import. It is not a gap, so a pull request that edits only
    tests still has nothing to check. A glob pattern that does not match the file, or a template
    prefix that does not cover it, changes nothing. A test file that `wideBlastGlobs` match is still
    a test file, so the match does not make it checked; its reason says it matched and was still
@@ -1748,7 +1754,8 @@ are placed there by the same rule. A test file that is a gap there makes `usabl 
 write a floor unless `--partial` is given, because a floor must not claim a scope usabl could not
 place. The loads that cause it most often cover many test files at once: `require(name)` or
 `import(name)` with no fixed start, `import.meta.glob(variable)`, a glob or a `require.context`
-whose folder holds a test folder, and a story, setup file, or mock that imports a fixture. The ways
+whose folder holds a test folder, and a file outside the tests, such as a mock request handler in
+`src/mocks/`, that imports a fixture. The ways
 out are `--partial`, a narrower load in the named importer, or a surface that lists the file.
 
 The excluded files are shown on every surface, marked as not blocking, on any run, an idle one

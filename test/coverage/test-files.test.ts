@@ -293,6 +293,85 @@ describe('a test file that a file outside the tests imports, where no route reac
   });
 });
 
+describe('a story, a test setup file, a mock, or a test helper file', () => {
+  // These follow the same rule as every test file, with no shortcut.
+  const screenWith = (body: string): string => `${body}\nexport function ClustersPage() { return <main />; }\n`;
+  const treeWith = (screen: string, extra: Record<string, string>): Record<string, string> => ({
+    'usabl.routes.json': SIDECAR,
+    'src/ClustersPage.tsx': screenWith(screen),
+    ...extra,
+  });
+
+  it.each([
+    ['src/Button.stories.tsx', /named like a test/],
+    ['src/setupTests.ts', /named like a test/],
+    ['src/test-utils.tsx', /named like a test/],
+    ['src/__mocks__/api.ts', /test folder/],
+    ['src/test-utils/render.tsx', /test folder/],
+  ])('is excluded and listed, and the run is idle, when only %s changed and nothing outside the tests imports it', async (file, kind) => {
+    const coverage = await computeCoverage(fsOf(treeWith('', { [file]: WIDGET })), config, [file]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect(coverage.gaps).toEqual([]);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([file]);
+    expect(coverage.excludedFiles?.[0]?.reason).toMatch(kind);
+  });
+
+  it('names the story kind in the reason', async () => {
+    const coverage = await computeCoverage(fsOf(treeWith('', { 'src/Button.stories.tsx': WIDGET })), config, ['src/Button.stories.tsx']);
+    expect(coverage.excludedFiles?.[0]?.reason).toContain('.stories.');
+  });
+
+  it('is checked when a screen imports the story', async () => {
+    const tree = treeWith("import { Widget } from './Button.stories';", { 'src/Button.stories.tsx': WIDGET });
+    const coverage = await computeCoverage(fsOf(tree), config, ['src/Button.stories.tsx']);
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a gap when a glob in a screen matches the story', async () => {
+    const tree = treeWith("const stories = import.meta.glob('./*.stories.tsx');", { 'src/Button.stories.tsx': WIDGET });
+    const coverage = await computeCoverage(fsOf(tree), config, ['src/Button.stories.tsx']);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/Button.stories.tsx', 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain('src/ClustersPage.tsx');
+  });
+
+  it('leaves a test helper that only a story imports excluded', async () => {
+    const helper = 'src/tests/fixtures/data.ts';
+    const tree = treeWith('', {
+      'src/Button.stories.tsx': "import { rows } from './tests/fixtures/data';\n",
+      [helper]: 'export const rows = [];\n',
+    });
+    const coverage = await computeCoverage(fsOf(tree), config, [helper]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect(coverage.gaps).toEqual([]);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([helper]);
+  });
+
+  it('is checked when a screen imports a file in a __mocks__ folder', async () => {
+    const mock = 'src/__mocks__/api.ts';
+    const tree = treeWith("import { api } from './__mocks__/api';", { [mock]: 'export const api = 1;\n' });
+    const coverage = await computeCoverage(fsOf(tree), config, [mock]);
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a UI file with a gap when a file outside the tests that no route reaches imports it', async () => {
+    const tree = treeWith('', {
+      'src/Orphan.tsx': "import { Widget } from './Button.stories';\nexport function Orphan() { return <Widget />; }\n",
+      'src/Button.stories.tsx': WIDGET,
+    });
+    const coverage = await computeCoverage(fsOf(tree), config, ['src/Button.stories.tsx']);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.unresolvedFiles).toEqual(['src/Button.stories.tsx']);
+    expect(coverage.gaps[0]?.reason).toContain('because src/Orphan.tsx imports it');
+  });
+});
+
 describe('the wider import graph', () => {
   const files: Record<string, string> = {
     'usabl.routes.json': SIDECAR,
