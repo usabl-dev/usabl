@@ -209,6 +209,32 @@ export function App() {
     expect((await entryFor('./pages/Page.js', { 'src/pages/Page.js': 'x' })).entry).toBe('src/pages/Page.js');
   });
 
+  it.each(['./pages/Page?x', './pages/Page#x', './pages/Page.tsx?raw'])(
+    'reads the entry import %s without its query or hash, as Vite does',
+    async (specifier) => {
+      expect((await entryFor(specifier, { 'src/pages/Page.tsx': 'x' })).entry).toBe('src/pages/Page.tsx');
+    },
+  );
+
+  it('reads a lazy entry import without its query or hash', async () => {
+    for (const specifier of ['./pages/Page?x', './pages/Page#x']) {
+      const router = `import { lazy } from 'react'
+import { Route, Routes } from 'react-router-dom'
+const Page = lazy(() => import('${specifier}'))
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/page" element={<Page />} />
+    </Routes>
+  )
+}
+`;
+      const draft = await inferInit(memoryFs({ 'src/App.tsx': router, 'src/pages/Page.tsx': 'x' }));
+      expect(draft.routes.routes[0]?.entryFile ?? null, specifier).toBe('src/pages/Page.tsx');
+    }
+  });
+
   it('refuses to pick when the ./Page.js form matches more than one file', async () => {
     const files = { 'src/pages/Page.js': 'x', 'src/pages/Page.ts': 'x' };
     const { entry, notes } = await entryFor('./pages/Page.js', files);
