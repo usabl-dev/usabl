@@ -98,12 +98,12 @@ const unrecognizedContinuationStep = (check: CheckCommand): string =>
  * guarded files are the only thing standing and wrong again when the work is resolving gaps.
  */
 const continuationSteps = (check: CheckCommand): NextSteps => ({
-  regression: `Next: fix each barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  regression: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
   notCovered: `Next: resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
   approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithRegression:
-    'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
+    'Next: fix each accessibility barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   approvalWithGaps:
     'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
 });

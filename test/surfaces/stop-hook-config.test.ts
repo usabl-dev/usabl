@@ -24,6 +24,7 @@ import {
   type StopHookRunnerPorts,
 } from '../../src/surfaces/stop-hook-runner.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -640,7 +641,7 @@ describe('Stop hook reads the config at the repository root, through the real po
   // The guard runs before the empty list blocks, and with no last commit the guard fails. That
   // failure fails open on its own, but an empty uiFileGlobs list still blocks, as it did before
   // the guard ran first.
-  it('still blocks an empty uiFileGlobs list in a repository with no commits', async () => {
+  it('still blocks an empty uiFileGlobs list in a repository with no commits', { timeout: REAL_PROCESS_BUDGET_MS }, async () => {
     await writeFile(join(repo, 'usabl.config.json'), JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2));
     const h = realGuardPorts(repo);
     expect(await runStopHookFromStdin(stopInput(false), h.ports)).toBe(0);

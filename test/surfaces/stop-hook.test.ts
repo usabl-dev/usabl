@@ -732,7 +732,7 @@ describe('evaluateStopDecision', () => {
 
       expect(lines[0]).toContain('continuation already active');
       expect(lines[1]).toBe(
-        'Next: fix each barrier usabl reported, then run usabl check before you tell the user this change is accessible.',
+        'Next: fix each accessibility barrier usabl reported, then run usabl check before you tell the user this change is accessible.',
       );
     });
 
@@ -779,7 +779,7 @@ describe('evaluateStopDecision', () => {
       }).split('\n');
 
       expect(lines[1]).toBe(
-        'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
+        'Next: fix each accessibility barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
       );
       expect(lines[2]).toBe('Guarded file changed: 1, named under "guarded files" in the untrusted text below');
       expect(lines).toContain('guarded files: .usabl-waivers.json');

@@ -170,6 +170,20 @@ async function main(argv: string[]): Promise<number> {
   const requested = counts(argv);
   const app = await createDisposableApp(source);
   let server: FixtureServer | null = null;
+  // A signal skips the finally below, so it stops the server and removes the clone first.
+  let cleaned: Promise<void> | null = null;
+  const cleanUp = (): Promise<void> =>
+    (cleaned ??= (async () => {
+      if (server !== null) {
+        await stopFixtureServer(server);
+      }
+      await app.dispose();
+    })());
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+    process.once(signal, () => {
+      void cleanUp().finally(() => process.exit(code));
+    });
+  }
   try {
     server = await startFixtureServer(app, '/');
     // The trusted branch: the demo as it ships, with its config pointed at this server.
@@ -195,10 +209,7 @@ async function main(argv: string[]): Promise<number> {
     }
     return 0;
   } finally {
-    if (server !== null) {
-      await stopFixtureServer(server);
-    }
-    await app.dispose();
+    await cleanUp();
   }
 }
 

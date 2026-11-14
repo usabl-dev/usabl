@@ -666,7 +666,7 @@ describe('the advice names the check that answers the next stop', { timeout: REA
       shape: REGRESSION,
       active: true,
       blocks: false,
-      step: (check) => `Next: fix each barrier usabl reported, then run ${check} before you tell the user`,
+      step: (check) => `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user`,
     },
     {
       name: 'an allow on a run that did not finish',
