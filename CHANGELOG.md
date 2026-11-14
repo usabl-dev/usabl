@@ -336,6 +336,81 @@
 
 ### Fixed
 
+- A trusted commit that is not in the repository is an error, never an absent file. In a shallow
+  clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
+  read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
+  that the ref names a commit before it reports a file as absent, and otherwise says it cannot
+  read the ref and how to fetch it. `usabl debt --trusted-ref <commit>` exited 0 and said no
+  accessibility debt is accepted; it now exits 4 and names the ref. `serve-build` said the config
+  file was missing; it now names the ref. No gate path gave a false green before, because a later
+  git call at the same ref failed. A trusted file is now read with `git cat-file blob`, which
+  reads git objects only. `git show` read `<ref>:<path>` as a path when a working tree file had
+  that exact name, so a committed file named `<commit>:usabl.config.json` made a trusted read
+  return the head commit's own text when that commit added or changed the file, and an empty
+  string otherwise. For the same reason the diff listing ends its revisions with `--`; a file
+  named `<ref>...HEAD` made the diff of a missing ref list no changed files. A path that is a
+  folder at the ref reads as it did before: the listing `git show` prints for it, with the
+  argument read as an object name only, so a file that becomes a folder still needs approval.
+  The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
+  refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
+  value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White
+  space includes non-ASCII spaces that git itself allows in a ref name, and control characters
+  include U+0080 to U+009F. git read `nosuch*` as a pathspec over HEAD and `^main` or `main..HEAD` as a negative
+  or range revision, so a trusted file that exists read as empty. It read `HEAD:pol` as a path, so
+  a file could read as absent, and `usabl debt ledger --trusted-ref HEAD:pol` said no commit had
+  ever held the floor; it now exits 4 and names the value. In the git reader, `git cat-file`,
+  `git rev-parse`, `git diff`, and `git ls-tree` end their options before the ref, so a ref such as
+  `--output=<file>` is never read as an option; on `git diff` it wrote the listing to a file and
+  read as no changed files. `serve-build --trusted-ref` refuses a value that starts with one
+  dash, as the main CLI does. usabl now needs Git 2.30 or later, the first release where
+  every git command usabl runs accepts `--end-of-options`.
+- A change to a test file that a screen can load is now checked, or is a gap, where it passed as
+  nothing to check. A test file is a file under `uiFileGlobs` named like a test (`*.test.*`,
+  `*.spec.*`) or in a `test`, `tests`, or `__tests__` folder. A file named like a test was dropped
+  before any check, even when a screen imported it or a surface listed it, and a file in a test
+  folder was excluded whenever no route closure reached it, which with router fallback routes was
+  always. Now a test file is a UI file when a surface lists it, a route closure reaches it, or a
+  file outside the tests imports it, directly or through other files. For this usabl builds a wider
+  import graph, only when a changed test file needs it, that starts from the files the config names
+  as app code: the files under `uiFileGlobs` that are not test files, the route entry files, the
+  router file, the other files `wideBlastGlobs` match, and the files of every surface. When such a test
+  file is reached only through files no route closure reaches, such as stories or setup files, the
+  gap reason names them. A test file is an `unresolved` gap when a load usabl cannot follow may
+  reach it: an unresolved import that names it, an `import.meta.glob` pattern that matches it, an
+  `import()` or `require()` whose path is built at run time and may point to it, a webpack
+  `require.context` of a folder that holds it, a bare import a tsconfig or jsconfig `baseUrl`
+  resolves to it, or a bare import no package explains (a `#` import, or a name that is not a
+  Node.js built-in as a whole and whose package no package.json declares) that names it. usabl
+  reads these loads narrowly only where it can read the text exactly: a glob's brace alternatives
+  are expanded and resolved one by one, a glob that starts with `/`, or with more than one `/`, is
+  read under every folder, because usabl cannot know the folder Vite runs from (so
+  `/tests/**/*.tsx` covers `src/tests/a.tsx`, and `/src/pages/**/*.tsx` does not cover
+  `src/tests/helper.ts`), a pattern with syntax usabl does not evaluate covers only the folder
+  above that syntax, a glob whose options may set `base` (any options other than plain values of
+  the other known keys, or options text longer than 1000 characters) may load any file, a load
+  inside a comment is skipped, a string with a backslash escape is read as the
+  string it is, and a Vite alias key written without quotes is read. A Vite root above the
+  repository root is not covered. The gap reason names the importer and says to narrow the load
+  there, or to list the file in a surface. The import graph also follows a name like
+  `./Widget.spec` to `Widget.spec.tsx`. A test file in a workspace package the app depends on
+  follows the same rule, with the sources of every workspace package the app depends on as starts.
+  A bare import of a path inside a workspace package is followed to the file it names when the
+  package has no `exports` field. With one, it is followed to one file only when `exports` has a
+  key that equals the subpath, such as `./styles.css`, whose value is a string that starts with
+  `./`, holds no `*`, and names a file inside the package. When any target under the key the
+  subpath matches leaves the package folder, as a plain string or inside a conditions object or an
+  array, it may load any file. Otherwise, or when it names no file, it may load any file of the
+  package, and one that leaves the package folder may load any file. A
+  change to a test file that
+  nothing usabl reads
+  imports, and that no such load can reach, stays nothing to check, and is now listed as excluded
+  with a reason for a file named like a test too. The pull request comment and the Stop hook now
+  list excluded files, as `usabl check` does, and an idle run that excluded files says so on every
+  surface in place of "No UI files changed". `usabl baseline` and `usabl docs --all` place test
+  files by the same rule, so `usabl baseline` refuses without `--partial` when a load such as
+  `require(name)`, `import.meta.glob(variable)`, or a fixture import in a story may reach a test
+  file. The ways out are `--partial`, a narrower load, or a surface that lists the file.
+
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
   The line now counts changed paths only and adds "the requirements could not be loaded" when the
@@ -453,9 +528,33 @@
   refuses a `guardedPaths` entry with white space at either end, which named no file and guarded
   nothing, and shows it in quotes. It also refuses a `guardedPaths` entry that starts with `/`
   (and shows the same path without it), one with a `..` that leaves the root, one with a `..`
-  after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and says how to
-  write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before any wildcard still load. Gate
-  effect: a config with such an entry no longer loads.
+  after a wildcard or a brace group, and one with a `.` or `..` segment inside a brace
+  alternative, and says how to write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before
+  any wildcard still load. Gate effect: a config with such an entry no longer loads.
+
+- Config load reads a `guardedPaths` segment as a pattern with the guard's own test. It counted
+  only `*` and `{`, while the guard also counts `}`, so `a}/../x.json` loaded and the guard read it
+  as the whole tree. Config load also refuses an entry with a brace alternative that leaves the
+  path empty, such as `{,}` or `{,policy}`, which the guard reads as the whole tree. The guard now
+  names such an entry in `usabl enforce policy` and `usabl doctor`; before, it guarded the whole
+  tree and said nothing. Gate effect: a config with such an entry no longer loads, and the policy
+  check names the entry where it was silent.
+
+- An entry in `guardedPaths` can name at most 256 paths through its brace groups. The local guard
+  lists the working tree once for each expansion, so an entry with 16 brace groups (65,536
+  expansions) took about 31 seconds and a larger one could make a Stop hook time out or crash.
+  Config load refuses an entry past the cap and says so. The guard reads such an entry from an
+  older or trusted ref's config as the literal folder above its first brace group, or as the whole
+  tree when an expansion could climb out of that folder or there is none, and names it. Both count
+  the expansions before they build any, so an entry of any size is read at once. Gate effect: a
+  config with such an entry no longer loads; at a trusted ref it guards more, never less.
+
+- The local guard lists the dot-named files and dot-named folders under a literal entry, such as
+  `src/gate`, and under an entry it reads wide. It listed the folder with `fs.glob`, which skips
+  them under `**`, so a new untracked file such as `src/gate/.x` or `policy/.x` was not reported,
+  while git listings, and so CI, held it once committed. That dot listing leaves out `.git/`,
+  which git never tracks. Gate effect: such a file is `approval_required` where the local guard
+  passed it.
 
 - The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
   expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed
@@ -1543,6 +1642,18 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- `usabl enforce policy` counts an approval only from a code owner whose permission on the
+  repository GitHub reports as `admin` or `write`. It reads the permission once for each
+  approving code owner. On a public repository anyone can submit an approving review, so a login
+  in `CODEOWNERS` that lost its access, or a name someone else registered, passed the policy
+  check. An approval from a user with `read` or `none` does not count. A read that fails never
+  counts as write. For a 404 the output says GitHub has no readable user by that login, for a 401
+  or 403 it says the job's token needs read access to repository metadata, and otherwise it says
+  the permission could not be read. A login with an underscore, as a managed user login has, is
+  read. The output names each reviewer whose approval did not count and says why. A later request
+  for changes still retracts an approval. Gate effect: the policy check refuses where such an
+  approval passed it.
 
 - Generated hooks, skills, the Cursor script, command, and rule, and the brief step run
   `npm exec --no -- usabl` in place of `npx usabl`. With usabl not installed, `npx usabl`

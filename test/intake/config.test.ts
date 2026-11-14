@@ -12,6 +12,7 @@ import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../..
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
+import { readGuardedEntry } from '../../src/trust/guard.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -618,6 +619,99 @@ describe('parseUsablConfig glob syntax', () => {
       }
       expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
       expect(message, entry).toMatch(reason);
+    }
+  });
+
+  it('refuses a .. after a segment with a stray }, which the guard counts as a pattern character', () => {
+    // The guard reads a .. after a pattern segment as the whole tree. It counts } as a pattern
+    // character, so config load counts it too, and a new config never holds such an entry.
+    for (const entry of ['a}/../x.json', 'policy/x}/../rule1.json']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toMatch(/\.\. after a wildcard/);
+    }
+  });
+
+  it('names a brace group, not only a wildcard, when a .. follows one', () => {
+    // These entries have a brace group and no wildcard, so a message that names only a wildcard
+    // points at something the entry does not have.
+    for (const entry of ['{a,b}/../x.json', '{policy/sub,b}/../rule1.json']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toContain('has a .. after a wildcard or a brace group');
+    }
+  });
+
+  describe('a guardedPaths entry with many brace expansions', () => {
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(entry: string): string {
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    it('loads an entry at the cap of 256 expansions', () => {
+      for (const entry of [`policy/{${alternatives(256)}}.json`, 'policy/' + '{a,b}'.repeat(8) + '.json']) {
+        expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).not.toThrow();
+      }
+    });
+
+    it('refuses an entry one past the cap and says so', () => {
+      const message = refusal(`policy/{${alternatives(257)}}.json`);
+      expect(message).toContain('guardedPaths entry "policy/{f0,f1');
+      expect(message).toContain('more than 256');
+    });
+
+    it('refuses an entry far past the cap without building its expansions', () => {
+      for (const glob of ['policy/' + '{a,b}'.repeat(64) + '.json', 'policy/' + '{a,b}'.repeat(64) + '{c,{d,e}}']) {
+        expect(refusal(glob), glob).toContain('guardedPaths');
+      }
+      expect(refusal('policy/' + '{a,b}'.repeat(64) + '.json')).toContain('more than 256');
+    });
+  });
+
+  it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
+    // The guard reads such an expansion as the whole repository, which the entry does not say.
+    for (const entry of ['{,}', '.{,}', '{,policy}']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toContain('leaves the path empty');
+    }
+    expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/{rules.json,}'] }))).not.toThrow();
+  });
+
+  it('refuses every guardedPaths entry the guard reads wide', () => {
+    const readWide = [
+      '{,}',
+      '/src/gate/',
+      '../outside',
+      'policy/*/../x.json',
+      'policy/rule{1..3}.json',
+      'a}/../x.json',
+      'policy/' + '{a,b}'.repeat(9),
+    ];
+    for (const entry of readWide) {
+      expect(readGuardedEntry(entry).some((reading) => reading.readWide !== null), entry).toBe(true);
+      expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).toThrow(/guardedPaths/);
     }
   });
 

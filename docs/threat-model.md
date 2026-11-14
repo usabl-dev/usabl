@@ -31,11 +31,33 @@ re-baseline to green.
   requirements YAML from `--trusted-ref`, not working tree bytes.
 - The requirements root is also read from trusted-ref `usabl.config.json`, so a
   PR cannot rewrite the requirements path to bypass baseline intake providers.
+- A trusted ref that is not in the repository, such as a base commit a shallow clone lacks, is an
+  error, never an absent file, so missing policy is never read as no policy. The git reader reads
+  a trusted file with `git cat-file blob`, which reads git objects only. `git show` read
+  `<ref>:<path>` as a path when a working tree file had that exact name, so a file a pull request
+  commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
+  same reason. A path that is a folder at the ref is read with `git show <ref>:<path> --`, which
+  also reads the argument as an object name only. The git reader, the history reader, and the ledger reader accept none of these
+  values as a ref, and refuse them before any git call: an empty value, a value that starts with
+  `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
+  character. White space includes non-ASCII spaces that git itself allows in a ref name, and
+  control characters include U+0080 to U+009F. git would read such a value as an option, a
+  negative or range revision, a path inside a commit, or a pathspec, and it could come back as an
+  empty or absent file. The git reader also passes each ref after `--end-of-options`.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
+  An approval counts only when GitHub reports the approving code owner's permission on the
+  repository as `admin` or `write`, read once per login from the collaborator permission
+  endpoint. On a public repository anyone can submit an approving review, so before, a CODEOWNERS
+  login that lost its access, or a name someone else registered, passed the check. An approval
+  from a user with `read` or `none` does not count, and a failed read never counts as write; the
+  output names the reviewer and says why. The review's `author_association` is not used, because
+  it hides private organization membership, so a code owner with write access can read as
+  `CONTRIBUTOR`. Residual: the permission is the one GitHub reports when the check runs. When the
+  job's token cannot read it, every approval is refused until the token can, which fails closed.
   Owners come from the last rule that matches each dirty guarded path. That path fails closed
   when no rule matches it, when its last rule names no owner, or when its last rule names an org
   team or an email, because usabl cannot resolve team membership or match an email to a login. A
@@ -394,12 +416,23 @@ the tool errored, not because the page is accessible.
   refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
   `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses a `guardedPaths` entry
   with white space at either end, one that starts with `/`, one with a `..` that leaves the root
-  or comes after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and
-  says how to write it. The guard expands a brace group first and reads each expansion on its own,
-  so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what an entry says and
-  never guards less because it cannot read one. An expansion in a form the matcher cannot evaluate
-  guards the literal folder above the first segment it cannot evaluate; one that starts with `/`,
-  has a `..` that leaves the root, or has a `..` anywhere after a wildcard guards the whole tree.
+  or comes after a wildcard or a brace group, one with a `.` or `..` segment inside a brace
+  alternative, one with a brace alternative that leaves the path empty, and one with more than 256
+  brace expansions, and says how to write it. It reads a segment as a pattern with the guard's own
+  test, so `a}/../x.json` is refused too. The guard expands a brace group first and reads each
+  expansion on its own, so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what
+  an entry says and never guards less because it cannot read one. An expansion in a form the
+  matcher cannot evaluate guards the literal folder above the first segment it cannot evaluate; one
+  that starts with `/`, is empty, has a `..` that leaves the root, or has a `..` anywhere after a
+  wildcard guards the whole tree. An entry with more than 256 brace expansions is never expanded:
+  it guards the literal folder above its first brace group, or the whole tree when an expansion
+  could climb out of that folder or there is none. Before, each expansion was read on its own, so
+  an entry with 16 brace groups took the local guard about 31 seconds, and a larger one could make
+  a Stop hook time out or crash, which an assistant may treat as an allow. A literal entry and a
+  wide reading guard the dot-named files and dot-named folders under their folder on the working
+  tree too, as the git listings do; before, the local guard listed the folder with `fs.glob`,
+  which skips them under `**`, so a new untracked dot file there, such as `src/gate/.x`, was not
+  reported.
   This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
   ref's config. A change there needs a code owner's approval, which a review can give, so the pull
   request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each

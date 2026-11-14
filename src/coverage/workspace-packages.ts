@@ -361,13 +361,49 @@ export async function workspacePackageDirs(fs: FsGlob): Promise<string[]> {
   }
 }
 
+/**
+ * The package names the app can import by a bare name, sorted: every name declared in the
+ * dependency fields of a package.json on the climb from each place the config points into (the
+ * router file, the folder of each uiFileGlobs pattern, and each surface file) to the repository
+ * root, and the name and dependencies of every workspace package the root lists. A package.json
+ * that is missing or cannot be read adds none, so an import of a package it would declare is not
+ * explained by it.
+ */
+export async function declaredPackageNames(fs: FsGlob, config: UsablConfig): Promise<string[]> {
+  const anchors = [
+    path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
+    ...config.uiFileGlobs.map((glob) => staticPrefix(glob.replace(/^\/+/u, ''))),
+    ...config.surfaces.flatMap((surface) => surface.files.map((file) => path.dirname(file.replace(/^\/+/u, '')))),
+  ];
+  const dirs = new Set<string>(['']);
+  for (const anchor of anchors) {
+    const inside = insideRepository(anchor === '' ? '.' : anchor);
+    if (inside === null) continue;
+    let dir = inside === '.' ? '' : inside.replace(/\/+$/u, '');
+    while (dir !== '') {
+      dirs.add(dir);
+      const parent = path.dirname(dir);
+      dir = parent === '.' ? '' : parent;
+    }
+  }
+  for (const dir of await workspacePackageDirs(fs)) dirs.add(dir);
+  const names = new Set<string>();
+  for (const dir of [...dirs].sort()) {
+    const manifest = await readManifest((file) => fs.readFile(file), dir);
+    if (manifest.name !== null) names.add(manifest.name);
+    for (const dependency of manifest.dependencies ?? []) names.add(dependency);
+  }
+  return [...names].sort();
+}
+
 /** Reads a file at the trusted ref, or null when that ref has no such file. */
 export type TrustedRead = (file: string) => Promise<string | null>;
 
 /**
  * A not-covered gap for each changed file that sits in a workspace package the configured app
  * depends on, directly or through another workspace package. The files given are the ones the
- * planner did not already count as UI: not tests, and outside uiFileGlobs. A repository with no
+ * planner did not already count as UI, outside uiFileGlobs. The planner places a test file among
+ * them by the test file rule before it keeps its gap (see test-files.ts). A repository with no
  * workspaces, a file outside every workspace package, a file in a package the app does not depend
  * on, and a file in the app's own package give no gap. When the workspace root cannot be read,
  * every file given is a gap that names the file, because any of them may be in such a package.
@@ -382,8 +418,37 @@ export async function workspaceDependencyGaps(
   files: readonly string[],
   trusted?: TrustedRead,
 ): Promise<CoverageGap[]> {
+  return (await workspaceDependencies(fs, config, files, trusted)).files.map((entry) => entry.gap);
+}
+
+/** A changed file in a workspace package the app depends on: its gap, and the package folder. */
+export interface WorkspaceDependencyFile {
+  gap: CoverageGap;
+  // The folder of the package the file sits in. Null when the workspace root could not be read, so
+  // the package is not known.
+  packageDir: string | null;
+}
+
+export interface WorkspaceDependencies {
+  files: WorkspaceDependencyFile[];
+  // The folders of every workspace package the app depends on, other than the app's own, sorted.
+  dependedDirs: string[];
+}
+
+/**
+ * The same as workspaceDependencyGaps, with the folder of the package each file sits in and the
+ * folders of every package the app depends on, so the planner can place a test file in one of them
+ * by the test file rule.
+ */
+export async function workspaceDependencies(
+  fs: FsGlob,
+  config: UsablConfig,
+  files: readonly string[],
+  trusted?: TrustedRead,
+): Promise<WorkspaceDependencies> {
+  const none: WorkspaceDependencies = { files: [], dependedDirs: [] };
   const candidates = [...new Set(files.filter((file) => !isInstalledPath(file) && !isDocumentation(file)))].sort();
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return none;
   const patterns: string[] = [];
   for (const [read, refLabel] of [
     [(file: string) => fs.readFile(file), ''],
@@ -393,27 +458,133 @@ export async function workspaceDependencyGaps(
       patterns.push(...(await workspacePatterns(read)));
     } catch (err) {
       if (!(err instanceof UnreadableWorkspaceRoot)) throw err;
-      return candidates.map((file) => unreadableRootGap(file, err, refLabel));
+      return { files: candidates.map((file) => ({ gap: unreadableRootGap(file, err, refLabel), packageDir: null })), dependedDirs: [] };
     }
   }
   const dirs = await workspaceDirs(fs, [...new Set(patterns)]);
-  if (dirs.length === 0) return [];
+  if (dirs.length === 0) return none;
 
   const workspace: PackageManifest[] = [];
   for (const dir of dirs) workspace.push(await readManifestBoth(fs, trusted, dir));
   const root = await readManifestBoth(fs, trusted, '');
   const all = [root, ...workspace];
   const apps = appPackages(config, all);
-  if (apps.length === 0) return [];
+  if (apps.length === 0) return none;
   const appDirs = new Set(apps.map((app) => app.dir));
   const changedOwners = new Set(candidates.map((file) => ownerOf(file, workspace)?.dir).filter((dir): dir is string => dir !== undefined));
   const reached = await dependencyClosure(fs, apps, workspace, changedOwners);
 
-  const gaps: CoverageGap[] = [];
+  const found: WorkspaceDependencyFile[] = [];
   for (const file of candidates) {
     const owner = ownerOf(file, workspace);
     if (owner === null || appDirs.has(owner.dir) || !reached.has(owner.dir)) continue;
-    gaps.push(gapFor(file, owner, apps));
+    found.push({ gap: gapFor(file, owner, apps), packageDir: owner.dir });
   }
-  return gaps;
+  return { files: found, dependedDirs: [...reached.keys()].filter((dir) => !appDirs.has(dir)).sort() };
+}
+
+/**
+ * A workspace package: its name, its folder, whether its package.json has an exports field, and the
+ * entries of that field usabl reads exactly.
+ */
+export interface WorkspacePackage {
+  name: string;
+  dir: string;
+  // Node.js and bundlers resolve a subpath only through `exports` once it is present, so the folder
+  // layout then says nothing about which file a subpath loads.
+  hasExports: boolean;
+  // The entries of an `exports` object that usabl reads exactly, by key, such as
+  // { './styles.css': './styles.css' }: a key with no * whose value is a string that starts with
+  // ./ and holds no *. Node.js picks an exact key before any pattern key, so such a subpath loads
+  // that one path. Empty when exports is not an object or holds no such entry.
+  exactExports: Readonly<Record<string, string>>;
+  // Every subpath key of an `exports` object (one that starts with ./), sorted.
+  exportKeys: readonly string[];
+  // The subpath keys under which some string target, at any depth of a conditions object or an
+  // array, leaves the package folder once normalized, such as ./../other/x. A bundler may follow
+  // such a target into another package, so a subpath that matches one of these keys may load any
+  // file. Sorted.
+  leavingExportKeys: readonly string[];
+}
+
+interface ExportsReading {
+  hasExports: boolean;
+  exactExports: Record<string, string>;
+  exportKeys: string[];
+  leavingExportKeys: string[];
+}
+
+// Whether a string target of an exports entry leaves the package folder once normalized.
+function targetLeavesPackage(target: string): boolean {
+  const normalized = path.normalize(target);
+  return normalized === '..' || normalized.startsWith('../') || normalized.startsWith('/');
+}
+
+// Whether any string under an exports value, at any depth, leaves the package folder. The walk uses
+// its own list, so a deeply nested value cannot overflow the call stack.
+function valueLeavesPackage(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === 'string') {
+      if (targetLeavesPackage(current)) return true;
+    } else if (typeof current === 'object' && current !== null) {
+      pending.push(...Object.values(current as Record<string, unknown>));
+    }
+  }
+  return false;
+}
+
+// Whether a package.json has an exports field, and the entries of it usabl reads exactly. One that
+// cannot be read or parsed counts as having one with no such entry, so a subpath into it is never
+// followed by path.
+async function readExportsField(fs: FsGlob, dir: string): Promise<ExportsReading> {
+  const unread: ExportsReading = { hasExports: true, exactExports: {}, exportKeys: [], leavingExportKeys: [] };
+  const text = await fs.readFile(dir === '' ? 'package.json' : `${dir}/package.json`);
+  if (text === null) return unread;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return unread;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return unread;
+  if (!('exports' in parsed)) return { ...unread, hasExports: false };
+  const exports: unknown = (parsed as Record<string, unknown>)['exports'];
+  if (typeof exports !== 'object' || exports === null || Array.isArray(exports)) return unread;
+  const reading: ExportsReading = { ...unread, exactExports: {} };
+  for (const [key, value] of Object.entries(exports as Record<string, unknown>)) {
+    if (!key.startsWith('./')) continue;
+    reading.exportKeys.push(key);
+    if (valueLeavesPackage(value)) reading.leavingExportKeys.push(key);
+    if (key.includes('*') || typeof value !== 'string' || !value.startsWith('./') || value.includes('*')) continue;
+    reading.exactExports[key] = value;
+  }
+  reading.exportKeys.sort();
+  reading.leavingExportKeys.sort();
+  return reading;
+}
+
+/**
+ * The named workspace packages the repository root lists, sorted by name. Empty when the root lists
+ * none or cannot be read. The import graph uses them to follow a bare import into a package folder.
+ */
+export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]> {
+  const found: WorkspacePackage[] = [];
+  for (const dir of await workspacePackageDirs(fs)) {
+    const { name } = await readManifest((file) => fs.readFile(file), dir);
+    if (name !== null) found.push({ name, dir, ...(await readExportsField(fs, dir)) });
+  }
+  return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
+}
+
+/**
+ * The source files of one workspace package, sorted: every file with a source extension under its
+ * folder, outside node_modules.
+ */
+export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[]> {
+  const prefix = dir === '' ? '' : `${dir}/`;
+  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+  const files = found.map(insideRepository).filter((file): file is string => file !== null && !isInstalledPath(file));
+  return [...new Set(files)].sort();
 }

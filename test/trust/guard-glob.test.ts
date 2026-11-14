@@ -22,7 +22,7 @@ import { makeGitReader } from '../../src/deps/git.js';
 import { computePolicyHash } from '../../src/evidence/receipt.js';
 import { run } from '../../src/run.js';
 import { enforcePolicy } from '../../src/surfaces/policy-enforce.js';
-import { buildGuardedSet, expandConfigGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
+import { buildGuardedSet, checkGuard, expandConfigGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -94,6 +94,7 @@ async function policyCheckAt(root: string): Promise<{ exitCode: number; message:
     pr: { authorLogin: 'author', headSha },
     git: makeGitReader({ cwd: root }),
     listReviews: async () => [],
+    readPermission: async () => ({ permission: 'write' }),
   });
 }
 
@@ -471,6 +472,7 @@ async function policyCheckWith(
     pr: { authorLogin: 'author', headSha },
     git: makeGitReader({ cwd: root }),
     listReviews: async () => reviewers.map((userLogin) => ({ userLogin, state: 'APPROVED', commitId: headSha })),
+    readPermission: async () => ({ permission: 'write' }),
   });
 }
 
@@ -603,6 +605,173 @@ describe('a guardedPaths entry that can name a path outside its folder', REAL_GI
       expect(result.dirtyGuardedPaths).toContain(changed);
     });
   }
+});
+
+/**
+ * `{,}` expands to empty paths, which guard the whole tree. The entry does not say so, so the
+ * policy check names it as read wide.
+ */
+describe('a guardedPaths entry with an empty brace expansion', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const config = configWith(['{,}']);
+
+  it('reads {,} as the whole repository in CI and names it', async () => {
+    root = await repoWith(config, files);
+    await git(root, ['checkout', '-b', 'feature']);
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    await git(root, ['commit', '-am', 'change the app']);
+    const refused = await policyCheckAt(root);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.message).toContain('src/App.tsx');
+    expect(refused.message).toContain('guardedPaths entry "{,}" as the whole repository');
+  });
+
+  it('reads {,} as the whole repository in the local guard', async () => {
+    root = await repoWith(config, files);
+    await write(root, 'src/App.tsx', 'export const changed = 1\n');
+    const result = await run(realDeps(root), config);
+    expect(result.verdict).toBe('approval_required');
+    expect(result.dirtyGuardedPaths).toEqual(['src/App.tsx']);
+  });
+});
+
+/**
+ * Past 256 brace expansions the guard reads an entry as the folder above its first brace group,
+ * so a trusted ref that already holds such an entry cannot make the guard slow, and still guards
+ * every path the entry names. The policy check names the entry.
+ */
+describe('a guardedPaths entry past the brace expansion cap', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const alternatives = Array.from({ length: 257 }, (_, i) => `rule${i}`).join(',');
+  const cases: Array<[string, string]> = [
+    ['one past the cap', `policy/{${alternatives}}.json`],
+    ['far past the cap', 'policy/' + '{a,b}'.repeat(64) + '.json'],
+  ];
+
+  for (const [label, entry] of cases) {
+    const config = configWith([entry]);
+
+    it(`reads an entry ${label} as its folder in CI, names it, and lets an owner clear it`, async () => {
+      root = await repoWith(config, files);
+      await git(root, ['checkout', '-b', 'feature']);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      await git(root, ['commit', '-am', 'change a rule']);
+      const refused = await policyCheckAt(root);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.message).toContain('policy/rule1.json');
+      expect(refused.message).toContain('as the folder policy/');
+      expect(refused.message).toContain('more than 256');
+      const approved = await policyCheckWith(root, ['owner']);
+      expect(approved.exitCode).toBe(0);
+      expect(approved.message).toContain('more than 256');
+    });
+
+    it(`reads an entry ${label} as its folder in the local guard`, async () => {
+      root = await repoWith(config, files);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      const result = await run(realDeps(root), config);
+      expect(result.verdict).toBe('approval_required');
+      expect(result.dirtyGuardedPaths).toEqual(['policy/rule1.json']);
+    });
+  }
+});
+
+/**
+ * A wide reading guards every file under its folder, dot-named files and folders too, as the git
+ * listings do. Node's fs.glob skips a dot name under `**`, so the local guard also lists the dot
+ * names. Otherwise a new untracked dot file under a wide entry would not be reported.
+ */
+describe('a new dot file under an entry the guard reads wide, in the local guard', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'other/keep.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+  const underPolicy = ['policy/.x', 'policy/.github/x.json', 'policy/.a/.b/c.json', 'policy/n/.c/d.json'];
+  const outsidePolicy = ['other/.y', '.z', '.cfg/x.json'];
+
+  async function divergedWith(entry: string): Promise<string[]> {
+    const config = configWith([entry]);
+    root = await repoWith(config, files);
+    for (const path of [...underPolicy, ...outsidePolicy]) {
+      await write(root, path, '{}\n');
+    }
+    return checkGuard(realDeps(root), config);
+  }
+
+  const folderCases: Array<[string, string]> = [
+    ['past the cap', `policy/{${Array.from({ length: 257 }, (_, i) => `f${i}`).join(',')}}.json`],
+    ['with a brace range', 'policy/rule{1..3}.json'],
+  ];
+  for (const [label, entry] of folderCases) {
+    it(`reports new dot files under the folder of an entry ${label}, and nothing outside it`, async () => {
+      expect(await divergedWith(entry)).toEqual([...underPolicy].sort());
+    });
+  }
+
+  const wholeTreeCases: Array<[string, string]> = [
+    ['past the cap', '{a,b}'.repeat(9)],
+    ['with an empty brace expansion', '{,}'],
+    ['with a .. after a wildcard', 'policy/*/../rule1.json'],
+  ];
+  for (const [label, entry] of wholeTreeCases) {
+    it(`reports new dot files at the root and in dot folders for an entry ${label}, and nothing in .git`, async () => {
+      expect(await divergedWith(entry)).toEqual([...underPolicy, ...outsidePolicy].sort());
+    });
+  }
+});
+
+/**
+ * A literal folder entry guards every file under it, dot-named files and folders too, as the git
+ * listings do. fs.glob skips a dot name under `**`, so the local guard also lists the dot names
+ * under the folder, or a new untracked `src/gate/.x` would not be reported.
+ */
+describe('a new dot file under a literal folder entry, in the local guard', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('reports new dot files under the folder, a modified tracked dot file once, and nothing outside', async () => {
+    const config = configWith(['src/gate', 'src/run.ts']);
+    root = await repoWith(config, {
+      'src/gate/index.ts': 'export {}\n',
+      'src/gate/.tracked': 'one\n',
+      'src/run.ts': 'export {}\n',
+      'src/App.tsx': 'export {}\n',
+      'other/keep.json': '{}\n',
+    });
+    const underGate = ['src/gate/.x', 'src/gate/.d/y.ts', 'src/gate/.d/.e/z.ts', 'src/gate/n/.f/w.ts'];
+    const outside = ['src/.y', 'src/gateway/.z', 'src/run.ts.d/.v', '.w', 'other/.u'];
+    for (const path of [...underGate, ...outside]) {
+      await write(root, path, 'new\n');
+    }
+    await write(root, 'src/gate/.tracked', 'two\n');
+    await write(root, 'src/run.ts', 'export const changed = 1\n');
+    const diverged = await checkGuard(realDeps(root), config);
+    expect(diverged).toEqual([...underGate, 'src/gate/.tracked', 'src/run.ts'].sort());
+  });
+
+  it('reports nothing for a clean tree', async () => {
+    const config = configWith(['src/gate', 'src/run.ts']);
+    root = await repoWith(config, { 'src/gate/.tracked': 'one\n', 'src/run.ts': 'export {}\n' });
+    expect(await checkGuard(realDeps(root), config)).toEqual([]);
+  });
 });
 
 /**

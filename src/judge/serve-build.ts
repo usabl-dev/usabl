@@ -251,6 +251,11 @@ export function parseServeBuildArgs(
     if (!takesValue) {
       return { ok: false, message: `serve-build does not know ${token ?? ''}` };
     }
+    // A ref that starts with a dash reads as an option to git, so it is refused the way the main
+    // CLI refuses it, with the same words.
+    if (token === '--trusted-ref' && (value === undefined || value.startsWith('-'))) {
+      return { ok: false, message: '--trusted-ref requires a value, such as --trusted-ref origin/main' };
+    }
     if (value === undefined || value.startsWith('--')) {
       return { ok: false, message: `serve-build ${token === '--dir' ? '--dir' : token} needs a value` };
     }

@@ -12,6 +12,7 @@
 import type { Finding, Result } from '../contracts/index.js';
 import { boundField, type BoundedGroup } from '../output/bounded-text.js';
 import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
+import { FULL_LIST_NOTE, listFileNotes } from '../output/file-notes.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
 import { NOTES_HEADING, screenNotes } from '../output/notes.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
@@ -88,6 +89,46 @@ export function notePieces(result: Result): string[] {
     (note) =>
       `${NOTES_HEADING}: ${boundField(note.screenId, 'gapRef')}: ${boundField(note.ref, 'gapRef')}: ` +
       boundField(note.reason, 'gapReason'),
+  );
+}
+
+/** The label of each framed piece that names an excluded file. */
+export const EXCLUDED_FILE_LABEL = 'excluded, not checked';
+
+/**
+ * The changed files the planner left out on purpose, as framed pieces, in the form the terminal
+ * prints: files that share a reason are grouped, each file is one piece, the reason one piece after
+ * them, and at most twenty files are named, with a count of the rest. An excluded file is not a gap
+ * and never changes the verdict, so callers pass these as the very last tail pieces. A list that is
+ * not a list gives no pieces.
+ */
+export function excludedFilePieces(result: Result): string[] {
+  const { groups, hidden } = listFileNotes(result.coverage?.excludedFiles);
+  const pieces: string[] = [];
+  for (const group of groups) {
+    pieces.push(...group.refs.map((ref) => `${EXCLUDED_FILE_LABEL}: ${boundField(ref, 'gapRef')}`));
+    pieces.push(`why: ${boundField(group.reason, 'gapReason')}`);
+  }
+  if (hidden > 0) {
+    pieces.push(`${wholeNumberText(hidden)} more excluded files not shown. ${FULL_LIST_NOTE}`);
+  }
+  return pieces;
+}
+
+/**
+ * The sentence an idle run that excluded files adds to its line, so the run does not read as
+ * plain nothing to check. Null when nothing was excluded.
+ */
+export function leftOutLine(result: Result): string | null {
+  const { count } = listFileNotes(result.coverage?.excludedFiles);
+  if (count === 0) {
+    return null;
+  }
+  const files = count === 1 ? 'file' : 'files';
+  const they = count === 1 ? 'it is' : 'they are';
+  return (
+    `usabl left out ${wholeNumberText(count)} changed ${files} on purpose; ${they} listed below with why. ` +
+    'If a screen renders one, this run did not check it.'
   );
 }
 

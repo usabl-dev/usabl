@@ -134,9 +134,18 @@ export async function runDebt(
   baseRef: string,
   now: string,
 ): Promise<DebtCommandOutcome> {
+  let text: string | null;
+  try {
+    text = await readFloor();
+  } catch (error) {
+    // The file was never read, so its content is not the problem. The reason names the cause,
+    // such as a trusted ref that is not in the repository, and the step that clears it.
+    const reason = error instanceof Error ? error.message : String(error);
+    const message = `usabl debt: .usabl-evidence.json could not be read, so there is no accepted debt to report. ${scrubString(reason)}`;
+    return { exitCode: 4, text: message, json: JSON.stringify({ error: message }, null, 2) };
+  }
   let floor: EvidenceFloor;
   try {
-    const text = await readFloor();
     floor = text === null ? EMPTY_FLOOR : parseEvidenceFloor(JSON.parse(text));
   } catch {
     const message = 'usabl debt: .usabl-evidence.json could not be read, so there is no accepted debt to report. Fix the file, or run usabl baseline to write it again.';

@@ -17,6 +17,7 @@ import { neutralize } from '../primitives/neutralize.js';
 import { isJudgeDisclosure, judgeLine } from '../judge/disclosure.js';
 import { boundField, type TextCap } from '../output/bounded-text.js';
 import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
+import { listFileNotes } from '../output/file-notes.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier, UNRECOGNIZED_GAP_STATE } from '../output/disclosure.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
@@ -264,10 +265,18 @@ function projectHeadline(verdict: Verdict): string {
 // and "run was not verified" would read as a run that was checked and failed. A null verdict
 // with any other exit code can only be composed outside run(); it reads as no verdict with the
 // reason, and never as idle, the same way the Stop hook reads it.
-function renderNoVerdict(result: Result): string[] {
+//
+// An idle run that excluded files is not plain nothing to check: the changed files it left out on
+// purpose are listed, with a sentence that says so, so a reviewer sees what was skipped.
+function renderNoVerdict(result: Result, limit: number): string {
   const line = describeVerdict(result);
   if (result.exitCode === 0 && result.coverage.nothingToCheck) {
-    return [COMMENT_MARKER, `## usabl report: ${formatVerdictWord(line)}`, '', line.meaning];
+    const idle = [COMMENT_MARKER, `## usabl report: ${formatVerdictWord(line)}`, '', line.meaning];
+    const excluded = renderExcludedFiles(result);
+    if (excluded === null) {
+      return idle.join('\n');
+    }
+    return renderWithinLimit([fixed([...idle, '', leftOutSentence(excludedCount(result))]), { kind: 'cut-note' }, excluded], limit);
   }
   const failed = result.exitCode === 4;
   // Both words come from the shared verdict unit, which prints an exit code only when it really
@@ -282,7 +291,7 @@ function renderNoVerdict(result: Result): string[] {
     '',
     ...framedMarkdownLines([{ label: 'engine summary', value: result.summary, cap: 'summary' }]),
     ...renderJudge(result),
-  ];
+  ].join('\n');
 }
 
 // One line saying the CI judge produced this Result. Disclosure only, never a verdict.
@@ -445,16 +454,18 @@ function carriedWord(value: unknown, cap: TextCap): string {
 // The order, lowest priority first:
 //   1. announcements: current state from the transcript, not part of any verdict;
 //   2. disclosed notes: what a check did not read, which never changes the verdict;
-//   3. advisory findings: preview and model judgment never gate;
-//   4. findings that do not gate: carried and waived findings the gate already accepted, and new
+//   3. excluded files: changed files the planner left out on purpose, which never change the
+//      verdict, one group of files that share a reason at a time;
+//   4. advisory findings: preview and model judgment never gate;
+//   5. findings that do not gate: carried and waived findings the gate already accepted, and new
 //      deterministic findings whose confidence is neither fail nor unverified, so they do not
 //      block (in the collapsed view, a rule group whose representative does not gate);
-//   5. notices for floored accessibility barriers this run did not see;
-//   6. coverage gaps after the first one of each state;
-//   7. the framed detail under a gating finding, which keeps its first line;
-//   8. a gating finding's first line.
+//   6. notices for floored accessibility barriers this run did not see;
+//   7. coverage gaps after the first one of each state;
+//   8. the framed detail under a gating finding, which keeps its first line;
+//   9. a gating finding's first line.
 //
-// Tier 8 is reached only when the first lines of the gating findings alone pass the bound. Each
+// Tier 9 is reached only when the first lines of the gating findings alone pass the bound. Each
 // first line is cut to a few hundred characters, so at the default noise budget it never is: the
 // noise budget collapses a long list into a handful of rule groups. It can be reached when an
 // operator raises the noise budget far enough that hundreds of gating findings are listed one by
@@ -464,6 +475,7 @@ function carriedWord(value: unknown, cap: TextCap): string {
 const CUT_ORDER = [
   'announcement',
   'note',
+  'excluded',
   'advisory',
   'recorded',
   'floor-notice',
@@ -918,6 +930,61 @@ function renderNotes(result: Result): CommentSection | null {
   );
 }
 
+function excludedCount(result: Result): number {
+  return listFileNotes(result.coverage.excludedFiles).count;
+}
+
+// The sentence under an idle verdict that excluded files, so the run does not read as plain
+// nothing to check. The count is checked to be a whole number.
+function leftOutSentence(count: number): string {
+  const files = count === 1 ? 'file' : 'files';
+  const they = count === 1 ? 'It is' : 'They are';
+  return (
+    `usabl left out ${wholeNumber(count)} changed ${files} on purpose. ${they} listed below with why. ` +
+    'If a screen renders one, this run did not check it: follow its reason, then run usabl again.'
+  );
+}
+
+// The changed files the planner left out on purpose, in the form the terminal prints: files that
+// share a reason are grouped, the reason is printed once, and at most twenty files are named, with
+// a count of the rest. A file name comes from the repository and a Result can be composed outside
+// the engine, so every name and reason is framed and spanned. A group is one item, cut at the
+// excluded tier, so near the size bound the list goes before any gap or finding.
+function renderExcludedFiles(result: Result): CommentSection | null {
+  const { count, groups, hidden } = listFileNotes(result.coverage.excludedFiles);
+  if (count === 0) {
+    return null;
+  }
+  return section(
+    [
+      '',
+      '### Excluded files, not checked',
+      '_Changed files usabl left out on purpose. They are not coverage gaps and do not change the verdict._',
+      UNTRUSTED_FRAME_START,
+    ],
+    groups.map((group) =>
+      item(
+        [
+          ...group.refs.map((ref) => framedLine({ label: 'file', value: ref, cap: 'gapRef' })),
+          framedLine({ label: 'why', value: group.reason, cap: 'gapReason' }),
+        ],
+        [],
+        'excluded',
+      ),
+    ),
+    hidden > 0
+      ? [
+          // This counts files past the list of twenty. The line above it, when the size bound cut
+          // groups, counts groups, so each line says what it counts.
+          `- ${wholeNumber(hidden)} more excluded ${hidden === 1 ? 'file is' : 'files are'} not named here, because the list names at most 20 files.`,
+          `_${FULL_RESULT_POINTER}_`,
+        ]
+      : [],
+    { one: 'group of excluded files', many: 'groups of excluded files' },
+    [UNTRUSTED_FRAME_END],
+  );
+}
+
 // The announcement text for one stop, page-derived: tokens come from the accessibility tree and
 // live regions, and the element-path fallback is a DOM selector. Returned raw; the caller frames
 // it, and the frame scrubs it, so it is not pre-neutralized here.
@@ -1004,8 +1071,9 @@ export function projectPrCommentWithin(result: Result, config: UsablConfig | und
   // and the fragment of a configured screen url.
   const safe = scrubPublishedResult(result);
   if (safe.verdict === null) {
-    // Every value here is cut to its cap, so this body is a few hundred characters long.
-    return renderNoVerdict(safe).join('\n');
+    // Every value here is cut to its cap, so this body is a few hundred characters long, plus the
+    // excluded files of an idle run, which are bounded the same way.
+    return renderNoVerdict(safe, limit);
   }
   const deterministicNew = safe.findings.filter(
     (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'new',
@@ -1053,6 +1121,7 @@ export function projectPrCommentWithin(result: Result, config: UsablConfig | und
     ...optional(renderFloorUnconfirmed(safe)),
     renderCoverageGaps(safe),
     ...optional(renderNotes(safe)),
+    ...optional(renderExcludedFiles(safe)),
     blank,
     renderAnnouncements(safe),
   ], limit);

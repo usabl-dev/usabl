@@ -28,7 +28,7 @@ If the sentence has two independent outcomes, split the work into two pull reque
 
 ## 2. Set up the repository
 
-You need Node.js 22, npm, Git, and Python 3 for pre-commit.
+You need Node.js 22, npm, Git 2.30 or later, and Python 3 for pre-commit.
 
 1. Clone the repository and install:
 
@@ -121,7 +121,8 @@ If you change one of these paths:
 - Expect a slower, more detailed review.
 - A policy file change makes usabl's own check on this repository return
   `approval_required`. That is expected. It clears only when a code owner who is not
-  the author approves the current head commit.
+  the author, and who has write or admin permission on the repository, approves the
+  current head commit.
 
 ## 6. Writing style
 

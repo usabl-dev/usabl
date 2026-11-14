@@ -10,7 +10,9 @@ import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-bud
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
   barrierLines,
+  excludedFilePieces,
   guardedFileLines,
+  leftOutLine,
   notEvaluatedPieces,
   notePieces,
   unconfirmedPieces,
@@ -209,12 +211,13 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const gapPieces = notEvaluatedPieces(result);
   // The floor notices close the frame. Like gap lines they limit what the run can claim, so they
   // are tail pieces and outlast every barrier when the message is shortened.
-  // Provider notes come last: they are disclosure only and the first tail pieces a shortened
-  // message drops.
+  // Provider notes and then the excluded files come last: they are disclosure only and the first
+  // tail pieces a shortened message drops.
   const tailPieces = [
     ...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []),
     ...unconfirmedPieces(result),
     ...notePieces(result),
+    ...excludedFilePieces(result),
   ];
 
   // The whole message is bounded as well as each field. Whole barriers go first, headline and
@@ -344,8 +347,9 @@ export function evaluateStopDecision(
     const line = `${formatVerdictWord(verdict, passNote)}: the gate verified this change. You may stop.`;
     // A verified run is where the floor notice matters most: floored debt on a screen whose
     // content may not have mounted. It does not change the decision. It travels with it, framed.
-    // Provider notes travel with it the same way, after the floor notices. They never block.
-    const notices = [...unconfirmedPieces(safe), ...notePieces(safe)];
+    // Provider notes travel with it the same way, after the floor notices, and the excluded files
+    // last. They never block.
+    const notices = [...unconfirmedPieces(safe), ...notePieces(safe), ...excludedFilePieces(safe)];
     if (sourceTree === undefined && notices.length === 0) {
       return { block: false, message: line };
     }
@@ -390,9 +394,22 @@ export function evaluateStopDecision(
   // and it blocks below.
   if (safe.verdict === null && safe.coverage.nothingToCheck === true) {
     const verdict = describeVerdict(safe);
+    // An idle run that excluded files says so on its line and lists them inside the frame, so it
+    // does not read as plain nothing to check.
+    const leftOut = leftOutLine(safe);
+    const line = `${formatVerdictWord(verdict, passNote)}: ${verdict.meaning}${leftOut === null ? '' : ` ${leftOut}`} You may stop.`;
+    if (leftOut === null) {
+      return { block: false, message: line };
+    }
     return {
       block: false,
-      message: `${formatVerdictWord(verdict, passNote)}: ${verdict.meaning} You may stop.`,
+      message: assembleBoundedMessage({
+        scaffold: [line],
+        keep: 1,
+        pieces: [],
+        tailPieces: excludedFilePieces(safe),
+        frame: frameUntrustedBlock,
+      }),
     };
   }
 
@@ -455,7 +472,7 @@ export function evaluateStopDecision(
         pieces,
         keepPieces: pieces.length,
         // The floor notices travel with the stop here too, inside the frame, after the summary.
-        tailPieces: [...unconfirmedPieces(safe), ...notePieces(safe)],
+        tailPieces: [...unconfirmedPieces(safe), ...notePieces(safe), ...excludedFilePieces(safe)],
         frame: frameUntrustedBlock,
       }),
     };
