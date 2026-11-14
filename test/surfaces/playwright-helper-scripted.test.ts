@@ -208,6 +208,26 @@ describe('checkPage on a page with nothing rendered', () => {
     ]);
   });
 
+  it('keeps only the first line of the error, neutralized, when the page does not settle while readiness waits for its signal', async () => {
+    adopted.page = scriptedPage(['#save'], {
+      gotoReady: async () => {
+        throw new Error('page did not settle‮ in 10000 ms\nCall log:\n  - waiting for <tr data-row="customer-4411">Ada</tr>');
+      },
+    });
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('#orders'), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps).toEqual([
+      {
+        ref: 'readiness:clusters',
+        state: 'not-covered',
+        reason:
+          "checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: page did not settle in 10000 ms",
+      },
+    ]);
+  });
+
   it('checks a labeled page with one control whose readiness signal holds', async () => {
     adopted.page = scriptedPage(['#save'], {
       queryAll: async (selector) => (selector === '#orders' ? [{ selector: '#orders' }] : []),

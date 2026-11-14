@@ -498,12 +498,15 @@ async function readinessBeforeChecks(
   try {
     readiness = await page.gotoReady(readyWhen);
   } catch (error: unknown) {
+    // A browser error's later lines can be a call log that quotes the page's markup, so the gap
+    // keeps only the first line, as the settle gap does.
+    const cause = neutralize(firstLine(errorMessage(error))) || 'the error had no message';
     return {
       gap: {
         ref: readinessRef(screenId),
         state: 'not-covered',
         reason: scrubString(
-          `checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+          `checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: ${cause}`,
         ),
       },
     };
