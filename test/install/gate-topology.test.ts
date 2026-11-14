@@ -19,6 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { load } from 'js-yaml';
@@ -266,6 +267,77 @@ describe.each(GATES)('$name', ({ body }) => {
       const summaryFile = join(temp, 'summary.md');
       expect(runStep(summary.run ?? '', { COMMENT_PATH: join(temp, 'comment.md'), GITHUB_STEP_SUMMARY: summaryFile })).toBe(0);
       expect(readFileSync(summaryFile, 'utf8')).toContain('REGRESSION');
+    });
+
+    describe('the sticky comment script, run against a stand-in for the GitHub client', () => {
+      interface Comment {
+        id: number;
+        user?: { login?: string; type?: string } | null;
+        body?: string;
+      }
+
+      // Runs the step's script the way actions/github-script does: as the body of an async
+      // function that receives require, github, context, and process.
+      async function post(existing: Comment[]): Promise<Array<{ call: string; args: Record<string, unknown> }>> {
+        const script = String(step(body, 'gate-comment', 'Post sticky PR comment').with?.['script'] ?? '');
+        const temp = scratch();
+        const commentPath = join(temp, 'comment.md');
+        writeFileSync(commentPath, '<!-- usabl-report -->\nREGRESSION\n');
+        const calls: Array<{ call: string; args: Record<string, unknown> }> = [];
+        const listComments = async (): Promise<never> => {
+          throw new Error('the script must page through paginate');
+        };
+        const github = {
+          paginate: async (method: unknown, args: Record<string, unknown>) => {
+            expect(method).toBe(listComments);
+            calls.push({ call: 'list', args });
+            return existing;
+          },
+          rest: {
+            issues: {
+              listComments,
+              updateComment: async (args: Record<string, unknown>) => {
+                calls.push({ call: 'update', args });
+              },
+              createComment: async (args: Record<string, unknown>) => {
+                calls.push({ call: 'create', args });
+              },
+            },
+          },
+        };
+        const context = { repo: { owner: 'acme', repo: 'app' }, issue: { number: 7 } };
+        const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
+          ...args: string[]
+        ) => (...values: unknown[]) => Promise<void>;
+        const run = new AsyncFunction('require', 'github', 'context', 'process', script);
+        await run(createRequire(import.meta.url), github, context, { env: { COMMENT_PATH: commentPath } });
+        return calls.filter((entry) => entry.call !== 'list');
+      }
+
+      const BODY = '<!-- usabl-report -->\nREGRESSION\n';
+
+      it('leaves another bot comment that holds the marker alone and creates its own', async () => {
+        const calls = await post([
+          { id: 1, user: { login: 'other-app[bot]', type: 'Bot' }, body: 'quoted: <!-- usabl-report -->' },
+        ]);
+        expect(calls).toEqual([{ call: 'create', args: { owner: 'acme', repo: 'app', issue_number: 7, body: BODY } }]);
+      });
+
+      it('updates its own comment, not an earlier one by another bot that holds the marker', async () => {
+        const calls = await post([
+          { id: 1, user: { login: 'other-app[bot]', type: 'Bot' }, body: '<!-- usabl-report -->' },
+          { id: 2, user: { login: 'github-actions[bot]', type: 'Bot' }, body: '<!-- usabl-report -->\nold' },
+        ]);
+        expect(calls).toEqual([{ call: 'update', args: { owner: 'acme', repo: 'app', comment_id: 2, body: BODY } }]);
+      });
+
+      it('leaves a comment by a person that holds the marker alone, even one named github-actions[bot]', async () => {
+        const calls = await post([
+          { id: 1, user: { login: 'github-actions[bot]', type: 'User' }, body: '<!-- usabl-report -->' },
+          { id: 2, user: null, body: '<!-- usabl-report -->' },
+        ]);
+        expect(calls).toEqual([{ call: 'create', args: { owner: 'acme', repo: 'app', issue_number: 7, body: BODY } }]);
+      });
     });
 
     it('reads the Result through the fetcher, with actions read for that only', () => {
