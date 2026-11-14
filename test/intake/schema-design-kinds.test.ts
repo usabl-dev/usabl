@@ -74,6 +74,17 @@ describe('design check kinds', () => {
     expect(reasonOf(oneRequirement(kind, assertion))).toContain(`requirements[0].${field}`);
   });
 
+  // The hit test needs a box at least 2 pixels on each side to place its points. A smaller box
+  // skips it, so a minimum under 2 would let such a box pass on size alone, with no hit test.
+  it('refuses a target size minimum under 2 CSS pixels and keeps 2', () => {
+    for (const minCssPx of [0.5, 1, 1.99]) {
+      const reason = reasonOf(oneRequirement('target-size', { type: 'target-size', target: { role: 'button', name: 'R' }, minCssPx }));
+      expect({ minCssPx, reason }).toEqual({ minCssPx, reason: expect.stringContaining('minCssPx must be at least 2') });
+    }
+    const two = parseBundle(oneRequirement('target-size', { type: 'target-size', target: { role: 'button', name: 'R' }, minCssPx: 2 }));
+    expect(two.ok).toBe(true);
+  });
+
   it('refuses a focus order that repeats a name, because which stop is meant would be a guess', () => {
     const reason = reasonOf(
       oneRequirement('focus-order', { type: 'focus-order', sequence: ['Edit', 'Save', ' Edit'] }),

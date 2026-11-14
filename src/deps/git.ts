@@ -47,32 +47,67 @@ export const NO_HEAD_MESSAGE =
 // The ref itself does not exist. Still an error, never a missing file: reading no policy at all
 // as "no policy" would let a run pass against nothing. The message names the fix, because a new
 // repository with no commits and a CI checkout without the trusted ref both land here.
-function missingRefError(ref: string, stderr: string): Error | null {
+async function missingRefError(ref: string, stderr: string, listRemotes: () => Promise<string[]>): Promise<Error | null> {
   if (!/invalid object name/i.test(stderr)) {
     return null;
   }
-  return refNotFoundError(ref);
+  return refNotFoundError(ref, listRemotes);
 }
 
-function refNotFoundError(ref: string): Error {
+// The remote names are read only for a ref whose hint may name a remote: never for HEAD or a
+// commit id.
+async function refNotFoundError(ref: string, listRemotes: () => Promise<string[]>): Promise<Error> {
   if (ref === 'HEAD') {
     return new Error(NO_HEAD_MESSAGE);
   }
+  if (COMMIT_ID.test(ref)) {
+    return new Error(
+      `git cannot read ${operatorText(ref)}. usabl reads trusted policy from that commit. Check the commit id. ` +
+        'A shallow checkout often lacks it, so fetch more history, such as fetch-depth: 0 in actions/checkout, ' +
+        'then run usabl again.',
+    );
+  }
   return new Error(
     `git cannot read ${operatorText(ref)}. usabl reads trusted policy from that ref. Check its name, ` +
-      `or fetch it first (${fetchExample(ref)}), then run usabl again.`,
+      `or fetch it first (${fetchExample(ref, await listRemotes())}), then run usabl again.`,
   );
 }
 
-// A remote-tracking ref such as upstream/develop names its own fetch, so the example uses it. Any
-// other ref names no remote, so the example says how to find the default branch instead of
-// guessing that it is called main.
-function fetchExample(ref: string): string {
-  const remoteBranch = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._/-]+)$/u.exec(ref);
-  if (remoteBranch?.[1] !== undefined && remoteBranch[2] !== undefined && remoteBranch[1] !== 'refs') {
-    return `for example git fetch ${remoteBranch[1]} ${remoteBranch[2]}`;
+// A commit id, whole or shortened, as the CI workflow passes the base commit. git fetch takes no
+// fixed form for it that works on every host, so the hint for it gives no fetch command.
+const COMMIT_ID = /^[0-9a-f]{7,64}$/iu;
+
+/**
+ * The fetch example for a missing branch ref. A ref such as upstream/develop is the branch develop
+ * on the remote upstream only when upstream is a remote. A ref such as feature/foo, whose first
+ * part names no remote, is a branch with a slash in its name, so the example fetches it by its
+ * whole name into a branch of that name. With no remote to compare against, both readings are
+ * given, each with its own command. A ref with no slash names no remote, so the example says how
+ * to find the default branch instead of guessing that it is called main.
+ *
+ * Each name from the ref or a remote goes through operatorText on its own, so only a long name is
+ * capped and the fixed text of the example is always printed whole.
+ */
+function fetchExample(ref: string, remotes: readonly string[]): string {
+  const branchRef = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/u.test(ref) && !ref.startsWith('refs/');
+  if (!branchRef) {
+    return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
   }
-  return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
+  const shownRef = operatorText(ref);
+  // The longest remote name that the ref starts with, since a remote name may hold a slash.
+  const remote = [...remotes].sort((a, b) => b.length - a.length).find((name) => ref.startsWith(`${name}/`));
+  if (remote !== undefined) {
+    return `for example git fetch ${operatorText(remote)} ${operatorText(ref.slice(remote.length + 1))}`;
+  }
+  const slash = ref.indexOf('/');
+  const first = operatorText(ref.slice(0, slash));
+  const asRemote = `git fetch ${first} ${operatorText(ref.slice(slash + 1))}`;
+  const asBranch = (name: string): string => `git fetch ${operatorText(name)} ${shownRef}:${shownRef}`;
+  if (remotes.length === 0) {
+    return `for example ${asRemote} if ${first} is a remote, or ${asBranch('origin')} if ${shownRef} is a branch on origin`;
+  }
+  const from = remotes.includes('origin') ? 'origin' : [...remotes].sort()[0] ?? 'origin';
+  return `for example ${asBranch(from)}`;
 }
 
 // usabl accepts no ref that is empty, starts with a dash or a caret, or holds two dots, a colon,
@@ -196,6 +231,19 @@ async function runGit(
   return stdout;
 }
 
+// The remote names, for a fetch hint only. A failure gives no names, and the hint then gives both
+// readings of the ref.
+async function listRemotes(cwd: string): Promise<string[]> {
+  try {
+    return (await runGit(cwd, ['remote']))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 // What to do when a change listing is too long: it most often holds a large folder of new files.
 const CHANGED_FILES_ADVICE =
   'This most often means a large folder of new files that .gitignore does not cover. Add that folder to ' +
@@ -296,16 +344,22 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
           if (await namesCommit(cwd, ref)) {
             return null;
           }
-          throw refNotFoundError(ref);
+          throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
-        // cat-file blob refuses a folder. git show prints its listing, which is never the bytes of
-        // a file, so the guard reads a policy file that became a folder, or the reverse, as a
-        // change an approval can clear. The closing -- makes git read the argument as an object
-        // name only, so a working tree file with that name is never read in its place.
-        if (code !== null && /bad file/i.test(stderr) && (await objectType(cwd, `${ref}:${path}`)) === 'tree') {
-          return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+        // cat-file blob refuses a folder and a submodule entry. git show prints a folder's listing,
+        // or the submodule's commit when that commit is in the repository, which is never the
+        // bytes of a file. So the guard reads a policy file that became a folder, or the reverse,
+        // and a moved submodule, as a change an approval can clear. A submodule whose commit is
+        // not here has no type git can read, so it still throws. The closing -- makes git read the
+        // argument as an object name only, so a working tree file with that name is never read in
+        // its place.
+        if (code !== null && /bad file/i.test(stderr)) {
+          const type = await objectType(cwd, `${ref}:${path}`);
+          if (type === 'tree' || type === 'commit') {
+            return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+          }
         }
-        throw missingRefError(ref, stderr) ?? err;
+        throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
       }
     },
     async lsTree(ref, paths) {

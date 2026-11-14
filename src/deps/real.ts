@@ -913,16 +913,29 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
     if (!clipsX && !clipsY) {
       continue;
     }
+    // The box from getBoundingClientRect includes every transform on the node and above it, while
+    // clientLeft, clientWidth, and the rest are layout sizes, which include none. So each client
+    // size is scaled by the ratio of the box on screen to the layout box, and the clip edges are in
+    // the same units as the control's box. A ratio that cannot be read, such as for a layout size
+    // of 0, counts as clipped.
     const outer = node.getBoundingClientRect();
-    const left = outer.left + node.clientLeft;
-    const top = outer.top + node.clientTop;
-    const right = left + node.clientWidth;
-    const bottom = top + node.clientHeight;
-    if (clipsX && (box.left < left - epsilon || box.right > right + epsilon)) {
-      limits.add('overflow-clipped');
+    const ratio = (screen, layout) =>
+      typeof layout === 'number' && layout > 0 && Number.isFinite(screen) && Number.isFinite(layout) ? screen / layout : null;
+    if (clipsX) {
+      const scaleX = ratio(outer.width, node.offsetWidth);
+      const left = outer.left + node.clientLeft * (scaleX ?? 1);
+      const right = left + node.clientWidth * (scaleX ?? 1);
+      if (scaleX === null || box.left < left - epsilon || box.right > right + epsilon) {
+        limits.add('overflow-clipped');
+      }
     }
-    if (clipsY && (box.top < top - epsilon || box.bottom > bottom + epsilon)) {
-      limits.add('overflow-clipped');
+    if (clipsY) {
+      const scaleY = ratio(outer.height, node.offsetHeight);
+      const top = outer.top + node.clientTop * (scaleY ?? 1);
+      const bottom = top + node.clientHeight * (scaleY ?? 1);
+      if (scaleY === null || box.top < top - epsilon || box.bottom > bottom + epsilon) {
+        limits.add('overflow-clipped');
+      }
     }
   }
   if (pinned) {
@@ -948,6 +961,15 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   // The centered scroll that follows is not judged this way, and any axis it moves that a person
   // cannot scroll is put back before the points are read (below). The overflow of each box
   // is read before any scroll, and a value that is not one usabl knows counts as hidden.
+  //
+  // The points sit 1 pixel inside each edge, so a box under 2 pixels on a side cannot hold them,
+  // and a box with no area has no point inside it. Such a box is left to the size compare, which
+  // fails it, because no allowed minimum is under 2. The hit test does not run and adds no limit.
+  const order = ${JSON.stringify(BOX_LIMITS)};
+  const finish = () => ({ width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) });
+  if (!(box.width >= 2 && box.height >= 2)) {
+    return finish();
+  }
   const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
   const saved = [];
   for (let node = parentOf(element); node !== null; node = parentOf(node)) {
@@ -1031,8 +1053,7 @@ export const BOUNDING_BOX_FUNCTION = `function (query) {
   if (resized) {
     limits.add('size-changed-on-scroll');
   }
-  const order = ${JSON.stringify(BOX_LIMITS)};
-  return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };
+  return finish();
 }`;
 
 function isBoxLimit(value: unknown): value is BoxLimit {
