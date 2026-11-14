@@ -630,12 +630,53 @@ describe('a test file in a workspace package the app depends on', () => {
   });
 });
 
-describe('a relative import with a query', () => {
-  it.each(['?raw', '?url', '?inline'])('maps the file it names to the screen: %s', async (query) => {
+describe('an import with a query', () => {
+  it.each(['?raw', '?url', '?inline'])('maps the file a relative import names to the screen: %s', async (query) => {
     const coverage = await coverageOf(`import w from './tests/Widget${query}';`);
     expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
     expect(coverage.gaps).toEqual([]);
     expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a gap for an alias import with a query when no alias config maps it', async () => {
+    const coverage = await coverageOf("import w from '@/tests/Widget?raw';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'@/tests/Widget?raw'");
+  });
+
+  it('maps the file a configured alias import with a query names to the screen', async () => {
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const coverage = await coverageOf("import w from '@/tests/Widget?raw';", { 'package.json': PACKAGE_JSON, 'tsconfig.json': tsconfig });
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('is a gap for a bare import with a query that a baseUrl resolves to the file', async () => {
+    const coverage = await coverageOf("import w from 'tests/Widget?raw';", {
+      'package.json': PACKAGE_JSON,
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: 'src' } }),
+    });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('baseUrl');
+  });
+
+  it('is a gap for a dynamic import whose fixed start ends in a query', async () => {
+    expectGap(await coverageOf('export const load = (q: string) => import(`./tests/Widget?${q}`);', { 'package.json': PACKAGE_JSON }));
+  });
+
+  it('keeps a # import whole, and still reads its query as no part of the name', async () => {
+    const coverage = await coverageOf("import w from '#tests/Widget?raw';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'#tests/Widget?raw'");
+  });
+
+  it('reads a ? in a glob pattern as glob syntax, as before', async () => {
+    const tree = { 'package.json': PACKAGE_JSON };
+    const coverage = await coverageOf("const all = import.meta.glob('./tests/?idget.tsx');", tree);
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain('src/tests/');
+    expectExcluded(await coverageOf("const pages = import.meta.glob('./pages/?ndex.tsx');", tree));
   });
 
   it('maps a stylesheet imported with a query to the screen', async () => {
