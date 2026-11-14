@@ -3,6 +3,7 @@
  * This module formats output only.
  * It must never run checks, decide a verdict, or mutate the Result.
  */
+import { resolve } from 'node:path';
 import type { GitReader, Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubPublishedResult } from './scrub.js';
@@ -464,13 +465,27 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
   };
 }
 
+// The config file the Stop hook reads, at the project root.
+const ROOT_CONFIG = 'usabl.config.json';
+
 /**
  * --branch-scope is a local check with the Stop hook's scope. The CI gate and a check with a
  * trusted ref have their own scope and policy reads, so a combination is refused, never merged.
  */
-export function branchScopeRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
+export function branchScopeRefusal(opts: CliOptions, cwd: string): { exitCode: 2; message: string } | null {
   if (!opts.branchScope) {
     return null;
+  }
+  // The Stop hook plans from usabl.config.json at the root, so a receipt from a check planned with
+  // another file would answer a stop that file does not describe.
+  if (resolve(cwd, opts.configPath) !== resolve(cwd, ROOT_CONFIG)) {
+    return {
+      exitCode: 2,
+      message:
+        `--branch-scope cannot be combined with --config naming another file. The Stop hook reads ${ROOT_CONFIG} ` +
+        'at the project root, and a receipt from this check answers the next stop, so the check must read the same ' +
+        `file. Drop --config to check the branch with ${ROOT_CONFIG}, or drop --branch-scope.`,
+    };
   }
   const conflict = opts.ci
     ? '--ci'

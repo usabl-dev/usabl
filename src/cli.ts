@@ -869,7 +869,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  const refusal = branchScopeRefusal(opts) ?? ciRefusal(opts);
+  const refusal = branchScopeRefusal(opts, process.cwd()) ?? ciRefusal(opts);
   if (refusal !== null) {
     process.stderr.write(`usabl: ${refusal.message}\n`);
     return refusal.exitCode;

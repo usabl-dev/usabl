@@ -236,6 +236,40 @@ describe('usabl check --branch-scope', { timeout: REAL_PROCESS_BUDGET_MS }, () =
     });
   }
 
+  // The hook reads usabl.config.json at the root, so a receipt from a check planned with another
+  // config file would answer a stop it does not match.
+  it('refuses --config with another file, says to drop it, and saves no receipt', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    const weak = join(repo, '..', `${repo.split('/').at(-1) ?? 'repo'}-weak.json`);
+    await writeFile(weak, JSON.stringify({ ...config, uiFileGlobs: ['src/Other.tsx'] }, null, 2) + '\n');
+    try {
+      const ran = await check('--branch-scope', '--config', `../${weak.split('/').at(-1) ?? ''}`);
+      expect(ran.code).toBe(2);
+      expect(ran.scanned).toEqual([]);
+      expect(ran.stderr).toContain('--branch-scope cannot be combined with --config');
+      expect(ran.stderr).toContain('Drop --config');
+      await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(weak, { force: true });
+    }
+  });
+
+  for (const path of ['usabl.config.json', './usabl.config.json']) {
+    it(`still runs with --config ${path}, the root config`, async () => {
+      recordTrustedBranch();
+      git('switch', '-q', '-c', 'feature');
+      await write('src/App.tsx', 'export const App = 2;\n');
+      git('commit', '-q', '-am', 'change the app');
+      const ran = await check('--branch-scope', '--config', path);
+      expect(ran.code).toBe(0);
+      expect(ran.scanned).toEqual(['home']);
+      expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
+    });
+  }
+
   it('is refused on a command other than check', async () => {
     stderr = [];
     const code = await main(['brief', '--branch-scope']);
