@@ -45,9 +45,11 @@ re-baseline to green.
   negative or range revision, a path inside a commit, or a pathspec, and it could come back as an
   empty or absent file. The git reader also passes each ref after `--end-of-options`.
 - `usabl enforce policy` checks the head SHA at its source too. It reads `pull_request.head.sha`
-  from the event file that `GITHUB_EVENT_PATH` names and refuses a value that is not 7 to 40 hex
-  characters before any git call, with exit 2 and a message that names the field and does not
-  repeat the value. Before, the value went to the git reader with no check of its own.
+  from the event file that `GITHUB_EVENT_PATH` names and refuses a value that is not a full commit
+  id, exactly 40 or 64 lowercase hex characters, before any git call, with exit 2 and a message
+  that names the field and does not repeat the value. A shorter value is refused because it can
+  also be a branch name, and git resolves a branch of that name before a commit. Before, the value
+  went to the git reader with no check of its own.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
@@ -1430,12 +1432,16 @@ What runs where, and what each job holds:
   read it. Neither runs head code. Both read the base commit the event names. On a pull request
   from a fork the run's token cannot write to the pull request, so `gate-comment` writes the
   comment to the run summary instead. The comment decides nothing either way. Its token can edit
-  any comment on the pull request, so the sticky comment step updates only a comment that holds
-  the usabl marker and that `github-actions[bot]` wrote. Before, it took the first comment by any
-  bot that held the marker, so another app's comment that quoted it, for example one that copies
-  the pull request description, was overwritten with the usabl report. Such a comment is now left
-  alone and the step writes its own. `usabl-policy` reads the head SHA from the event file and
-  refuses one that is not 7 to 40 hex characters before any git call (see Threat 1).
+  any comment on the pull request, so the sticky comment step updates only a comment that GitHub
+  Actions wrote (`github-actions[bot]`) and that starts with the usabl marker, which the renderer
+  always writes as the first line. Before, it took the first comment by any bot that held the
+  marker anywhere, so another app's comment that quoted it, for example one that copies the pull
+  request description, was overwritten with the usabl report. Such a comment is now left alone
+  and the step writes a new one. Residual: every workflow in the repository posts as
+  `github-actions[bot]`, so a comment another workflow writes that starts with the marker is still
+  taken. It is one overwritten comment, and the comment decides nothing. `usabl-policy` reads the
+  head SHA from the event file and refuses one that is not a full commit id (40 or 64 lowercase
+  hex characters) before any git call (see Threat 1).
 - **`usabl-required`** is the required status check. It runs with `if: always()` and is red
   unless every job has the exact shape for the event and the judge's `verdict` output is
   `pass`. On `pull_request` all five jobs must succeed. On `pull_request_review` the build and
