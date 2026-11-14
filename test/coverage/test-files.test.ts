@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
-import { isStorybookPageUrl } from '../../src/coverage/test-files.js';
+import { isStoryToolPageUrl } from '../../src/coverage/test-files.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { run } from '../../src/run.js';
@@ -373,7 +373,7 @@ describe('a story, a test setup file, a mock, or a test helper file', () => {
   });
 });
 
-describe('a Storybook page url', () => {
+describe('a story tool page url', () => {
   it.each([
     'http://127.0.0.1:6006/iframe.html?id=button--primary',
     'http://127.0.0.1:6006/storybook/iframe.html?viewMode=story&id=button--primary&args=size:large#top',
@@ -383,7 +383,7 @@ describe('a Storybook page url', () => {
     'http://127.0.0.1:6006/index.html?path=/docs/button--docs&globals=theme:dark#x',
     '/?path=/story/button--primary',
   ])('counts %s', (url) => {
-    expect(isStorybookPageUrl(url)).toBe(true);
+    expect(isStoryToolPageUrl(url)).toBe(true);
   });
 
   it.each([
@@ -398,11 +398,11 @@ describe('a Storybook page url', () => {
     'http://127.0.0.1:5173/clusters?q=iframe.html&id=1',
     'http://[::1',
   ])('does not count %s', (url) => {
-    expect(isStorybookPageUrl(url)).toBe(false);
+    expect(isStoryToolPageUrl(url)).toBe(false);
   });
 });
 
-describe('a story when the config points at a Storybook page', () => {
+describe('a story or test support file when the config names a story tool page', () => {
   const story = 'src/Button.stories.tsx';
   const storybookSurface = { id: 'button-story', url: 'http://127.0.0.1:6006/iframe.html?id=button--primary', files: ['src/Button.tsx'] };
   const withStorybook: UsablConfig = { ...config, surfaces: [storybookSurface] };
@@ -420,7 +420,8 @@ describe('a story when the config points at a Storybook page', () => {
     expect(coverage.excludedFiles ?? []).toEqual([]);
     expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[story, 'unresolved']]);
     const reason = coverage.gaps[0]?.reason ?? '';
-    expect(reason).toContain('Storybook loads stories through its own stories setting, which usabl does not read');
+    expect(reason).toContain('the config names a story tool page');
+    expect(reason).toContain('loads stories through its own config, which usabl does not read');
     expect(reason).toContain('cannot tell which stories');
     expect(reason).toContain('list this story in the files of the surface');
   });
@@ -436,7 +437,7 @@ describe('a story when the config points at a Storybook page', () => {
     const routes = { routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }, { screenId: 'button', url: '/iframe.html?id=button--primary', entryFile: 'src/Button.tsx' }] };
     const coverage = await computeCoverage(fsOf({ ...files, 'usabl.routes.json': `${JSON.stringify(routes)}\n` }), config, [story]);
     expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[story, 'unresolved']]);
-    expect(coverage.gaps[0]?.reason).toContain('Storybook loads stories');
+    expect(coverage.gaps[0]?.reason).toContain('loads stories through its own config');
   });
 
   it('makes a fixture that only the story imports a UI file, as on main', async () => {
@@ -455,10 +456,36 @@ describe('a story when the config points at a Storybook page', () => {
     expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([story]);
   });
 
-  it('leaves a setup file excluded with the Storybook page', async () => {
+  it('makes a setup file that nothing loads a gap, as on main', async () => {
     const coverage = await computeCoverage(fsOf(files), withStorybook, ['src/setupTests.ts']);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/setupTests.ts', 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain('the config names a story tool page');
+    expect(coverage.gaps[0]?.reason).toContain('list this file in the files of the surface');
+  });
+
+  it.each(['src/test-utils/providers.tsx', 'src/test-utils.tsx', 'src/__mocks__/handlers.ts'])(
+    'is a gap for %s that only the story tool preview file imports, as on main',
+    async (helper) => {
+      const specifier = `../${helper.replace(/\.tsx?$/u, '')}`;
+      const tree = { ...files, '.storybook/preview.tsx': `import { P } from '${specifier}';\nexport const decorators = [P];\n`, [helper]: 'export const P = () => null;\n' };
+      const coverage = await computeCoverage(fsOf(tree), withStorybook, [helper]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.excludedFiles ?? []).toEqual([]);
+      expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[helper, 'unresolved']]);
+      expect(coverage.gaps[0]?.reason).toContain('the config names a story tool page');
+    },
+  );
+
+  it('still excludes and lists a test that nothing loads', async () => {
+    const coverage = await computeCoverage(fsOf({ ...files, 'src/Button.test.tsx': 'export const t = 1;\n' }), withStorybook, ['src/Button.test.tsx']);
     expect(coverage.nothingToCheck).toBe(true);
-    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual(['src/setupTests.ts']);
+    expect(coverage.gaps).toEqual([]);
+    const excluded = coverage.excludedFiles ?? [];
+    expect(excluded.map((entry) => entry.ref)).toEqual(['src/Button.test.tsx']);
+    // The reason lists only the names that count with a story tool page.
+    expect(excluded[0]?.reason).toContain('named like a test file (.test. or .spec.)');
   });
 });
 

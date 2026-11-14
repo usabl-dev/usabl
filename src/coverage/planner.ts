@@ -10,12 +10,11 @@ import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-di
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import {
   excludedTestFileReason,
-  isStoryFile,
-  isStorybookPageUrl,
+  isStoryToolPageUrl,
   isTestFile,
   loadedTestFileNote,
   placeTestFiles,
-  STORYBOOK_STORY_NOTE,
+  storyToolNote,
   testFileGapReason,
 } from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
@@ -223,12 +222,13 @@ export async function computeCoverage(
   const docs = docsManifest === undefined ? await parseDocsManifest(fs) : docsManifest;
   assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
-  // Storybook loads stories through its own stories setting, which usabl does not read. So when a
-  // surface or a route is a Storybook page, a story is not read as a test file: it is a UI file,
-  // checked when a surface lists it and a gap otherwise.
-  const storybookPage =
-    config.surfaces.some((surface) => isStorybookPageUrl(surface.url)) || manifest.routes.some((route) => isStorybookPageUrl(route.url));
-  const isTest = (file: string): boolean => isTestFile(file, storybookPage);
+  // A story tool loads stories, setup files, mocks, and helpers through its own config, which usabl
+  // does not read. So when a surface or a route is a story tool page, the test file set is only the
+  // base names and folders, and the other names are UI files, checked when a surface lists them
+  // and a gap otherwise.
+  const storyToolPage =
+    config.surfaces.some((surface) => isStoryToolPageUrl(surface.url)) || manifest.routes.some((route) => isStoryToolPageUrl(route.url));
+  const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
 
   const quotedFiles = changedFiles.filter(looksQuoted);
   const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
@@ -296,24 +296,25 @@ export async function computeCoverage(
         aliasConfig,
         [...unreached, ...placeable.map((entry) => entry.gap.ref)],
         packageStarts,
-        storybookPage,
+        storyToolPage,
       );
       for (const file of unreached) {
         const placement = placements.get(file) ?? { state: 'none' };
         if (placement.state === 'loaded') {
           reachedTestFiles.add(file);
-          loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers));
+          loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers, storyToolPage));
         } else if (placement.state === 'maybe') {
-          testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads) });
+          testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads, storyToolPage) });
         } else {
-          excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, isWideBlastFile(file, config.discovery.wideBlastGlobs)) });
+          const wide = isWideBlastFile(file, config.discovery.wideBlastGlobs);
+          excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, wide, storyToolPage) });
         }
       }
       for (const entry of placeable) {
         const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
         if (placement.state === 'none') {
           const ref = entry.gap.ref;
-          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref, config.discovery.wideBlastGlobs)) });
+          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref, config.discovery.wideBlastGlobs), storyToolPage) });
         } else {
           workspaceTestGaps.push(entry.gap);
         }
@@ -501,7 +502,8 @@ export async function computeCoverage(
           file,
           combinedUnresolvable,
           graph.visited,
-          loadedTestFileNotes.get(file) ?? (storybookPage && isStoryFile(file) ? STORYBOOK_STORY_NOTE : undefined),
+          // A file this set leaves out only because of the story tool page gets the story tool note.
+          loadedTestFileNotes.get(file) ?? (storyToolPage && isTestFile(file) ? storyToolNote(file) : undefined),
         ),
       });
     }
