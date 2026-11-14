@@ -158,7 +158,13 @@ that, and what to do.
     bundlers or neither, it refuses and names what it saw.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
     `npm exec --no -- usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
-    blocking verdict is blocked unless a one-use bypass was issued. The hook command is a POSIX
+    blocking verdict is blocked unless a one-use bypass was issued. A stop checks what CI will
+    check: every file changed since the branch left the default branch git records for origin
+    (`refs/remotes/origin/HEAD`), plus changes that are not committed, so work the assistant
+    committed before it stopped is checked too. When git records no default branch, the stop
+    checks uncommitted changes only and says so; `git remote set-head origin --auto` records it.
+    When the branch's starting commit is not in the clone, as in a shallow clone, the stop
+    blocks as not covered and says what to fetch. The hook command is a POSIX
     shell line; on Windows it needs Git Bash, which is the shell Claude Code uses there by default.
     Its companion `usabl install --claude-skill`
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`.
@@ -200,8 +206,8 @@ that, and what to do.
     findings live, the agent can self-check mid-task, and at stop time and PR time the
     same engine runs on just the affected screens and returns one of the four verdicts, or
     none when nothing was checked or the run could not decide.
-    `verified` mints a receipt bound to the exact code, and the Stop hook accepts a
-    valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
+    `verified` mints a receipt bound to the exact code and to the commit the branch left
+    the default branch at, and the Stop hook accepts a valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
     lets the next stop skip verification once.
 17. (automatic, with the history workflow) When a floor finding is fixed it shows as `fixed`,
     and the pull request comment counts it: "This PR fixes 2 accessibility barriers. 14

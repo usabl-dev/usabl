@@ -8,6 +8,7 @@ import { makeFakeDeps } from "../../src/deps/fakes.js";
 import {
   computePolicyHash,
   mintReceipt,
+  receiptFailureReasons,
   verifyReceipt,
 } from "../../src/evidence/receipt.js";
 import { buildGuardedSet, expandGuardedSet } from "../../src/trust/guard.js";
@@ -241,6 +242,67 @@ describe("verifyReceipt", () => {
       valid: false,
       failedFields: ["scannerVersions"],
     });
+  });
+});
+
+describe("receipt starting commit binding", () => {
+  const BASE_A = "a".repeat(40);
+  const BASE_B = "b".repeat(40);
+
+  function deps() {
+    return makeFakeDeps({
+      files: guardFiles,
+      headContents: guardFiles,
+      headBlobs: guardBlobs,
+      writeTree: "tree-a",
+      runnerVersion: "0.1.0",
+    });
+  }
+
+  it("re-verifies a receipt minted for the same starting commit", async () => {
+    const receipt = await mintReceipt(deps(), config, { ...mintArgs, baseRevision: BASE_A });
+    expect(receipt.baseRevision).toBe(BASE_A);
+    await expect(verifyReceipt(deps(), config, receipt, "tree-a", BASE_A)).resolves.toEqual({
+      valid: true,
+      failedFields: [],
+    });
+  });
+
+  // A receipt stands for the changes listed from one starting commit. The same tree checked from
+  // another starting commit is a different set of changes, so the receipt does not stand for it.
+  it("fails baseRevision when the receipt was minted for another starting commit", async () => {
+    const receipt = await mintReceipt(deps(), config, { ...mintArgs, baseRevision: BASE_A });
+    await expect(verifyReceipt(deps(), config, receipt, "tree-a", BASE_B)).resolves.toEqual({
+      valid: false,
+      failedFields: ["baseRevision"],
+    });
+  });
+
+  // A receipt minted with no starting commit checked only the changes that were not committed.
+  // It never stands for a stop that also checks committed work.
+  it("fails baseRevision when a receipt with no starting commit meets a stop that has one", async () => {
+    const receipt = await mintReceipt(deps(), config, mintArgs);
+    expect(receipt.baseRevision).toBeNull();
+    await expect(verifyReceipt(deps(), config, receipt, "tree-a", BASE_A)).resolves.toEqual({
+      valid: false,
+      failedFields: ["baseRevision"],
+    });
+    const withBase = await mintReceipt(deps(), config, { ...mintArgs, baseRevision: BASE_A });
+    await expect(verifyReceipt(deps(), config, withBase, "tree-a", null)).resolves.toEqual({
+      valid: false,
+      failedFields: ["baseRevision"],
+    });
+  });
+
+  it("says in plain words why a receipt for another starting commit did not stand", () => {
+    const reasons = receiptFailureReasons(
+      { baseRevision: BASE_A } as Parameters<typeof receiptFailureReasons>[0],
+      ["baseRevision"],
+      "2026-01-01T00:00:00.000Z",
+    );
+    expect(reasons).toEqual([
+      "the receipt was minted for changes since a different commit on the trusted branch, so it does not stand for the changes this stop checks",
+    ]);
   });
 });
 

@@ -3,7 +3,8 @@
  * This module formats output only.
  * It must never run checks, decide a verdict, or mutate the Result.
  */
-import type { Result } from '../contracts/index.js';
+import { resolve } from 'node:path';
+import type { GitReader, Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubPublishedResult } from './scrub.js';
 
@@ -71,6 +72,9 @@ export interface CliOptions {
   // check-only: run the judge's browser. Chromium's sandbox required, service workers blocked, and
   // every request outside the trusted origins aborted, so a blocked screen is a coverage gap.
   isolatedBrowser: boolean;
+  // check-only: check what the Stop hook checks, every change since the branch left the trusted
+  // branch plus uncommitted changes, and bind the same starting commit into the receipt.
+  branchScope: boolean;
   // brief-only: the task's files from `--files <path> [<path> ...]`. Null when the flag was not
   // given, which means the changed files git reports.
   files: string[] | null;
@@ -167,6 +171,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let docsCi = false;
   let branchRule = false;
   let isolatedBrowser = false;
+  let branchScope = false;
   let files: string[] | null = null;
   let verifySubcommand: string | null = null;
   let verifyApp = false;
@@ -280,6 +285,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--isolated-browser') {
       isolatedBrowser = true;
+      continue;
+    }
+    if (token === '--branch-scope') {
+      branchScope = true;
       continue;
     }
     if (token === '--self-check') {
@@ -432,6 +441,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     installTarget,
     cursorStopHook,
     isolatedBrowser,
+    branchScope,
     files,
     verifySubcommand,
     verifyApp,
@@ -452,6 +462,46 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
   return {
     exitCode: 2,
     message: `install needs exactly one target flag. Choose one of: ${INSTALL_TARGET_FLAGS.join(', ')}`,
+  };
+}
+
+// The config file the Stop hook reads, at the project root.
+const ROOT_CONFIG = 'usabl.config.json';
+
+/**
+ * --branch-scope is a local check with the Stop hook's scope. The CI gate and a check with a
+ * trusted ref have their own scope and policy reads, so a combination is refused, never merged.
+ */
+export function branchScopeRefusal(opts: CliOptions, cwd: string): { exitCode: 2; message: string } | null {
+  if (!opts.branchScope) {
+    return null;
+  }
+  // The Stop hook plans from usabl.config.json at the root, so a receipt from a check planned with
+  // another file would answer a stop that file does not describe.
+  if (resolve(cwd, opts.configPath) !== resolve(cwd, ROOT_CONFIG)) {
+    return {
+      exitCode: 2,
+      message:
+        `--branch-scope cannot be combined with --config naming another file. The Stop hook reads ${ROOT_CONFIG} ` +
+        'at the project root, and a receipt from this check answers the next stop, so the check must read the same ' +
+        `file. Drop --config to check the branch with ${ROOT_CONFIG}, or drop --branch-scope.`,
+    };
+  }
+  const conflict = opts.ci
+    ? '--ci'
+    : opts.trustedRef !== null
+      ? '--trusted-ref'
+      : opts.isolatedBrowser
+        ? '--isolated-browser'
+        : null;
+  if (conflict === null) {
+    return null;
+  }
+  return {
+    exitCode: 2,
+    message:
+      `--branch-scope cannot be combined with ${conflict}. --branch-scope runs the local check a Stop hook runs, ` +
+      `and ${conflict} belongs to a CI check. Drop ${conflict} to check the branch locally, or drop --branch-scope.`,
   };
 }
 
@@ -551,6 +601,21 @@ export function projectCli(result: Result): { exitCode: number; text: string; js
     text: formatSummary(safe),
     json: JSON.stringify(safe, null, 2),
   };
+}
+
+/**
+ * The changed files of a check with a trusted ref. The merge-base diff covers a CI checkout, and
+ * the status paths keep local changes in scope. A listing that fails throws, so the check stops
+ * with an error and never runs on a list it could not read. The Stop hook lists its changes with
+ * this same function, so a stop and CI cannot list different files for the same branch.
+ */
+export async function listChangedFiles(
+  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
+  trustedRef: string,
+): Promise<string[]> {
+  const diffNames = await git.diffNameOnly(trustedRef);
+  const statusPaths = (await git.statusZ()).map((entry) => entry.path);
+  return mergeChangedPaths(diffNames, statusPaths);
 }
 
 export function mergeChangedPaths(diffNames: string[], statusPaths: string[]): string[] {

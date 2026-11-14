@@ -70,7 +70,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, configFixture)).resolves.toEqual([]);
+    await expect(checkGuard(deps)).resolves.toEqual([]);
   });
 
   it('checkGuard lists every dirty guarded file even when config also diverged', async () => {
@@ -85,7 +85,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] })).resolves.toEqual([
+    await expect(checkGuard(deps)).resolves.toEqual([
       'src/gate/index.ts',
       'usabl.config.json',
     ]);
@@ -106,7 +106,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] }, 'origin/main')).resolves.toEqual([
+    await expect(checkGuard(deps, 'origin/main')).resolves.toEqual([
       'usabl.config.json',
     ]);
   });
@@ -123,7 +123,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] })).resolves.toEqual([
+    await expect(checkGuard(deps)).resolves.toEqual([
       'src/gate/index.ts',
     ]);
   });
@@ -138,7 +138,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, configFixture)).resolves.toEqual(['usabl.config.json']);
+    await expect(checkGuard(deps)).resolves.toEqual(['usabl.config.json']);
   });
 
   it('checkGuard reports a modified file under a guarded directory', async () => {
@@ -153,7 +153,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, configFixture)).resolves.toEqual(['src/gate/index.ts']);
+    await expect(checkGuard(deps)).resolves.toEqual(['src/gate/index.ts']);
   });
 
   it('checkGuard reports a new file under a guarded directory', async () => {
@@ -169,7 +169,7 @@ describe('trust guard', () => {
       },
     });
 
-    await expect(checkGuard(deps, configFixture)).resolves.toEqual(['src/gate/backdoor.ts']);
+    await expect(checkGuard(deps)).resolves.toEqual(['src/gate/backdoor.ts']);
   });
 
   it('computeSessionPins uses committed bytes and diffSessionPins reports changed or appeared paths', async () => {

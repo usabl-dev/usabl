@@ -921,3 +921,35 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     }
   });
 });
+
+// A stop that runs out of time is ended by the assistant, not by usabl: nothing in the hook
+// bounds its time. What usabl owns is that it answers nothing before the run ends, so a stop the
+// assistant cuts off carries no allow, no pass, and no receipt from usabl. Whether the assistant
+// then lets the stop go on is the assistant's rule; see the stop hook section of the ground truth.
+describe('stop-hook-runner while the run has not finished', () => {
+  it('writes no answer and saves no receipt until the run ends', async () => {
+    let finish: (result: Result) => void = () => {};
+    let started: () => void = () => {};
+    const runStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { ports, fs, stdout, stderr } = makePorts({
+      runEngine: () =>
+        new Promise<Result>((resolve) => {
+          finish = resolve;
+          started();
+        }),
+    });
+
+    const stop = runStopHookFromStdin('{}', ports);
+    await runStarted;
+    // The run is still going: the point an assistant's timeout would end the hook.
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual([]);
+    expect(fs.writes).toEqual([]);
+
+    finish(baseResult({ verdict: 'verified' }));
+    expect(await stop).toBe(0);
+    expect(stderr.join('')).toContain('VERIFIED');
+  });
+});

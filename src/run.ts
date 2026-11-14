@@ -53,6 +53,10 @@ const CONFIG_PATH = 'usabl.config.json';
 export interface RunOptions {
   changedFiles?: string[];
   trustedRef?: string;
+  // The commit the changed list was taken from, when the caller listed every change since it. The
+  // receipt records it, so the receipt does not stand for a check of a different set of changes.
+  // Without changedFiles the run lists only uncommitted changes, so the receipt records null.
+  baseRevision?: string | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,7 +113,7 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // file written while the check runs can never be bound into a receipt that did not see it.
     const treeBeforePlanning = await deps.git.writeTree();
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
-    const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
+    const guardDivergedPaths = await checkGuard(deps, opts.trustedRef ?? 'HEAD');
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
@@ -304,6 +308,7 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             // The tree read before planning, which the read after the scan matched. A later edit
             // moves the tree, so this receipt does not stand for it.
             sourceTree: treeBeforePlanning,
+            baseRevision: opts.changedFiles === undefined ? null : (opts.baseRevision ?? null),
             historyHead: debt.read.head,
           })
         : null;
