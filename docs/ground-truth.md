@@ -4757,9 +4757,10 @@ A requirement never holds a CSS selector. The roles are `button`, `link`, `headi
 The other assertions are `{ type: heading, name, level }` with a level from 1 to 6;
 `{ type: landmark, role, name? }`; `{ type: focus-order, sequence: [name, ...] }` with 2 to 200
 names; and `{ type: target-size, target: { role, name }, minCssPx }` with a size from 2 to 200
-(the hit test needs a box at least 2 pixels on each side, see below). Names are stored the way the browser reports an accessible name: each run of ASCII white
-space is one space, with none at either end, and they are compared with the page's names the same
-way, so "Create  user" matches "Create user". Case and every other character must match. The
+(the hit test needs a box at least 2 pixels on each side, see below). Names are stored the way
+the browser reports an accessible name: each run of ASCII white space is one space, with none at
+either end, and they are compared with the page's names the same way, so "Create  user" matches
+"Create user". Case and every other character must match. The
 loader refuses, as `approval_required`, an empty name, a
 heading level that is not a whole number from 1 to 6, a focus order that repeats a name, an
 unknown role, an unknown field, and a `source` whose file key, node id, or version does not fit
