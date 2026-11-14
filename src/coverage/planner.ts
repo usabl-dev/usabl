@@ -8,7 +8,16 @@ import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
 import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
-import { excludedTestFileReason, isTestFile, loadedTestFileNote, placeTestFiles, testFileGapReason } from './test-files.js';
+import {
+  excludedTestFileReason,
+  isStoryFile,
+  isStorybookPageUrl,
+  isTestFile,
+  loadedTestFileNote,
+  placeTestFiles,
+  STORYBOOK_STORY_NOTE,
+  testFileGapReason,
+} from './test-files.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { packageSourceFiles, type TrustedRead, workspaceDependencies, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
@@ -214,6 +223,13 @@ export async function computeCoverage(
   const docs = docsManifest === undefined ? await parseDocsManifest(fs) : docsManifest;
   assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
+  // Storybook loads stories through its own stories setting, which usabl does not read. So when a
+  // surface or a route is a Storybook page, a story is not read as a test file: it is a UI file,
+  // checked when a surface lists it and a gap otherwise.
+  const storybookPage =
+    config.surfaces.some((surface) => isStorybookPageUrl(surface.url)) || manifest.routes.some((route) => isStorybookPageUrl(route.url));
+  const isTest = (file: string): boolean => isTestFile(file, storybookPage);
+
   const quotedFiles = changedFiles.filter(looksQuoted);
   const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
   const globbedFiles = listedFiles.filter((file) => config.uiFileGlobs.some((glob) => matchGlob(glob, file)));
@@ -243,9 +259,9 @@ export async function computeCoverage(
   // so a package that imports it through a path inside its package counts too. It keeps its
   // workspace gap when a file outside the tests loads it or a load usabl cannot follow may reach
   // it, and it is excluded and listed otherwise.
-  const testFiles = [...globbedFiles.filter(isTestFile)].sort();
+  const testFiles = [...globbedFiles.filter(isTest)].sort();
   const globbedSet = new Set(globbedFiles);
-  const outsideTestFiles = listedFiles.filter((file) => isTestFile(file) && !globbedSet.has(file));
+  const outsideTestFiles = listedFiles.filter((file) => isTest(file) && !globbedSet.has(file));
   const { files: workspaceTests, dependedDirs } =
     outsideTestFiles.length === 0 ? { files: [], dependedDirs: [] } : await workspaceDependencies(fs, config, outsideTestFiles, trustedRead);
   const reachedTestFiles = new Set<string>();
@@ -280,6 +296,7 @@ export async function computeCoverage(
         aliasConfig,
         [...unreached, ...placeable.map((entry) => entry.gap.ref)],
         packageStarts,
+        storybookPage,
       );
       for (const file of unreached) {
         const placement = placements.get(file) ?? { state: 'none' };
@@ -304,13 +321,13 @@ export async function computeCoverage(
     }
   }
   excludedFiles.sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
-  const uiFiles = globbedFiles.filter((file) => !isTestFile(file) || reachedTestFiles.has(file));
+  const uiFiles = globbedFiles.filter((file) => !isTest(file) || reachedTestFiles.has(file));
   // Omitted when empty, so a Coverage with nothing excluded has the same shape it always had.
   const excluded = excludedFiles.length === 0 ? {} : { excludedFiles };
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
-  const otherFiles = listedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
+  const otherFiles = listedFiles.filter((file) => !isTest(file) && !uiFiles.includes(file));
   const workspaceGaps = [...(await workspaceDependencyGaps(fs, config, otherFiles, trustedRead)), ...workspaceTestGaps].sort((a, b) =>
     a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0,
   );
@@ -480,7 +497,12 @@ export async function computeCoverage(
       gaps.push({
         ref: file,
         state: 'unresolved',
-        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited, loadedTestFileNotes.get(file)),
+        reason: buildUnresolvedReason(
+          file,
+          combinedUnresolvable,
+          graph.visited,
+          loadedTestFileNotes.get(file) ?? (storybookPage && isStoryFile(file) ? STORYBOOK_STORY_NOTE : undefined),
+        ),
       });
     }
   }

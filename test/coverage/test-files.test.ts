@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
+import { isStorybookPageUrl } from '../../src/coverage/test-files.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { run } from '../../src/run.js';
@@ -369,6 +370,95 @@ describe('a story, a test setup file, a mock, or a test helper file', () => {
     expect(coverage.excludedFiles ?? []).toEqual([]);
     expect(coverage.unresolvedFiles).toEqual(['src/Button.stories.tsx']);
     expect(coverage.gaps[0]?.reason).toContain('because src/Orphan.tsx imports it');
+  });
+});
+
+describe('a Storybook page url', () => {
+  it.each([
+    'http://127.0.0.1:6006/iframe.html?id=button--primary',
+    'http://127.0.0.1:6006/storybook/iframe.html?viewMode=story&id=button--primary&args=size:large#top',
+    '/iframe.html?id=button--primary',
+    'iframe.html?args=x&id=button--primary',
+    'http://127.0.0.1:6006/?path=/story/button--primary',
+    'http://127.0.0.1:6006/index.html?path=/docs/button--docs&globals=theme:dark#x',
+    '/?path=/story/button--primary',
+  ])('counts %s', (url) => {
+    expect(isStorybookPageUrl(url)).toBe(true);
+  });
+
+  it.each([
+    'http://127.0.0.1:6006/iframe.html',
+    'http://127.0.0.1:6006/iframe.html?viewMode=story',
+    'http://127.0.0.1:6006/story/button--primary',
+    'http://127.0.0.1:6006/?other=/story/button--primary',
+    'http://127.0.0.1:6006/?path=/stories/button',
+    'http://127.0.0.1:6006/iframe.htmlx?id=button--primary',
+    'http://127.0.0.1:6006/index.html?id=button--primary',
+    'http://127.0.0.1:6006/iframe.html#?id=button--primary',
+    'http://127.0.0.1:5173/clusters?q=iframe.html&id=1',
+    'http://[::1',
+  ])('does not count %s', (url) => {
+    expect(isStorybookPageUrl(url)).toBe(false);
+  });
+});
+
+describe('a story when the config points at a Storybook page', () => {
+  const story = 'src/Button.stories.tsx';
+  const storybookSurface = { id: 'button-story', url: 'http://127.0.0.1:6006/iframe.html?id=button--primary', files: ['src/Button.tsx'] };
+  const withStorybook: UsablConfig = { ...config, surfaces: [storybookSurface] };
+  const files: Record<string, string> = {
+    'usabl.routes.json': SIDECAR,
+    'src/ClustersPage.tsx': 'export function ClustersPage() { return <main />; }\n',
+    'src/Button.tsx': 'export const Button = () => <button>go</button>;\n',
+    [story]: "import { Button } from './Button';\nexport const Primary = () => <Button />;\n",
+    'src/setupTests.ts': 'export const setup = 1;\n',
+  };
+
+  it('is a gap that says usabl cannot tell which stories the page loads', async () => {
+    const coverage = await computeCoverage(fsOf(files), withStorybook, [story]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[story, 'unresolved']]);
+    const reason = coverage.gaps[0]?.reason ?? '';
+    expect(reason).toContain('Storybook loads stories through its own stories setting, which usabl does not read');
+    expect(reason).toContain('cannot tell which stories');
+    expect(reason).toContain('list this story in the files of the surface');
+  });
+
+  it('is checked on the surface that lists it', async () => {
+    const listed: UsablConfig = { ...config, surfaces: [{ ...storybookSurface, files: ['src/Button.tsx', story] }] };
+    const coverage = await computeCoverage(fsOf(files), listed, [story]);
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['button-story', 'manual']]);
+    expect(coverage.gaps).toEqual([]);
+  });
+
+  it('is a gap when a route in usabl.routes.json is the Storybook page', async () => {
+    const routes = { routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }, { screenId: 'button', url: '/iframe.html?id=button--primary', entryFile: 'src/Button.tsx' }] };
+    const coverage = await computeCoverage(fsOf({ ...files, 'usabl.routes.json': `${JSON.stringify(routes)}\n` }), config, [story]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[story, 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain('Storybook loads stories');
+  });
+
+  it('makes a fixture that only the story imports a UI file, as on main', async () => {
+    const fixture = 'src/tests/fixtures/data.ts';
+    const tree = { ...files, [story]: "import { rows } from './tests/fixtures/data';\n", [fixture]: 'export const rows = [];\n' };
+    const coverage = await computeCoverage(fsOf(tree), withStorybook, [fixture]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([[fixture, 'unresolved']]);
+    expect(coverage.gaps[0]?.reason).toContain(`because ${story} imports it`);
+  });
+
+  it('stays excluded with no Storybook page in the config', async () => {
+    const other: UsablConfig = { ...config, surfaces: [{ ...storybookSurface, url: `${BASE}/button` }] };
+    const coverage = await computeCoverage(fsOf(files), other, [story]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([story]);
+  });
+
+  it('leaves a setup file excluded with the Storybook page', async () => {
+    const coverage = await computeCoverage(fsOf(files), withStorybook, ['src/setupTests.ts']);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual(['src/setupTests.ts']);
   });
 });
 

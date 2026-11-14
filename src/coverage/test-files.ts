@@ -30,15 +30,22 @@ import { buildImportGraph, importMayLoad, type ImportGraphView, type Unresolvabl
 // and test helpers. Each one follows the same rule as any other test file. The names: a file
 // such as Button.test.tsx, Button.spec.tsx, Button.stories.tsx, setupTests.ts, or test-utils.tsx.
 // The folders: test, tests, __tests__, __mocks__, and test-utils. The two lists after each pattern
-// are the words the reasons use, so keep each pattern and its list in step.
-const TEST_NAME = /(\.(test|spec|stories)\.|(^|\/)(setupTests|test-utils)\.)[^/]+$/u;
+// are the words the reasons use, so keep the patterns and the lists in step. Stories have their
+// own pattern, because a config that names a Storybook page reads them apart (see isTestFile).
+const STORY_NAME = /\.stories\.[^/]+$/u;
+const TEST_NAME_NOT_STORY = /(\.(test|spec)\.|(^|\/)(setupTests|test-utils)\.)[^/]+$/u;
 const TEST_NAMES = '.test., .spec., .stories., setupTests, or test-utils';
 const TEST_FOLDER = /(^|\/)(test|tests|__tests__|__mocks__|test-utils)(\/|$)/u;
 const TEST_FOLDERS = 'test, tests, __tests__, __mocks__, or test-utils';
 
+// A story, such as Button.stories.tsx.
+export function isStoryFile(file: string): boolean {
+  return STORY_NAME.test(file);
+}
+
 // A file named like a test file, such as Button.test.tsx or Button.stories.tsx.
 export function isTestNamedFile(file: string): boolean {
-  return TEST_NAME.test(file);
+  return TEST_NAME_NOT_STORY.test(file) || isStoryFile(file);
 }
 
 // A file in a test folder, such as src/__tests__/ or src/__mocks__/.
@@ -46,9 +53,45 @@ export function isInTestFolder(file: string): boolean {
   return TEST_FOLDER.test(file);
 }
 
-export function isTestFile(file: string): boolean {
-  return isInTestFolder(file) || isTestNamedFile(file);
+/**
+ * Whether a file is in the test file set. `storybookPage` says the config names a Storybook page
+ * (see isStorybookPageUrl). Storybook loads stories through its own stories setting, which usabl
+ * does not read, so then a story counts as a UI file, unless it is a test file for another reason.
+ */
+export function isTestFile(file: string, storybookPage = false): boolean {
+  if (isInTestFolder(file)) return true;
+  return storybookPage ? TEST_NAME_NOT_STORY.test(file) : isTestNamedFile(file);
 }
+
+// A base for a url that is not absolute. Only its path and query are read.
+const URL_BASE = 'http://usabl.invalid';
+
+/**
+ * Whether a url is a Storybook page, in one of the two standard forms: a path that ends with
+ * /iframe.html and a query with an id parameter, or a query whose path parameter starts with
+ * /story/ or /docs/. The url is parsed, not searched as text, and one that does not parse does not
+ * count. A Storybook served under another url shape is not recognised.
+ */
+export function isStorybookPageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, URL_BASE);
+  } catch {
+    return false;
+  }
+  if (parsed.pathname.endsWith('/iframe.html') && parsed.searchParams.has('id')) return true;
+  const storyPath = parsed.searchParams.get('path');
+  return storyPath !== null && (storyPath.startsWith('/story/') || storyPath.startsWith('/docs/'));
+}
+
+/**
+ * The sentence a story's unplaced gap says in place of the usual fix, when the config names a
+ * Storybook page.
+ */
+export const STORYBOOK_STORY_NOTE =
+  'It is a story, and the config names a Storybook page. Storybook loads stories through its own stories setting, ' +
+  'which usabl does not read, so usabl cannot tell which stories that page loads, and did not check this one. ' +
+  'To fix it, list this story in the files of the surface that shows it in usabl.config.json.';
 
 // The search starts from the files the config names as app code, not from every file in the
 // repository, so the reason says so.
@@ -147,7 +190,7 @@ function reachable(graph: ImportGraphView, starts: Iterable<string>): Set<string
  * file. The reverse edges are built once for every file given, so the cost grows with the size of
  * the graph, not with the graph times the number of files.
  */
-export function importersOutsideTests(graph: ImportGraphView, files: readonly string[]): Map<string, string[]> {
+export function importersOutsideTests(graph: ImportGraphView, files: readonly string[], storybookPage = false): Map<string, string[]> {
   const importersOf = new Map<string, string[]>();
   for (const from of [...graph.visited].sort()) {
     for (const to of graph.get(from)) {
@@ -165,7 +208,7 @@ export function importersOutsideTests(graph: ImportGraphView, files: readonly st
       for (const importer of importersOf.get(queue[at] as string) ?? []) {
         if (seen.has(importer)) continue;
         seen.add(importer);
-        if (isTestFile(importer)) queue.push(importer);
+        if (isTestFile(importer, storybookPage)) queue.push(importer);
         else found.add(importer);
       }
     }
@@ -197,7 +240,11 @@ export async function placeTestFiles(
   // More files that start the graph, such as the source of the workspace packages the app depends
   // on. Test files among them are left out.
   extraStarts: readonly string[] = [],
+  // Whether the config names a Storybook page, so a story counts as a file outside the tests (see
+  // isTestFile).
+  storybookPage = false,
 ): Promise<Map<string, TestFilePlacement>> {
+  const isTest = (file: string): boolean => isTestFile(file, storybookPage);
   const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
   const options = {
     complete: true,
@@ -211,12 +258,12 @@ export async function placeTestFiles(
   // importer outside uiFileGlobs that the config does not name is not followed.
   const wideBlast = config.discovery.wideBlastGlobs.length === 0 ? [] : await fs.glob([...config.discovery.wideBlastGlobs]);
   const entries = sortedUnique([
-    ...listed.filter((file) => !isTestFile(file)),
+    ...listed.filter((file) => !isTest(file)),
     ...routeEntries,
     config.discovery.routerFile.replace(/^\/+/u, ''),
-    ...wideBlast.filter((file) => !isTestFile(file)),
+    ...wideBlast.filter((file) => !isTest(file)),
     ...config.surfaces.flatMap((surface) => surface.files),
-    ...extraStarts.filter((file) => !isTestFile(file)),
+    ...extraStarts.filter((file) => !isTest(file)),
   ]);
   const loaded = await buildImportGraph(fs, entries, aliases, options);
 
@@ -252,6 +299,7 @@ export async function placeTestFiles(
   const importers = importersOutsideTests(
     loaded,
     sortedUnique(files).filter((file) => loaded.visited.has(file)),
+    storybookPage,
   );
   for (const file of sortedUnique(files)) {
     if (loaded.visited.has(file)) {
