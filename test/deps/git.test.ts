@@ -433,6 +433,35 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     await expect(git.diffNameOnly(first)).resolves.toContain('nosuch...HEAD');
   });
 
+  // git cat-file blob refuses a folder. git show printed the folder listing, and the guard read
+  // that as a changed policy path, which an approval can clear. The reader keeps that answer.
+  it('reads a path that is a folder at the ref as git show prints it', async () => {
+    const { stdout: expected } = await execFileAsync('git', ['show', 'HEAD:src/gate'], { cwd: repoPath, encoding: 'utf8' });
+    expect(expected).toContain('index.ts');
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.show('HEAD', 'src/gate')).resolves.toBe(expected);
+    await expect(git.show('main', 'src/gate')).resolves.toBe(
+      (await execFileAsync('git', ['show', 'main:src/gate'], { cwd: repoPath, encoding: 'utf8' })).stdout,
+    );
+  });
+
+  it('reads the folder, never a working tree file named <ref>:<folder path>', async () => {
+    const { stdout: expected } = await execFileAsync('git', ['show', 'main:src/gate'], { cwd: repoPath, encoding: 'utf8' });
+    await mkdir(join(repoPath, 'main:src'), { recursive: true });
+    await writeFile(join(repoPath, 'main:src/gate'), 'decoy\n', 'utf8');
+    await runGit(repoPath, ['add', 'main:src/gate']);
+    await runGit(repoPath, ['commit', '-m', 'a file named like the folder read']);
+    const text = await makeGitReader({ cwd: repoPath }).show('main', 'src/gate');
+    expect(text).toBe(expected);
+    expect(text).not.toContain('decoy');
+  });
+
+  it('still throws for a submodule path', async () => {
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
+    await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub')).rejects.toThrow();
+  });
+
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
     const odd = 'café\tline\r\nno newline at the end ';
     const large = 'x'.repeat(3 * 1024 * 1024);

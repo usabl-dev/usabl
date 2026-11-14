@@ -244,6 +244,15 @@ async function namesCommit(cwd: string, ref: string): Promise<boolean> {
   }
 }
 
+// The type git gives the object, such as blob or tree, or null when git cannot say.
+async function objectType(cwd: string, object: string): Promise<string | null> {
+  try {
+    return (await runGit(cwd, ['cat-file', '-t', '--end-of-options', object])).trim();
+  } catch {
+    return null;
+  }
+}
+
 export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}): GitReader {
   const cwd = options.cwd ?? process.cwd();
   // The buffer size is an option only so tests can reach the over-limit path with a small repository.
@@ -288,6 +297,13 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
             return null;
           }
           throw refNotFoundError(ref);
+        }
+        // cat-file blob refuses a folder. git show prints its listing, which is never the bytes of
+        // a file, so the guard reads a policy file that became a folder, or the reverse, as a
+        // change an approval can clear. The closing -- makes git read the argument as an object
+        // name only, so a working tree file with that name is never read in its place.
+        if (code !== null && /bad file/i.test(stderr) && (await objectType(cwd, `${ref}:${path}`)) === 'tree') {
+          return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
         }
         throw missingRefError(ref, stderr) ?? err;
       }
