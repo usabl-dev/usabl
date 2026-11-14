@@ -3,7 +3,7 @@
  * This module formats output only.
  * It must never run checks, decide a verdict, or mutate the Result.
  */
-import type { Result } from '../contracts/index.js';
+import type { GitReader, Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubPublishedResult } from './scrub.js';
 
@@ -551,6 +551,21 @@ export function projectCli(result: Result): { exitCode: number; text: string; js
     text: formatSummary(safe),
     json: JSON.stringify(safe, null, 2),
   };
+}
+
+/**
+ * The changed files of a check with a trusted ref. The merge-base diff covers a CI checkout, and
+ * the status paths keep local changes in scope. A listing that fails throws, so the check stops
+ * with an error and never runs on a list it could not read. The Stop hook lists its changes with
+ * this same function, so a stop and CI cannot list different files for the same branch.
+ */
+export async function listChangedFiles(
+  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
+  trustedRef: string,
+): Promise<string[]> {
+  const diffNames = await git.diffNameOnly(trustedRef);
+  const statusPaths = (await git.statusZ()).map((entry) => entry.path);
+  return mergeChangedPaths(diffNames, statusPaths);
 }
 
 export function mergeChangedPaths(diffNames: string[], statusPaths: string[]): string[] {

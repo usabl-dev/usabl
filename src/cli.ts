@@ -15,7 +15,7 @@ import { dirname, isAbsolute, relative, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
-import type { GitReader, Result, UsablConfig } from './contracts/index.js';
+import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
@@ -34,8 +34,8 @@ import { loadConfig, parseConfigText } from './intake/load-config.js';
 import {
   ciRefusal,
   installRefusal,
+  listChangedFiles,
   localApprovalNextSteps,
-  mergeChangedPaths,
   parseCliArgs,
   projectCli,
   type CliOptions,
@@ -370,19 +370,9 @@ async function runVerify(opts: CliOptions): Promise<number> {
   );
 }
 
-/**
- * The changed files of a check with a trusted ref. The merge-base diff covers a CI checkout, and
- * the status paths keep local changes in scope. A listing that fails throws, so the check stops
- * with an error and never runs on a list it could not read.
- */
-export async function listChangedFiles(
-  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
-  trustedRef: string,
-): Promise<string[]> {
-  const diffNames = await git.diffNameOnly(trustedRef);
-  const statusPaths = (await git.statusZ()).map((entry) => entry.path);
-  return mergeChangedPaths(diffNames, statusPaths);
-}
+// The CI listing lives beside the other CLI projections so the Stop hook lists the same files
+// without importing this entry point.
+export { listChangedFiles };
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   // Help and unknown flags are answered before anything runs, so asking how to use a command

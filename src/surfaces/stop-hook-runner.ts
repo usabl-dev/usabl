@@ -21,14 +21,16 @@ import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
-import { run } from '../run.js';
+import { run, type RunOptions } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
 import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guardedFilesHeadline } from '../output/disclosure.js';
 import { firstLine } from '../primitives/first-line.js';
+import { listChangedFiles } from './cli.js';
 import { GUARDED_FILES_LABEL } from './model-pieces.js';
+import { findStartingCommit, scopeGit, type StartingCommit } from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -84,7 +86,11 @@ export interface StopHookRunnerPorts {
   // Parses the config bytes readConfigBytes returned. It never reads the file again.
   loadConfig: (text: string) => Promise<UsablConfig>;
   buildDeps: (config: UsablConfig) => Promise<Deps>;
-  runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  runEngine: (deps: Deps, config: UsablConfig, opts?: RunOptions) => Promise<Result>;
+  // The commit where this branch left the trusted branch. See stop-hook-scope.ts. The real ports
+  // always set it. Absent only in ports a test builds by hand: the stop then checks the changes
+  // that are not committed, as it did before this was built.
+  findStartingCommit?: () => Promise<StartingCommit>;
   evaluateDecision: (result: Result, ctx: HookContext, config?: UsablConfig) => { block: boolean; message: string };
 }
 
@@ -674,7 +680,8 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
     },
     loadConfig: async (text: string) => parseConfigText(text),
     buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
-    runEngine: async (deps: Deps, config: UsablConfig) => run(deps, config),
+    runEngine: async (deps: Deps, config: UsablConfig, opts?: RunOptions) => run(deps, config, opts ?? {}),
+    findStartingCommit: async () => findStartingCommit(scopeGit(root)),
     evaluateDecision: evaluateStopDecision,
   };
 }
@@ -771,6 +778,29 @@ async function emitConfigBlock(
     return;
   }
   await emitProtocolBlock(ports, configBlockMessage(problem, false, error, guardedPaths), options);
+}
+
+/** What one stop checks, as the options its run gets. */
+interface StopScope {
+  runOptions: RunOptions;
+}
+
+/**
+ * What this stop checks. CI checks every file changed since the pull request left its base branch,
+ * so the stop checks every file changed since this branch left the trusted branch, plus the
+ * changes that are not committed. The committed part is listed by listChangedFiles, the function
+ * CI uses, from the starting commit itself, so the two lists cannot drift apart. A listing that
+ * fails throws, so it is never read as nothing to check.
+ */
+async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
+  if (ports.findStartingCommit === undefined) {
+    return { runOptions: {} };
+  }
+  const start = await ports.findStartingCommit();
+  if (start.kind !== 'found') {
+    return { runOptions: {} };
+  }
+  return { runOptions: { changedFiles: await listChangedFiles(deps.git, start.commit) } };
 }
 
 // usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
@@ -921,6 +951,9 @@ export async function runStopHook(
       }
     }
 
+    // What this stop checks: what CI will check. See stopScope.
+    const scope = await stopScope(ports, guardDeps);
+
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
@@ -941,7 +974,7 @@ export async function runStopHook(
       }
     }
 
-    const result = await ports.runEngine(guardDeps, config);
+    const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
     if (receipt !== null) {
