@@ -485,13 +485,16 @@ const VALIDATE_RESULT_SCRIPT = `          node <<'NODE'
           NODE`;
 
 // How the sticky comment step finds the comment to update. The job token can edit any comment on
-// the pull request, so the step takes only a comment that GitHub Actions itself wrote. Before, it
-// took the first comment by any bot that held the marker, so another app's comment that quoted the
-// marker was overwritten with the usabl report.
-const FIND_OWN_COMMENT = `            // Only a comment this workflow's token wrote. Another app's comment can quote the marker.
+// the pull request, so the step takes only a comment that GitHub Actions wrote and that starts
+// with the usabl marker, which the renderer always writes as the first line. Every workflow in the
+// repository posts as github-actions[bot], so the login alone does not tell this step's comment
+// from another workflow's. Before, the step took the first comment by any bot that held the marker
+// anywhere, so another app's comment that quoted the marker was overwritten with the usabl report.
+const FIND_GATE_COMMENT = `            // A comment GitHub Actions wrote that starts with the marker. Another app, or another
+            // workflow in this repository, can post a comment that quotes the marker further down.
             const existing = comments.find(
               (comment) =>
-                comment.user?.type === 'Bot' && comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+                comment.user?.type === 'Bot' && comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker),
             );`;
 
 // The gate for an app whose default branch is `branch`. The name goes into the pull request trigger
@@ -866,7 +869,7 @@ ${ENGINE_CHECK}
               issue_number,
               per_page: 100,
             });
-${FIND_OWN_COMMENT}
+${FIND_GATE_COMMENT}
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
@@ -1062,9 +1065,9 @@ const EARLIER_GATE_TEXT: EarlierText = [
   // The earlier build wrote this line without the word "accessibility". This text is only compared
   // with a file on disk; it is never written or printed.
   [VERDICT_HINT, VERDICT_HINT.replace('accessibility ', '')],
-  // The earlier build took the first comment by any bot that held the marker.
+  // The earlier build took the first comment by any bot that held the marker anywhere.
   [
-    FIND_OWN_COMMENT,
+    FIND_GATE_COMMENT,
     "            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));",
   ],
   ...EARLIER_ENGINE_TEXT,

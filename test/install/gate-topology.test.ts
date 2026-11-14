@@ -316,17 +316,38 @@ describe.each(GATES)('$name', ({ body }) => {
 
       const BODY = '<!-- usabl-report -->\nREGRESSION\n';
 
-      it('leaves another bot comment that holds the marker alone and creates its own', async () => {
+      it('leaves another bot comment that holds the marker alone and creates a new one', async () => {
         const calls = await post([
           { id: 1, user: { login: 'other-app[bot]', type: 'Bot' }, body: 'quoted: <!-- usabl-report -->' },
         ]);
         expect(calls).toEqual([{ call: 'create', args: { owner: 'acme', repo: 'app', issue_number: 7, body: BODY } }]);
       });
 
-      it('updates its own comment, not an earlier one by another bot that holds the marker', async () => {
+      it('updates the GitHub Actions comment, not an earlier one by another bot that holds the marker', async () => {
         const calls = await post([
           { id: 1, user: { login: 'other-app[bot]', type: 'Bot' }, body: '<!-- usabl-report -->' },
           { id: 2, user: { login: 'github-actions[bot]', type: 'Bot' }, body: '<!-- usabl-report -->\nold' },
+        ]);
+        expect(calls).toEqual([{ call: 'update', args: { owner: 'acme', repo: 'app', comment_id: 2, body: BODY } }]);
+      });
+
+      // Every workflow in the repository posts as github-actions[bot], so the login alone does not
+      // tell this step's comment from another workflow's. The renderer writes the marker first.
+      it('leaves a GitHub Actions comment that quotes the marker further down alone and creates one', async () => {
+        const calls = await post([
+          {
+            id: 1,
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            body: 'Pull request description:\n\nSee <!-- usabl-report --> in the gate comment.',
+          },
+        ]);
+        expect(calls).toEqual([{ call: 'create', args: { owner: 'acme', repo: 'app', issue_number: 7, body: BODY } }]);
+      });
+
+      it('updates the GitHub Actions comment that starts with the marker, after one that only quotes it', async () => {
+        const calls = await post([
+          { id: 1, user: { login: 'github-actions[bot]', type: 'Bot' }, body: 'quoted: <!-- usabl-report -->' },
+          { id: 2, user: { login: 'github-actions[bot]', type: 'Bot' }, body: '<!-- usabl-report -->\n## usabl report: old' },
         ]);
         expect(calls).toEqual([{ call: 'update', args: { owner: 'acme', repo: 'app', comment_id: 2, body: BODY } }]);
       });
