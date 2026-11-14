@@ -6,7 +6,7 @@
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
-import { operatorText } from '../intake/config-error.js';
+import { operatorPath, operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import { isRouterSource, readRouterSource, screenIdFromUrl } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
@@ -195,6 +195,13 @@ export interface InferInitOptions {
   appDir?: string;
 }
 
+// A path as init prints it. Folder names come from the file system, through a link target or a
+// folder init found, so they can hold a terminal control sequence. Each control character is
+// labelled, so nothing raw reaches the terminal and two folders never read as one name.
+function shownPath(path: string): string {
+  return operatorText(operatorPath(path));
+}
+
 /**
  * The app folder from `--app`, as a clean repository-relative path with no trailing slash.
  *
@@ -203,14 +210,14 @@ export interface InferInitOptions {
  * files, and one written with glob characters are refused: drafting it would write globs that
  * match nothing in this tree, or that match several apps.
  */
-async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
+async function normalizeAppDir(fs: InitFs, appDir: string): Promise<{ dir: string; note: string | null }> {
   const cleaned = posix.normalize(appDir.trim().split('\\').join('/')).replace(/\/+$/, '');
   if (cleaned === '.' || cleaned === '') {
-    return '';
+    return { dir: '', note: null };
   }
   if (posix.isAbsolute(cleaned) || cleaned === '..' || cleaned.startsWith('../')) {
     throw new Error(
-      `usabl init refused --app ${operatorText(appDir)}: the app folder must be a folder inside this repository, ` +
+      `usabl init refused --app ${shownPath(appDir)}: the app folder must be a folder inside this repository, ` +
         'written relative to its root, such as packages/web. Nothing was written.',
     );
   }
@@ -218,29 +225,49 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
   // its characters would ride into every glob init drafts from the folder.
   if (/[*?[\]{}!]/.test(cleaned)) {
     throw new Error(
-      `usabl init refused --app ${operatorText(appDir)}: the app folder must be one folder, written without the ` +
+      `usabl init refused --app ${shownPath(appDir)}: the app folder must be one folder, written without the ` +
         'glob characters * ? [ ] { } !, such as packages/web. Nothing was written.',
     );
   }
   // A folder written inside the repository can be a symbolic link to one outside it. A draft for
   // it would check files the repository does not hold, so the real path decides.
   const real = await fs.realpath(cleaned);
-  if (real !== null && (posix.isAbsolute(real) || real === '..' || real.startsWith('../'))) {
+  const noFiles = new Error(
+    `usabl init refused --app ${shownPath(cleaned)}: that folder has no files in this repository. ` +
+      'Check the path, relative to the repository root. Nothing was written.',
+  );
+  // Nothing usable is at the path: it is missing, a link loop, or a path through a file.
+  if (real === null) {
+    throw noFiles;
+  }
+  if (posix.isAbsolute(real) || real === '..' || real.startsWith('../')) {
     throw new Error(
-      `usabl init refused --app ${operatorText(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
+      `usabl init refused --app ${shownPath(cleaned)}: that folder is a symbolic link, or sits under one, that leads ` +
         'outside this repository. Pass the app folder inside the repository. Nothing was written.',
     );
   }
+  // git lists a file at its real path and tracks a symbolic link as one entry, so a change under a
+  // linked folder is reported under the folder it leads to. Every path is drafted from there, or
+  // no changed file would ever match the drafted globs and every run would read as nothing to check.
+  const dir = real;
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
-  // A file counts only when its path starts with the folder as written, so the folder exists.
-  const inside = (await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).filter((file) => file.startsWith(`${cleaned}/`));
+  // A file counts only when its path starts with the folder, so the folder exists.
+  const inside = (await fs.glob(dir === '' ? ['*', '*/*'] : [`${dir}/*`, `${dir}/*/*`])).filter(
+    (file) => dir === '' || file.startsWith(`${dir}/`),
+  );
   if (inside.length === 0) {
-    throw new Error(
-      `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
-        'Check the path, relative to the repository root. Nothing was written.',
-    );
+    throw noFiles;
   }
-  return cleaned;
+  if (dir === cleaned) {
+    return { dir, note: `Drafting the app in ${shownPath(dir)}, from --app.` };
+  }
+  const where = dir === '' ? 'the repository root' : shownPath(dir);
+  return {
+    dir,
+    note:
+      `Review: ${shownPath(cleaned)} is a symbolic link, or sits under one, that leads to ${where} inside this ` +
+      `repository. git reports changed files at their real path, so the draft uses ${where} for every path.`,
+  };
 }
 
 function isSkippedPath(path: string): boolean {
@@ -286,8 +313,7 @@ async function rootIsApp(fs: InitFs): Promise<boolean> {
 // refused, because drafting the wrong app would write a config that checks the other app's files.
 async function chooseAppDir(fs: InitFs, appDir: string | undefined): Promise<{ dir: string; note: string | null }> {
   if (appDir !== undefined) {
-    const dir = await normalizeAppDir(fs, appDir);
-    return { dir, note: dir === '' ? null : `Drafting the app in ${dir}, from --app.` };
+    return normalizeAppDir(fs, appDir);
   }
   if (await rootIsApp(fs)) {
     return { dir: '', note: null };
@@ -296,15 +322,15 @@ async function chooseAppDir(fs: InitFs, appDir: string | undefined): Promise<{ d
   if (found.length === 1 && found[0] !== undefined) {
     return {
       dir: found[0],
-      note: `Review: drafting the app in ${found[0]}, the one app found below the repository root. Run usabl init --app <dir> to draft another folder.`,
+      note: `Review: drafting the app in ${shownPath(found[0])}, the one app found below the repository root. Run usabl init --app <dir> to draft another folder.`,
     };
   }
   if (found.length > 1) {
     throw new Error(
       [
         `usabl init found more than one app and will not pick one, because a config drafted for the wrong app checks the wrong files. Nothing was written. The apps it found:`,
-        ...found.map((dir) => `  ${operatorText(dir)}`),
-        `Run usabl init --app <dir> with the app to check, for example: usabl init --app ${operatorText(found[0] ?? '')}`,
+        ...found.map((dir) => `  ${shownPath(dir)}`),
+        `Run usabl init --app <dir> with the app to check, for example: usabl init --app ${shownPath(found[0] ?? '')}`,
       ].join('\n'),
     );
   }
@@ -347,9 +373,9 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     const name = packageJson(await fs.readFile(manifest))?.['name'];
     if (typeof name !== 'string' || !depends.has(name)) continue;
     notes.push(
-      `Review: ${appDir} depends on ${operatorText(name)} in ${dir}, and its files are not in uiFileGlobs, so a ` +
+      `Review: ${shownPath(appDir)} depends on ${operatorText(name)} in ${shownPath(dir)}, and its files are not in uiFileGlobs, so a ` +
         'change there is a coverage gap, because usabl cannot tell which screens render it. If the app renders ' +
-        `components from it, add their files to uiFileGlobs, such as ${dir}/src/**/*.tsx, and to the files of the surfaces that render them.`,
+        `components from it, add their files to uiFileGlobs, such as ${shownPath(`${dir}/src/**/*.tsx`)}, and to the files of the surfaces that render them.`,
     );
   }
   return notes;
@@ -424,6 +450,7 @@ function draftBaseUrl(viteFile: string | null, raw: string | null): { appBaseUrl
     return { appBaseUrl: fallback, notes: [`Review: no Vite config found; using ${fallback}. ${setIt}`] };
   }
   const server = readViteServer(raw, viteFile);
+  const shownFile = shownPath(viteFile);
   const notes: string[] = [];
   const unread: string[] = [];
   if ('unread' in server.port) unread.push('server.port');
@@ -435,19 +462,19 @@ function draftBaseUrl(viteFile: string | null, raw: string | null): { appBaseUrl
     // The file does not parse, or exports its config in a shape usabl does not read, such as the
     // result of a call. usabl never saw the settings, so it does not say how they are set.
     notes.push(
-      `Review: usabl could not read the config that ${viteFile} exports, so it could not read server.port ` +
+      `Review: usabl could not read the config that ${shownFile} exports, so it could not read server.port ` +
         `or server.https. Using ${appBaseUrl}. ${setIt}`,
     );
   } else if (unread.length > 0) {
     notes.push(
-      `Review: ${viteFile} sets ${unread.join(' and ')} with code usabl does not run, so it could not read ` +
+      `Review: ${shownFile} sets ${unread.join(' and ')} with code usabl does not run, so it could not read ` +
         `${unread.length === 1 ? 'it' : 'them'}. Using ${appBaseUrl}. ${setIt}`,
     );
   }
   if ('value' in server.port) {
-    notes.push(`Inferred appBaseUrl from ${viteFile}: port ${port}, ${https ? 'https' : 'http'}.`);
+    notes.push(`Inferred appBaseUrl from ${shownFile}: port ${port}, ${https ? 'https' : 'http'}.`);
   } else if ('absent' in server.port) {
-    notes.push(`Review: ${viteFile} has no server.port; using ${appBaseUrl}, the Vite default port.`);
+    notes.push(`Review: ${shownFile} has no server.port; using ${appBaseUrl}, the Vite default port.`);
   }
   return { appBaseUrl, notes };
 }
@@ -462,8 +489,8 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
     const others = (await findAppDirs(fs)).filter((found) => found !== app.dir);
     if (others.length > 0) {
       notes.push(
-        `Review: this config checks only ${app.dir}. usabl init also found ${others.length === 1 ? 'this app' : 'these apps'}, ` +
-          `which it does not check: ${others.map((found) => operatorText(found)).join(', ')}.`,
+        `Review: this config checks only ${shownPath(app.dir)}. usabl init also found ${others.length === 1 ? 'this app' : 'these apps'}, ` +
+          `which it does not check: ${others.map((found) => shownPath(found)).join(', ')}.`,
       );
     }
   }
@@ -491,12 +518,12 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
     if (raw !== null && isRouterSource(raw)) {
       routerFile = candidate;
       routerRaw = raw;
-      notes.push(`Inferred router file ${candidate}.`);
+      notes.push(`Inferred router file ${shownPath(candidate)}.`);
       break;
     }
   }
   if (routerFile.length === 0) {
-    notes.push(`Review: no router file found (looked for ${ROUTER_CANDIDATES.map(appFile).join(', ')}).`);
+    notes.push(`Review: no router file found (looked for ${ROUTER_CANDIDATES.map((name) => shownPath(appFile(name))).join(', ')}).`);
   }
 
   const routes: RouteEntry[] = [];
@@ -516,14 +543,14 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
     for (const gap of read.unreadable) {
       const where = gap.line === null || gap.wholeFile === true ? routerFile : `${routerFile} line ${gap.line}`;
       notes.push(
-        `Review: ${where}: ${gap.reason} The draft usabl.routes.json does not list it, and usabl never ` +
+        `Review: ${shownPath(where)}: ${gap.reason} The draft usabl.routes.json does not list it, and usabl never ` +
           'scans a route that usabl.routes.json leaves out. Add the route by hand before you merge.',
       );
     }
     // A route list read on an assumption is in the draft. The operator confirms the assumption.
     for (const entry of read.assumed) {
       const where = entry.line === null ? routerFile : `${routerFile} line ${entry.line}`;
-      notes.push(`Review: ${where}: ${entry.reason}`);
+      notes.push(`Review: ${shownPath(where)}: ${entry.reason}`);
     }
     let attributed = 0;
     const wheresById = new Map<string, string[]>();
@@ -531,7 +558,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       const where = `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`;
       if (!isProvenRoutePath(route.path)) {
         notes.push(
-          `Review: ${where}: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
+          `Review: ${shownPath(where)}: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
         );
         continue;
       }
@@ -564,7 +591,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       const refusal = validateId(screenId);
       if (!refusal.ok) {
         unusable.push({
-          source: where,
+          source: shownPath(where),
           origin: 'the screen id derived from the route path there',
           refusal,
         });
@@ -576,11 +603,11 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         attributed += 1;
       } else if (entryCandidates.length > 0) {
         notes.push(
-          `Review: ${where}: ${route.path} has no proven entry file. Its import matches more than one file: ` +
-            `${entryCandidates.join(', ')}. Set entryFile in usabl.routes.json to the file the route renders.`,
+          `Review: ${shownPath(where)}: ${route.path} has no proven entry file. Its import matches more than one file: ` +
+            `${entryCandidates.map((file) => shownPath(file)).join(', ')}. Set entryFile in usabl.routes.json to the file the route renders.`,
         );
       } else {
-        notes.push(`Review: ${where}: ${route.path} has no proven entry file.`);
+        notes.push(`Review: ${shownPath(where)}: ${route.path} has no proven entry file.`);
       }
       routes.push({
         screenId,
@@ -598,7 +625,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
           'usabl init refused to write usabl.config.json and usabl.routes.json: route paths in the router file give the ' +
             'same screen id, so usabl could not tell those screens apart, and a sidecar that left one out would never ' +
             'scan it. Nothing was written. The routes that share an id:',
-          ...colliding.map((wheres) => `  ${wheres.map((where) => operatorText(where)).join(' and ')}`),
+          ...colliding.map((wheres) => `  ${wheres.map((where) => shownPath(where)).join(' and ')}`),
           // init reads the router before any file on disk, so running it again refuses again.
           'Fix: write usabl.config.json and usabl.routes.json by hand, with a screen id of its own for each route in ' +
             'usabl.routes.json. Then run usabl drift routes to check the sidecar against the router file.',
@@ -623,9 +650,9 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
     if ((await fs.glob([glob])).length > 0) uiFileGlobs.push(glob);
   }
   if (uiFileGlobs.length === 0) {
-    const where = app.dir === '' ? 'the repository root' : app.dir;
+    const where = app.dir === '' ? 'the repository root' : shownPath(app.dir);
     throw new Error(
-      `usabl init found no UI files in ${operatorText(where)} (it looked for ${UI_GLOBS.map(appFile).join(' and ')}), ` +
+      `usabl init found no UI files in ${where} (it looked for ${UI_GLOBS.map((glob) => shownPath(appFile(glob))).join(' and ')}), ` +
         'so nothing was written. A config with empty uiFileGlobs treats no change as a UI change, so every run ' +
         'would read as nothing to check. If the app is in a folder below the root, run usabl init --app <dir>. ' +
         'Otherwise write usabl.config.json by hand and set uiFileGlobs to the files that render your UI.',

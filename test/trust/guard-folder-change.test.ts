@@ -86,16 +86,20 @@ describe('a guarded path that changes between a file and a folder', { timeout: 6
     await git(root, ['add', '-A']);
     await git(root, ['commit', '-m', 'the config becomes a folder']);
     const headSha = await git(root, ['rev-parse', 'HEAD']);
+    // No review approves this head, so no code owner permission is ever read. The policy check
+    // catches an error from the stub, so the calls are counted instead of trusted to throw.
+    let permissionReads = 0;
     const out = await enforcePolicy(verified, {
       trustedRef: 'main',
       pr: { authorLogin: 'author', headSha },
       git: makeGitReader({ cwd: root }),
       listReviews: async () => [],
-      // No review approves this head, so no code owner permission is ever read.
       readPermission: async () => {
+        permissionReads += 1;
         throw new Error('no permission read is expected in this test');
       },
     });
+    expect(permissionReads).toBe(0);
     expect(out.exitCode).toBe(2);
     expect(out.message).toMatch(/approval/i);
     expect(out.message).toContain('usabl.config.json');
