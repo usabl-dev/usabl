@@ -84,6 +84,39 @@ export function expandBraces(pattern: string): string[] | null {
   return results;
 }
 
+/**
+ * How many patterns expandBraces would return, without building them, or null when it would
+ * return null. The count grows as a product of the groups, so a short pattern can name more
+ * patterns than memory holds. A caller checks the count before it expands.
+ */
+export function countBraceExpansions(pattern: string): number | null {
+  let count = 1;
+  let i = 0;
+  while (i < pattern.length) {
+    const char = pattern.charAt(i);
+    if (char === '}') {
+      return null;
+    }
+    if (char === '{') {
+      const close = pattern.indexOf('}', i);
+      if (close === -1) {
+        return null;
+      }
+      const body = pattern.slice(i + 1, close);
+      if (body.includes('{')) {
+        return null;
+      }
+      if (body.includes(',')) {
+        count *= body.split(',').length;
+      }
+      i = close + 1;
+      continue;
+    }
+    i++;
+  }
+  return count;
+}
+
 function compileToRegExp(pattern: string): RegExp {
   // Encode **/? first so src/**/*.tsx matches src/App.tsx and deeper files. `**` becomes
   // [\s\S]*, which matches any character, a newline too: git allows a newline in a file name,
