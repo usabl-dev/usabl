@@ -423,16 +423,19 @@
   as other leaving keys do, where before the import read as loading only files of that package. A
   folder key whose target stays inside keeps that reading.
 
-- A query on an import, such as `?inline`, `?url`, or `?raw`, is no longer read as part of the
-  path. Vite takes it off before it looks up the file. For a package subpath, usabl now takes it
-  off before it reads `exports` and before it looks up the path, so
-  `import css from '@acme/ui/styles.css?inline'` no longer makes every test-only change in the
-  package a gap. A relative import with a query now links the file it names. Before, a relative
-  import with a query and no extension, such as `./tests/Widget?raw`, linked nothing, so a change
-  to that test file read as nothing to check while the screen loaded it. The same holds for alias
+- A query or hash on an import, such as `?inline`, `?url`, `?raw`, or `#x`, is no longer read as
+  part of the path. Vite cuts the path at the first `?` or `#` before it looks up the file. For a
+  package subpath, usabl now takes it off before it reads `exports` and before it looks up the
+  path, so `import css from '@acme/ui/styles.css?inline'` no longer makes every test-only change in
+  the package a gap. A relative import with a query or hash now links the file it names. Before, a
+  relative import such as `./tests/Widget?raw` or `./tests/Widget#x` linked nothing, so a change to
+  that test file read as nothing to check while the screen loaded it. The same holds for alias
   imports, `baseUrl` lookups, the name an unresolved import is matched by, the fixed start of an
-  `import()` built at run time, and a bare package name, so `@/tests/Widget?raw` names `Widget`
-  and `lodash?x` names `lodash`. A `?` in an `import.meta.glob` pattern stays glob syntax.
+  `import()`, `require()`, or `require.context` built at run time, a bare package name, and the
+  route entry import `usabl init` reads, so `@/tests/Widget?raw` names `Widget`, `lodash#x` names
+  `lodash`, and a lazy route that imports `./pages/Home?x` gets `Home` as its entry file. A `#` as
+  the first character still starts a package.json `imports` specifier. A `?` or `#` in an
+  `import.meta.glob` pattern stays part of the pattern.
 
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.

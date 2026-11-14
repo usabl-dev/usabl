@@ -1712,9 +1712,9 @@ in this order:
      package may load any file of that package: a conditions object, an array, a key with `*` or a
      folder key that would be needed to match, a string `exports`, an entry that names no file, and
      a package.json that cannot be parsed.
-     A query after the subpath, such as `?inline`, `?url`, or `?raw`, is not part of it: usabl
-     takes it off before it reads `exports` and before it looks up the path, as Vite does. So
-     `@acme/ui/styles.css?inline` reads as `@acme/ui/styles.css`.
+     A query or hash after the subpath, such as `?inline`, `?url`, `?raw`, or `#x`, is not part
+     of it: usabl takes it off before it reads `exports` and before it looks up the path, as Vite
+     does. So `@acme/ui/styles.css?inline` reads as `@acme/ui/styles.css`.
      Without `exports`, a path that names a file under
      the package folder, such as `@acme/ui/src/tests/helpers`, is followed to it like any import,
      and one that names no file there may load any file of that package. A path that leaves the
@@ -1837,13 +1837,16 @@ extension, such as `./Widget.spec` or `./Button.styles`, loads the file of that 
 exists, and otherwise is probed against the list above like a name with no dot, as the bundler and
 the compiler do. So `./Widget.spec` links `Widget.spec.tsx`.
 
-An import with a query, such as `./styles.css?inline`, `./logo.svg?url`, or
-`./tests/Widget?raw`, links the file the path before the `?` names. Vite takes the query off before
-it looks up the path, so the query is not part of the file name. This holds for relative, alias,
-and package imports, for a `baseUrl` lookup, for the name an unresolved import is matched by, and
-for the fixed start of an `import()` built at run time: `@/tests/Widget?raw` names `Widget`, and
-`lodash?x` names the package `lodash`. A disclosure still quotes the import as written. A `?` in
-an `import.meta.glob` pattern is glob syntax, read as above, and a `#` is not read as a query.
+An import with a query or a hash, such as `./styles.css?inline`, `./logo.svg?url`,
+`./tests/Widget?raw`, or `./tests/Widget#x`, links the file the path before the first `?` or `#`
+names. Vite cuts the path there before it looks it up, so neither is part of the file name. This
+holds for relative, alias, and package imports, for a `baseUrl` lookup, for the name an unresolved
+import is matched by, for the fixed start of an `import()`, `require()`, or `require.context` built
+at run time, and for the entry import `usabl init` reads for a route: `@/tests/Widget?raw` names
+`Widget`, and `lodash#x` names the package `lodash`. A `#` as the first character starts a
+package.json `imports` specifier, such as `#tests/Widget`, so it is kept, and a later `?` or `#`
+still ends the path. A disclosure still quotes the import as written. A `?` or `#` in an
+`import.meta.glob` pattern is read as part of the pattern, as above.
 
 A template literal with a `${...}` part inside `import()` is not read as a file name. It is a path
 built at run time, recorded as a load usabl cannot follow (see "Test files" above).
