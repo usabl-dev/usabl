@@ -780,10 +780,12 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     expect(end).toBeLessThan(args.indexOf(refArg));
   }
 
-  it('puts --end-of-options before the ref in show, the commit check, the diff, and each tree listing', async () => {
+  it('puts --end-of-options before the ref in show, the commit check, the folder read, the diff, and each tree listing', async () => {
     const git = makeGitReader({ cwd: repoPath });
     await git.show('main', 'screen.tsx');
     await git.show(ABSENT_COMMIT, 'missing.tsx').catch(() => undefined);
+    // A folder: cat-file blob refuses it, cat-file -t names it a tree, and git show lists it.
+    await git.show('main', 'src/gate');
     await git.diffNameOnly('main');
     await git.lsTree('main', ['screen.tsx']);
     await git.lsFiles('main', 'src/gate');
@@ -793,6 +795,11 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     // show reads the blob with git cat-file.
     expectEndBefore(all, 'main:screen.tsx', 'cat-file');
     expectEndBefore(all, `${ABSENT_COMMIT}^{commit}`, 'rev-parse');
+    const typeCheck = all.find((args) => args[0] === 'cat-file' && args[1] === '-t' && args.includes('main:src/gate'));
+    expect(typeCheck, 'a git cat-file -t call for the folder').toBeDefined();
+    expect(typeCheck?.indexOf('--end-of-options') ?? -1, `--end-of-options in git ${(typeCheck ?? []).join(' ')}`).toBeGreaterThan(-1);
+    expect(typeCheck?.indexOf('--end-of-options')).toBeLessThan(typeCheck?.indexOf('main:src/gate') ?? -1);
+    expectEndBefore(all, 'main:src/gate', 'show');
     expectEndBefore(all, 'main...HEAD', 'diff');
     const listings = all.filter((args) => args[0] === 'ls-tree');
     expect(listings).toHaveLength(4);
