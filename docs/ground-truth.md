@@ -990,8 +990,17 @@ a later stop's path does not confirm the end. After the extra Tab, the walk disc
 Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
 where it did before the end was confirmed. A walk that reached no stop is complete only when
 the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
-below, which runs in the CLI only. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
-more Tab did not go back to a control the walk had reached. A page with one control or a skip
+below. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
+more Tab did not go back to a control the walk had reached. Focus can also reach the body
+because a page script called `focus()` on a body that has a `tabindex`, in the middle of the
+page. The next Tab from a focused body starts again at the first control, so the extra Tab
+alone would read that as the end. At the real end no element has focus, and
+`document.activeElement` only falls back to the body. So before the extra Tab, the end rule
+reads whether the body itself holds focus (`Page.bodyHoldsFocus`, the browser's own `:focus`
+state, read in an isolated world). When it does, or when the read fails, the walk ends with
+`keyboard-walk-truncated` as `unverified`, whose `why` says a script moved focus to the
+document body itself. The focus order check on design requirements uses the same end rule
+(`providers/keyboard-walk/walk-end.ts`). A page with one control or a skip
 link wraps as any other page does. Tab that brings focus back to
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
 never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
@@ -1052,14 +1061,34 @@ threw on mount all look like this, so its findings are dropped and it gets a `no
 (`coverage/unseen.ts`). The detector reads that fact, not the path. A body with an id has that
 id as its path, so `<body id="app">` never read as the body when the detector read the tail of
 the path, and a screen that crashed on mount read as seen. An empty transcript is no evidence
-either way, so it is not unseen. The detector runs in the CLI only. `checkPage` collects no
-transcript, so it has no blank-page detector: a blank or crashed page handed to `checkPage` reads
-as checked unless its screen declares a `reachedWhen` readiness signal that the page fails.
+either way, so it is not unseen.
 
-Known limits of what the scan sees. A page with no tabbable control has a walk that stays on the
-body, so the CLI reads it as unseen. A readiness signal that holds does not change that, because
-the two detectors are independent (`coverage/unseen.ts`). In `checkPage` the same page reads as
-checked. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
+A page with nothing to Tab to, such as a page of text, has a walk that stays on the body too,
+and it rendered. Only a readiness signal can tell it from a page that never rendered. So the
+detector alone never marks a screen unseen when the screen declares a `reachedWhen` selector
+that held and every other declared part held too. A declared response alone does not count: an
+application can fetch its data and then throw while it renders it, so the answer says nothing
+about what is on the page. A body-only screen without a selector stays unseen, because nothing
+confirms it rendered, and its gap says to declare a `reachedWhen` selector for an element only
+that screen renders. A body-only screen whose selector did not hold stays unseen, and its gap
+names the selector. The limit of the signal holds here too: a selector that matches only the app
+shell also holds on a screen whose content did not mount, so point it at the screen's own
+content (see "Absent is a fix only with evidence" in section 9).
+
+`checkPage` collects no transcript of its own. The keyboard walk returns the stops it reached,
+the body stop included, with whether its end rule confirmed the end (`WalkRecord`), and
+`runProviders` passes the first such record to the caller. The record is measurement for this
+check only: no draft, finding, or verdict is made from it, the gate never reads it, and no CLI
+scan carries it, so a CLI result is the same as before. `checkPage` reads a complete walk's stops
+with the same function the CLI runs (`markUnseenScreens`), so a blank or crashed page handed to
+it is a `not-covered` gap with ref `readiness:<screenId>` and the CLI's wording, and a page of
+text follows the readiness rule above. A walk that was cut short gives no stops to read, and its
+own `keyboard-walk-truncated` draft already keeps the page from verifying. A walk that did not
+run, because the caller passed `keyboardWalk: false`, gives no stops either, so `checkPage` makes
+no blank-page claim and the page reads as its other checks found it. A blank page checked that
+way is caught only by a `reachedWhen` readiness signal that the page fails.
+
+Known limits of what the scan sees. The menu and dialog probes each wait up to 2.5 seconds for the menu or dialog to open,
 and that wait is a wall-clock limit: a menu or dialog that opens later is read as one that did
 not open, which is an `unverified` draft when the toggle or trigger promised it and nothing
 otherwise. The live-region
@@ -4374,7 +4403,9 @@ path is: only the part before its first `?` is compared, with one trailing slash
 An `expectedUrl` that is not an http or https address, such as `about:blank`, is the same
 `landing:<screenId>` gap, with a reason that says so, and `checkPage` does not throw. When the
 screen declares no readiness signal, `checkPage` first waits for the page to settle, as the CLI
-does, and then reads the address. It reads the address again after the checks, and a page that
+does, and then reads the address. A page that does not settle is a `landing:<screenId>` gap that
+keeps only the first line of the browser's error, neutralized, because its later lines can be a
+call log that quotes the page's markup. It reads the address again after the checks, and a page that
 left its screen while they ran is the same gap, with its findings dropped. A page at another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
