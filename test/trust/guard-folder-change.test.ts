@@ -107,6 +107,6 @@ describe('a guarded path that changes between a file and a folder', { timeout: 6
     await rm(join(root, 'policy'), { recursive: true, force: true });
     await write(root, 'policy', 'now a file\n');
     const deps = { ...makeFakeDeps(), git: makeGitReader({ cwd: root }), fs: makeFsGlob({ cwd: root }) };
-    await expect(checkGuard(deps, config)).resolves.toContain('policy');
+    await expect(checkGuard(deps)).resolves.toContain('policy');
   });
 });
