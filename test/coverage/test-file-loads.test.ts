@@ -128,7 +128,7 @@ describe('a test file that only files no route reaches import', () => {
       {
         'package.json': PACKAGE_JSON,
         [fixture]: 'export const rows = [];\n',
-        'src/Button.stories.tsx': "import { rows } from './tests/fixtures/data';\n",
+        'src/demo/ButtonDemo.tsx': "import { rows } from '../tests/fixtures/data';\n",
         'src/mocks/handlers.ts': "import { rows } from '../tests/fixtures/data';\n",
       },
       fixture,
@@ -136,7 +136,7 @@ describe('a test file that only files no route reaches import', () => {
     expectGap(coverage, fixture);
     const reason = coverage.gaps[0]?.reason ?? '';
     expect(reason).toMatch(/^This UI file is not in any route closure/);
-    expect(reason).toContain('src/Button.stories.tsx, src/mocks/handlers.ts');
+    expect(reason).toContain('src/demo/ButtonDemo.tsx, src/mocks/handlers.ts');
     expect(reason).toContain('no route closure reaches');
   });
 
