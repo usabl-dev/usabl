@@ -91,6 +91,10 @@ describe('a guarded path that changes between a file and a folder', { timeout: 6
       pr: { authorLogin: 'author', headSha },
       git: makeGitReader({ cwd: root }),
       listReviews: async () => [],
+      // No review approves this head, so no code owner permission is ever read.
+      readPermission: async () => {
+        throw new Error('no permission read is expected in this test');
+      },
     });
     expect(out.exitCode).toBe(2);
     expect(out.message).toMatch(/approval/i);
