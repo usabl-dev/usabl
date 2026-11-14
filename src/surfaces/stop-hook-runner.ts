@@ -34,6 +34,7 @@ import {
   findStartingCommit,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
+  scopeGapNextStep,
   scopeGit,
   type BranchScope,
   type CheckCommand,
@@ -848,11 +849,7 @@ function scopeGapMessage(
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
   }
-  lines.push(
-    'Next: fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
-      'or git fetch --unshallow in a shallow clone, then stop again. If the branch shares no history with the ' +
-      'trusted branch, run usabl check and check the change by hand before you call it accessible.',
-  );
+  lines.push(scopeGapNextStep(scope.problem, 'stop again'));
   const guarded = guardedFilesNamed(guardedPaths);
   if (guarded !== null) {
     lines.push(guarded.line);

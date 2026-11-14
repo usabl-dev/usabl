@@ -302,13 +302,13 @@ describe('no trusted branch at all', { timeout: REAL_PROCESS_BUDGET_MS }, () => 
 });
 
 describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
-  function expectScopeGap(h: ReturnType<typeof hook>, reason: string): string {
+  function expectScopeGap(h: ReturnType<typeof hook>, reason: string, next = 'Next: fetch the trusted branch'): string {
     const text = blockReason(h.stdout());
     expect(text.startsWith('NOT verified - not covered: usabl could not find where this branch left the trusted branch')).toBe(true);
     expect(text).toContain(reason);
     expect(text).toContain('checked nothing on this stop');
     expect(text).toContain('It did not fall back to the uncommitted changes alone or to the whole history.');
-    expect(text).toContain('Next: fetch the trusted branch');
+    expect(text).toContain(next);
     expect(text).not.toContain('IDLE');
     expect(text).not.toContain('VERIFIED');
     expect(h.scanned).toEqual([]);
@@ -350,6 +350,42 @@ describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, ()
     await runStopHookFromStdin('{}', h.ports);
     const text = expectScopeGap(h, 'this clone has no commit for it');
     expect(insideFrame(text, 'trusted branch: origin/gone')).toBe(true);
+  });
+
+  // Only a branch of origin is a trusted branch. origin/HEAD pointed at a local branch or a tag
+  // on HEAD made the starting commit HEAD itself, so committed work read as nothing to check.
+  for (const [kind, target] of [
+    ['a local branch', 'refs/heads/feature'],
+    ['a tag', 'refs/tags/here'],
+  ] as const) {
+    it(`reports a gap when origin/HEAD names ${kind}, not a branch of origin`, async () => {
+      git('switch', '-q', '-c', 'feature');
+      await write('src/App.tsx', 'export const App = 2;\n');
+      git('commit', '-q', '-am', 'change the app');
+      git('tag', 'here');
+      git('symbolic-ref', 'refs/remotes/origin/HEAD', target);
+
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      const text = expectScopeGap(
+        h,
+        'which is not a branch of origin under refs/remotes/origin/',
+        'Next: run git remote set-head origin --auto, which records the default branch of origin again, then fetch the trusted branch',
+      );
+      expect(insideFrame(text, `trusted branch: ${target}`)).toBe(true);
+    });
+  }
+
+  it('reads a target of origin/HEAD outside refs/remotes/origin/ as a gap before any other git call', async () => {
+    for (const target of ['refs/heads/main', 'refs/tags/v1', 'refs/remotes/upstream/main', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/']) {
+      const calls: string[][] = [];
+      const start = await findStartingCommit(async (args) => {
+        calls.push([...args]);
+        return { code: 0, stdout: `${target}\n`, stderr: '' };
+      });
+      expect(start).toEqual({ kind: 'not-found', branch: target, problem: 'not-remote-branch', detail: null });
+      expect(calls).toHaveLength(1);
+    }
   });
 
   it('reports a gap when the commit is not an ancestor of HEAD', async () => {

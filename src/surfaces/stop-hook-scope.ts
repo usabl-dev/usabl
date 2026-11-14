@@ -23,7 +23,12 @@ const execFileAsync = promisify(execFile);
 export const TRUSTED_BRANCH_POINTER = 'refs/remotes/origin/HEAD';
 
 /** Why a trusted branch is named but its starting commit could not be used. */
-export type StartingCommitProblem = 'branch-missing' | 'no-common-commit' | 'not-ancestor' | 'git-failed';
+export type StartingCommitProblem =
+  | 'not-remote-branch'
+  | 'branch-missing'
+  | 'no-common-commit'
+  | 'not-ancestor'
+  | 'git-failed';
 
 /**
  * What the hook found. `found` carries the trusted branch as git names it (for example
@@ -83,6 +88,13 @@ function gitFailed(branch: string, result: ScopeGitResult): StartingCommit {
   return { kind: 'not-found', branch, problem: 'git-failed', detail: detail.length > 0 ? detail : 'git did not run' };
 }
 
+const ORIGIN_BRANCHES = 'refs/remotes/origin/';
+
+// refs/remotes/origin/<name>, and never origin/HEAD itself.
+function isOriginBranch(ref: string): boolean {
+  return ref.startsWith(ORIGIN_BRANCHES) && ref.length > ORIGIN_BRANCHES.length && ref !== TRUSTED_BRANCH_POINTER;
+}
+
 // The branch as a person names it: refs/remotes/origin/main reads as origin/main.
 function branchName(ref: string): string {
   return ref.startsWith('refs/remotes/') ? ref.slice('refs/remotes/'.length) : ref;
@@ -103,6 +115,11 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
     return gitFailed('origin/HEAD', pointer);
   }
   const ref = oneLine(pointer.stdout);
+  // Only a branch of origin is a trusted branch. A local branch or a tag can sit on HEAD, which
+  // would make HEAD its own starting commit and committed work read as nothing to check.
+  if (!isOriginBranch(ref)) {
+    return { kind: 'not-found', branch: ref, problem: 'not-remote-branch', detail: null };
+  }
   const branch = branchName(ref);
 
   const tip = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
@@ -162,6 +179,8 @@ export const NO_TRUSTED_BRANCH_NOTE =
 
 /** One plain reason per problem, in usabl's own words. */
 export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
+  'not-remote-branch':
+    'git names that ref as the default branch of origin, which is not a branch of origin under refs/remotes/origin/, so usabl does not trust it',
   'branch-missing': 'git names that branch as the default branch of origin, but this clone has no commit for it',
   'no-common-commit':
     'this branch and the trusted branch share no commit in this clone, which happens in a shallow clone or on a branch with unrelated history',
@@ -170,6 +189,26 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
   'listing-failed':
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
 };
+
+// The problems a fetch alone does not clear, because origin/HEAD itself names the wrong ref.
+const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>(['not-remote-branch']);
+
+/**
+ * The next step for a scope gap, shared by the Stop hook and `usabl check --branch-scope`.
+ * `then` says what to do after the fix: stop again, or run the check again.
+ */
+export function scopeGapNextStep(problem: ScopeProblem, then: string): string {
+  const fetch =
+    'fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
+    'or git fetch --unshallow in a shallow clone';
+  const first = SET_HEAD_FIRST.has(problem)
+    ? `Next: run git remote set-head origin --auto, which records the default branch of origin again, then ${fetch}, then ${then}.`
+    : `Next: ${fetch}, then ${then}.`;
+  return (
+    `${first} If the branch shares no history with the trusted branch, run usabl check and check the change by hand ` +
+    'before you call it accessible.'
+  );
+}
 
 /** The check a message tells the reader to run. */
 export type CheckCommand = 'usabl check' | 'usabl check --branch-scope';
@@ -194,10 +233,7 @@ export function branchScopeGapText(scope: Extract<BranchScope, { kind: 'gap' }>)
       `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
       'So it could not tell which committed changes CI will check, and it checked nothing. ' +
       'It did not fall back to the uncommitted changes alone or to the whole history.',
-    'Next: fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
-      'or git fetch --unshallow in a shallow clone, then run usabl check --branch-scope again. If the branch ' +
-      'shares no history with the trusted branch, run usabl check and check the change by hand before you call ' +
-      'it accessible.',
+    scopeGapNextStep(scope.problem, 'run usabl check --branch-scope again'),
   ];
   const pieces = [`trusted branch: ${scope.branch}`, ...(scope.detail === null ? [] : [`error: ${scope.detail}`])];
   return [...lines, frameUntrustedBlock(pieces.map((piece) => boundField(piece, 'gapReason')))].join('\n');
