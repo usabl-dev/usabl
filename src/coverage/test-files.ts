@@ -1,5 +1,7 @@
 /**
- * Changed test files: files under uiFileGlobs that are named like a test or sit in a test folder.
+ * Changed test files: files under uiFileGlobs that are named like a test file or sit in a test
+ * folder. Stories, test setup files, mocks, and test helper files count, by the names listed below,
+ * unless the config scans a story tool page (see isTestFile).
  *
  * Such a file usually holds tests or test helpers, but a screen can render it too. So it is
  * excluded only when usabl has looked at every place that could load it and found none. "No
@@ -25,18 +27,93 @@ import { declaredPackageNames, workspacePackages } from './workspace-packages.js
 import { describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
 
-// A file named like a test, such as Button.test.tsx or Button.spec.tsx.
-export function isTestNamedFile(file: string): boolean {
-  return /\.(test|spec)\.[^/]+$/u.test(file);
+// The test file set. These are the files test tools load: tests, stories, test setup files, mocks,
+// and test helpers. Each one follows the same rule as any other test file. The names: a file
+// such as Button.test.tsx, Button.spec.tsx, Button.stories.tsx, setupTests.ts, or test-utils.tsx.
+// The folders: test, tests, __tests__, __mocks__, and test-utils. The lists after each pattern are
+// the words the reasons use, so keep the patterns and the lists in step.
+//
+// When the config names a story tool page (see isStoryToolPageUrl), the set is only the base
+// names and folders: tests named .test. or .spec., and the test, tests, and __tests__ folders. A
+// story tool loads stories, setup files, mocks, and helpers through its own config, which usabl
+// does not read, so then none of the other names is read as a test file.
+const BASE_TEST_NAME = /\.(test|spec)\.[^/]+$/u;
+const BASE_TEST_NAMES = '.test. or .spec.';
+const BASE_TEST_FOLDER = /(^|\/)(test|tests|__tests__)(\/|$)/u;
+const BASE_TEST_FOLDERS = 'test, tests, or __tests__';
+const TEST_NAME = /(\.(test|spec|stories)\.|(^|\/)(setupTests|test-utils)\.)[^/]+$/u;
+const TEST_NAMES = '.test., .spec., .stories., setupTests, or test-utils';
+const TEST_FOLDER = /(^|\/)(test|tests|__tests__|__mocks__|test-utils)(\/|$)/u;
+const TEST_FOLDERS = 'test, tests, __tests__, __mocks__, or test-utils';
+
+// A story, such as Button.stories.tsx.
+export function isStoryFile(file: string): boolean {
+  return /\.stories\.[^/]+$/u.test(file);
 }
 
-// A file in a folder named test, tests, or __tests__.
-export function isInTestFolder(file: string): boolean {
-  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file);
+// A file named like a test file, such as Button.test.tsx or Button.stories.tsx.
+export function isTestNamedFile(file: string, storyToolPage = false): boolean {
+  return (storyToolPage ? BASE_TEST_NAME : TEST_NAME).test(file);
 }
 
-export function isTestFile(file: string): boolean {
-  return isInTestFolder(file) || isTestNamedFile(file);
+// A file in a test folder, such as src/__tests__/ or src/__mocks__/.
+export function isInTestFolder(file: string, storyToolPage = false): boolean {
+  return (storyToolPage ? BASE_TEST_FOLDER : TEST_FOLDER).test(file);
+}
+
+/**
+ * Whether a file is in the test file set. `storyToolPage` says the config names a story tool page,
+ * which leaves only the base names and folders in the set.
+ */
+export function isTestFile(file: string, storyToolPage = false): boolean {
+  return isInTestFolder(file, storyToolPage) || isTestNamedFile(file, storyToolPage);
+}
+
+// A base for a url that is not absolute. Only its path and query are read.
+const URL_BASE = 'http://usabl.invalid';
+
+/**
+ * Whether a url is a story tool page. Reading a url as one can only add gaps, so the test is
+ * generous. A url counts when its path ends with /iframe.html, with or without a query, or when its
+ * query has a viewMode parameter, a path parameter that starts with /story/ or /docs/, a
+ * selectedKind parameter (Storybook 5), or a story parameter (Ladle). The url is parsed, not
+ * searched as text, and one that does not parse does not count. A hash is not read.
+ */
+export function isStoryToolPageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, URL_BASE);
+  } catch {
+    return false;
+  }
+  if (parsed.pathname.endsWith('/iframe.html')) return true;
+  const query = parsed.searchParams;
+  if (query.has('viewMode') || query.has('selectedKind') || query.has('story')) return true;
+  const storyPath = query.get('path');
+  return storyPath !== null && (storyPath.startsWith('/story/') || storyPath.startsWith('/docs/'));
+}
+
+/**
+ * Whether the config scans story tool pages: a url usabl opens is one (see isStoryToolPageUrl), or
+ * a surface lists a story in its files.
+ */
+export function scansStoryToolPages(urls: readonly string[], surfaces: readonly { files: readonly string[] }[]): boolean {
+  return urls.some(isStoryToolPageUrl) || surfaces.some((surface) => surface.files.some(isStoryFile));
+}
+
+/**
+ * The sentence the unplaced gap of a story, setup file, mock, or test helper says in place of the
+ * usual fix, when the config names a story tool page.
+ */
+export function storyToolNote(file: string): string {
+  const story = isStoryFile(file);
+  return (
+    `It is ${story ? 'a story' : 'a test support file'}, and the config names a story tool page. ` +
+    `A story tool such as Storybook loads ${story ? 'stories' : 'stories and the files they use'} through its own config, ` +
+    `which usabl does not read, so usabl cannot tell ${story ? 'which stories that page loads' : 'whether that page loads this file'}, ` +
+    `and did not check ${story ? 'this one' : 'it'}. To fix it, list this ${story ? 'story' : 'file'} in the files of the ` +
+    'surface that shows it in usabl.config.json.'
+  );
 }
 
 // The search starts from the files the config names as app code, not from every file in the
@@ -46,8 +123,14 @@ const NOT_FOUND =
   'so usabl reads it as test code and did not check it. This does not block. If a screen renders it, import it ' +
   'from that screen, or add it to the files of a surface in usabl.config.json.';
 
-const TEST_NAMED_REASON = `This file is named like a test (.test. or .spec.). ${NOT_FOUND}`;
-const TEST_FOLDER_REASON = `This file is in a test folder (test, tests, or __tests__). ${NOT_FOUND}`;
+// The words for the names and the folders in the set, with or without a story tool page.
+function namesOf(storyToolPage: boolean): string {
+  return storyToolPage ? BASE_TEST_NAMES : TEST_NAMES;
+}
+
+function foldersOf(storyToolPage: boolean): string {
+  return storyToolPage ? BASE_TEST_FOLDERS : TEST_FOLDERS;
+}
 
 // A test file that wideBlastGlobs match is still read as a test file, so the reason says the match
 // did not make it a file usabl checks.
@@ -55,17 +138,19 @@ const WIDE_BLAST_CLAUSE = 'It matches wideBlastGlobs, but it was still not check
 
 /**
  * Why a test file nothing loads was excluded, in words that fit its kind. `matchesWideBlast` adds
- * that a wideBlastGlobs pattern matched it.
+ * that a wideBlastGlobs pattern matched it. `storyToolPage` picks the names the set holds.
  */
-export function excludedTestFileReason(file: string, matchesWideBlast = false): string {
-  const reason = isTestNamedFile(file) ? TEST_NAMED_REASON : TEST_FOLDER_REASON;
-  if (!matchesWideBlast) return reason;
-  const kindEnd = reason.indexOf('. ') + 2;
-  return `${reason.slice(0, kindEnd)}${WIDE_BLAST_CLAUSE} ${reason.slice(kindEnd)}`;
+export function excludedTestFileReason(file: string, matchesWideBlast = false, storyToolPage = false): string {
+  const kind = isTestNamedFile(file, storyToolPage)
+    ? `This file is named like a test file (${namesOf(storyToolPage)}).`
+    : `This file is in a test folder (${foldersOf(storyToolPage)}).`;
+  return matchesWideBlast ? `${kind} ${WIDE_BLAST_CLAUSE} ${NOT_FOUND}` : `${kind} ${NOT_FOUND}`;
 }
 
-function kindOf(file: string): string {
-  return isTestNamedFile(file) ? 'is named like a test (.test. or .spec.)' : 'is in a test folder (test, tests, or __tests__)';
+function kindOf(file: string, storyToolPage: boolean): string {
+  return isTestNamedFile(file, storyToolPage)
+    ? `is named like a test file (${namesOf(storyToolPage)})`
+    : `is in a test folder (${foldersOf(storyToolPage)})`;
 }
 
 // One unresolved import, as a clause.
@@ -77,13 +162,13 @@ function describeImport(entry: UnresolvableImport): string {
  * Why a test file is a gap: the files that load files in a way usabl cannot follow, that this file
  * may be one of them, and what to do.
  */
-export function testFileGapReason(file: string, loads: readonly UnresolvableImport[]): string {
+export function testFileGapReason(file: string, loads: readonly UnresolvableImport[], storyToolPage = false): string {
   const clauses = [...new Set(loads.map(describeImport))].sort();
   const importers = [...new Set(loads.map((entry) => entry.importer))].sort().join(', ');
   // The fix usually belongs in the importer: a loader whose pattern or path start covers a test
   // folder makes every change there a gap, and a test helper has no screen to list it on.
   return (
-    `This file ${kindOf(file)}, and no file outside the tests imports it in a way usabl can follow. But ` +
+    `This file ${kindOf(file, storyToolPage)}, and no file outside the tests imports it in a way usabl can follow. But ` +
     `${clauses.join('; ')}. This file may be one of the files loaded that way, or be imported by one of them. ` +
     `So usabl cannot tell whether a screen renders it, and did not check it. To fix it, change the load in ${importers} ` +
     'so its pattern or path start does not cover test folders, or make it a plain import that usabl can resolve. ' +
@@ -93,16 +178,16 @@ export function testFileGapReason(file: string, loads: readonly UnresolvableImpo
 
 /**
  * The sentence a test file's unplaced gap adds when the file counts as a UI file only because files
- * outside the tests that no route closure reaches import it, such as a story, a setup file, or a
- * mock. It says who imports the file, so a reader can tell test support from a screen.
+ * outside the tests that no route closure reaches import it, such as a mock request handler in a
+ * mocks folder. It says who imports the file, so a reader can tell test support from a screen.
  */
-export function loadedTestFileNote(file: string, importers: readonly string[]): string {
+export function loadedTestFileNote(file: string, importers: readonly string[], storyToolPage = false): string {
   const who = importers.length === 0 ? 'files outside the tests' : importers.join(', ');
   const verb = importers.length === 1 ? 'imports' : 'import';
   return (
-    `It ${kindOf(file)}, and usabl counts it as a UI file because ${who} ${verb} it, but no route closure reaches ` +
-    `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, such as stories, setup files, ` +
-    'or mocks, this gap stays until they are named like a test or sit in a test folder. If a screen renders this file, ' +
+    `It ${kindOf(file, storyToolPage)}, and usabl counts it as a UI file because ${who} ${verb} it, but no route closure reaches ` +
+    `${importers.length === 1 ? 'that file' : 'those files'}. If they are test support, this gap stays until they are ` +
+    `named like a test file (${namesOf(storyToolPage)}) or sit in a test folder (${foldersOf(storyToolPage)}). If a screen renders this file, ` +
     'list it in the files of a surface in usabl.config.json.'
   );
 }
@@ -136,7 +221,7 @@ function reachable(graph: ImportGraphView, starts: Iterable<string>): Set<string
  * file. The reverse edges are built once for every file given, so the cost grows with the size of
  * the graph, not with the graph times the number of files.
  */
-export function importersOutsideTests(graph: ImportGraphView, files: readonly string[]): Map<string, string[]> {
+export function importersOutsideTests(graph: ImportGraphView, files: readonly string[], storyToolPage = false): Map<string, string[]> {
   const importersOf = new Map<string, string[]>();
   for (const from of [...graph.visited].sort()) {
     for (const to of graph.get(from)) {
@@ -154,7 +239,7 @@ export function importersOutsideTests(graph: ImportGraphView, files: readonly st
       for (const importer of importersOf.get(queue[at] as string) ?? []) {
         if (seen.has(importer)) continue;
         seen.add(importer);
-        if (isTestFile(importer)) queue.push(importer);
+        if (isTestFile(importer, storyToolPage)) queue.push(importer);
         else found.add(importer);
       }
     }
@@ -186,7 +271,11 @@ export async function placeTestFiles(
   // More files that start the graph, such as the source of the workspace packages the app depends
   // on. Test files among them are left out.
   extraStarts: readonly string[] = [],
+  // Whether the config names a story tool page, which leaves only the base names and folders in the
+  // test file set (see isTestFile).
+  storyToolPage = false,
 ): Promise<Map<string, TestFilePlacement>> {
+  const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
   const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
   const options = {
     complete: true,
@@ -200,12 +289,12 @@ export async function placeTestFiles(
   // importer outside uiFileGlobs that the config does not name is not followed.
   const wideBlast = config.discovery.wideBlastGlobs.length === 0 ? [] : await fs.glob([...config.discovery.wideBlastGlobs]);
   const entries = sortedUnique([
-    ...listed.filter((file) => !isTestFile(file)),
+    ...listed.filter((file) => !isTest(file)),
     ...routeEntries,
     config.discovery.routerFile.replace(/^\/+/u, ''),
-    ...wideBlast.filter((file) => !isTestFile(file)),
+    ...wideBlast.filter((file) => !isTest(file)),
     ...config.surfaces.flatMap((surface) => surface.files),
-    ...extraStarts.filter((file) => !isTestFile(file)),
+    ...extraStarts.filter((file) => !isTest(file)),
   ]);
   const loaded = await buildImportGraph(fs, entries, aliases, options);
 
@@ -241,6 +330,7 @@ export async function placeTestFiles(
   const importers = importersOutsideTests(
     loaded,
     sortedUnique(files).filter((file) => loaded.visited.has(file)),
+    storyToolPage,
   );
   for (const file of sortedUnique(files)) {
     if (loaded.visited.has(file)) {
