@@ -69,7 +69,7 @@ async function refNotFoundError(ref: string, listRemotes: () => Promise<string[]
   }
   return new Error(
     `git cannot read ${operatorText(ref)}. usabl reads trusted policy from that ref. Check its name, ` +
-      `or fetch it first (${operatorText(fetchExample(ref, await listRemotes()))}), then run usabl again.`,
+      `or fetch it first (${fetchExample(ref, await listRemotes())}), then run usabl again.`,
   );
 }
 
@@ -84,22 +84,27 @@ const COMMIT_ID = /^[0-9a-f]{7,64}$/iu;
  * whole name into a branch of that name. With no remote to compare against, both readings are
  * given, each with its own command. A ref with no slash names no remote, so the example says how
  * to find the default branch instead of guessing that it is called main.
+ *
+ * Each name from the ref or a remote goes through operatorText on its own, so only a long name is
+ * capped and the fixed text of the example is always printed whole.
  */
 function fetchExample(ref: string, remotes: readonly string[]): string {
   const branchRef = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/u.test(ref) && !ref.startsWith('refs/');
   if (!branchRef) {
     return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
   }
+  const shownRef = operatorText(ref);
   // The longest remote name that the ref starts with, since a remote name may hold a slash.
   const remote = [...remotes].sort((a, b) => b.length - a.length).find((name) => ref.startsWith(`${name}/`));
   if (remote !== undefined) {
-    return `for example git fetch ${remote} ${ref.slice(remote.length + 1)}`;
+    return `for example git fetch ${operatorText(remote)} ${operatorText(ref.slice(remote.length + 1))}`;
   }
   const slash = ref.indexOf('/');
-  const asRemote = `git fetch ${ref.slice(0, slash)} ${ref.slice(slash + 1)}`;
-  const asBranch = (name: string): string => `git fetch ${name} ${ref}:${ref}`;
+  const first = operatorText(ref.slice(0, slash));
+  const asRemote = `git fetch ${first} ${operatorText(ref.slice(slash + 1))}`;
+  const asBranch = (name: string): string => `git fetch ${operatorText(name)} ${shownRef}:${shownRef}`;
   if (remotes.length === 0) {
-    return `for example ${asRemote} if ${ref.slice(0, slash)} is a remote, or ${asBranch('origin')} if ${ref} is a branch on origin`;
+    return `for example ${asRemote} if ${first} is a remote, or ${asBranch('origin')} if ${shownRef} is a branch on origin`;
   }
   const from = remotes.includes('origin') ? 'origin' : [...remotes].sort()[0] ?? 'origin';
   return `for example ${asBranch(from)}`;

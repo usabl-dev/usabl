@@ -331,6 +331,20 @@ describe('makeGitReader in a repository with no commits', () => {
     expect(message).not.toContain('git fetch feature foo');
   });
 
+  // With no remote to compare against, the hint gives both readings of the ref. The ref alone is
+  // capped, never the fixed text around it, so the hint is never cut off.
+  it('gives both readings in full when the repository has no remote', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    for (const ref of ['feature/foo', 'cafe/babe']) {
+      const message = await git.show(ref, 'usabl.config.json').catch((err: Error) => err.message);
+      const [first, rest] = ref.split('/');
+      expect(message).toContain(
+        `(for example git fetch ${first} ${rest} if ${first} is a remote, or git fetch origin ${ref}:${ref} if ${ref} is a branch on origin), then run usabl again.`,
+      );
+      expect(message).not.toContain('(truncated)');
+    }
+  });
+
   it('fetches a remote-tracking ref from its remote when the first part is a remote', async () => {
     await runGit(emptyRepo, ['remote', 'add', 'origin', 'https://example.test/app.git']);
     await runGit(emptyRepo, ['remote', 'add', 'upstream', 'https://example.test/upstream.git']);
