@@ -512,6 +512,11 @@ describe('a test file in a workspace package the app depends on', () => {
       expectExcluded(await coverageOf(`import css from '@acme/ui/styles.css${query}';`, tree, helpers), helpers);
     });
 
+    it('reads the subpath without a #, so a test-only change stays idle', async () => {
+      const tree = withExports({ '.': './src/index.ts', './styles.css': './styles.css' });
+      expectExcluded(await coverageOf("import css from '@acme/ui/styles.css#x';", tree, helpers), helpers);
+    });
+
     it('still makes the test file a subpath with a query names a UI file', async () => {
       const tree = withExports({ '.': './src/index.ts', './testing': './src/tests/helpers.ts' });
       const coverage = await coverageOf("import helper from '@acme/ui/testing?raw';", tree, helpers);
@@ -671,12 +676,38 @@ describe('an import with a query', () => {
     expect(coverage.gaps[0]?.reason).toContain("'#tests/Widget?raw'");
   });
 
+  it('maps the file a relative import with a # names to the screen', async () => {
+    const coverage = await coverageOf("import w from './tests/Widget#x';");
+    expect(coverage.affected.map((screen) => [screen.screenId, screen.provenance])).toEqual([['clusters', 'route-graph']]);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.excludedFiles ?? []).toEqual([]);
+  });
+
+  it('reads an alias import with a # without it, mapped or not', async () => {
+    expectGap(await coverageOf("import w from '@/tests/Widget#x';", { 'package.json': PACKAGE_JSON }));
+    const tsconfig = JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const coverage = await coverageOf("import w from '@/tests/Widget#x';", { 'package.json': PACKAGE_JSON, 'tsconfig.json': tsconfig });
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters']);
+    expect(coverage.gaps).toEqual([]);
+  });
+
+  it('keeps a leading # and reads a later # as the end of the path', async () => {
+    const coverage = await coverageOf("import w from '#tests/Widget#x';", { 'package.json': PACKAGE_JSON });
+    expectGap(coverage);
+    expect(coverage.gaps[0]?.reason).toContain("'#tests/Widget#x'");
+  });
+
+  it('is a gap for a dynamic import whose fixed start ends in a #', async () => {
+    expectGap(await coverageOf('export const load = (h: string) => import(`./tests/Widget#${h}`);', { 'package.json': PACKAGE_JSON }));
+  });
+
   it('reads a ? in a glob pattern as glob syntax, as before', async () => {
     const tree = { 'package.json': PACKAGE_JSON };
     const coverage = await coverageOf("const all = import.meta.glob('./tests/?idget.tsx');", tree);
     expectGap(coverage);
     expect(coverage.gaps[0]?.reason).toContain('src/tests/');
     expectExcluded(await coverageOf("const pages = import.meta.glob('./pages/?ndex.tsx');", tree));
+    expectExcluded(await coverageOf("const pages = import.meta.glob('./pages/#x/*.tsx');", tree));
   });
 
   it('maps a stylesheet imported with a query to the screen', async () => {
