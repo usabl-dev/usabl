@@ -349,6 +349,8 @@ export interface Receipt {
   // Version 2 added historyHead. A version 1 receipt is not read, so it triggers one full run.
   schemaVersion: 2;
   sourceTree: string;
+  // The commit the run's changed list was taken from, or null when the run listed only changes
+  // that are not committed. verifyReceipt compares it, so a receipt stands for one set of changes.
   baseRevision: string | null;
   // The commit of the debt history branch when this receipt was minted, or null when there was
   // none. The history lowers the debt a run accepts, so a receipt minted before the history moved
