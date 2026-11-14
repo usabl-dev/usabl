@@ -710,7 +710,7 @@ describe('a new dot file under an entry the guard reads wide, in the local guard
     for (const path of [...underPolicy, ...outsidePolicy]) {
       await write(root, path, '{}\n');
     }
-    return checkGuard(realDeps(root), config);
+    return checkGuard(realDeps(root));
   }
 
   const folderCases: Array<[string, string]> = [
@@ -763,14 +763,14 @@ describe('a new dot file under a literal folder entry, in the local guard', REAL
     }
     await write(root, 'src/gate/.tracked', 'two\n');
     await write(root, 'src/run.ts', 'export const changed = 1\n');
-    const diverged = await checkGuard(realDeps(root), config);
+    const diverged = await checkGuard(realDeps(root));
     expect(diverged).toEqual([...underGate, 'src/gate/.tracked', 'src/run.ts'].sort());
   });
 
   it('reports nothing for a clean tree', async () => {
     const config = configWith(['src/gate', 'src/run.ts']);
     root = await repoWith(config, { 'src/gate/.tracked': 'one\n', 'src/run.ts': 'export {}\n' });
-    expect(await checkGuard(realDeps(root), config)).toEqual([]);
+    expect(await checkGuard(realDeps(root))).toEqual([]);
   });
 });
 

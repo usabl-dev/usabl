@@ -17,6 +17,7 @@ import type { Receipt, Result } from '../contracts/index.js';
 import { boundField } from '../output/bounded-text.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { frameUntrustedBlock } from './scrub.js';
+import type { CheckCommand } from './stop-hook-scope.js';
 
 export const RECEIPT_DIR = '.usabl';
 export const RECEIPT_PATH = '.usabl/receipt.json';
@@ -127,7 +128,13 @@ const NOT_SAVED_CONSEQUENCE =
  * the first line of the error, neutralized and inside the untrusted frame, because error text can
  * name a path from the environment.
  */
-export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<ReceiptSave> {
+export async function saveReceipt(
+  fs: ReceiptFs,
+  receipt: Receipt,
+  // The check the fix names. A receipt that binds a starting commit comes again only from usabl
+  // check --branch-scope, because a plain usabl check binds none.
+  checkCommand: CheckCommand = 'usabl check',
+): Promise<ReceiptSave> {
   // Receipt files stay local and gitignored so fast-path trust cannot become a committed self-accept.
   try {
     await fs.mkdir(RECEIPT_DIR);
@@ -138,7 +145,7 @@ export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<Rece
         status: 'refused',
         message:
           `NOT saved - usabl did not save the receipt for this run because ${err.message}. ${NOT_SAVED_CONSEQUENCE} ` +
-          `To fix: remove ${err.path}, then run usabl check or stop again.`,
+          `To fix: remove ${err.path}, then run ${checkCommand} or stop again.`,
       };
     }
     const reason = (err instanceof Error ? err.message : String(err)).split(/\r?\n/)[0] ?? '';
@@ -147,7 +154,7 @@ export async function saveReceipt(fs: ReceiptFs, receipt: Receipt): Promise<Rece
       message: [
         'NOT saved - usabl did not save the receipt for this run because the write failed ' +
           `(the reason is under "reason" in the untrusted text below). ${NOT_SAVED_CONSEQUENCE} ` +
-          `To fix: make sure usabl can write ${RECEIPT_PATH} in this repository, then run usabl check or stop again.`,
+          `To fix: make sure usabl can write ${RECEIPT_PATH} in this repository, then run ${checkCommand} or stop again.`,
         frameUntrustedBlock([`reason: ${boundField(neutralize(reason), 'gapReason')}`]),
       ].join('\n'),
     };

@@ -107,13 +107,44 @@ re-baseline to green.
   receipt that counts a waived finding but binds no waiver end, a waiver end that is not an
   ISO-8601 UTC timestamp, and a scanner version that could not be read. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
+- The Stop hook checks what CI will check. It used to check only uncommitted changes, so an
+  agent that committed its work and then stopped was told there was nothing to check, and the
+  first gate that looked was the pull request. A stop now checks every file changed since the
+  branch left the trusted branch (the merge base with the branch `refs/remotes/origin/HEAD`
+  names), listed with the function CI uses, plus uncommitted changes. The receipt binds that
+  starting commit (`baseRevision`) and verification compares it, so a receipt minted for a
+  narrower set of changes, for example by a stop that checked only uncommitted changes, does not
+  answer a stop of the same tree that checks more. When a trusted branch is named but the
+  starting commit cannot be found or used, or the listing fails, the stop is a not-covered gap
+  that blocks once; it never falls back to the uncommitted changes, to the whole history, or to
+  nothing to check. With no trusted branch at all, the stop keeps the uncommitted scope and
+  every decision says that committed work was not checked. Limits: the trusted branch is what
+  the local clone records for origin, so a stale `origin/HEAD` or an old fetch moves the
+  starting commit, and a branch whose base is not origin's default branch is compared with the
+  default branch anyway. In both cases the stop checks the changes since the commit the local
+  refs name, and CI still checks the pull request against its real base. Any process in the
+  session can also move `origin/HEAD`, or the branch it names, with ordinary git commands such
+  as `git update-ref refs/remotes/origin/main HEAD`. That shrinks the stop's scope to the
+  uncommitted changes, and usabl cannot tell this from a fetch. CI, which checks the pull
+  request against its real base, is the backstop. usabl accepts only a target of `origin/HEAD`
+  of the form `refs/remotes/origin/<name>`: a local branch under `refs/heads/`, a tag, a branch
+  of another remote, or `origin/HEAD` itself is a gap that blocks and names `git remote set-head
+  origin --auto`. So pointing `origin/HEAD` at a local branch or a tag on HEAD no longer makes a
+  stop idle. Pointing it at a branch of origin that sits on HEAD still does, whether the session
+  made that branch with `git update-ref` or pushed it and ran `git remote set-head`. That is the
+  limit stated above. A stop the assistant
+  times out is not
+  a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
+  as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section
+  11.2).
 - A waiver ends by the clock. A receipt minted while a waiver was live used to keep verifying
   after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
   would now block. The receipt binds the earliest end among the waivers the run applied
   (`waiverExpiresAt`), and stops verifying at that moment (Threat 4).
 - Limit, stated plainly: a user with a shell on the same machine can write a local receipt
-  that verifies. Every binding the receipt carries (tree, policy hash, engine and scanner
-  versions, history head) can be computed again by that user, and `mintReceipt()` is exported.
+  that verifies. Every binding the receipt carries (tree, starting commit, policy hash, engine
+  and scanner versions, history head) can be computed again by that user, and `mintReceipt()` is
+  exported.
   Receipt signing is not built. So the Stop hook's fast path says on its first line that the
   result comes from a stored receipt and was not re-scanned. CI never reads a local receipt;
   the CI gate scans the pull request itself.
@@ -167,12 +198,13 @@ passing bundle from another run.
 
 **Controls:**
 
-- A minted receipt binds five values re-checked on verify: `sourceTree` (the working-tree
-  `git write-tree`), `policyHash` (HEAD blob shas over the guarded set), `runnerVersion`,
-  `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the debt history
-  commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among the waivers
-  the run applied, or null when it applied none. It records `baseRevision`
-  and `mintedAt`. A receipt exists only for a `verified` run.
+- A minted receipt binds six values re-checked on verify: `sourceTree` (the working-tree
+  `git write-tree`), `baseRevision` (the commit the changed list was taken from, or null for
+  uncommitted changes only), `policyHash` (HEAD blob shas over the guarded set),
+  `runnerVersion`, `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the
+  debt history commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among
+  the waivers the run applied, or null when it applied none. It records `mintedAt`. A receipt
+  exists only for a `verified` run.
 - `sourceTree` is the tree the run read before it planned. The run reads the tree again after
   the scan and every policy read, before the gate. If the two reads differ, a file changed
   while the check ran, so the scan may have seen code that is neither the planned tree nor the
@@ -187,9 +219,11 @@ passing bundle from another run.
   gets scanned, and the receipt binds the newer tree. Both cases stay verified today. Neither
   can be closed by comparing tree reads.
 - `verifyReceipt` re-derives `sourceTree` and `policyHash` from the current tree and HEAD
-  and compares all five bindings. A bundle lifted from another run fails because its
-  bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
-  re-checks the stored receipt the same way before it trusts a green.
+  and compares all six bindings. A bundle lifted from another run fails because its
+  bindings do not match this tree, starting commit, policy, runner, and scanners. The stop-hook
+  fast path re-checks the stored receipt the same way before it trusts a green, with the
+  starting commit of that stop (Threat 1). A receipt from before `baseRevision` was compared
+  records null, so it verifies only where a stop still checks uncommitted changes alone.
 - `verifyReceipt` also fails a receipt once the injected clock reaches `waiverExpiresAt`,
   because the gate would then count the waived accessibility barrier again. The fast path keeps
   skipping the scan until that one moment, and runs the full check from then on. A receipt
@@ -214,6 +248,16 @@ passing bundle from another run.
   exported. The bindings stop a receipt lifted from another run, not one written on purpose on
   this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
   re-scanned)" and says usabl did not scan the change again on that stop.
+- A receipt does not bind the config file a run used. It binds the committed policy files, and
+  the Stop hook reads `usabl.config.json` at the root. So a plain `usabl check --config <other
+  file>`, which plans from that other file (for example one with narrower `uiFileGlobs`), saves a
+  receipt the hook checks against the root config. As built, that receipt records no starting
+  commit, because a plain check passes no changed list. It answers only a stop that has no
+  starting commit either: a stop in a repository where git records no trusted branch, which
+  checks the uncommitted changes and says that committed work was not checked. On a stop with a
+  starting commit it does not verify, and the stop runs the full check. `usabl check
+  --branch-scope` refuses `--config` naming any file other than the root `usabl.config.json`.
+  Binding the config bytes into the receipt is not built.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
@@ -1551,7 +1595,7 @@ required where applicable.
 
 ## Open actions
 
-Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`,
+Receipt bindings (`sourceTree`, `baseRevision`, `policyHash`, `runnerVersion`, `scannerVersions`,
 `historyHead`, `waiverExpiresAt`), the
 `not_covered` gap path, and exit-4 fail-open already ship, so they are no longer open.
 Remaining items:

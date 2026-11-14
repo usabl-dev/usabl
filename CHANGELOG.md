@@ -349,6 +349,55 @@
   value in `pull_request.head.sha` went to git with no check of its own. It must now be 7 to 40
   hex characters, or the command exits 2 before any git call, with a message that names the
   field and does not repeat the value.
+- The Stop hook checks what CI will check: every file changed since the branch left the default
+  branch git records for origin (`refs/remotes/origin/HEAD`), plus staged, unstaged, and untracked
+  changes. It lists the committed part with the same function `usabl check --trusted-ref` uses in
+  CI. Before, it checked only changes that were not committed, so an agent that committed a UI
+  change and then stopped was told there was nothing to check. Gate effect: a stop after committed
+  UI work scans the screens it reaches, where it said nothing to check. A long branch scans more
+  screens on a stop; `npm run measure:stop-time` measures how long a cold and a warm stop take on
+  the demo app.
+- A receipt records the commit its changed list was taken from (`baseRevision`), and
+  `verifyReceipt` fails a receipt minted for another starting commit or for none. A receipt minted
+  while the Stop hook checked only uncommitted changes used to answer a later stop of the same tree
+  that also checks committed work. Gate effect: such a stop runs a full check where it allowed
+  from the stored receipt. A receipt saved before this release records no starting commit, so in a
+  repository with a trusted branch it does not verify once and the next stop runs one full check.
+  A receipt from a plain `usabl check` records none either, so a stop does not use it there.
+  `run()` records the starting commit only when it was given a changed list; a starting commit
+  passed with no list records none, so the receipt never claims a wider scope than the run
+  listed. Gate effect: none for the hook and the CLI, which pass both or neither.
+- `usabl check --branch-scope` checks what the Stop hook checks: it lists the changes through the
+  same function as the hook and binds the same starting commit into its receipt. It is the way to
+  finish a check a stop could not finish, because its receipt answers the next stop of the same
+  tree and starting commit, and a plain `usabl check` receipt does not. With no trusted branch it
+  checks uncommitted changes and prints the hook's note. When the starting commit cannot be found
+  it checks nothing, prints the hook's reason, and exits 4. It is refused next to `--ci`,
+  `--trusted-ref`, or `--isolated-browser`, and next to `--config` naming a file other than the
+  root `usabl.config.json`, because the hook plans from that file and the receipt answers the
+  hook. On a stop with a starting commit, every hook message
+  that tells the reader to run a check now names `usabl check --branch-scope`; a stop without one
+  keeps `usabl check`. Gate effect: none; no stop changes between block and allow.
+- When git names a trusted branch but the Stop hook cannot find the commit where this branch left
+  it (the clone has no commit for the branch, a shallow clone holds no shared commit, the commit is
+  not an ancestor of HEAD, or git fails), or cannot list the changes since it, the stop is a
+  not-covered gap that checks nothing, blocks once, and says what to fetch. Gate effect: the stop
+  blocks where it said nothing to check, or where a failed listing ended in a stop hook error
+  that allowed it. A detached HEAD, a rebased branch, and the trusted branch itself keep a
+  starting commit and are checked from it.
+- Only a branch of origin (`refs/remotes/origin/<name>`) counts as the trusted branch. When
+  `origin/HEAD` names a local branch, a tag, a branch of another remote, or itself, the stop is
+  the same not-covered gap, and its next step names `git remote set-head origin --auto`. The
+  same step comes first when `origin/HEAD` names a branch the clone has no commit for, as after a
+  default branch rename, where a fetch does not move it. Gate effect: a stop where `origin/HEAD`
+  named a local branch or a tag on HEAD blocks once where it said nothing to check.
+- In a repository where git records no default branch for origin, the Stop hook keeps checking
+  uncommitted changes only, and every decision now says that committed work on the branch was not
+  checked and how to record the branch. Gate effect: none on the decision; the note is shown to
+  the person in Claude Code on every stop.
+- When an empty `uiFileGlobs` list blocks the Stop hook, the guard now runs first and the block
+  names the guarded files that changed, such as a waiver weakened in the same session. A guard
+  failure blocks as a guard failure. Gate effect: none; the stop still blocks once.
 - A trusted commit that is not in the repository is an error, never an absent file. In a shallow
   clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
   read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks

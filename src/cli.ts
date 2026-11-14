@@ -15,7 +15,7 @@ import { dirname, isAbsolute, relative, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
-import type { GitReader, Result, UsablConfig } from './contracts/index.js';
+import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
@@ -32,16 +32,24 @@ import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { loadConfig, parseConfigText } from './intake/load-config.js';
 import {
+  branchScopeRefusal,
   ciRefusal,
   installRefusal,
+  listChangedFiles,
   localApprovalNextSteps,
-  mergeChangedPaths,
   parseCliArgs,
   projectCli,
   type CliOptions,
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
+import {
+  branchScopeGapText,
+  checkCommandFor,
+  findStartingCommit,
+  resolveBranchScope,
+  scopeGit,
+} from './surfaces/stop-hook-scope.js';
 import { scrubString } from './surfaces/scrub.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -421,19 +429,9 @@ async function runVerify(opts: CliOptions): Promise<number> {
   );
 }
 
-/**
- * The changed files of a check with a trusted ref. The merge-base diff covers a CI checkout, and
- * the status paths keep local changes in scope. A listing that fails throws, so the check stops
- * with an error and never runs on a list it could not read.
- */
-export async function listChangedFiles(
-  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
-  trustedRef: string,
-): Promise<string[]> {
-  const diffNames = await git.diffNameOnly(trustedRef);
-  const statusPaths = (await git.statusZ()).map((entry) => entry.path);
-  return mergeChangedPaths(diffNames, statusPaths);
-}
+// The CI listing lives beside the other CLI projections so the Stop hook lists the same files
+// without importing this entry point.
+export { listChangedFiles };
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   // Help and unknown flags are answered before anything runs, so asking how to use a command
@@ -888,7 +886,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  const refusal = ciRefusal(opts);
+  const refusal = branchScopeRefusal(opts, process.cwd()) ?? ciRefusal(opts);
   if (refusal !== null) {
     process.stderr.write(`usabl: ${refusal.message}\n`);
     return refusal.exitCode;
@@ -939,20 +937,38 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   });
   try {
     let changedFiles: string[] | undefined;
+    let baseRevision: string | null = null;
+    let scopeNote: string | null = null;
     if (opts.trustedRef !== null) {
       changedFiles = await listChangedFiles(deps.git, opts.trustedRef);
+    } else if (opts.branchScope) {
+      // The Stop hook's scope, found by the same function, so the receipt binds the same starting
+      // commit and the next stop of this tree answers from it. A gap checks nothing and never
+      // exits 0, so it cannot read as a clean check.
+      const scope = await resolveBranchScope(() => findStartingCommit(scopeGit(process.cwd())), deps.git);
+      if (scope.kind === 'gap') {
+        process.stderr.write(branchScopeGapText(scope) + '\n');
+        return 4;
+      }
+      changedFiles = scope.changedFiles;
+      baseRevision = scope.baseRevision;
+      scopeNote = scope.note;
     }
 
     const ran = await run(deps, config, {
       ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
+      ...(baseRevision === null ? {} : { baseRevision }),
     });
+    if (scopeNote !== null) {
+      process.stderr.write(scopeNote + '\n');
+    }
     const result = judge === null ? ran : judge.finish(ran);
     // Verified local checks persist local proof so the stop-hook fast path can re-check without a
     // browser. A CI run saves none. The write never follows a symbolic link.
     const receipt = receiptToSave(result, { ci: opts.ci });
     if (receipt !== null) {
-      const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt);
+      const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt, checkCommandFor(baseRevision));
       if (saved.status === 'refused') {
         process.stderr.write(`usabl: ${saved.message}\n`);
       }
