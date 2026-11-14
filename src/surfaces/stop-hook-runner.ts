@@ -30,7 +30,7 @@ import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guarded
 import { firstLine } from '../primitives/first-line.js';
 import { listChangedFiles } from './cli.js';
 import { GUARDED_FILES_LABEL } from './model-pieces.js';
-import { findStartingCommit, scopeGit, type StartingCommit } from './stop-hook-scope.js';
+import { findStartingCommit, scopeGit, type StartingCommit, type StartingCommitProblem } from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -782,33 +782,92 @@ async function emitConfigBlock(
   await emitProtocolBlock(ports, configBlockMessage(problem, false, error, guardedPaths), options);
 }
 
-/** What one stop checks, as the options its run gets. */
-interface StopScope {
-  runOptions: RunOptions;
-  // The commit the changed list was taken from, or null for uncommitted changes only. The receipt
-  // records it, and a stored receipt verifies only for the same one.
-  baseRevision: string | null;
-}
+/** Why a stop could not tell which committed changes to check. */
+type ScopeProblem = StartingCommitProblem | 'listing-failed';
+
+/**
+ * What one stop checks. `scan` carries the options its run gets and the commit the changed list
+ * was taken from, or null for uncommitted changes only; the receipt records it, and a stored
+ * receipt verifies only for the same one. `gap` means the stop cannot tell which changes CI will
+ * check, so it checks nothing and blocks.
+ */
+type StopScope =
+  | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null }
+  | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null };
 
 /**
  * What this stop checks. CI checks every file changed since the pull request left its base branch,
  * so the stop checks every file changed since this branch left the trusted branch, plus the
  * changes that are not committed. The committed part is listed by listChangedFiles, the function
- * CI uses, from the starting commit itself, so the two lists cannot drift apart. A listing that
- * fails throws, so it is never read as nothing to check.
+ * CI uses, from the starting commit itself, so the two lists cannot drift apart.
+ *
+ * A starting commit that cannot be found or used, and a listing that fails, are a gap. The stop
+ * never falls back to the uncommitted changes, to the whole history, or to nothing to check.
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
-    return { runOptions: {}, baseRevision: null };
+    return { kind: 'scan', runOptions: {}, baseRevision: null };
   }
   const start = await ports.findStartingCommit();
-  if (start.kind !== 'found') {
-    return { runOptions: {}, baseRevision: null };
+  if (start.kind === 'not-found') {
+    return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
   }
-  return {
-    runOptions: { changedFiles: await listChangedFiles(deps.git, start.commit), baseRevision: start.commit },
-    baseRevision: start.commit,
-  };
+  if (start.kind !== 'found') {
+    return { kind: 'scan', runOptions: {}, baseRevision: null };
+  }
+  let changedFiles: string[];
+  try {
+    changedFiles = await listChangedFiles(deps.git, start.commit);
+  } catch (err) {
+    return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: firstLine(errorMessage(err)) };
+  }
+  return { kind: 'scan', runOptions: { changedFiles, baseRevision: start.commit }, baseRevision: start.commit };
+}
+
+const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
+  'branch-missing': 'git names that branch as the default branch of origin, but this clone has no commit for it',
+  'no-common-commit':
+    'this branch and the trusted branch share no commit in this clone, which happens in a shallow clone or on a branch with unrelated history',
+  'not-ancestor': 'the commit git found is not an ancestor of HEAD, so it cannot be where this branch started',
+  'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
+  'listing-failed':
+    'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
+};
+
+/**
+ * The message for a stop that could not tell which committed changes CI will check. It checked
+ * nothing, so it is a coverage gap and blocks once, as every other gap does. The branch name and
+ * git's error come from the repository, so they go inside the frame.
+ */
+function scopeGapMessage(
+  scope: Extract<StopScope, { kind: 'gap' }>,
+  continuation: boolean,
+  guardedPaths: readonly string[],
+): string {
+  const lines = [
+    'NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
+      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
+      'So it could not tell which committed changes CI will check, and it checked nothing on this stop. ' +
+      'It did not fall back to the uncommitted changes alone or to the whole history.',
+  ];
+  if (continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  lines.push(
+    'Next: fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
+      'or git fetch --unshallow in a shallow clone, then stop again. If the branch shares no history with the ' +
+      'trusted branch, run usabl check and check the change by hand before you call it accessible.',
+  );
+  const guarded = guardedFilesNamed(guardedPaths);
+  if (guarded !== null) {
+    lines.push(guarded.line);
+  }
+  lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
+  return framedMessage(lines, [
+    `trusted branch: ${scope.branch}`,
+    ...(scope.detail === null ? [] : [`error: ${scope.detail}`]),
+    ...(guarded === null ? [] : [guarded.piece]),
+  ]);
 }
 
 // usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
@@ -961,6 +1020,21 @@ export async function runStopHook(
 
     // What this stop checks: what CI will check. See stopScope.
     const scope = await stopScope(ports, guardDeps);
+    if (scope.kind === 'gap') {
+      if (input.stopHookActive) {
+        await emitProtocolAllow(
+          ports,
+          { message: scopeGapMessage(scope, true, dirtyGuardedPaths), notices: pinNotices(pinNotice) },
+          options,
+        );
+        return 0;
+      }
+      await emitProtocolBlock(ports, scopeGapMessage(scope, false, dirtyGuardedPaths), options);
+      for (const notice of pinNotices(pinNotice)) {
+        await writeStderr(ports, notice);
+      }
+      return 0;
+    }
 
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {

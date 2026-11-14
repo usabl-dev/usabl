@@ -21,6 +21,7 @@ import {
   runStopHookFromStdin,
   type StopHookRunnerPorts,
 } from '../../src/surfaces/stop-hook-runner.js';
+import { findStartingCommit, type ScopeGit, type ScopeGitResult } from '../../src/surfaces/stop-hook-scope.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
 
 const config: UsablConfig = {
@@ -66,8 +67,12 @@ async function storedReceipt(): Promise<{ baseRevision: unknown }> {
   return JSON.parse(await readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')) as { baseRevision: unknown };
 }
 
+// Every folder a test made, so afterEach removes a clone as well as the first repository.
+const made: string[] = [];
+
 beforeEach(async () => {
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-scope-')));
+  made.push(repo);
   git('init', '-q', '-b', 'main');
   await write('.gitignore', '.usabl/\n');
   await write('usabl.config.json', CONFIG_TEXT);
@@ -78,8 +83,21 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(repo, { recursive: true, force: true });
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true });
+  }
 });
+
+function blockReason(stdout: string): string {
+  const payload = JSON.parse(stdout.trim()) as { decision?: string; reason?: string };
+  expect(payload.decision).toBe('block');
+  return payload.reason ?? '';
+}
+
+function insideFrame(text: string, value: string): boolean {
+  const frameStart = text.indexOf('[BEGIN UNTRUSTED TEXT');
+  return frameStart > 0 && text.indexOf(value) > frameStart && !text.slice(0, frameStart).includes(value);
+}
 
 function hook() {
   const stdout: string[] = [];
@@ -193,5 +211,239 @@ describe('the receipt binds the starting commit', () => {
         'Why: the receipt was minted for changes since a different commit on the trusted branch',
     );
     expect((await storedReceipt()).baseRevision).toBe(commitOf('main'));
+  });
+});
+
+describe('no starting commit, no guess', () => {
+  function expectScopeGap(h: ReturnType<typeof hook>, reason: string): string {
+    const text = blockReason(h.stdout());
+    expect(text.startsWith('NOT verified - not covered: usabl could not find where this branch left the trusted branch')).toBe(true);
+    expect(text).toContain(reason);
+    expect(text).toContain('checked nothing on this stop');
+    expect(text).toContain('It did not fall back to the uncommitted changes alone or to the whole history.');
+    expect(text).toContain('Next: fetch the trusted branch');
+    expect(text).not.toContain('IDLE');
+    expect(text).not.toContain('VERIFIED');
+    expect(h.scanned).toEqual([]);
+    return text;
+  }
+
+  // A shallow clone holds only the newest commit of each branch, so git cannot find where the
+  // branch left the trusted branch.
+  it('reports a gap in a shallow clone that does not hold the commit the branch left', async () => {
+    await write('README.md', 'second\n');
+    git('commit', '-q', '-am', 'second on main');
+    git('switch', '-q', '-c', 'feature', 'HEAD~1');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    git('switch', '-q', 'main');
+
+    const source = repo;
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-shallow-')));
+    made.push(repo);
+    execFileSync('git', ['clone', '-q', '--depth', '1', '--no-single-branch', '--branch', 'feature', `file://${source}`, repo], {
+      stdio: 'ignore',
+    });
+    expect(git('rev-parse', '--is-shallow-repository').trim()).toBe('true');
+    expect(git('symbolic-ref', 'refs/remotes/origin/HEAD').trim()).toBe('refs/remotes/origin/main');
+
+    const h = hook();
+    expect(await runStopHookFromStdin('{}', h.ports)).toBe(0);
+    const text = expectScopeGap(h, 'this branch and the trusted branch share no commit in this clone');
+    expect(insideFrame(text, 'trusted branch: origin/main')).toBe(true);
+  });
+
+  it('reports a gap when origin names a default branch this clone has no commit for', async () => {
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    const text = expectScopeGap(h, 'this clone has no commit for it');
+    expect(insideFrame(text, 'trusted branch: origin/gone')).toBe(true);
+  });
+
+  it('reports a gap when the commit is not an ancestor of HEAD', async () => {
+    const h = hook();
+    h.ports.findStartingCommit = async () => ({ kind: 'not-found', branch: 'origin/main', problem: 'not-ancestor', detail: null });
+    await runStopHookFromStdin('{}', h.ports);
+    expectScopeGap(h, 'the commit git found is not an ancestor of HEAD');
+  });
+
+  it('reports a gap, with git error inside the frame, when git fails while it looks', async () => {
+    const h = hook();
+    h.ports.findStartingCommit = async () => ({
+      kind: 'not-found',
+      branch: 'origin/main',
+      problem: 'git-failed',
+      detail: 'fatal: bad object deadbeef',
+    });
+    await runStopHookFromStdin('{}', h.ports);
+    const text = expectScopeGap(h, 'git failed while it looked for that commit');
+    expect(insideFrame(text, 'error: fatal: bad object deadbeef')).toBe(true);
+  });
+
+  // A listing that fails is never read as nothing to check, and never as a run that failed open.
+  it('reports a gap when git cannot list the changes since the starting commit', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    const h = hook();
+    const buildDeps = h.ports.buildDeps;
+    h.ports.buildDeps = async (loaded) => {
+      const deps = await buildDeps(loaded);
+      deps.git.diffNameOnly = async () => {
+        throw new Error('git diff printed more than usabl reads, so usabl could not list the files it needs');
+      };
+      return deps;
+    };
+    await runStopHookFromStdin('{}', h.ports);
+    const text = expectScopeGap(h, 'git could not list the files changed since that commit');
+    expect(insideFrame(text, 'error: git diff printed more than usabl reads')).toBe(true);
+  });
+
+  it('lets one continuation through, marked NOT verified, and names changed guarded files', async () => {
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+    await write('.usabl-waivers.json', '{"version":1,"waivers":[]}\n');
+    const h = hook();
+    await runStopHookFromStdin(JSON.stringify({ stop_hook_active: true }), h.ports);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    const text = h.stderr();
+    expect(text.startsWith('NOT verified - not covered')).toBe(true);
+    expect(text).toContain('continuation already active');
+    expect(text).toContain('Guarded file changed: 1');
+    expect(insideFrame(text, 'guarded files: .usabl-waivers.json')).toBe(true);
+    expect(h.scanned).toEqual([]);
+  });
+});
+
+describe('the scope in the cases that look like a missing starting commit', () => {
+  // A detached HEAD still has a merge base with the trusted branch, so the stop checks every
+  // change since HEAD left it, as on a branch.
+  it('checks every change since HEAD left the trusted branch on a detached HEAD', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    git('switch', '-q', '--detach', 'feature');
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('main'));
+  });
+
+  // After a rebase the branch left the trusted branch at its new tip, so the stop checks the
+  // rebased commits and not the changes the branch took in from the trusted branch.
+  it('checks only the rebased commits after a rebase onto a newer trusted branch', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    const first = hook();
+    await runStopHookFromStdin('{}', first.ports);
+    const oldBase = commitOf('main');
+    expect((await storedReceipt()).baseRevision).toBe(oldBase);
+
+    git('switch', '-q', 'main');
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'the other screen lands on main');
+    recordTrustedBranch();
+    git('switch', '-q', 'feature');
+    git('rebase', '-q', 'main');
+
+    const second = hook();
+    await runStopHookFromStdin('{}', second.ports);
+    expect(second.scanned).toEqual(['home']);
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('main'));
+    expect(commitOf('main')).not.toBe(oldBase);
+  });
+
+  // On the trusted branch itself, the merge base is the trusted branch's tip when the local
+  // branch is level with it or ahead of it. The stop checks the commits not on the trusted branch
+  // yet and the uncommitted changes.
+  it('checks uncommitted changes on the trusted branch when it is level with origin', async () => {
+    recordTrustedBranch();
+    const idle = hook();
+    await runStopHookFromStdin('{}', idle.ports);
+    expect(idle.scanned).toEqual([]);
+    expect(idle.stderr()).toContain('IDLE');
+
+    await write('src/App.tsx', 'export const App = 2;\n');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('origin/main'));
+  });
+
+  it('checks commits not yet on origin when the local trusted branch is ahead of it', async () => {
+    recordTrustedBranch();
+    const pushed = commitOf('main');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'not pushed yet');
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    expect((await storedReceipt()).baseRevision).toBe(pushed);
+  });
+});
+
+describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
+  const COMMIT = 'c'.repeat(40);
+
+  function scripted(answers: Record<string, ScopeGitResult>): ScopeGit {
+    return async (args) => answers[args[0] === 'merge-base' && args[1] === '--is-ancestor' ? 'is-ancestor' : args[0]!] ?? {
+      code: 0,
+      stdout: '',
+      stderr: '',
+    };
+  }
+
+  const ok = (stdout: string): ScopeGitResult => ({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+  const no: ScopeGitResult = { code: 1, stdout: '', stderr: '' };
+  const broken: ScopeGitResult = { code: 128, stdout: '', stderr: 'fatal: unable to read refs\nmore detail' };
+
+  it('reads exit 1 from symbolic-ref as no trusted branch', async () => {
+    await expect(findStartingCommit(scripted({ 'symbolic-ref': no }))).resolves.toEqual({ kind: 'no-trusted-branch' });
+  });
+
+  it('reads any other symbolic-ref failure as a git failure, never as no trusted branch', async () => {
+    await expect(findStartingCommit(scripted({ 'symbolic-ref': broken }))).resolves.toEqual({
+      kind: 'not-found',
+      branch: 'origin/HEAD',
+      problem: 'git-failed',
+      detail: 'fatal: unable to read refs',
+    });
+  });
+
+  it('reads a merge-base failure other than exit 1 as a git failure', async () => {
+    const git = scripted({
+      'symbolic-ref': ok('refs/remotes/origin/main'),
+      'rev-parse': ok(COMMIT),
+      'merge-base': broken,
+    });
+    await expect(findStartingCommit(git)).resolves.toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+  });
+
+  it('refuses a merge base that is not a full commit id', async () => {
+    const git = scripted({
+      'symbolic-ref': ok('refs/remotes/origin/main'),
+      'rev-parse': ok(COMMIT),
+      'merge-base': ok('not-a-commit'),
+    });
+    await expect(findStartingCommit(git)).resolves.toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+  });
+
+  it('finds the commit when every step answers', async () => {
+    const git = scripted({
+      'symbolic-ref': ok('refs/remotes/origin/main'),
+      'rev-parse': ok(COMMIT),
+      'merge-base': ok(COMMIT),
+      'is-ancestor': { code: 0, stdout: '', stderr: '' },
+    });
+    await expect(findStartingCommit(git)).resolves.toEqual({ kind: 'found', branch: 'origin/main', commit: COMMIT });
   });
 });
