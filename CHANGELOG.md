@@ -338,6 +338,17 @@
 
 ### Fixed
 
+- The sticky comment step in the gate that `usabl install --ci` and `usabl install --docs-ci`
+  write updates only its own comment. It took the first comment by any bot that held the usabl
+  marker, so it could overwrite another app's comment that quoted the marker, because the job
+  token can edit any comment. It now also requires the `github-actions[bot]` login, and writes a
+  new comment when no such comment exists. The comment decides nothing, so no verdict changed.
+  Install still recognises an unedited gate that an earlier 0.3.0 build wrote with the old line,
+  and rewrites it.
+- `usabl enforce policy` refuses a head SHA from the event file that is not a commit id. The
+  value in `pull_request.head.sha` went to git with no check of its own. It must now be 7 to 40
+  hex characters, or the command exits 2 before any git call, with a message that names the
+  field and does not repeat the value.
 - A trusted commit that is not in the repository is an error, never an absent file. In a shallow
   clone that lacks the base commit, git says a file "does not exist in" a full commit id, and usabl
   read the trusted config, docs manifest, floor, or waivers as absent. The git reader now checks
