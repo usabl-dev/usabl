@@ -1613,8 +1613,8 @@ does not determine which screen renders. A surface that overrides a discovered r
 test file (`*.test.*`, `*.spec.*`, a story `*.stories.*`, a test setup file `setupTests.*`, or a
 test helper file `test-utils.*`) or sits in a folder named `test`, `tests`, `__tests__`,
 `__mocks__`, or `test-utils`. Stories, setup files, mocks, and test helpers follow the same rule as
-tests, with no shortcut for their names. When the config names a Storybook page, stories are read
-apart (see "Stories and Storybook pages" below). Both kinds follow one rule:
+tests, with no shortcut for their names. When the config scans a story tool page, these added names
+are not test files (see "Story tool pages" below). Both kinds follow one rule:
 a test file is excluded only when usabl has looked at every place that could load it and found
 none. "No import found" is evidence only when the search was complete. For each changed test file,
 in this order:
@@ -1798,25 +1798,45 @@ through one of them is excluded:
 If a screen renders a test file, list it in the `files` of a surface, which makes it a UI file
 whatever usabl finds.
 
-**Stories and Storybook pages.** Storybook loads stories through the `stories` setting in its own
-config, which usabl does not read. So when a surface's `url` or a route's `url` in
-`usabl.routes.json` is a Storybook page, a file named `*.stories.*` is not read as a test file. It
-is a UI file, as it was before stories joined the test file set: it is mapped like any UI file, by a
-route closure, a wide-blast glob, or a surface that lists it, and otherwise it is an `unresolved`
-gap. The reason says that usabl cannot tell which stories that page loads, and that the way out is
-to list the story in the `files` of the surface that shows it. A file that only such a story
-imports follows from the story, as for any UI file. A story in a test folder is still a test file,
-and setup files, mocks, and test helpers keep the test file rule. usabl recognises the two
-standard Storybook url forms. The url is parsed, relative to a placeholder base when it is not
-absolute, and a url that does not parse does not count:
+**Story tool pages.** A story tool, such as Storybook or Ladle, loads stories through its own
+config, and its preview file can import setup files, mocks, and test helpers. usabl does not read
+that config, so it cannot follow what a story tool page loads. So when the config scans a story
+tool page, none of the names that stories and test support added to the test file set is read as
+a test file. The set is then only the base set: a file named `*.test.*` or `*.spec.*`, or a file in
+a folder named `test`, `tests`, or `__tests__`. A story (`*.stories.*`), a `setupTests.*` file, a
+`test-utils.*` file, and a file in a `__mocks__` or `test-utils` folder are then ordinary UI files,
+as they were before those names joined the set. Each is mapped like any UI file, by a route
+closure, a wide-blast glob, or a surface that lists it, and otherwise it is an `unresolved` gap.
+The reason says that the config names a story tool page, that usabl does not read what that page
+loads, and that the way out is to list the file in the `files` of the surface that shows it. A
+file that only such a file imports follows from it, as for any UI file. The reasons for files that
+stay in the base set name only the base names and folders.
 
-- a path that ends with `/iframe.html` and a query with an `id` parameter, such as
+The config scans a story tool page when a surface lists a `*.stories.*` file in its `files`, or
+when a url usabl opens is a story tool page. Those urls are each surface's `url`, each route's
+`url` joined with `appBaseUrl`, each page `url` in `usabl.docs.json` joined with `docsBaseUrl` the
+way the docs scan joins it, `appBaseUrl`, and `docsBaseUrl`. A route or page url the join refuses
+is read as written. Requirements, flows, and voice checks run on those screens and name no url of
+their own. Reading a url as a story tool page can only add gaps, so the test is generous. A url is
+parsed, relative to a placeholder base when it is not absolute, and a url that does not parse
+does not count. It counts when any of these holds:
+
+- its path ends with `/iframe.html`, with or without a query, such as
   `http://127.0.0.1:6006/iframe.html?id=button--primary`;
-- a query whose `path` parameter starts with `/story/` or `/docs/`, such as
-  `http://127.0.0.1:6006/?path=/story/button--primary`.
+- its query has a `viewMode` parameter;
+- its query has a `path` parameter that starts with `/story/` or `/docs/`, such as
+  `http://127.0.0.1:6006/?path=/story/button--primary`;
+- its query has a `selectedKind` parameter, as in Storybook 5;
+- its query has a `story` parameter, as in Ladle.
 
-A Storybook served under another url shape is not recognised, so its stories stay test files. A
-team that scans such a page should list its stories in the `files` of the surface.
+The hash is not read. These limits remain:
+
+- A story tool page whose url has none of these shapes is not recognised. The Storybook root with
+  no query is one. A team that scans such a page should list its stories and helpers in the
+  `files` of the surface, which also marks the config as scanning story tool pages.
+- A file in a `test`, `tests`, or `__tests__` folder that only the story tool's preview file, or a
+  story outside `uiFileGlobs`, imports is still excluded, as it was before. usabl does not follow
+  those files. A story under `uiFileGlobs` is a UI file, so a fixture it imports is a gap.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the

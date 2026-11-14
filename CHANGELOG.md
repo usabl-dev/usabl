@@ -415,14 +415,21 @@
   reaches it, or a file outside the tests imports it; it is an `unresolved` gap when a load usabl
   cannot follow may reach it; and only otherwise is it excluded and listed. Gate effect: a run that
   was `not_covered` only because such a file changed now reads as nothing to check, with the file
-  listed as excluded. One exception keeps stories as before: Storybook loads stories through its
-  own `stories` setting, which usabl does not read, so when a surface's `url` or a route's `url` is
-  a Storybook page, a `*.stories.*` file stays a UI file. It is checked when a surface lists it, and
-  otherwise it is a gap that says to list it in the surface's `files`. usabl recognises the two
-  standard Storybook url forms: a path that ends with `/iframe.html` with an `id` query parameter,
-  and a `path` query parameter that starts with `/story/` or `/docs/`. A Storybook served under
-  another url shape is not recognised, so a team that scans one should list its stories in the
-  surface's `files`.
+  listed as excluded. One exception keeps all of these names as before: a story tool such as
+  Storybook or Ladle loads stories, setup files, mocks, and helpers through its own config, which
+  usabl does not read. So when the config scans a story tool page, a `*.stories.*`, `setupTests.*`,
+  or `test-utils.*` file, and a file in a `__mocks__` or `test-utils` folder, reads as it did
+  before: a UI file, checked when a surface lists it, and otherwise a gap that says to list it in
+  the surface's `files`. Only `*.test.*` and `*.spec.*` names and the `test`, `tests`, and
+  `__tests__` folders stay test files then. The config scans a story tool page when a surface
+  lists a story, or when a url usabl opens is one: each surface url, each route url joined with
+  `appBaseUrl`, each `usabl.docs.json` page url joined with `docsBaseUrl`, and the two base urls.
+  A url counts when its path ends with `/iframe.html`, or its query has a `viewMode`,
+  `selectedKind`, or `story` parameter, or a `path` parameter that starts with `/story/` or
+  `/docs/`. A story tool page with none of these shapes, such as the Storybook root with no query,
+  is not recognised, so a team that scans one should list its stories and helpers in the surface's
+  `files`. A file in a `test`, `tests`, or `__tests__` folder that only the story tool's preview
+  file imports is still excluded.
 
 - An `exports` key that ends with `/`, such as `"./t/": "./../other/src/tests/"`, is now matched
   when the subpath starts with it. Node.js removed such folder keys, but Vite still reads one and

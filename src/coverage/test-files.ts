@@ -1,6 +1,7 @@
 /**
  * Changed test files: files under uiFileGlobs that are named like a test file or sit in a test
- * folder. Stories, test setup files, mocks, and test helper files count, by the names listed below.
+ * folder. Stories, test setup files, mocks, and test helper files count, by the names listed below,
+ * unless the config scans a story tool page (see isTestFile).
  *
  * Such a file usually holds tests or test helpers, but a screen can render it too. So it is
  * excluded only when usabl has looked at every place that could load it and found none. "No
