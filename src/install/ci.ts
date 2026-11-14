@@ -484,6 +484,19 @@ const VALIDATE_RESULT_SCRIPT = `          node <<'NODE'
           }
           NODE`;
 
+// How the sticky comment step finds the comment to update. The job token can edit any comment on
+// the pull request, so the step takes only a comment that GitHub Actions wrote and that starts
+// with the usabl marker, which the renderer always writes as the first line. Every workflow in the
+// repository posts as github-actions[bot], so the login alone does not tell this step's comment
+// from another workflow's. Before, the step took the first comment by any bot that held the marker
+// anywhere, so another app's comment that quoted the marker was overwritten with the usabl report.
+const FIND_GATE_COMMENT = `            // A comment GitHub Actions wrote that starts with the marker. Another app, or another
+            // workflow in this repository, can post a comment that quotes the marker further down.
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.type === 'Bot' && comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker),
+            );`;
+
 // The gate for an app whose default branch is `branch`. The name goes into the pull request trigger
 // and nowhere else, so only a plain name is taken: letters, digits, and . _ - /. It is written
 // quoted, so YAML reads it as text even when it looks like a number.
@@ -856,7 +869,7 @@ ${ENGINE_CHECK}
               issue_number,
               per_page: 100,
             });
-            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+${FIND_GATE_COMMENT}
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
@@ -1028,8 +1041,9 @@ export const USABL_DOCS_GATE_WORKFLOW = docsGateWorkflowFor('main');
 const VERDICT_HINT = 'see the usabl comment for the accessibility barriers"';
 
 // What an earlier 0.3.0 build wrote in place of these parts of the draft: a trigger that names
-// main unquoted, comments that said main for the default branch, a shorter verdict line, and the engine
-// step with no guard for a repository named usabl. Those files are usabl's own text, so install
+// main unquoted, comments that said main for the default branch, a shorter verdict line, a sticky
+// comment step that took any bot's comment, and the engine step with no guard for a repository
+// named usabl. Those files are usabl's own text, so install
 // recognises them, unedited, and rewrites them to this draft. Nothing else is recognised this way.
 const EARLIER_PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
           # An app that does not use that path never reads the folder, so for that app this step does
@@ -1051,6 +1065,11 @@ const EARLIER_GATE_TEXT: EarlierText = [
   // The earlier build wrote this line without the word "accessibility". This text is only compared
   // with a file on disk; it is never written or printed.
   [VERDICT_HINT, VERDICT_HINT.replace('accessibility ', '')],
+  // The earlier build took the first comment by any bot that held the marker anywhere.
+  [
+    FIND_GATE_COMMENT,
+    "            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));",
+  ],
   ...EARLIER_ENGINE_TEXT,
 ];
 

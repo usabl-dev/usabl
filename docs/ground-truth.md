@@ -3742,6 +3742,12 @@ lines.
   pair exits 4 and names `verdict`. The check does not test whether the other
   values agree with each other, so a well-formed document is still only as true as whoever wrote
   it, and the receipt, not the document, is what proves a run happened.
+- `usabl enforce policy` reads the pull request from the event file that `GITHUB_EVENT_PATH`
+  names. The head SHA in it, `pull_request.head.sha`, goes to git as a ref, so the command
+  refuses a value that is not a full commit id, exactly 40 or 64 lowercase hex characters, before
+  any git call. A shorter value can also be a branch name, which git would read as that branch.
+  It exits 2, the code it uses for an event file it cannot use, and the message names the field
+  but not the value.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -4097,8 +4103,13 @@ the verdict. The terminal summary, the self-check, and the Stop hook print the s
 after the gaps under `disclosed, does not block`. The known section lists carried and waived deterministic
 findings, each with its status, the same recorded debt the terminal and the overlay list. A
 collapsed group holds findings of one status, and names its screen id and rule once, in its
-headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
-matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
+headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. The sticky comment
+step updates only a comment that GitHub Actions wrote (`github-actions[bot]`) and that starts with
+`<!-- usabl-report -->`, which the renderer always writes as the first line. The token can edit
+any comment, so a comment by another app that quotes the marker is left alone, and the step writes
+a new comment instead. Every workflow in the repository posts under the same login, so the step
+cannot tell its own comment from another workflow's that starts with the marker; one that quotes
+the marker further down is left alone. On
 `approval_required` the comment stays loud after the policy check is green.
 
 **Size bound.** GitHub refuses a comment body over 65,536, and the required check then fails
