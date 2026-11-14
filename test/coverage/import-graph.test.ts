@@ -356,6 +356,20 @@ describe('loads the import graph cannot follow', () => {
     ]);
   });
 
+  it('reads a bare package import with a query as that package', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': "import css from '@acme/ui?inline';\nimport _ from 'lodash?x';\nimport { readFile } from 'fs?x';\nimport { S } from '@acme/shared?x';",
+    });
+    const complete = await buildImportGraph(fs, ['src/Page.tsx'], undefined, { complete: true, declaredPackages: ['@acme/ui', 'lodash'] });
+    expect(complete.unresolvable).toEqual([{ importer: 'src/Page.tsx', specifier: '@acme/shared?x', kind: 'bare-unknown' }]);
+  });
+
+  it('reads a bare package import with a # after its name as that package', async () => {
+    const fs = fsOf({ 'src/Page.tsx': "import _ from 'lodash#x';\nimport css from '@acme/ui#x';" });
+    const complete = await buildImportGraph(fs, ['src/Page.tsx'], undefined, { complete: true, declaredPackages: ['@acme/ui', 'lodash'] });
+    expect(complete.unresolvable).toEqual([]);
+  });
+
   it('records a bare import that a baseUrl resolves to a file in the complete reading only', async () => {
     const fs = fsOf({ 'src/Page.tsx': "import { W } from 'tests/Widget';\nimport React from 'react';", 'src/tests/Widget.tsx': '' });
     expect((await buildImportGraph(fs, ['src/Page.tsx'])).unresolvable).toEqual([]);

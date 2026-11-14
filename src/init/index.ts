@@ -14,6 +14,7 @@ import { SESSION_STATE_PATH, STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
 import { workspacePackageDirs } from '../coverage/workspace-packages.js';
+import { withoutQueryOrHash } from '../coverage/import-graph.js';
 import { readViteServer, viteConfigReadable } from './vite-server.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
@@ -135,9 +136,11 @@ async function existingFiles(fs: InitFs, candidates: readonly string[]): Promise
 async function resolveEntryFile(
   fs: InitFs,
   routerFile: string,
-  specifier: string,
+  imported: string,
   aliases: readonly AliasMapping[],
 ): Promise<EntryResolution> {
+  // Vite cuts the path at a query or hash, so ./pages/Home?x loads ./pages/Home.
+  const specifier = withoutQueryOrHash(imported);
   const target = specifier.startsWith('.')
     ? posix.join(posix.dirname(routerFile), specifier)
     : resolveAliasSpecifier(specifier, [...aliases]);
