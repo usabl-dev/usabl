@@ -474,7 +474,7 @@ describe('a test file in a workspace package the app depends on', () => {
     expectWorkspaceGap(await coverageOf("import { helper } from '@acme/ui/src/tests/helpers';", workspace, helpers));
   });
 
-  it('is a workspace gap when a screen imports a package subpath that usabl cannot find as a file', async () => {
+  it('is a workspace gap when a screen imports an exports entry that names a test file that re-exports it', async () => {
     const tree = {
       ...workspace,
       'packages/ui/package.json': JSON.stringify({ name: '@acme/ui', exports: { '.': './src/index.ts', './testing': './src/tests/index.ts' } }),
