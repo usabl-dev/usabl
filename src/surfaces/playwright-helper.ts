@@ -23,7 +23,7 @@ import type {
   WalkRecord,
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
-import { markUnseenScreens } from '../coverage/unseen.js';
+import { markUnseenScreens, walkStayedOnBody } from '../coverage/unseen.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
 import { readStorageStateEnv } from '../deps/session.js';
@@ -39,6 +39,7 @@ import {
   measureReadiness,
   readApiResponses,
   readinessSignalOf,
+  readTextShown,
   selectorHeldBeforeWalk,
   signalTimeoutMsFor,
   signalWait,
@@ -458,7 +459,10 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       before === null || signal === null || config === null
         ? null
         : { signal, measured: heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl)) };
-    const unseen = unseenGap(screenId, readiness, walk);
+    // A page whose complete walk stayed on the body has nothing to Tab to, so whether it shows text
+    // is read here, on the live page, as the CLI reads it.
+    const textShown = walk?.complete === true && walkStayedOnBody(walk.stops) ? await readTextShown(page) : undefined;
+    const unseen = unseenGap(screenId, readiness, walk, textShown);
     return unseen === null ? finish(drafts, gaps, notes) : finish([], [...gaps, unseen]);
   } finally {
     // Releases the CDP session and the listeners adoption added. The caller's page stays open.
@@ -511,7 +515,7 @@ async function readinessBeforeChecks(
   // No walk has run yet, so only the signal is read here.
   const gap = selectorHeld
     ? unseenGap(screenId, { signal, measured }, undefined)
-    : unseenGap(screenId, { signal, measured: { ...measured, selectorPresent: false } }, undefined, signalWaitMs);
+    : unseenGap(screenId, { signal, measured: { ...measured, selectorPresent: false } }, undefined, undefined, signalWaitMs);
   return gap === null ? { measured } : { gap };
 }
 
@@ -698,6 +702,7 @@ function unseenGap(
   screenId: string,
   readiness: { signal: ReadinessSignal; measured: ReadinessMeasurement } | null,
   walk: WalkRecord | undefined,
+  textShown?: boolean,
   signalWaitMs?: number,
 ): CoverageGap | null {
   const signal = readiness?.signal ?? null;
@@ -706,6 +711,7 @@ function unseenGap(
     screenId,
     url: readinessRef(screenId),
     stops: walk?.complete === true ? walk.stops : [],
+    ...(textShown === undefined ? {} : { textShown }),
     drafts: [],
     gaps: [],
     applicability: [],

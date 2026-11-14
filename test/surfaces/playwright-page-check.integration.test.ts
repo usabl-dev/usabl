@@ -811,6 +811,26 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
     expect(result.failures.map((failure) => failure.rule)).toContain('image-alt');
   });
 
+  it('is not_covered for a blank page whose selector names its empty mount point', async () => {
+    const blank = '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Clusters</title></head><body id="app"></body></html>';
+    const result = await check(blank, '#app');
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
+    expect(result.gaps[0]?.reason).toContain('found no rendered text on the page');
+  });
+
+  it('checks a page whose only text is inside an open shadow root when its selector holds', async () => {
+    const shadow =
+      '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Clusters</title></head><body><main>' +
+      '<x-card id="card"></x-card></main><script>customElements.define("x-card", class extends HTMLElement { constructor() { super();' +
+      ' this.attachShadow({ mode: "open" }).innerHTML = "<h1>Clusters</h1>"; } });</script></body></html>';
+    const result = await check(shadow, '#card');
+
+    expect(result.gaps).toEqual([]);
+  });
+
   it('checks a page with a control when the declared selector holds, and the walk adds no gap', async () => {
     const result = await check(ordersPage(MOUNT_NOW).replace('</main>', '<button type="button">Refresh</button></main>'), '#orders');
 

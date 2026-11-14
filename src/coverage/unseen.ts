@@ -17,9 +17,11 @@
  *   1. isBodyOnly reads the keyboard transcript. Every stop stayed on the document body, so the page
  *      had nothing to walk. This runs for every screen. A page with nothing to Tab to, such as a
  *      page of text, looks the same, so a body-only screen is seen when its declared reachedWhen
- *      selector held and every other declared part held too. A response alone does not count. A
- *      selector aimed at a persistent app shell also holds on a screen whose content did not
- *      mount: that is the stated limit of the readiness signal.
+ *      selector held, every other declared part held too, and the page shows text (textShown).
+ *      A response alone does not count, and neither does a selector on a page with no text, such as
+ *      an empty mount point. A selector aimed at a persistent app shell that shows text also holds
+ *      on a screen whose content did not mount: that is the stated limit of the readiness signal.
+ *      A page with no text and nothing to Tab to, such as a page of only images, stays unseen.
  *   2. reachedSelectorPresent and reachedResponseSeen read the per-surface readiness signal the
  *      operator declared and the scan measured against the live page: a selector that must match,
  *      and a data response that must have been answered with a success. Only an explicit false
@@ -36,7 +38,7 @@
  *
  * This unit reports coverage. It must never mint a verdict.
  */
-import type { CoverageGap, ScreenScan } from '../contracts/index.js';
+import type { CoverageGap, ScreenScan, TranscriptStop } from '../contracts/index.js';
 
 export interface UnseenPass {
   screens: ScreenScan[]; // same order as the input, unseen screens stripped of drafts and applicability
@@ -57,7 +59,16 @@ export interface UnseenPass {
  * of evidence rather than evidence the screen was blank.
  */
 function isBodyOnly(scan: ScreenScan): boolean {
-  return scan.stops.length > 0 && scan.stops.every((stop) => stop.onBody === true);
+  return walkStayedOnBody(scan.stops);
+}
+
+/**
+ * Whether every stop of a keyboard walk had focus on the body, with at least one stop. The check
+ * runner and checkPage read the page's text only when this holds, so the scan of any other page
+ * keeps its shape.
+ */
+export function walkStayedOnBody(stops: readonly TranscriptStop[]): boolean {
+  return stops.length > 0 && stops.every((stop) => stop.onBody === true);
 }
 
 // Whether the surface declared a reachedWhen selector. A measured value of either kind means one was
@@ -93,10 +104,11 @@ function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {
  * Strip drafts and applicability from every screen the engine cannot claim it saw and disclose
  * each one as a coverage gap. Screens that were really walked pass through untouched, gaps and all.
  *
- * A body-only screen is unseen unless its readiness signal held, selector included, and then its
- * gap says to declare a selector when it has none. A reachedWhen aimed at a persistent app shell
- * element (a header, nav, or footer present on every route) also holds on a screen that threw on
- * mount while the shell survived, so point the selector at the screen's own content.
+ * A body-only screen is unseen unless its readiness signal held, selector included, and the page
+ * shows text. Its gap says to declare a selector when it has none, and says the page shows no text
+ * when the selector held on a blank page. A reachedWhen aimed at a persistent app shell element (a
+ * header, nav, or footer present on every route) that shows text also holds on a screen that threw
+ * on mount while the shell survived, so point the selector at the screen's own content.
  *
  * A screen with a control to walk is not body-only in the first place, so it passes through with
  * its drafts. Only an explicit reachedSelectorPresent === false raises the reachability gap.
@@ -106,10 +118,11 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
 
   const marked = screens.map((scan) => {
     const sentences: string[] = [];
-    // A page with nothing to Tab to, such as a page of text, is body-only too. A readiness signal
-    // that held is the positive evidence that it rendered, so the body-only floor alone never
-    // marks such a screen unseen. Without one, nothing confirms the page rendered.
-    if (isBodyOnly(scan) && !renderedSignalHeld(scan)) {
+    // A page with nothing to Tab to, such as a page of text, is body-only too. It is seen only when
+    // its readiness signal held and the page shows text. A selector alone is not enough: one that
+    // names the app shell or an empty mount point, such as #app on <body id="app">, matches on a
+    // page that never rendered. Without both, nothing confirms the page rendered.
+    if (isBodyOnly(scan) && !(renderedSignalHeld(scan) && scan.textShown === true)) {
       sentences.push(
         'Every keyboard stop stayed on the document body, so the page had nothing to walk; a page ' +
           'that never rendered, one behind a login, and one that threw on mount all look like this.',
@@ -119,6 +132,14 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
           'If this screen has no control to Tab to, such as a page of text, declare a reachedWhen selector ' +
             'for it in usabl.config.json that matches an element only this screen renders, so usabl can ' +
             'confirm it rendered.',
+        );
+      } else if (scan.reachedSelectorPresent === true && scan.textShown !== true) {
+        const selector = scan.reachedWhenSelector ?? 'the declared reachedWhen selector';
+        sentences.push(
+          `The reachedWhen selector ${selector} matched, but usabl found no rendered text on the page, so ` +
+            'nothing confirms the screen itself rendered: a selector that names the app shell or an empty ' +
+            "mount point also matches a page that never rendered. Point reachedWhen at an element of the screen's " +
+            'own content, such as its heading.',
         );
       }
     }

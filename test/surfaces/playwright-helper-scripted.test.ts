@@ -161,15 +161,30 @@ describe('checkPage on a page with nothing rendered', () => {
     expect(result.verdict).toBe('verified');
   });
 
-  it('checks a labeled page with nothing to Tab to when its readiness signal holds, by the CLI rule', async () => {
+  it('checks a labeled page of text with nothing to Tab to when its readiness selector holds, by the CLI rule', async () => {
     adopted.page = scriptedPage([], {
       queryAll: async (selector) => (selector === 'main article' ? [{ selector: 'main article' }] : []),
+      pageShowsText: async () => true,
     });
 
     const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('main article'), tabCap: 10 });
 
     expect(result.gaps).toEqual([]);
     expect(result.verdict).toBe('verified');
+  });
+
+  it('is not covered for a blank page whose selector names its empty mount point, by the CLI rule', async () => {
+    adopted.page = scriptedPage([], {
+      queryAll: async (selector) => (selector === '#app' ? [{ selector: '#app' }] : []),
+      pageShowsText: async () => false,
+    });
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project('#app'), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
+    expect(result.gaps[0]?.reason).toContain('The reachedWhen selector #app matched, but usabl found no rendered text on the page');
   });
 
   it('keeps only the first line of the error, neutralized, when the page does not settle before the address read', async () => {

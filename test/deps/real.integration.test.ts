@@ -90,6 +90,31 @@ async function readFixture(name: string): Promise<string> {
 // page, so a scan that starts before the answer lands finishes before it too.
 const SLOW_ANSWER_MS = 4_000;
 
+// Pages with nothing to Tab to, for the text read the unseen check uses on such a page.
+function textPage(title: string, body: string, bodyAttributes = ''): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>${title}</title></head><body${bodyAttributes}>${body}</body></html>`;
+}
+const GIF = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+const TEXT_PAGES: Record<string, string> = {
+  // An application that never rendered into its mount point. The title is text, but not shown.
+  '/blank-app.html': textPage('App', '', ' id="app"'),
+  '/plain-text.html': textPage('Terms', '<main id="terms"><h1>Terms</h1><p>These terms apply to every account.</p></main>'),
+  '/open-shadow-text.html': textPage(
+    'Shadow',
+    '<x-card id="card"></x-card><script>customElements.define("x-card", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = "<p>Text inside an open shadow root</p>"; } });</script>',
+  ),
+  '/closed-shadow-text.html': textPage(
+    'Closed',
+    '<x-closed id="card"></x-closed><script>customElements.define("x-closed", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "closed" }).innerHTML = "<p>Text inside a closed shadow root</p>"; } });</script>',
+  ),
+  '/frame-text.html': textPage('Frame', '<iframe id="frame" title="Inner" srcdoc="<p>Text inside a same-origin frame</p>"></iframe>'),
+  '/hidden-text.html': textPage(
+    'Hidden',
+    '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p><p style="opacity: 0">Hidden by opacity</p></div>',
+  ),
+  '/images-only.html': textPage('Images', `<div id="gallery"><img src="${GIF}" alt="A chart" width="40" height="40" /></div>`),
+};
+
 async function makeFixtureServer(): Promise<FixtureServer> {
   const html = await readFixture('labelledby.html');
   const pages: Record<string, string> = {
@@ -109,6 +134,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
     '/partial-render.html': await readFixture('partial-render.html'),
     '/details-after-signal.html': await readFixture('details-after-signal.html'),
+    ...TEXT_PAGES,
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -866,6 +892,55 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       const scan = await runner.scan({ id: 'body-id-screen', url });
       expect(scan.stops.some((stop) => stop.elementPath === '#app')).toBe(true);
       expect(markUnseenScreens([scan]).unseenScreenIds).toEqual(unseen ? ['body-id-screen'] : []);
+    });
+  }
+
+  // What the text read answers on pages with nothing to Tab to. The unseen check counts a selector
+  // that held on such a page only when the page shows text.
+  for (const [path, shows] of [
+    ['/blank-app.html', false],
+    ['/plain-text.html', true],
+    ['/open-shadow-text.html', true],
+    ['/closed-shadow-text.html', false],
+    ['/frame-text.html', true],
+    ['/hidden-text.html', false],
+    ['/images-only.html', false],
+  ] as const) {
+    it(`reads ${path} as ${shows ? 'showing' : 'not showing'} text`, async () => {
+      const page = await driver.open(new URL(path, fixture.url).toString());
+      try {
+        await page.gotoReady();
+        expect(await page.pageShowsText()).toBe(shows);
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
+  // A body-only screen is seen only when its selector held and the page shows text.
+  for (const [name, path, selector, unseen] of [
+    ['a blank page whose selector names its empty mount point', '/blank-app.html', '#app', true],
+    ['a page whose only text is inside an open shadow root', '/open-shadow-text.html', '#card', false],
+    ['a page of plain text', '/plain-text.html', '#terms', false],
+  ] as const) {
+    it(`reads ${name}, with a selector that held, as ${unseen ? 'unseen' : 'seen'} in the CLI path`, async () => {
+      const url = new URL(path, fixture.url).toString();
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [],
+        config: testConfig({ surfaces: [{ id: 'text-screen', url, files: [], reachedWhen: selector }] }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 3,
+      });
+      const scan = await runner.scan({ id: 'text-screen', url });
+      expect(scan.reachedSelectorPresent).toBe(true);
+      expect(scan.stops.every((stop) => stop.onBody === true)).toBe(true);
+      const pass = markUnseenScreens([scan]);
+      expect(pass.unseenScreenIds).toEqual(unseen ? ['text-screen'] : []);
+      if (unseen) {
+        expect(pass.screens[0]?.gaps[0]?.reason).toContain('found no rendered text on the page');
+      }
     });
   }
 

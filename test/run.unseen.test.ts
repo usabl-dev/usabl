@@ -305,10 +305,60 @@ describe('unseen screens', () => {
     expect(r.coverage.gaps).toEqual([]);
   });
 
+  it('never mints verified with a receipt for a body-only screen whose reachedWhen matched the app shell', async () => {
+    // A reachedWhen aimed at a persistent app shell element (header, nav, footer) matches on every
+    // route, including a login wall or a screen that threw on mount while the shell survived. That
+    // screen is still body-only, so it was never reached. The run must not mint verified for it. This
+    // guards the receipt-level false green: a matched shell selector must not cancel the body-only
+    // gap. Two genuinely walked screens sit beside it so the run does not take the refuse-all path.
+    // The blank document carries no failing drafts, which is the reviewer's proven false green: with
+    // the bug the run mints verified with a receipt, exit 0. axe firing nothing on a bare shell is
+    // exactly the login-wall case the body-only floor exists to catch.
+    const bodyOnlyButShellMatched: ScreenScan = {
+      screenId: 'overview',
+      url: config.surfaces[0]!.url,
+      stops: bodyOnlyStops,
+      drafts: [],
+      gaps: [],
+      applicability: [],
+      // The operator pointed reachedWhen at header.app-shell, which the surviving shell still carries.
+      reachedSelectorPresent: true,
+      reachedWhenSelector: 'header.app-shell',
+    };
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: changedAll,
+      scans: {
+        overview: bodyOnlyButShellMatched,
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+        inventories: {
+          screenId: 'inventories',
+          url: config.surfaces[2]!.url,
+          stops: realStops('a:nth-child(3)'),
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          reachedSelectorPresent: null,
+        },
+      },
+    });
+
+    const r = await run(deps, config);
+
+    // The body-only screen is not covered, so the run cannot verify and mints no receipt.
+    expect(r.verdict).not.toBe('verified');
+    expect(r.receipt).toBeNull();
+    expect(r.verdict).toBe('not_covered');
+    expect(r.exitCode).toBe(3);
+    const overview = r.screens.find((s) => s.screenId === 'overview');
+    expect(overview?.drafts).toEqual([]);
+    const gap = overview?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('keyboard stop');
+  });
 });
 
 // A screen with nothing to Tab to, such as a page of text, has a walk that stays on the body. Only a
-// readiness signal that held tells it from a page that never rendered.
+// readiness selector that held, on a page that shows text, tells it from a page that never rendered.
 describe('a body-only screen and its readiness signal', () => {
   const walked = {
     jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
@@ -333,13 +383,24 @@ describe('a body-only screen and its readiness signal', () => {
   }
 
   it('verifies a text-only page whose declared selector held', async () => {
-    // The same holds for a selector that matches only the app shell on a screen whose content did
-    // not mount. That is the stated limit of the readiness signal in the ground truth.
-    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: 'main article' }));
+    // The same holds for a selector that matches only the app shell, on a shell that shows text,
+    // on a screen whose content did not mount. That is the stated limit in the ground truth.
+    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: 'main article', textShown: true }));
 
     expect(r.verdict).toBe('verified');
     expect(r.exitCode).toBe(0);
     expect(r.coverage.gaps).toEqual([]);
+  });
+
+  it('does not cover a blank page whose declared selector held, and the gap says the page shows no text', async () => {
+    const r = await runWith(textOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: '#app', textShown: false }));
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.exitCode).toBe(3);
+    expect(r.receipt).toBeNull();
+    const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('The reachedWhen selector #app matched, but usabl found no rendered text on the page');
+    expect(gap?.reason).toContain("Point reachedWhen at an element of the screen's own content");
   });
 
   it('does not cover the same page with no readiness signal, and the gap says to declare one', async () => {

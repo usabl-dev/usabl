@@ -197,6 +197,13 @@ export interface ScreenScan {
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
   reachedWhenResponse?: string | null;
+  // Whether the page showed rendered text that is not white space, read after the checks and only
+  // when every keyboard stop stayed on the body. A readiness selector can match an empty mount point
+  // or the app shell on a page that never rendered, so for such a page a selector that held counts
+  // only when the page shows text too. A failed read is false. Absent means it was not read.
+  // Measurement for the unseen check in coverage/unseen.ts only: no draft, no finding, and no
+  // verdict is made from it anywhere else, and the gate never reads it.
+  textShown?: boolean;
   // 'off' when the page was scanned in a browser that usabl started without Chromium's sandbox,
   // because the system could not provide one. Absent means usabl did not report it off: the
   // browser ran with its sandbox, or the page came from a caller's own browser. Disclosure only:
@@ -962,6 +969,11 @@ export interface Page {
   // falls back to the body, as it does after Tab moves past the last control. The walk's end rule
   // reads it, because the next Tab from a focused body starts again at the first control.
   bodyHoldsFocus(): Promise<boolean>;
+  // Whether the page shows any rendered text that is not white space: in the document, in open
+  // shadow roots, and in same-origin frames. Text that CSS hides is not counted, and neither is
+  // text in a closed shadow root or a frame from another origin, because the read cannot see it.
+  // Read in an isolated world. The unseen check reads it for a page with nothing to Tab to.
+  pageShowsText(): Promise<boolean>;
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   // Waits for the page to react to one action: the element count holds and the network is quiet,
