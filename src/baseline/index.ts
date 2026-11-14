@@ -476,7 +476,7 @@ export async function runBaseline(
   opts: { trustedRef?: string; partial?: boolean } = {},
 ): Promise<BaselineOutcome> {
   const trustedRef = opts.trustedRef ?? 'HEAD';
-  const dirtyGuardedPaths = await checkGuard(deps, config, trustedRef);
+  const dirtyGuardedPaths = await checkGuard(deps, trustedRef);
   const otherGuardedDirty = dirtyGuardedPaths.filter((path) => path !== EVIDENCE_FLOOR_PATH);
   // Baseline drafts must stay reviewable. Mixing floor updates with other guarded edits is refused.
   if (otherGuardedDirty.length > 0) {

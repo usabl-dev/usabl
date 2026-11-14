@@ -7,7 +7,6 @@
  */
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import type { UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { compileCodeownersPattern } from '../../src/primitives/match-codeowners.js';
 import { buildGuardedSet, checkGuard } from '../../src/trust/guard.js';
@@ -22,12 +21,11 @@ describe("this repository's verdict rule files", () => {
   for (const path of VERDICT_RULE_FILES) {
     it(`reports a change to ${path} as a guarded change`, async () => {
       const configBytes = await repoFile('usabl.config.json');
-      const config = JSON.parse(configBytes) as UsablConfig;
       const deps = makeFakeDeps({
         files: { 'usabl.config.json': configBytes, [path]: 'changed rules\n' },
         headContents: { 'usabl.config.json': configBytes, [path]: 'committed rules\n' },
       });
-      await expect(checkGuard(deps, config)).resolves.toEqual([path]);
+      await expect(checkGuard(deps)).resolves.toEqual([path]);
     });
 
     it(`gives ${path} an explicit owner rule in CODEOWNERS`, async () => {

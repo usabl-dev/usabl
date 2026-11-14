@@ -105,7 +105,7 @@ export async function runFloorPrune(
 ): Promise<FloorPruneOutcome> {
   try {
     const trustedRef = opts.trustedRef ?? 'HEAD';
-    const dirtyGuardedPaths = await checkGuard(deps, config, trustedRef);
+    const dirtyGuardedPaths = await checkGuard(deps, trustedRef);
     const otherGuardedDirty = dirtyGuardedPaths.filter((path) => path !== EVIDENCE_FLOOR_PATH);
     // Prune writes a draft diff. Mixing other guarded edits would hide scope inside one approval.
     if (otherGuardedDirty.length > 0) {

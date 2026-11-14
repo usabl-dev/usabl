@@ -24,6 +24,7 @@ import {
   type StopHookRunnerPorts,
 } from '../../src/surfaces/stop-hook-runner.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -235,6 +236,73 @@ describe('Stop hook compares usabl.config.json with the last commit before it pa
     expect(again.stderr()).toContain('usabl.config.json has an empty uiFileGlobs list');
     expect(again.stderr()).toContain('continuation already active');
     expect(again.engineRuns()).toBe(0);
+  });
+
+  // The guard runs before the empty list blocks, so a waiver or floor weakened in the same session
+  // is named on that stop. The stop still blocks once and is never verified.
+  it('names the guarded files that changed when an empty uiFileGlobs list blocks', async () => {
+    const EMPTY = JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2);
+    const committedWaivers = JSON.stringify({ version: 1, waivers: [] });
+    const weakenedWaivers = JSON.stringify({
+      version: 1,
+      waivers: [{ rule: 'color-contrast', screenId: 'home', reason: 'later', expires: '2099-01-01T00:00:00.000Z' }],
+    });
+    const depsWithWeakenedWaivers = () =>
+      makeFakeDeps({
+        files: { 'usabl.config.json': EMPTY, '.usabl-waivers.json': weakenedWaivers },
+        headContents: { 'usabl.config.json': EMPTY, '.usabl-waivers.json': committedWaivers },
+      });
+
+    const h = harness({ working: found(EMPTY), head: found(EMPTY) });
+    h.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    h.ports.buildDeps = async () => depsWithWeakenedWaivers();
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    const reason = blockReason(h.stdout());
+    expect(reason).toContain('usabl.config.json has an empty uiFileGlobs list');
+    expect(reason).toContain('Guarded file changed: 1, named under "guarded files" in the untrusted text below');
+    const frameStart = reason.indexOf('[BEGIN UNTRUSTED TEXT');
+    expect(frameStart).toBeGreaterThan(0);
+    expect(reason.indexOf('guarded files: .usabl-waivers.json')).toBeGreaterThan(frameStart);
+    expect(reason).not.toContain('VERIFIED');
+    expect(h.engineRuns()).toBe(0);
+
+    const again = harness({ working: found(EMPTY), head: found(EMPTY) });
+    again.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    again.ports.buildDeps = async () => depsWithWeakenedWaivers();
+    await runStopHookFromStdin(stopInput(true), again.ports);
+    expect(again.stdout()).not.toContain('"decision":"block"');
+    expect(again.stderr()).toContain('continuation already active');
+    expect(again.stderr()).toContain('guarded files: .usabl-waivers.json');
+    expect(again.stderr()).not.toContain('VERIFIED');
+    expect(again.engineRuns()).toBe(0);
+  });
+
+  it('blocks as a guard failure when the guard fails on a config with an empty uiFileGlobs list', async () => {
+    const EMPTY = JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2);
+    const h = harness({ working: found(EMPTY), head: found(EMPTY) });
+    h.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    const deps = makeFakeDeps({ files: { 'usabl.config.json': EMPTY }, headContents: { 'usabl.config.json': EMPTY } });
+    deps.git.lsFilesUnder = async () => {
+      throw new Error('git ls-tree printed more than usabl reads');
+    };
+    h.ports.buildDeps = async () => deps;
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    const reason = blockReason(h.stdout());
+    expect(reason).toContain('usabl could not tell whether guarded policy files changed, because the guard failed');
+    expect(reason).toContain('error: git ls-tree printed more than usabl reads');
+    expect(h.engineRuns()).toBe(0);
+  });
+
+  it('still blocks an empty uiFileGlobs list when the run setup fails before the guard', async () => {
+    const EMPTY = JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2);
+    const h = harness({ working: found(EMPTY), head: found(EMPTY) });
+    h.ports.loadConfig = async (text) => JSON.parse(text) as UsablConfig;
+    h.ports.buildDeps = async () => {
+      throw new Error('the storage state file could not be read');
+    };
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    expect(blockReason(h.stdout())).toContain('usabl.config.json has an empty uiFileGlobs list');
+    expect(h.engineRuns()).toBe(0);
   });
 
   it('runs a docs-only config whose usabl.docs.json names a page', async () => {
@@ -568,6 +636,18 @@ describe('Stop hook reads the config at the repository root, through the real po
     const h = realGuardPorts(repo);
     expect(await runStopHookFromStdin(stopInput(false), h.ports)).toBe(0);
     expectNoHeadFailOpen(h);
+  });
+
+  // The guard runs before the empty list blocks, and with no last commit the guard fails. That
+  // failure fails open on its own, but an empty uiFileGlobs list still blocks, as it did before
+  // the guard ran first.
+  it('still blocks an empty uiFileGlobs list in a repository with no commits', { timeout: REAL_PROCESS_BUDGET_MS }, async () => {
+    await writeFile(join(repo, 'usabl.config.json'), JSON.stringify({ ...config, uiFileGlobs: [] }, null, 2));
+    const h = realGuardPorts(repo);
+    expect(await runStopHookFromStdin(stopInput(false), h.ports)).toBe(0);
+    const reason = blockReason(h.stdout());
+    expect(reason).toContain('usabl.config.json has an empty uiFileGlobs list');
+    expect(h.engineRuns()).toBe(0);
   });
 
   it('fails open with the same disclosure on an orphan branch with no commit yet', async () => {

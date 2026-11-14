@@ -21,13 +21,25 @@ import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
-import { run } from '../run.js';
+import { run, type RunOptions } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
 import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
+import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guardedFilesHeadline } from '../output/disclosure.js';
 import { firstLine } from '../primitives/first-line.js';
+import { GUARDED_FILES_LABEL } from './model-pieces.js';
+import {
+  checkCommandFor,
+  findStartingCommit,
+  resolveBranchScope,
+  SCOPE_PROBLEM_REASONS,
+  scopeGapNextStep,
+  scopeGit,
+  type BranchScope,
+  type CheckCommand,
+  type StartingCommit,
+} from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -83,7 +95,11 @@ export interface StopHookRunnerPorts {
   // Parses the config bytes readConfigBytes returned. It never reads the file again.
   loadConfig: (text: string) => Promise<UsablConfig>;
   buildDeps: (config: UsablConfig) => Promise<Deps>;
-  runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  runEngine: (deps: Deps, config: UsablConfig, opts?: RunOptions) => Promise<Result>;
+  // The commit where this branch left the trusted branch. See stop-hook-scope.ts. The real ports
+  // always set it. Absent only in ports a test builds by hand: the stop then checks the changes
+  // that are not committed, as it did before this was built.
+  findStartingCommit?: () => Promise<StartingCommit>;
   evaluateDecision: (result: Result, ctx: HookContext, config?: UsablConfig) => { block: boolean; message: string };
 }
 
@@ -333,11 +349,34 @@ const DO_NOT_EDIT_BLOCK = 'Do not edit the file to clear this block.';
 const DO_NOT_EDIT_CONTINUATION = 'Do not edit the file to make a later stop pass.';
 
 /**
+ * The line and the framed piece that name the guarded files the guard found changed, or nothing
+ * when it found none. The paths are file names anyone who can add a file chooses, so they go
+ * inside the frame.
+ */
+function guardedFilesNamed(paths: readonly string[]): { line: string; piece: string } | null {
+  if (paths.length === 0) {
+    return null;
+  }
+  return {
+    line:
+      `${guardedFilesHeadline(paths.length)}: ${paths.length}, named under "${GUARDED_FILES_LABEL}" in the untrusted text below. ` +
+      'They need approval on the pull request too.',
+    piece: `${GUARDED_FILES_LABEL}: ${paths.join(', ')}`,
+  };
+}
+
+/**
  * The message for a config that blocks before the run. It says what happened, that nothing was
  * checked, what clears it, and the one lever a person has. Error text comes from the file system
- * or the parser and can carry config content, so it goes inside the frame.
+ * or the parser and can carry config content, so it goes inside the frame. When the guard ran
+ * first and found changed guarded files, they are named too.
  */
-function configBlockMessage(problem: ConfigProblem, continuation: boolean, error: string | null): string {
+function configBlockMessage(
+  problem: ConfigProblem,
+  continuation: boolean,
+  error: string | null,
+  guardedPaths: readonly string[] = [],
+): string {
   const lines = [`NOT verified - approval required: ${CONFIG_PROBLEM_LINES[problem]}`];
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
@@ -350,8 +389,13 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
   } else {
     lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
+  const guarded = guardedFilesNamed(guardedPaths);
+  if (guarded !== null) {
+    lines.push(guarded.line);
+  }
   lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
-  return framedMessage(lines, error === null ? [] : [`error: ${error}`]);
+  const pieces = [...(error === null ? [] : [`error: ${error}`]), ...(guarded === null ? [] : [guarded.piece])];
+  return framedMessage(lines, pieces);
 }
 
 /**
@@ -486,15 +530,17 @@ async function verifyStoredReceipt(
   deps: Deps,
   config: UsablConfig,
   pins: StoredReceiptPinState,
+  baseRevision: string | null,
 ): Promise<{ verified: boolean; details: string; notice: string | null }> {
   const receipt = await loadReceipt(ports.fs);
   if (receipt === null) {
     return { verified: false, details: 'no local receipt found', notice: null };
   }
 
-  // Fast-path verification reuses the same verifier as run() so trust rules cannot diverge.
+  // Fast-path verification reuses the same verifier as run() so trust rules cannot diverge. The
+  // starting commit is this stop's, so a receipt for another set of changes does not verify.
   const currentSourceTree = await deps.git.writeTree();
-  const verification = await verifyReceipt(deps, config, receipt, currentSourceTree);
+  const verification = await verifyReceipt(deps, config, receipt, currentSourceTree, baseRevision);
   if (verification.valid) {
     return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree, pins), notice: null };
   }
@@ -645,7 +691,11 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
     },
     loadConfig: async (text: string) => parseConfigText(text),
     buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
-    runEngine: async (deps: Deps, config: UsablConfig) => run(deps, config),
+    runEngine: async (deps: Deps, config: UsablConfig, opts?: RunOptions) => run(deps, config, opts ?? {}),
+    // Outside a work tree the hook stops before it looks (see configStep), and there is no branch
+    // and no committed work to compare. Inside one, git answers.
+    findStartingCommit: async () =>
+      inRepository ? findStartingCommit(scopeGit(root)) : { kind: 'no-trusted-branch' as const },
     evaluateDecision: evaluateStopDecision,
   };
 }
@@ -725,6 +775,10 @@ function pinNotices(notice: PinNotice | null): string[] {
   return notice === null ? [] : [notice.message];
 }
 
+function scopeNotes(scope: { note: string | null }): string[] {
+  return scope.note === null ? [] : [scope.note];
+}
+
 /**
  * A config block lets one continuation through while stop_hook_active is set, as every other
  * block does, so a person who edits the config on purpose is never looped.
@@ -735,12 +789,77 @@ async function emitConfigBlock(
   options: StopHookOptions,
   problem: ConfigProblem,
   error: string | null,
+  guardedPaths: readonly string[] = [],
 ): Promise<void> {
   if (input.stopHookActive) {
-    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error) }, options);
+    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error, guardedPaths) }, options);
     return;
   }
-  await emitProtocolBlock(ports, configBlockMessage(problem, false, error), options);
+  await emitProtocolBlock(ports, configBlockMessage(problem, false, error, guardedPaths), options);
+}
+
+/**
+ * What one stop checks. `scan` carries the options its run gets and the commit the changed list
+ * was taken from, or null for uncommitted changes only; the receipt records it, and a stored
+ * receipt verifies only for the same one. `gap` means the stop cannot tell which changes CI will
+ * check, so it checks nothing and blocks.
+ */
+type StopScope =
+  | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null; note: string | null }
+  | Extract<BranchScope, { kind: 'gap' }>;
+
+/**
+ * What this stop checks: what CI will check. The scope comes from resolveBranchScope, the same
+ * function `usabl check --branch-scope` uses, so that check and a stop list the same changes and
+ * bind the same starting commit. See stop-hook-scope.ts.
+ */
+async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
+  if (ports.findStartingCommit === undefined) {
+    return { kind: 'scan', runOptions: {}, baseRevision: null, note: null };
+  }
+  const scope = await resolveBranchScope(ports.findStartingCommit, deps.git);
+  if (scope.kind === 'gap') {
+    return scope;
+  }
+  return {
+    kind: 'scan',
+    runOptions:
+      scope.changedFiles === undefined ? {} : { changedFiles: scope.changedFiles, baseRevision: scope.baseRevision },
+    baseRevision: scope.baseRevision,
+    note: scope.note,
+  };
+}
+
+/**
+ * The message for a stop that could not tell which committed changes CI will check. It checked
+ * nothing, so it is a coverage gap and blocks once, as every other gap does. The branch name and
+ * git's error come from the repository, so they go inside the frame.
+ */
+function scopeGapMessage(
+  scope: Extract<StopScope, { kind: 'gap' }>,
+  continuation: boolean,
+  guardedPaths: readonly string[],
+): string {
+  const lines = [
+    'NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
+      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
+      'So it could not tell which committed changes CI will check, and it checked nothing on this stop. ' +
+      'It did not fall back to the uncommitted changes alone or to the whole history.',
+  ];
+  if (continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  lines.push(scopeGapNextStep(scope.problem, 'stop again'));
+  const guarded = guardedFilesNamed(guardedPaths);
+  if (guarded !== null) {
+    lines.push(guarded.line);
+  }
+  lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
+  return framedMessage(lines, [
+    `trusted branch: ${scope.branch}`,
+    ...(scope.detail === null ? [] : [`error: ${scope.detail}`]),
+    ...(guarded === null ? [] : [guarded.piece]),
+  ]);
 }
 
 // usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
@@ -759,6 +878,8 @@ export async function runStopHook(
 ): Promise<number> {
   let deps: Deps | null = null;
   let pinNotice: PinNotice | null = null;
+  // The check the advice names. It stays usabl check until the stop finds a starting commit.
+  let checkCommand: CheckCommand = 'usabl check';
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
@@ -808,13 +929,31 @@ export async function runStopHook(
     }
     // A config with no UI globs would read every stop as idle. The rule is the loader's, with the
     // docs manifest read from the repository root through the hook's file port.
-    if (config.uiFileGlobs.length === 0 && uiFileGlobsRefusal(config, await readDocsManifest(ports.fs), CONFIG_FILE) !== null) {
-      await emitConfigBlock(ports, input, options, 'no-ui-globs', null);
+    const noUiGlobs =
+      config.uiFileGlobs.length === 0 && uiFileGlobsRefusal(config, await readDocsManifest(ports.fs), CONFIG_FILE) !== null;
+    // The guard runs before the empty list blocks, so a waiver or floor weakened in the same
+    // session is named on that stop, and a guard that fails blocks as a guard failure. Any other
+    // failure here, such as no last commit, fails open below, so an empty list still blocks on it,
+    // as it did before the guard ran first.
+    let guardDeps: Deps;
+    let dirtyGuardedPaths: string[];
+    try {
+      const built = await ports.buildDeps(config);
+      deps = built;
+      guardDeps = built;
+      dirtyGuardedPaths = await guarded(() => checkGuard(built));
+    } catch (err) {
+      const blocksAsGuardFailure = err instanceof GuardFailure && err.message !== NO_HEAD_MESSAGE;
+      if (noUiGlobs && !blocksAsGuardFailure) {
+        await emitConfigBlock(ports, input, options, 'no-ui-globs', null);
+        return 0;
+      }
+      throw err;
+    }
+    if (noUiGlobs) {
+      await emitConfigBlock(ports, input, options, 'no-ui-globs', null, dirtyGuardedPaths);
       return 0;
     }
-    deps = await ports.buildDeps(config);
-    const guardDeps = deps;
-    const dirtyGuardedPaths = await guarded(() => checkGuard(guardDeps, config));
 
     // Session pins are compared before the receipt fast path. A receipt binds the committed policy
     // as it is when the receipt was minted, so a policy weakened and committed during the session,
@@ -873,6 +1012,25 @@ export async function runStopHook(
       }
     }
 
+    // What this stop checks: what CI will check. See stopScope.
+    const scope = await stopScope(ports, guardDeps);
+    if (scope.kind === 'gap') {
+      if (input.stopHookActive) {
+        await emitProtocolAllow(
+          ports,
+          { message: scopeGapMessage(scope, true, dirtyGuardedPaths), notices: pinNotices(pinNotice) },
+          options,
+        );
+        return 0;
+      }
+      await emitProtocolBlock(ports, scopeGapMessage(scope, false, dirtyGuardedPaths), options);
+      for (const notice of pinNotices(pinNotice)) {
+        await writeStderr(ports, notice);
+      }
+      return 0;
+    }
+    checkCommand = checkCommandFor(scope.baseRevision);
+
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
@@ -881,23 +1039,23 @@ export async function runStopHook(
       const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
-      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
+      }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
         await emitProtocolAllow(
           ports,
-          { message: receiptCheck.details, notices: pinNotices(pinNotice), quiet: true },
+          { message: receiptCheck.details, notices: [...scopeNotes(scope), ...pinNotices(pinNotice)], quiet: true },
           options,
         );
         return 0;
       }
     }
 
-    const result = await ports.runEngine(deps, config);
+    const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
     if (receipt !== null) {
-      const saved = await saveReceipt(ports.fs, receipt);
+      const saved = await saveReceipt(ports.fs, receipt, checkCommand);
       // A refused save changes no verdict. It is said after the decision, so the decision line
       // still comes first.
       receiptNotice = saved.status === 'refused' ? saved.message : null;
@@ -908,6 +1066,7 @@ export async function runStopHook(
     const ctx: HookContext = {
       stopHookActive: input.stopHookActive,
       guardDivergedPaths: dirtyGuardedPaths,
+      checkCommand,
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
@@ -917,6 +1076,8 @@ export async function runStopHook(
       // without a stored receipt.
       ...(receiptNotUsed === null || result.verdict === null ? [] : [receiptNotUsed]),
       ...(receiptNotice === null ? [] : [receiptNotice]),
+      // What this stop did not check goes with every decision, the idle one included.
+      ...scopeNotes(scope),
       ...pinNotices(pinNotice),
     ];
     if (decision.block) {
@@ -955,7 +1116,7 @@ export async function runStopHook(
           [
             'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
               'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-            'Next: run usabl check, or check the change by hand, before you call this change accessible.',
+            `Next: run ${checkCommand}, or check the change by hand, before you call this change accessible.`,
           ],
           [`error: ${message}`],
         ),

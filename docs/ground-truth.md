@@ -473,7 +473,7 @@ export interface DiscoveryNote {
 export interface Receipt {
   schemaVersion: 2;
   sourceTree: string;             // the tree read before planning, unchanged after the scan
-  baseRevision: string | null;
+  baseRevision: string | null;    // the commit the changed list was taken from, or null
   historyHead: string | null;     // the debt history commit the run read
   policyHash: string;
   runnerVersion: string;
@@ -3428,7 +3428,7 @@ What this does not cover:
 
 ### Receipt binding
 
-Five bindings are compared on re-verification, plus the waiver end below:
+Six bindings are compared on re-verification, plus the waiver end below:
 - `sourceTree`: hash of the working tree (git write-tree on a temporary index), read before the
   run plans. The run reads it again after the scan and every policy read, before the gate. If
   the two reads differ, a file changed during the check: the run carries a not-covered gap
@@ -3440,6 +3440,22 @@ Five bindings are compared on re-verification, plus the waiver end below:
   and undone before the second read leaves the reads equal, so the run is verified and the
   receipt binds a tree the scan did not see as it was. A dev server that still serves an older
   build than the tree is scanned, and the receipt binds the newer tree. Both stay verified today.
+- `baseRevision`: the commit the run's changed list was taken from, or null when the run listed
+  only changes that are not committed. `run()` records it only when the caller passed
+  `changedFiles`; a starting commit passed with no list records null. The Stop hook lists every change since the branch left
+  the trusted branch (section 11.2) and passes that starting commit, and `verifyReceipt` compares
+  it with the starting commit of the stop that reads the receipt. The same tree checked from
+  another starting commit, or from none, is a different set of changes, so the receipt does not
+  verify and the stop runs a full check. Before this was compared, a receipt minted while the
+  hook checked only uncommitted changes verified on a later stop of the same tree that also
+  checked committed work, so that work was never scanned. A plain `usabl check` passes no
+  starting commit, so its receipt records null and is not used by a stop that has one. `usabl
+  check --branch-scope` lists the changes through the same function as the hook and passes the
+  same starting commit, so its receipt answers the next stop of the same tree and starting
+  commit (section 11.2). A receipt minted
+  before this comparison records null too, so it verifies only where a stop still checks
+  uncommitted changes alone; anywhere else it costs one full check. The schema version stays 2,
+  because a null value read under the new rule can only fail to verify where the scope widened.
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
   (first-party `dist/*.js` in the installed package, or the `src` tree when run from
@@ -3484,8 +3500,9 @@ Five bindings are compared on re-verification, plus the waiver end below:
   minted before this field existed has none; it verifies only when it counted no waived finding.
   The schema version stays 2, because that absent value is read safely.
 
-A source-tree change or committed policy change invalidates the receipt, and so does an
-engine or scanner change, a move of the history branch, or the end of a waiver it applied.
+A source-tree change or committed policy change invalidates the receipt, and so does a
+different starting commit, an engine or scanner change, a move of the history branch, or the
+end of a waiver it applied.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
@@ -3553,6 +3570,12 @@ lines.
 **Typical uses:**
 
 - Local: `usabl check` (the default) on changed files or named surfaces.
+- Local with the Stop hook's scope: `usabl check --branch-scope` checks every change since the
+  branch left the trusted branch, plus uncommitted changes, and binds the same starting commit
+  into its receipt. It is the way to finish a check a stop could not finish; a plain `usabl
+  check` receipt is not used by a stop with a starting commit (section 11.2). It is refused next
+  to `--ci`, `--trusted-ref`, `--isolated-browser`, or `--config` naming a file other than the
+  root `usabl.config.json`.
 - First-run policy drafts: `usabl init` infers and writes `usabl.config.json` and
   `usabl.routes.json` only. `--app <dir>` drafts one app folder in a repository that holds
   several (see section 12). It never calls the gate and never consumes the files it just
@@ -3721,6 +3744,93 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   `loop_count` above 0), marked NOT verified, as every other block does. A continuation that
   goes through tells the model not to edit the file to make a later stop pass; only a block
   speaks of clearing it.
+- What a stop checks: what CI will check. CI checks every file changed since the pull request
+  left its base branch, so a stop checks every file changed since this branch left the trusted
+  branch, plus staged, unstaged, and untracked changes. The trusted branch is the default branch
+  git records for origin in `refs/remotes/origin/HEAD` (a clone sets it; `git remote set-head
+  origin --auto` sets it later). The starting commit is the merge base of that branch and HEAD,
+  and it must be an ancestor of HEAD. The committed part is listed by `listChangedFiles`, the
+  function `usabl check --trusted-ref` uses in CI, from the starting commit, with `-z`. So an
+  agent that commits a UI change and then stops is checked; before, the hook checked only
+  uncommitted changes and said there was nothing to check. The hook passes the list and the
+  starting commit to `run()`, and the receipt records the commit (Receipt binding). The hook does
+  not pass a trusted ref to `run()`, so policy is read as on every local run: compared with HEAD
+  by the guard and the session pins.
+  - A detached HEAD, a rebased branch, and a branch that changed since an earlier stop all have a
+    merge base, so each stop checks every change since that commit. After a rebase that is the
+    rebased commits; the changes the branch took in from the trusted branch are not rechecked.
+  - HEAD on the trusted branch itself: when the local branch is level with origin's, the starting
+    commit is its tip and the stop checks uncommitted changes only. When the local branch is
+    ahead, the stop also checks the commits not on origin yet.
+  - A trusted branch is named but its starting commit cannot be used: `origin/HEAD` names a ref
+    that is not `refs/remotes/origin/<name>` (a local branch under `refs/heads/`, a tag, a branch
+    of another remote, or `origin/HEAD` itself), git has no commit for the
+    branch, the branch and HEAD share no commit in this clone (a shallow clone, or unrelated
+    history), the commit is not an ancestor of HEAD, git fails while it looks, or git cannot list
+    the files changed since it. The stop is a not-covered gap: it checks nothing and blocks with
+    "NOT verified - not covered: usabl could not find where this branch left the trusted branch
+    ...", the reason, "It did not fall back to the uncommitted changes alone or to the whole
+    history.", and the step to fetch the branch with its history (`git fetch origin`, or `git
+    fetch --unshallow` in a shallow clone). When `origin/HEAD` names a ref that is not a branch
+    of origin, or a branch this clone has no commit for, the step names `git remote set-head
+    origin --auto` first: after a default branch rename `origin/HEAD` still names the old branch,
+    and a fetch does not move it. The branch name and git's error are inside the
+    untrusted frame, and changed guarded files are named there too. It never reads as nothing
+    to check, and it lets one continuation through, marked NOT verified.
+  - No trusted branch at all (`refs/remotes/origin/HEAD` is not set, for example a repository with
+    no remote, or a single-branch clone): the stop keeps the uncommitted scope, and every
+    decision, a block, an idle line, and a stored receipt allow included, is followed by "Note:
+    usabl found no trusted branch to compare this branch with ... Work already committed on this
+    branch was not checked on this stop." and the `git remote set-head origin --auto` step. In
+    Claude Code the note reaches the person through `systemMessage`.
+  - Limit: any process in the session can move `origin/HEAD`, or the branch it names, with
+    ordinary git commands such as `git update-ref refs/remotes/origin/main HEAD`. That shrinks
+    the stop's scope to the uncommitted changes, and usabl cannot tell this from a fetch. CI,
+    which checks the pull request against its real base, is the backstop. Pointing `origin/HEAD`
+    at a ref outside `refs/remotes/origin/` is the gap above, so that form does not shrink it.
+- `usabl check --branch-scope` is the way to finish a check a stop could not finish, for example a
+  stop that ran out of time. It finds the starting commit and lists the changes with
+  `resolveBranchScope`, the function the hook calls, so it checks the same changes and passes the
+  same `changedFiles` and `baseRevision` to `run()`. Everything else is the plain local check:
+  the same policy reads, output, and exit codes. Its receipt verifies on the next stop of the same
+  tree with the same starting commit. One more UI edit changes the tree, so the next stop runs the
+  full check. A commit that only records changes already checked leaves the tree and the starting
+  commit as they were, so the receipt still stands. A merge or a rebase that moves the starting
+  commit makes the stop run the full check. A plain `usabl check` receipt is not used by a stop
+  with a starting commit.
+  - No trusted branch: it checks the uncommitted changes and prints the same note as the hook on
+    stderr, with the `git remote set-head origin --auto` step.
+  - A starting commit it cannot find or use: it scans nothing and saves no receipt. It prints the
+    hook's reason on stderr, "usabl: NOT verified - not covered: usabl could not find where this
+    branch left the trusted branch ...", with the branch name and git's error inside the untrusted
+    frame and the step to fetch the branch and run it again, and exits 4, the code of a run that
+    could not check. It never exits 0, `--self-check` included.
+  - It is refused with exit 2 next to `--ci`, `--trusted-ref`, or `--isolated-browser`, and the
+    message names the flag to drop. `check` takes no named surface or file list.
+  - It is refused with exit 2 next to `--config` naming any file other than `usabl.config.json`
+    at the project root (`--config usabl.config.json` and `--config ./usabl.config.json` run),
+    because the hook plans from that file and the receipt answers the hook. The message says to
+    drop `--config`. The path is resolved against the folder the command runs in, so run the
+    check from the project root: from a subfolder, `--config ../usabl.config.json` is refused
+    too. The receipt does not bind the config bytes.
+- Advice names that check. On a stop with a starting commit, each hook message that tells the
+  reader to run a check says `usabl check --branch-scope`: the step after a verdict usabl does not
+  recognize (block and continuation), the continuation steps for a regression and for gaps, a run
+  that did not finish, a hook error after the scope was found, and a receipt that could not be
+  saved. A stop with no starting commit keeps `usabl check`. The messages written before the stop
+  finds its scope keep `usabl check`: a guard failure, a folder outside a work tree, input the
+  hook could not read, and the scope gap itself. Which stops block and which allow does not
+  change.
+- Stop time. A wider scope scans more screens on a long branch. A stored receipt still answers
+  a stop of an unchanged tree with the same starting commit without a scan. Nothing in the hook
+  bounds its own time: the generated Claude Code hook sets no `timeout`, so Claude Code's
+  default applies, and the Cursor hook sets `timeout: 300`. When the assistant ends a hook at its
+  timeout, usabl has written no answer, no pass, and no receipt, because it answers only after
+  the run ends. The assistant then lets the stop go on with a hook error, so a stop that runs out
+  of time is not a block. `npm run measure:stop-time -- 1 5 20` measures a cold and a warm stop
+  on the demo app for each number of changed screens, beside both budgets. It needs a built
+  engine, the demo app (`USABL_FIXTURE_APP_CWD`), and Chromium, so it runs by hand on a quiet
+  machine and is not part of `npm run check`.
 - Input that is not JSON: allow with "NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop.", then the step to check the hook command in `.claude/settings.json` or `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check` before calling the change accessible.
 - An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
@@ -3755,9 +3865,10 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
   block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets
   the agent finish. Neither reads it as a pass, and neither is a block a person must clear.
-- Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
-  message. Not `not_covered`.
-- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
+- Nothing to check (no UI files among the changes the stop checks, see What a stop checks):
+  allow with explicit "nothing to check" message. Not `not_covered`.
+- Valid receipt on an unchanged tree with the same starting commit: fast allow with no browser
+  and no scan. The session
   pins are read and compared first, with every refusal described under Session pinning, so a
   stored receipt never allows a stop that the pin comparison would block. A receipt binds the
   committed policy as it was when the receipt was minted. A policy weakened and committed
@@ -4625,6 +4736,10 @@ each path prints the same sentence, which says why and names the fix:
   the fix takes effect once it is merged there.
 - The Stop hook. It never says idle for such a config. It blocks the stop as approval
   required, as it does for a config that does not parse, and lets one continuation through.
+  The guard runs first, so the block also names the guarded files that changed, such as a
+  waiver or floor weakened in the same session, inside the untrusted frame. A guard failure
+  blocks as a guard failure. Any other failure before the guard, such as a repository with no
+  commits, still blocks on the empty list, so the stop never fails open there.
 - `usabl doctor` reports the config as drifted, with the same sentence as its next step.
 
 A documentation-only repository has no UI files, so the config loads when `usabl.docs.json`
