@@ -341,8 +341,8 @@
   import graph, only when a changed test file needs it, that starts from the files the config names
   as app code: the files under `uiFileGlobs` that are not test files, the route entry files, the
   router file, the other files `wideBlastGlobs` match, and the files of every surface. When such a test
-  file is reached only through files no route closure reaches, such as stories or setup files, the
-  gap reason names them. A test file is an `unresolved` gap when a load usabl cannot follow may
+  file is reached only through files no route closure reaches, such as a mock request handler in
+  `src/mocks/`, the gap reason names them. A test file is an `unresolved` gap when a load usabl cannot follow may
   reach it: an unresolved import that names it, an `import.meta.glob` pattern that matches it, an
   `import()` or `require()` whose path is built at run time and may point to it, a webpack
   `require.context` of a folder that holds it, a bare import a tsconfig or jsconfig `baseUrl`
@@ -375,8 +375,33 @@
   list excluded files, as `usabl check` does, and an idle run that excluded files says so on every
   surface in place of "No UI files changed". `usabl baseline` and `usabl docs --all` place test
   files by the same rule, so `usabl baseline` refuses without `--partial` when a load such as
-  `require(name)`, `import.meta.glob(variable)`, or a fixture import in a story may reach a test
-  file. The ways out are `--partial`, a narrower load, or a surface that lists the file.
+  `require(name)`, `import.meta.glob(variable)`, or a fixture import in a file outside the tests
+  may reach a test file. The ways out are `--partial`, a narrower load, or a surface that lists the
+  file.
+
+- Stories, test setup files, mocks, and test helper files now count as test files. The test file
+  set gains a file named `*.stories.*`, `setupTests.*`, or `test-utils.*`, and any file in a
+  `__mocks__` or `test-utils` folder. Before, each was an ordinary UI file, so a change to one alone
+  was a gap, and a fixture that only a story imported was a gap too. The rule is unchanged and has
+  no shortcut for these names: such a file is checked when a surface lists it, a route closure
+  reaches it, or a file outside the tests imports it; it is an `unresolved` gap when a load usabl
+  cannot follow may reach it; and only otherwise is it excluded and listed. Gate effect: a run that
+  was `not_covered` only because such a file changed now reads as nothing to check, with the file
+  listed as excluded.
+
+- An `exports` key that ends with `/`, such as `"./t/": "./../other/src/tests/"`, is now matched
+  when the subpath starts with it. Node.js removed such folder keys, but Vite still reads one and
+  appends the rest of the subpath. A folder key whose target leaves the package may load any file,
+  as other leaving keys do, where before the import read as loading only files of that package. A
+  folder key whose target stays inside keeps that reading.
+
+- A query on an import, such as `?inline`, `?url`, or `?raw`, is no longer read as part of the
+  path. Vite takes it off before it looks up the file. For a package subpath, usabl now takes it
+  off before it reads `exports` and before it looks up the path, so
+  `import css from '@acme/ui/styles.css?inline'` no longer makes every test-only change in the
+  package a gap. A relative import with a query now links the file it names. Before, a relative
+  import with a query and no extension, such as `./tests/Widget?raw`, linked nothing, so a change
+  to that test file read as nothing to check while the screen loaded it.
 
 - The gate's own words are exact. A requirements file that did not load was counted as a changed
   guarded path, so the approval line said "1 guarded path(s) changed" about a file nobody changed.
