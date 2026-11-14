@@ -118,7 +118,14 @@ re-baseline to green.
   the local clone records for origin, so a stale `origin/HEAD` or an old fetch moves the
   starting commit, and a branch whose base is not origin's default branch is compared with the
   default branch anyway. In both cases the stop checks the changes since the commit the local
-  refs name, and CI still checks the pull request against its real base. A stop the assistant
+  refs name, and CI still checks the pull request against its real base. Any process in the
+  session can also move `origin/HEAD`, or the branch it names, with ordinary git commands such
+  as `git update-ref refs/remotes/origin/main HEAD`. That shrinks the stop's scope to the
+  uncommitted changes, and usabl cannot tell this from a fetch. CI, which checks the pull
+  request against its real base, is the backstop. usabl accepts only a target of `origin/HEAD`
+  of the form `refs/remotes/origin/<name>`: a local branch under `refs/heads/`, a tag, a branch
+  of another remote, or `origin/HEAD` itself is a gap that blocks and names `git remote set-head
+  origin --auto`, so `git symbolic-ref` to a ref on HEAD no longer makes a stop idle. A stop the assistant
   times out is not
   a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
   as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section
@@ -234,6 +241,16 @@ passing bundle from another run.
   exported. The bindings stop a receipt lifted from another run, not one written on purpose on
   this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
   re-scanned)" and says usabl did not scan the change again on that stop.
+- A receipt does not bind the config file a run used. It binds the committed policy files, and
+  the Stop hook reads `usabl.config.json` at the root. So a plain `usabl check --config <other
+  file>`, which plans from that other file (for example one with narrower `uiFileGlobs`), saves a
+  receipt the hook checks against the root config. As built, that receipt records no starting
+  commit, because a plain check passes no changed list. It answers only a stop that has no
+  starting commit either: a stop in a repository where git records no trusted branch, which
+  checks the uncommitted changes and says that committed work was not checked. On a stop with a
+  starting commit it does not verify, and the stop runs the full check. `usabl check
+  --branch-scope` refuses `--config` naming any file other than the root `usabl.config.json`.
+  Binding the config bytes into the receipt is not built.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
