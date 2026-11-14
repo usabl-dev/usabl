@@ -217,6 +217,47 @@ describe('the receipt binds the starting commit', { timeout: REAL_PROCESS_BUDGET
   });
 });
 
+describe('the fast path stays', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  // A stored receipt for the same tree and the same starting commit, with no waiver that ended,
+  // answers the stop with no scan, so a long branch does not pay for a full check on every stop.
+  it('answers a second stop of an unchanged branch from the stored receipt without a scan', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change both screens');
+
+    const first = hook();
+    await runStopHookFromStdin('{}', first.ports);
+    expect([...first.scanned].sort()).toEqual(['home', 'other']);
+    expect(first.stderr().startsWith('VERIFIED (exit 0')).toBe(true);
+    expect(first.stderr()).not.toContain('not re-scanned');
+
+    const second = hook();
+    await runStopHookFromStdin('{}', second.ports);
+    expect(second.scanned).toEqual([]);
+    expect(second.stderr().startsWith('VERIFIED (exit 0, stored receipt, not re-scanned')).toBe(true);
+    expect(second.stdout()).not.toContain('"decision":"block"');
+  });
+
+  it('scans again once the branch has a new commit', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    await runStopHookFromStdin('{}', hook().ports);
+
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the other screen');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect([...h.scanned].sort()).toEqual(['home', 'other']);
+    expect(h.stderr()).not.toContain('not re-scanned');
+  });
+});
+
 describe('no trusted branch at all', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   const NOTE =
     'Note: usabl found no trusted branch to compare this branch with, because git records no default branch for origin ' +
