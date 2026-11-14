@@ -99,6 +99,9 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === 'object' && error !== null && 'code' in error;
 }
 
+// A commit id as the event file carries the pull request head: 7 to 40 hex characters, nothing else.
+const HEAD_COMMIT_ID = /^[0-9a-f]{7,40}$/i;
+
 async function runEnforce(opts: CliOptions): Promise<number> {
   try {
     if (opts.enforceCheck !== 'accessibility' && opts.enforceCheck !== 'policy') {
@@ -118,6 +121,16 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     const pr = parsePullRequestEvent(readEventPayload());
     if (pr === null) {
       process.stderr.write('usabl: GITHUB_EVENT_PATH must describe a pull request\n');
+      return 2;
+    }
+    // The head SHA goes to git as a ref. A value that is not a commit id could read as an option, a
+    // range, or a path, so it is refused here, before any git call. The value is not printed.
+    if (!HEAD_COMMIT_ID.test(pr.headSha)) {
+      process.stderr.write(
+        'usabl: pull_request.head.sha in the event file that GITHUB_EVENT_PATH names is not a commit id ' +
+          '(7 to 40 hex characters), so usabl did not pass it to git. Run enforce policy on a pull_request ' +
+          'or pull_request_review event.\n',
+      );
       return 2;
     }
     const git = makeGitReader();
