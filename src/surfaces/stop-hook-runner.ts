@@ -26,8 +26,9 @@ import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } fro
 import { parseConfigText } from '../intake/load-config.js';
 import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER } from '../output/disclosure.js';
+import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guardedFilesHeadline } from '../output/disclosure.js';
 import { firstLine } from '../primitives/first-line.js';
+import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
@@ -333,11 +334,34 @@ const DO_NOT_EDIT_BLOCK = 'Do not edit the file to clear this block.';
 const DO_NOT_EDIT_CONTINUATION = 'Do not edit the file to make a later stop pass.';
 
 /**
+ * The line and the framed piece that name the guarded files the guard found changed, or nothing
+ * when it found none. The paths are file names anyone who can add a file chooses, so they go
+ * inside the frame.
+ */
+function guardedFilesNamed(paths: readonly string[]): { line: string; piece: string } | null {
+  if (paths.length === 0) {
+    return null;
+  }
+  return {
+    line:
+      `${guardedFilesHeadline(paths.length)}: ${paths.length}, named under "${GUARDED_FILES_LABEL}" in the untrusted text below. ` +
+      'They need approval on the pull request too.',
+    piece: `${GUARDED_FILES_LABEL}: ${paths.join(', ')}`,
+  };
+}
+
+/**
  * The message for a config that blocks before the run. It says what happened, that nothing was
  * checked, what clears it, and the one lever a person has. Error text comes from the file system
- * or the parser and can carry config content, so it goes inside the frame.
+ * or the parser and can carry config content, so it goes inside the frame. When the guard ran
+ * first and found changed guarded files, they are named too.
  */
-function configBlockMessage(problem: ConfigProblem, continuation: boolean, error: string | null): string {
+function configBlockMessage(
+  problem: ConfigProblem,
+  continuation: boolean,
+  error: string | null,
+  guardedPaths: readonly string[] = [],
+): string {
   const lines = [`NOT verified - approval required: ${CONFIG_PROBLEM_LINES[problem]}`];
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
@@ -350,8 +374,13 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
   } else {
     lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
+  const guarded = guardedFilesNamed(guardedPaths);
+  if (guarded !== null) {
+    lines.push(guarded.line);
+  }
   lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
-  return framedMessage(lines, error === null ? [] : [`error: ${error}`]);
+  const pieces = [...(error === null ? [] : [`error: ${error}`]), ...(guarded === null ? [] : [guarded.piece])];
+  return framedMessage(lines, pieces);
 }
 
 /**
@@ -735,12 +764,13 @@ async function emitConfigBlock(
   options: StopHookOptions,
   problem: ConfigProblem,
   error: string | null,
+  guardedPaths: readonly string[] = [],
 ): Promise<void> {
   if (input.stopHookActive) {
-    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error) }, options);
+    await emitProtocolAllow(ports, { message: configBlockMessage(problem, true, error, guardedPaths) }, options);
     return;
   }
-  await emitProtocolBlock(ports, configBlockMessage(problem, false, error), options);
+  await emitProtocolBlock(ports, configBlockMessage(problem, false, error, guardedPaths), options);
 }
 
 // usabl.docs.json at the repository root. A read that fails is no manifest, never proof of one.
@@ -808,13 +838,31 @@ export async function runStopHook(
     }
     // A config with no UI globs would read every stop as idle. The rule is the loader's, with the
     // docs manifest read from the repository root through the hook's file port.
-    if (config.uiFileGlobs.length === 0 && uiFileGlobsRefusal(config, await readDocsManifest(ports.fs), CONFIG_FILE) !== null) {
-      await emitConfigBlock(ports, input, options, 'no-ui-globs', null);
+    const noUiGlobs =
+      config.uiFileGlobs.length === 0 && uiFileGlobsRefusal(config, await readDocsManifest(ports.fs), CONFIG_FILE) !== null;
+    // The guard runs before the empty list blocks, so a waiver or floor weakened in the same
+    // session is named on that stop, and a guard that fails blocks as a guard failure. Any other
+    // failure here, such as no last commit, fails open below, so an empty list still blocks on it,
+    // as it did before the guard ran first.
+    let guardDeps: Deps;
+    let dirtyGuardedPaths: string[];
+    try {
+      guardDeps = await ports.buildDeps(config);
+      deps = guardDeps;
+      const built = guardDeps;
+      dirtyGuardedPaths = await guarded(() => checkGuard(built));
+    } catch (err) {
+      const blocksAsGuardFailure = err instanceof GuardFailure && err.message !== NO_HEAD_MESSAGE;
+      if (noUiGlobs && !blocksAsGuardFailure) {
+        await emitConfigBlock(ports, input, options, 'no-ui-globs', null);
+        return 0;
+      }
+      throw err;
+    }
+    if (noUiGlobs) {
+      await emitConfigBlock(ports, input, options, 'no-ui-globs', null, dirtyGuardedPaths);
       return 0;
     }
-    deps = await ports.buildDeps(config);
-    const guardDeps = deps;
-    const dirtyGuardedPaths = await guarded(() => checkGuard(guardDeps));
 
     // Session pins are compared before the receipt fast path. A receipt binds the committed policy
     // as it is when the receipt was minted, so a policy weakened and committed during the session,
@@ -893,7 +941,7 @@ export async function runStopHook(
       }
     }
 
-    const result = await ports.runEngine(deps, config);
+    const result = await ports.runEngine(guardDeps, config);
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
     if (receipt !== null) {
