@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../../src/cli.js';
-import { inferInit, type InitFs } from '../../src/init/index.js';
+import { formatInitReport, inferInit, type InitFs } from '../../src/init/index.js';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 
 const APP_FILES: Record<string, string> = {
@@ -84,6 +84,45 @@ describe('inferInit --app through the realpath port', () => {
     expect(draft.config.uiFileGlobs.some((glob) => matchGlob(glob, 'packages/web/src/App.tsx'))).toBe(true);
     expect(draft.config.uiFileGlobs.some((glob) => glob.startsWith('apps/web/'))).toBe(false);
     expect(draft.notes.join('\n')).toMatch(/apps\/web is a symbolic link.*packages\/web/);
+  });
+
+  // The real folder name comes from the file system, not from the operator's --app value, so it can
+  // hold a terminal control sequence. Every note prints it with each control character labelled, so
+  // nothing raw reaches the terminal and the name never reads as a clean packages/web.
+  it('prints the real folder in every note with its control characters labelled', async () => {
+    const realDir = 'packages/w\u001b]0;pwn\u0007eb';
+    const shown = 'packages/w<U+001B>]0;pwn<U+0007>eb';
+    const router = [
+      "import Users from './Users';",
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route path="/users" element={<Users />} />',
+      '    <Route path="/about" element={<About />} />',
+      '  </Routes>',
+      ');',
+      '',
+    ].join('\n');
+    const realFiles: Record<string, string> = {
+      [`${realDir}/package.json`]: JSON.stringify({ name: 'web' }),
+      [`${realDir}/vite.config.ts`]: 'export default { server: { port: 3000 } };\n',
+      [`${realDir}/src/App.tsx`]: router,
+      [`${realDir}/src/Users.tsx`]: 'export default function Users() { return null; }\n',
+      // A second app, really named packages/web, so the two names must stay apart.
+      'packages/web/vite.config.ts': 'export default {};\n',
+      'packages/web/src/App.tsx': router,
+    };
+    const draft = await inferInit(
+      memoryFs(realFiles, (path) => (path === 'apps/web' ? realDir : path)),
+      { appDir: 'apps/web' },
+    );
+    const text = formatInitReport(draft, { ok: true, written: ['usabl.config.json'], refused: [], message: 'Wrote usabl.config.json.' });
+    expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u);
+    expect(text).toContain(`the draft uses ${shown} for every path`);
+    expect(text).toContain(`Review: this config checks only ${shown}.`);
+    expect(text).toContain('which it does not check: packages/web.');
+    expect(text).toContain(`Inferred appBaseUrl from ${shown}/vite.config.ts: port 3000, http.`);
+    expect(text).toContain(`Inferred router file ${shown}/src/App.tsx.`);
+    expect(text).toContain(`Review: ${shown}/src/App.tsx line 5: /about has no proven entry file.`);
   });
 });
 
