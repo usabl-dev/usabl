@@ -125,7 +125,10 @@ re-baseline to green.
   request against its real base, is the backstop. usabl accepts only a target of `origin/HEAD`
   of the form `refs/remotes/origin/<name>`: a local branch under `refs/heads/`, a tag, a branch
   of another remote, or `origin/HEAD` itself is a gap that blocks and names `git remote set-head
-  origin --auto`, so `git symbolic-ref` to a ref on HEAD no longer makes a stop idle. A stop the assistant
+  origin --auto`. So pointing `origin/HEAD` at a local branch or a tag on HEAD no longer makes a
+  stop idle. Pointing it at a branch of origin that sits on HEAD still does, whether the session
+  made that branch with `git update-ref` or pushed it and ran `git remote set-head`. That is the
+  limit stated above. A stop the assistant
   times out is not
   a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
   as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section

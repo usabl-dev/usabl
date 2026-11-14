@@ -3810,7 +3810,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - It is refused with exit 2 next to `--config` naming any file other than `usabl.config.json`
     at the project root (`--config usabl.config.json` and `--config ./usabl.config.json` run),
     because the hook plans from that file and the receipt answers the hook. The message says to
-    drop `--config`. The receipt does not bind the config bytes.
+    drop `--config`. The path is resolved against the folder the command runs in, so run the
+    check from the project root: from a subfolder, `--config ../usabl.config.json` is refused
+    too. The receipt does not bind the config bytes.
 - Advice names that check. On a stop with a starting commit, each hook message that tells the
   reader to run a check says `usabl check --branch-scope`: the step after a verdict usabl does not
   recognize (block and continuation), the continuation steps for a regression and for gaps, a run
