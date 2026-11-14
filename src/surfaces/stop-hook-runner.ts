@@ -28,14 +28,14 @@ import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-g
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { APPROVAL_REQUIRED_HOW_IT_CLEARS, APPROVAL_REQUIRED_HUMAN_LEVER, guardedFilesHeadline } from '../output/disclosure.js';
 import { firstLine } from '../primitives/first-line.js';
-import { listChangedFiles } from './cli.js';
 import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import {
   findStartingCommit,
+  resolveBranchScope,
+  SCOPE_PROBLEM_REASONS,
   scopeGit,
-  TRUSTED_BRANCH_POINTER,
+  type BranchScope,
   type StartingCommit,
-  type StartingCommitProblem,
 } from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
@@ -795,9 +795,6 @@ async function emitConfigBlock(
   await emitProtocolBlock(ports, configBlockMessage(problem, false, error, guardedPaths), options);
 }
 
-/** Why a stop could not tell which committed changes to check. */
-type ScopeProblem = StartingCommitProblem | 'listing-failed';
-
 /**
  * What one stop checks. `scan` carries the options its run gets and the commit the changed list
  * was taken from, or null for uncommitted changes only; the receipt records it, and a stored
@@ -806,72 +803,29 @@ type ScopeProblem = StartingCommitProblem | 'listing-failed';
  */
 type StopScope =
   | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null; note: string | null }
-  | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null };
+  | Extract<BranchScope, { kind: 'gap' }>;
 
 /**
- * The note for a stop in a repository with no trusted branch to compare with. The stop keeps the
- * uncommitted scope, and this note follows every decision, so nothing to check or a verified line
- * never reads as a check of the whole branch. It is usabl's own text.
- */
-const NO_TRUSTED_BRANCH_NOTE =
-  'Note: usabl found no trusted branch to compare this branch with, because git records no default branch for origin ' +
-  `(${TRUSTED_BRANCH_POINTER} is not set). So this stop checked only the changes that are not committed. ` +
-  'Work already committed on this branch was not checked on this stop. To check it on every stop, run ' +
-  'git remote set-head origin --auto, which records the default branch of origin. A repository with no remote ' +
-  'named origin needs one that holds the trusted branch first.';
-
-/**
- * What this stop checks. CI checks every file changed since the pull request left its base branch,
- * so the stop checks every file changed since this branch left the trusted branch, plus the
- * changes that are not committed. The committed part is listed by listChangedFiles, the function
- * CI uses, from the starting commit itself, so the two lists cannot drift apart.
- *
- * A starting commit that cannot be found or used, and a listing that fails, are a gap. The stop
- * never falls back to the uncommitted changes, to the whole history, or to nothing to check.
+ * What this stop checks: what CI will check. The scope comes from resolveBranchScope, the same
+ * function `usabl check --branch-scope` uses, so that check and a stop list the same changes and
+ * bind the same starting commit. See stop-hook-scope.ts.
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
     return { kind: 'scan', runOptions: {}, baseRevision: null, note: null };
   }
-  // A lookup that throws is a git failure, never the narrower scope.
-  const start = await ports.findStartingCommit().catch(
-    (err: unknown): StartingCommit => ({
-      kind: 'not-found',
-      branch: 'origin/HEAD',
-      problem: 'git-failed',
-      detail: firstLine(errorMessage(err)),
-    }),
-  );
-  if (start.kind === 'not-found') {
-    return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
-  }
-  if (start.kind === 'no-trusted-branch') {
-    // Nothing to compare with: the uncommitted changes, as before, and the note says so.
-    return { kind: 'scan', runOptions: {}, baseRevision: null, note: NO_TRUSTED_BRANCH_NOTE };
-  }
-  let changedFiles: string[];
-  try {
-    changedFiles = await listChangedFiles(deps.git, start.commit);
-  } catch (err) {
-    return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: firstLine(errorMessage(err)) };
+  const scope = await resolveBranchScope(ports.findStartingCommit, deps.git);
+  if (scope.kind === 'gap') {
+    return scope;
   }
   return {
     kind: 'scan',
-    runOptions: { changedFiles, baseRevision: start.commit },
-    baseRevision: start.commit,
-    note: null,
+    runOptions:
+      scope.changedFiles === undefined ? {} : { changedFiles: scope.changedFiles, baseRevision: scope.baseRevision },
+    baseRevision: scope.baseRevision,
+    note: scope.note,
   };
 }
-
-const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
-  'branch-missing': 'git names that branch as the default branch of origin, but this clone has no commit for it',
-  'no-common-commit':
-    'this branch and the trusted branch share no commit in this clone, which happens in a shallow clone or on a branch with unrelated history',
-  'not-ancestor': 'the commit git found is not an ancestor of HEAD, so it cannot be where this branch started',
-  'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
-  'listing-failed':
-    'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
-};
 
 /**
  * The message for a stop that could not tell which committed changes CI will check. It checked

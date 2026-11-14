@@ -73,6 +73,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      branchScope: false,
       files: null,
       verifySubcommand: null,
       verifyApp: false,
@@ -117,6 +118,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      branchScope: false,
       files: null,
       verifySubcommand: null,
       verifyApp: false,
@@ -128,6 +130,11 @@ describe('parseCliArgs', () => {
     const parsed = parseCliArgs(['check', '--ci', '--trusted-ref', 'origin/main', '--isolated-browser']);
     expect(parsed.isolatedBrowser).toBe(true);
     expect(parseCliArgs(['check']).isolatedBrowser).toBe(false);
+  });
+
+  it('parses --branch-scope for a local check with the Stop hook scope', () => {
+    expect(parseCliArgs(['check', '--branch-scope']).branchScope).toBe(true);
+    expect(parseCliArgs(['check']).branchScope).toBe(false);
   });
 
   it('parses --html for the docs command', () => {
@@ -205,6 +212,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      branchScope: false,
       files: null,
       verifySubcommand: null,
       verifyApp: false,

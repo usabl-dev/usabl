@@ -32,6 +32,7 @@ import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { loadConfig, parseConfigText } from './intake/load-config.js';
 import {
+  branchScopeRefusal,
   ciRefusal,
   installRefusal,
   listChangedFiles,
@@ -42,6 +43,7 @@ import {
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
+import { branchScopeGapText, findStartingCommit, resolveBranchScope, scopeGit } from './surfaces/stop-hook-scope.js';
 import { scrubString } from './surfaces/scrub.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -861,7 +863,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  const refusal = ciRefusal(opts);
+  const refusal = branchScopeRefusal(opts) ?? ciRefusal(opts);
   if (refusal !== null) {
     process.stderr.write(`usabl: ${refusal.message}\n`);
     return refusal.exitCode;
@@ -912,14 +914,32 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   });
   try {
     let changedFiles: string[] | undefined;
+    let baseRevision: string | null = null;
+    let scopeNote: string | null = null;
     if (opts.trustedRef !== null) {
       changedFiles = await listChangedFiles(deps.git, opts.trustedRef);
+    } else if (opts.branchScope) {
+      // The Stop hook's scope, found by the same function, so the receipt binds the same starting
+      // commit and the next stop of this tree answers from it. A gap checks nothing and never
+      // exits 0, so it cannot read as a clean check.
+      const scope = await resolveBranchScope(() => findStartingCommit(scopeGit(process.cwd())), deps.git);
+      if (scope.kind === 'gap') {
+        process.stderr.write(branchScopeGapText(scope) + '\n');
+        return 4;
+      }
+      changedFiles = scope.changedFiles;
+      baseRevision = scope.baseRevision;
+      scopeNote = scope.note;
     }
 
     const ran = await run(deps, config, {
       ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
+      ...(baseRevision === null ? {} : { baseRevision }),
     });
+    if (scopeNote !== null) {
+      process.stderr.write(scopeNote + '\n');
+    }
     const result = judge === null ? ran : judge.finish(ran);
     // Verified local checks persist local proof so the stop-hook fast path can re-check without a
     // browser. A CI run saves none. The write never follows a symbolic link.

@@ -61,6 +61,10 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
         name: '--isolated-browser',
         help: 'Scan as the CI judge: sandbox required, other origins blocked.',
       },
+      {
+        name: '--branch-scope',
+        help: 'Check what the Stop hook checks: all changes on this branch.',
+      },
       CONFIG_FLAG,
     ],
   },

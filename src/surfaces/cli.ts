@@ -71,6 +71,9 @@ export interface CliOptions {
   // check-only: run the judge's browser. Chromium's sandbox required, service workers blocked, and
   // every request outside the trusted origins aborted, so a blocked screen is a coverage gap.
   isolatedBrowser: boolean;
+  // check-only: check what the Stop hook checks, every change since the branch left the trusted
+  // branch plus uncommitted changes, and bind the same starting commit into the receipt.
+  branchScope: boolean;
   // brief-only: the task's files from `--files <path> [<path> ...]`. Null when the flag was not
   // given, which means the changed files git reports.
   files: string[] | null;
@@ -167,6 +170,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let docsCi = false;
   let branchRule = false;
   let isolatedBrowser = false;
+  let branchScope = false;
   let files: string[] | null = null;
   let verifySubcommand: string | null = null;
   let verifyApp = false;
@@ -280,6 +284,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--isolated-browser') {
       isolatedBrowser = true;
+      continue;
+    }
+    if (token === '--branch-scope') {
+      branchScope = true;
       continue;
     }
     if (token === '--self-check') {
@@ -432,6 +440,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     installTarget,
     cursorStopHook,
     isolatedBrowser,
+    branchScope,
     files,
     verifySubcommand,
     verifyApp,
@@ -452,6 +461,32 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
   return {
     exitCode: 2,
     message: `install needs exactly one target flag. Choose one of: ${INSTALL_TARGET_FLAGS.join(', ')}`,
+  };
+}
+
+/**
+ * --branch-scope is a local check with the Stop hook's scope. The CI gate and a check with a
+ * trusted ref have their own scope and policy reads, so a combination is refused, never merged.
+ */
+export function branchScopeRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
+  if (!opts.branchScope) {
+    return null;
+  }
+  const conflict = opts.ci
+    ? '--ci'
+    : opts.trustedRef !== null
+      ? '--trusted-ref'
+      : opts.isolatedBrowser
+        ? '--isolated-browser'
+        : null;
+  if (conflict === null) {
+    return null;
+  }
+  return {
+    exitCode: 2,
+    message:
+      `--branch-scope cannot be combined with ${conflict}. --branch-scope runs the local check a Stop hook runs, ` +
+      `and ${conflict} belongs to a CI check. Drop ${conflict} to check the branch locally, or drop --branch-scope.`,
   };
 }
 

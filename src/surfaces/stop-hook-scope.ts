@@ -11,7 +11,11 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { GitReader } from '../contracts/index.js';
+import { boundField } from '../output/bounded-text.js';
 import { firstLine } from '../primitives/first-line.js';
+import { listChangedFiles } from './cli.js';
+import { frameUntrustedBlock } from './scrub.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -129,4 +133,97 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
     return gitFailed(branch, ancestor);
   }
   return { kind: 'found', branch, commit };
+}
+
+/** Why a check could not tell which committed changes to check. */
+export type ScopeProblem = StartingCommitProblem | 'listing-failed';
+
+/**
+ * What a check with the Stop hook's scope checks. `scan` carries the changed list (absent means
+ * the changes that are not committed, which run() lists itself), the commit it was taken from or
+ * null, and the note to print, or null. `gap` means the check cannot tell which changes CI will
+ * check, so it checks nothing.
+ */
+export type BranchScope =
+  | { kind: 'scan'; changedFiles?: string[]; baseRevision: string | null; note: string | null }
+  | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null };
+
+/**
+ * The note for a check in a repository with no trusted branch to compare with. The check keeps
+ * the uncommitted scope, and this note follows its answer, so nothing to check or a verified line
+ * never reads as a check of the whole branch. It is usabl's own text.
+ */
+export const NO_TRUSTED_BRANCH_NOTE =
+  'Note: usabl found no trusted branch to compare this branch with, because git records no default branch for origin ' +
+  `(${TRUSTED_BRANCH_POINTER} is not set). So this stop checked only the changes that are not committed. ` +
+  'Work already committed on this branch was not checked on this stop. To check it on every stop, run ' +
+  'git remote set-head origin --auto, which records the default branch of origin. A repository with no remote ' +
+  'named origin needs one that holds the trusted branch first.';
+
+/** One plain reason per problem, in usabl's own words. */
+export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
+  'branch-missing': 'git names that branch as the default branch of origin, but this clone has no commit for it',
+  'no-common-commit':
+    'this branch and the trusted branch share no commit in this clone, which happens in a shallow clone or on a branch with unrelated history',
+  'not-ancestor': 'the commit git found is not an ancestor of HEAD, so it cannot be where this branch started',
+  'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
+  'listing-failed':
+    'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
+};
+
+/**
+ * What `usabl check --branch-scope` prints when it cannot tell which changes to check. It gives
+ * the reason the Stop hook gives, and the branch name and git's error go inside the untrusted
+ * frame, because git prints text this repository controls.
+ */
+export function branchScopeGapText(scope: Extract<BranchScope, { kind: 'gap' }>): string {
+  const lines = [
+    'usabl: NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
+      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
+      'So it could not tell which committed changes CI will check, and it checked nothing. ' +
+      'It did not fall back to the uncommitted changes alone or to the whole history.',
+    'Next: fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
+      'or git fetch --unshallow in a shallow clone, then run usabl check --branch-scope again. If the branch ' +
+      'shares no history with the trusted branch, run usabl check and check the change by hand before you call ' +
+      'it accessible.',
+  ];
+  const pieces = [`trusted branch: ${scope.branch}`, ...(scope.detail === null ? [] : [`error: ${scope.detail}`])];
+  return [...lines, frameUntrustedBlock(pieces.map((piece) => boundField(piece, 'gapReason')))].join('\n');
+}
+
+function errorText(err: unknown): string {
+  return firstLine(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * What a check with the Stop hook's scope checks: every file changed since this branch left the
+ * trusted branch, plus the changes that are not committed. The committed part is listed by
+ * listChangedFiles, the function CI uses, from the starting commit itself, so the lists cannot
+ * drift apart. The Stop hook and `usabl check --branch-scope` both call this.
+ *
+ * A starting commit that cannot be found or used, a lookup that throws, and a listing that fails
+ * are a gap. The check never falls back to the uncommitted changes, to the whole history, or to
+ * nothing to check. With no trusted branch at all it keeps the uncommitted scope, with the note.
+ */
+export async function resolveBranchScope(
+  find: () => Promise<StartingCommit>,
+  git: Pick<GitReader, 'diffNameOnly' | 'statusZ'>,
+): Promise<BranchScope> {
+  // A lookup that throws is a git failure, never the narrower scope.
+  const start = await find().catch(
+    (err: unknown): StartingCommit => ({ kind: 'not-found', branch: 'origin/HEAD', problem: 'git-failed', detail: errorText(err) }),
+  );
+  if (start.kind === 'not-found') {
+    return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
+  }
+  if (start.kind === 'no-trusted-branch') {
+    return { kind: 'scan', baseRevision: null, note: NO_TRUSTED_BRANCH_NOTE };
+  }
+  let changedFiles: string[];
+  try {
+    changedFiles = await listChangedFiles(git, start.commit);
+  } catch (err) {
+    return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: errorText(err) };
+  }
+  return { kind: 'scan', changedFiles, baseRevision: start.commit, note: null };
 }
