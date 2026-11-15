@@ -4,6 +4,24 @@
 
 ### Added
 
+- A keyboard walk budget for each screen, in `usabl.config.json`:
+  `keyboardWalk.perSurface.<id>.tabCap` (1 to 2000 tab stops, default 200) and `.wallClockMs`
+  (1 to 300000 ms, default 15000). `checkPage` takes `tabCap` and `wallClockMs` options with the
+  same bounds. A value out of bounds is refused when the config is read. The gap for a walk that
+  ran out names the setting and the option. Gate effect: a long page that was `not_covered`
+  because its walk ran out reads as checked once its screen has a budget that fits. The setting
+  is in the guarded config, so changing it needs approval, and in CI it is read from the trusted
+  ref.
+- A region the keyboard walk cannot read can be listed as a known limit of its screen, under
+  `keyboardWalk.perSurface.<id>.unreadableRegions` in `usabl.config.json`: a frame by its origin
+  (`{"frameOrigin": "https://chat.example.com"}`) or a closed shadow root by its host tag
+  (`{"shadowHost": "chat-widget"}`), at most 20 per screen. Gate effect: a listed region is not a
+  gap, so a screen whose only gap was that region can read `verified`. The run then says
+  `with known limits` in the verdict line, the summary, the pull request comment, the overlay, the
+  stop hook, and the self-check, and lists the region, and the docs output adds it to the
+  screen's keyboard walk order. A listing that matched no region on a full walk is reported as
+  stale. The listing is in the guarded config and read from the trusted ref in CI, so a pull
+  request cannot list its own region.
 - Design input from Figma.
   `usabl import figma <file key> --frame <Frame name>=<surface id> --out <file>`
   reads the accessibility stamps in a Figma file and writes draft requirements, each with
@@ -338,6 +356,26 @@
 
 ### Fixed
 
+- A keyboard walk that was cut short is a `not-covered` coverage gap on its screen. Before, it was
+  a `keyboard-walk-truncated` draft with confidence `unverified`, and a baseline taken while the
+  walk was cut short accepted it onto the evidence floor. Every later run then carried it and
+  read `verified`, although the controls past the cut were never walked. Every reason the walk
+  can stop early gives the same gap: the stop cap, the time cap, a cycle, an end the extra Tab
+  did not confirm, a script that moved focus to the body, and a region Tab did not leave. Gate
+  effect: such a screen is never verified and gets no receipt, `usabl baseline` writes no entry
+  for it, and a full baseline refuses while it is not covered. `checkPage` makes no blank-page
+  claim from such a walk.
+- An evidence floor that holds a `keyboard-walk-truncated` entry, written by an earlier version,
+  no longer hides a cut short walk. Gate effect: the run gets one `not-covered` gap on
+  `.usabl-evidence.json` that names the screens and says to run `usabl baseline` (or
+  `usabl baseline --partial`) to rewrite the floor without them. The entry is never carried,
+  claimed fixed, or shown as headroom. Rewrite the floor once to clear the gap.
+- A region the keyboard walk cannot read, such as a closed shadow root or a frame from another
+  origin, no longer ends the walk. The walk counts it as one stop and keeps pressing Tab until
+  focus is readable again, so the controls after it are checked. Gate effect: each such region is
+  its own `not-covered` gap on the screen, which names the region and the tab stop. A screen that
+  read `not_covered` because the walk stopped at the region can now also show findings on the
+  controls after it. If 100 Tabs leave focus in the region, the walk is cut short.
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
