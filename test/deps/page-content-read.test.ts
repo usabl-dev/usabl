@@ -133,8 +133,26 @@ describe('the read of whether a page shows content', () => {
     expect(showsContent(el('body', [el('x-card', [], { shadowRoot: shadowRoot([el('img')]) })]))).toBe(true);
   });
 
-  it('reads a frame whose document it can reach, and not one it cannot', () => {
+  it('reads a frame whose document it can reach', () => {
     expect(showsContent(el('body', [el('iframe', [], { contentDocument: { body: el('body', [el('p', [text('Framed')])]) } })]))).toBe(true);
-    expect(showsContent(el('body', [el('iframe', [], { contentDocument: null })]))).toBe(false);
   });
+
+  // The read cannot see into a frame from another origin. The frame element is on the page all the
+  // same, so a visible one with a box is content, whatever it holds.
+  for (const tag of ['iframe', 'frame']) {
+    it(`counts a visible ${tag} from another origin, whose document it cannot reach`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null })]))).toBe(true);
+    });
+
+    it(`does not count a hidden ${tag}`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, visible: false })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, noCheckVisibility: true })]))).toBe(false);
+    });
+
+    it(`does not count a ${tag} with no box`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, box: NO_BOX })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, box: { width: 300, height: 0 } })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: { body: el('body') }, box: NO_BOX })]))).toBe(false);
+    });
+  }
 });

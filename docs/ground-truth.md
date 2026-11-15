@@ -1093,11 +1093,14 @@ when it has either of these:
   `checkVisibility` (not `display: none`, not `visibility: hidden`, not `opacity: 0`) and that is
   laid out in a box with a width and a height;
 - an `img`, `svg`, `canvas`, `video`, `picture`, `object`, or `embed` element, or an element whose
-  role is `img`, that passes the same visibility test and whose box has a width and a height.
+  role is `img`, that passes the same visibility test and whose box has a width and a height;
+- an `iframe` or `frame` element that passes the same visibility test and whose box has a width
+  and a height, whatever its origin and whether or not the read can see inside it.
 
 What does not count: a CSS background image (the element that shows it is empty), content hidden
-with CSS as above, content in a closed shadow root or in a frame from another origin (the read
-cannot see it), `script`, `style`, and `template` content, and the document title. Text that is
+with CSS as above, content in a closed shadow root or inside a frame from another origin (the read
+cannot see it, though the visible frame element itself counts, as above), a hidden frame or one
+with no box, `script`, `style`, and `template` content, and the document title. Text that is
 visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
 browser that cannot say whether an element is visible gets no benefit of the doubt: the element
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads

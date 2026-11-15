@@ -156,6 +156,35 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
     }
   });
 
+  // A page whose only content is a frame from another origin. The sandbox gives the frame an opaque
+  // origin, so the content read cannot see into it, and the frame holds nothing to Tab to. The
+  // visible frame element still shows on the page, so the page is checked and the finding on the
+  // page itself, a missing title, is reported. Without the frame the same page is blank.
+  it('checks a page whose only content is a visible frame from another origin, and reports its finding', async () => {
+    const shell = (body: string): string =>
+      `<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>${body}</body></html>`;
+    const framed = shell('<iframe title="Partner" sandbox srcdoc="<p>Partner content</p>"></iframe>');
+    const { context, page } = await openPage(framed);
+    try {
+      expect(await page.evaluate(() => document.querySelector('iframe')?.contentDocument ?? null)).toBeNull();
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.gaps.filter((gap) => gap.ref === 'readiness:page')).toEqual([]);
+      expect(result.failures.some((f) => f.rule === 'document-title')).toBe(true);
+    } finally {
+      await context.close();
+    }
+    const bare = await openPage(shell(''));
+    try {
+      const result = await checkPage(bare.page, { tabCap: 10 });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.gaps.map((gap) => gap.ref)).toContain('readiness:page');
+    } finally {
+      await bare.context.close();
+    }
+  });
+
   it('checks a page of text with nothing to Tab to and no readiness signal, as on main', async () => {
     const { context, page } = await openPage(TEXT_ONLY_HTML);
     try {

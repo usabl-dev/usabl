@@ -823,8 +823,12 @@ const BODY_HOLDS_FOCUS_FUNCTION = `function () {
  * visibility test and its box has a width and a height. A CSS background image is not content: the
  * element that shows it is empty.
  *
+ * An iframe or frame element counts when it passes the same visibility test and its box has a width
+ * and a height, whatever its origin. The read cannot see into a frame from another origin, but the
+ * frame itself shows on the page, so a page whose only content is such a frame is not blank.
+ *
  * Node types are compared by number, because a frame's nodes come from another realm. A closed
- * shadow root and a frame from another origin cannot be read, so what they show is not counted. A
+ * shadow root and a frame from another origin cannot be read, so what they hold is not counted. A
  * walk past the node limit has not found content, and says so. Exported for its tests.
  */
 export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
@@ -871,6 +875,12 @@ export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
         const tag = node.localName;
         if (tag === 'script' || tag === 'style' || tag === 'template') continue;
         if (mediaShows(node)) return true;
+        // A frame the read cannot see into, such as one from another origin, still shows on the
+        // page. A visible frame element with a box counts by itself, whatever its origin.
+        if ((tag === 'iframe' || tag === 'frame') && visible(node)) {
+          const frameBox = node.getBoundingClientRect();
+          if (frameBox.width > 0 && frameBox.height > 0) return true;
+        }
         if (node.shadowRoot) pending.push(node.shadowRoot);
         if ((tag === 'iframe' || tag === 'frame') && depth < FRAME_DEPTH_LIMIT && visible(node)) {
           let inner = null;
