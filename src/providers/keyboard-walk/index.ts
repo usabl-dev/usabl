@@ -17,6 +17,10 @@ import type {
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
 import { readWalkEnd, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
+import { walkScreenConfig } from '../../intake/keyboard-walk-config.js';
+
+// The most Tab stops a walk takes when neither the screen's settings nor the caller name a cap.
+const DEFAULT_TAB_CAP = 200;
 
 const INTERACTIVE_ROLES = new Set([
   'button',
@@ -177,11 +181,17 @@ const STOP_REASON_OF_END: Record<WalkEnd, StopReason> = {
   'body-focused': 'body-focused',
 };
 
-const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) => string> = {
-  'wall-clock': (stops) =>
-    `The keyboard walk ran out of its time budget after ${stops} tab stop(s), before focus reached the end of the page.`,
-  'tab-cap': (stops) =>
-    `The keyboard walk reached its limit on tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
+// The budget one walk ran with, so a gap can name the limit it hit.
+interface WalkBudget {
+  tabCap: number;
+  wallClockMs: number | undefined;
+}
+
+const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, budget: WalkBudget) => string> = {
+  'wall-clock': (stops, budget) =>
+    `The keyboard walk ran out of its time budget of ${budget.wallClockMs ?? 0} ms after ${stops} tab stop(s), before focus reached the end of the page.`,
+  'tab-cap': (stops, budget) =>
+    `The keyboard walk reached its limit of ${budget.tabCap} tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
   'closed-shadow-root': (stops) =>
     `After ${stops} tab stop(s), focus moved into a closed shadow root, where the keyboard walk cannot tell one control from another.`,
   'frame-unreadable': (stops) =>
@@ -198,22 +208,30 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
     `After ${stops} tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.`,
 };
 
-const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
+// The way to raise a budget, for each kind of user: the setting in usabl.config.json for the CLI,
+// the stop hook, the overlay, and CI, and the checkPage option for a Playwright test. The screen
+// id comes from the operator's config or routes, never from the page.
+function budgetFix(screenId: string, setting: 'tabCap' | 'wallClockMs'): string {
+  return (
+    `To raise it, set keyboardWalk.perSurface.${screenId}.${setting} in usabl.config.json, or in a Playwright test pass ` +
+    `the ${setting} option of checkPage. Or split the screen so its focus order fits one walk.`
+  );
+}
 const UNREADABLE_FIX =
   'Check the controls past this point by hand. To let usabl walk them, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.';
 
-const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
-  'wall-clock': BUDGET_FIX,
-  'tab-cap': BUDGET_FIX,
-  'closed-shadow-root': UNREADABLE_FIX,
-  'frame-unreadable': UNREADABLE_FIX,
-  'focus-too-deep': UNREADABLE_FIX,
-  'focus-trap': 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
-  'modal-dialog':
+const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string) => string> = {
+  'wall-clock': (screenId) => budgetFix(screenId, 'wallClockMs'),
+  'tab-cap': (screenId) => budgetFix(screenId, 'tabCap'),
+  'closed-shadow-root': () => UNREADABLE_FIX,
+  'frame-unreadable': () => UNREADABLE_FIX,
+  'focus-too-deep': () => UNREADABLE_FIX,
+  'focus-trap': () => 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
+  'modal-dialog': () =>
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
-  'end-unconfirmed':
+  'end-unconfirmed': () =>
     'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, so Tab moves through every control to the end of the page, then check the screen again.',
-  'body-focused':
+  'body-focused': () =>
     'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
 };
 
@@ -229,11 +247,14 @@ function truncatedWalkGap(
   screen: { id: string; url: string },
   reason: Exclude<StopReason, 'complete'>,
   stopsWalked: number,
+  budget: WalkBudget,
 ): CoverageGap {
   return {
     ref: screen.url,
     state: 'not-covered',
-    reason: `${cutShortLead(screen)} ${TRUNCATION_WHY[reason](stopsWalked)} Accessibility barriers past that point are unknown. ${TRUNCATION_FIX[reason]}`,
+    reason:
+      `${cutShortLead(screen)} ${TRUNCATION_WHY[reason](stopsWalked, budget)} Accessibility barriers past that point are unknown. ` +
+      TRUNCATION_FIX[reason](screen.id),
   };
 }
 
@@ -251,9 +272,7 @@ export function isCutShortWalkGap(gap: CoverageGap, screen: { id: string; url: s
 }
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
-  const tabCap = options.tabCap ?? 200;
   const now = options.now ?? (() => Date.now());
-  const wallClockMs = options.wallClockMs;
   const stepRunner = makeStepRunner();
 
   return {
@@ -266,6 +285,15 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
     // when it starts from the page as loaded. An opened or dismissed widget rewrites that order.
     requiresPristinePage: true,
     async run(ctx): Promise<ProviderOutput> {
+      // The budget of this screen: its own settings in the config the run was given, and the
+      // engine defaults for whatever they leave out. Under a trusted ref that config is the trusted
+      // one, so a pull request cannot set its own.
+      const own = walkScreenConfig(ctx.config, ctx.screen.id);
+      const budget: WalkBudget = {
+        tabCap: own?.tabCap ?? options.tabCap ?? DEFAULT_TAB_CAP,
+        wallClockMs: own?.wallClockMs ?? options.wallClockMs,
+      };
+      const { tabCap, wallClockMs } = budget;
       await ctx.page.focusBody();
 
       // The budget is anchored per run, not per provider. One instance walks every screen in a
@@ -346,7 +374,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       // A walk cut short returns the same empty or short list as a clean screen. Saying so as a
       // coverage gap on the screen puts the gate on not_covered instead of a false pass, and a gap
       // is never floored or carried.
-      const gaps = stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked)];
+      const gaps = stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget)];
 
       // The record is measurement for checkPage's blank-page check. It is not a draft and decides
       // nothing here. A walk that was cut short says so, and that check then does not read it.

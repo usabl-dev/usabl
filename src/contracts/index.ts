@@ -1219,6 +1219,24 @@ export interface UsablConfig {
   // engine's provider is not registered at all, so a run without this block is the run usabl
   // made before engines existed.
   engines?: EnginesConfig;
+  // How the keyboard walk treats each screen. Part of the guarded config, so under a trusted ref
+  // the walk reads it from the trusted ref only. Absent means the engine defaults on every screen.
+  keyboardWalk?: KeyboardWalkConfig;
+}
+
+// The keyboard walk settings of one screen. Each one left out means the engine default. A walk
+// that runs out of either cap is cut short, and a walk cut short is a coverage gap on the screen.
+export interface KeyboardWalkScreenConfig {
+  // The most Tab stops the walk takes on this screen, from 1 to 2000. Engine default 200.
+  tabCap?: number;
+  // The most whole milliseconds the walk spends on this screen, from 1 to 300000. Engine default
+  // 15000, the same budget checkPage uses.
+  wallClockMs?: number;
+}
+export interface KeyboardWalkConfig {
+  // Keyed by screen id, the way noiseBudget.perSurface is, so a screen discovered from routes can
+  // have settings as well as one listed in surfaces. Null prototype, so every read is an own key.
+  perSurface?: Record<string, KeyboardWalkScreenConfig>;
 }
 
 // ---- optional commercial engines (the operator holds the license; the package is never a dependency) ----

@@ -8,14 +8,16 @@ import { parseUsablConfig } from './config.js';
 
 // Without trusted policy, nothing that trusted policy alone may turn on is kept: the requirements
 // root, the origins the judge's browser may reach, the commercial engines, which run vendor
-// code that can hold credentials and reach the network, and the promoted obligation classes, which
-// turn a voice requirement's preview findings into ones that gate.
+// code that can hold credentials and reach the network, the promoted obligation classes, which
+// turn a voice requirement's preview findings into ones that gate, and the keyboard walk settings,
+// which set how far the walk goes on each screen.
 function withoutTrustedOnlyFields(config: UsablConfig): UsablConfig {
   const {
     requirements: _requirements,
     judge: _judge,
     engines: _engines,
     promotedObligations: _promotedObligations,
+    keyboardWalk: _keyboardWalk,
     ...rest
   } = config;
   return rest;

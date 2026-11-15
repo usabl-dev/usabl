@@ -283,3 +283,74 @@ describe('checkPage on a page with nothing rendered', () => {
     expect(result.verdict).toBe('verified');
   });
 });
+
+// A long table page cuts the walk short at the default budget. A Playwright test raises it with the
+// tabCap or wallClockMs option, and a labeled page also takes the budget usabl.config.json sets for
+// its screen. An option the test passes wins over the config.
+describe('checkPage and the keyboard walk budget', () => {
+  const rows = Array.from({ length: 250 }, (_, i) => `#row-${i}`);
+
+  async function projectWithWalk(keyboardWalk: unknown): Promise<string> {
+    const dir = await project();
+    const config = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['src/**'],
+      discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [{ id: 'clusters', url: PAGE_URL, files: ['src/clusters.tsx'] }],
+      guardedPaths: [],
+      keyboardWalk,
+    };
+    await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config, null, 2));
+    return dir;
+  }
+
+  it('is not covered at the default budget, and the gap names the checkPage option', async () => {
+    adopted.page = scriptedPage(rows);
+
+    const result = await checkPage(pwPage(), { projectRoot: await project() });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.reason)).toEqual([expect.stringContaining('the tabCap option of checkPage')]);
+  });
+
+  it('completes the walk with the tabCap option raised', async () => {
+    adopted.page = scriptedPage(rows);
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 300 });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('completes the walk of a labeled page with the budget its screen has in usabl.config.json', async () => {
+    adopted.page = scriptedPage(rows);
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await projectWithWalk({ perSurface: { clusters: { tabCap: 300 } } }) });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('takes the option the test passes over the config', async () => {
+    adopted.page = scriptedPage(rows);
+
+    const result = await checkPage(pwPage(), {
+      screenId: 'clusters',
+      projectRoot: await projectWithWalk({ perSurface: { clusters: { tabCap: 300 } } }),
+      tabCap: 20,
+    });
+
+    expect(result.verdict).toBe('not_covered');
+  });
+
+  it('refuses a budget out of range before it touches the page', async () => {
+    adopted.page = scriptedPage(rows);
+
+    await expect(checkPage(pwPage(), { projectRoot: await project(), tabCap: 5000 })).rejects.toThrow(
+      'checkPage() options.tabCap must be a whole number of Tab stops from 1 to 2000',
+    );
+    await expect(checkPage(pwPage(), { projectRoot: await project(), wallClockMs: 0 })).rejects.toThrow(
+      'checkPage() options.wallClockMs must be a whole number of milliseconds from 1 to 300000',
+    );
+  });
+});

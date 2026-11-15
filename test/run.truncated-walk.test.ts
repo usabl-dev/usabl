@@ -50,7 +50,7 @@ function walkPage(controls: number, end: boolean): Page {
   });
 }
 
-function depsWith(page: () => Page, files: Record<string, string>): Deps {
+function depsWith(page: () => Page, files: Record<string, string>, runConfig: UsablConfig = config): Deps {
   const all = { 'usabl.config.json': '{}', 'src/JobsPage.tsx': 'export {};\n', ...files };
   const base = makeFakeDeps({ files: all, headContents: all, changed: [{ code: 'M', path: 'src/JobsPage.tsx' }] });
   return {
@@ -58,7 +58,7 @@ function depsWith(page: () => Page, files: Record<string, string>): Deps {
     checkRunner: makeCheckRunner({
       browser: { open: async () => page(), close: async () => {} },
       providers: [makeKeyboardWalkProvider({ tabCap: 5 })],
-      config,
+      config: runConfig,
       allowedCapabilities: ['live'],
       stepRunner: makeStepRunner(),
       transcriptTabCap: 3,
@@ -119,6 +119,17 @@ describe('a keyboard walk that was cut short', () => {
 
     expect(result.verdict).toBe('verified');
     expect(result.coverage.gaps).toEqual([]);
+  });
+
+  it('verifies a long page once its screen has a stop cap raised in the config', async () => {
+    const raised: UsablConfig = { ...config, keyboardWalk: { perSurface: { jobs: { tabCap: 60 } } } };
+
+    const cut = await run(depsWith(() => walkPage(40, true), {}), config);
+    const done = await run(depsWith(() => walkPage(40, true), {}, raised), raised);
+
+    expect(cut.verdict).toBe('not_covered');
+    expect(cut.coverage.gaps.find((g) => g.ref === URL)?.reason).toContain('keyboardWalk.perSurface.jobs.tabCap');
+    expect(done.verdict).toBe('verified');
   });
 
   it('still verifies a screen whose walk ends exactly at the stop cap with the walk complete', async () => {

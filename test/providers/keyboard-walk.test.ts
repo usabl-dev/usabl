@@ -715,6 +715,63 @@ describe('makeKeyboardWalkProvider', () => {
   });
 });
 
+// A long table page has more Tab stops than the engine default allows. The budget of one screen is
+// set in usabl.config.json, under keyboardWalk.perSurface, so the walk on that page can complete.
+describe('the keyboard walk budget of one screen', () => {
+  function contextWith(page: Page, perSurface: Record<string, { tabCap?: number; wallClockMs?: number }>): ProviderContext {
+    return { page, screen: SCREEN, config: { ...testConfig(), keyboardWalk: { perSurface } } };
+  }
+
+  const longPage = (): ScriptedPageSpec => {
+    const paths = Array.from({ length: 250 }, (_, i) => `#row-${i}`);
+    return { ...namedButtonPage([...paths, BODY_PATH]), bodyAt: paths.length };
+  };
+
+  it('cuts a long page short at the default stop cap, and the gap names the setting for the CLI and for checkPage', async () => {
+    const output = await makeKeyboardWalkProvider().run(makeContext(await makeScriptedPage(longPage())));
+
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('reached its limit of 200 tab stops');
+    expect(reasons[0]).toContain(`keyboardWalk.perSurface.${SCREEN.id}.tabCap in usabl.config.json`);
+    expect(reasons[0]).toContain('the tabCap option of checkPage');
+  });
+
+  it('completes the walk of that page with a stop cap raised for the screen', async () => {
+    const output = await makeKeyboardWalkProvider().run(contextWith(await makeScriptedPage(longPage()), { [SCREEN.id]: { tabCap: 300 } }));
+
+    expect(gapsOf(output)).toEqual([]);
+    expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(true);
+  });
+
+  it('reads the setting of this screen only', async () => {
+    const output = await makeKeyboardWalkProvider().run(contextWith(await makeScriptedPage(longPage()), { other: { tabCap: 300 } }));
+
+    expect(cutShort(output)).toHaveLength(1);
+  });
+
+  it('cuts the walk short at the time cap, names the time setting, and completes with the time cap raised for the screen', async () => {
+    const spec = (clock: ReturnType<typeof makeClock>): ScriptedPageSpec => ({
+      ...namedButtonPage([...Array.from({ length: 50 }, (_, i) => `#stop-${i}`), BODY_PATH]),
+      bodyAt: 50,
+      onTab: () => clock.advance(60),
+    });
+
+    const short = makeClock();
+    const cut = await makeKeyboardWalkProvider({ wallClockMs: 1_000, now: short.now }).run(makeContext(await makeScriptedPage(spec(short))));
+    const reasons = cutShort(cut);
+    expect(reasons[0]).toContain('ran out of its time budget of 1000 ms');
+    expect(reasons[0]).toContain(`keyboardWalk.perSurface.${SCREEN.id}.wallClockMs in usabl.config.json`);
+    expect(reasons[0]).toContain('the wallClockMs option of checkPage');
+
+    const long = makeClock();
+    const done = await makeKeyboardWalkProvider({ wallClockMs: 1_000, now: long.now }).run(
+      contextWith(await makeScriptedPage(spec(long)), { [SCREEN.id]: { wallClockMs: 10_000 } }),
+    );
+    expect(gapsOf(done)).toEqual([]);
+  });
+});
+
 // checkPage collects no transcript of its own, so the walk hands back the stops it reached, for the
 // blank-page check only.
 describe('the walk record the keyboard walk returns', () => {
