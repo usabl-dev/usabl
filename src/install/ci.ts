@@ -1099,13 +1099,27 @@ export type CiPlan =
   | { action: 'already-wired'; path: string; pinnedTo?: string }
   | { action: 'refuse'; path: string; difference: string };
 
-function describeDifference(actual: string, expected: string): string {
+function describeDifference(actual: string, expected: string, placeholderDraft: string): string {
   // High-level only. We report where the files first diverge, not a full diff, so the
   // operator knows to reconcile by hand without us guessing at their intent.
   const actualLines = actual.split('\n');
   const expectedLines = expected.split('\n');
+  const placeholderLines = placeholderDraft.split('\n');
   const max = Math.max(actualLines.length, expectedLines.length);
   for (let i = 0; i < max; i += 1) {
+    // The engine pin is set aside. A pin someone chose always differs from the draft, so naming
+    // that line would point away from the edit that made the file differ. Only a full commit SHA
+    // or the placeholder is set aside: a branch or a tag on that line is the difference to name.
+    const pinIndent = draftEngineRefIndent(placeholderLines[i] ?? '');
+    const actualRef = /^(\s*)ref:\s*(\S+)\s*$/.exec(actualLines[i] ?? '');
+    if (
+      pinIndent !== null &&
+      actualRef !== null &&
+      actualRef[1] === pinIndent &&
+      (actualRef[2] === ENGINE_REF_PLACEHOLDER || /^[0-9a-f]{40}$/.test(actualRef[2] ?? ''))
+    ) {
+      continue;
+    }
     if (actualLines[i] !== expectedLines[i]) {
       return `the first difference is at line ${i + 1} (existing file has ${actualLines.length} lines, the usabl draft has ${expectedLines.length} lines)`;
     }
@@ -1177,7 +1191,7 @@ export async function planWorkflow(
   return {
     action: 'refuse',
     path,
-    difference: describeDifference(raw, draft),
+    difference: describeDifference(raw, draft, placeholderDraft),
   };
 }
 
