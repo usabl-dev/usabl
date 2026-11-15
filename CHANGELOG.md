@@ -338,6 +338,35 @@
 
 ### Fixed
 
+- A focus order check no longer lets a name on more than one stop hide a missing name or a wrong
+  order. With a design of `Save`, `Export` and a Tab walk of `Save`, `Save`, the result was needs
+  review, though focus never reached `Export`. The missing and order checks now run first, over
+  every stop a name could be, and the check fails when either fails. Needs review for a name on
+  more than one stop is the result only when the rest of the check passes. Gate effect: a focus
+  order requirement that read as needs review now fails when a name is never reached or the order
+  is wrong on every reading.
+- A focus order that is needs review because of hidden white space names every design name that
+  only a near stop matches, in design order, with the stops that could be it. With a design of
+  `Save`, `Delete` and a walk where each name ends in a no-break space, the reason named `Save`
+  only, and `sameButForWhiteSpace` was 1. The reason now names both, at most 15 names and 3 stops
+  for each with a count of the rest, `sameButForWhiteSpace` counts the near stops of every such
+  name, and the new `nearDesignNames` counts the names. When a name is also on more than one stop,
+  the reason says both. Gate effect: none; the result is still needs review.
+- The git reader reads a submodule path as the commit id its tree entry records, after a fixed
+  prefix that no file read can return. It read the path with `git show`, which prints the commit
+  and its whole patch: the text changed with the working tree's `.gitattributes`, a large patch
+  failed with "stdout maxBuffer length exceeded", and the read failed when the submodule's commit
+  was not in the repository, which is the normal state of a submodule. Gate effect: a guarded path
+  that is a submodule now compares as changed exactly when its recorded commit changed, where it
+  stopped the guard with an error when that commit was absent.
+- `usabl init` and `usabl init --docs` print every string that comes from a file in the
+  repository with each control character shown as a label such as `<U+001B>`: route paths,
+  include targets, file and folder names, package names, and topic names. A route path such as
+  `//ev<ESC>]0;x<BEL>il` and an `include::` target that held ESC and BEL reached the terminal
+  raw, and a file name in the refusal for an unusable id lost its control sequence, so it read as
+  a clean name. A topic map that is not valid YAML is now refused by file and position, because
+  the YAML reader's own error quotes the raw line. Gate effect: none; init writes the same
+  drafts.
 - The sticky comment step in the gate that `usabl install --ci` and `usabl install --docs-ci`
   write updates only a comment that GitHub Actions wrote and that starts with the usabl marker.
   It took the first comment by any bot that held the marker anywhere, so it could overwrite
@@ -422,8 +451,10 @@
   named `<ref>...HEAD` made the diff of a missing ref list no changed files. A path that is a
   folder at the ref reads as it did before: the listing `git show` prints for it, with the
   argument read as an object name only, so a file that becomes a folder still needs approval. A
-  submodule path whose commit is in the repository also reads as before, as the commit `git show`
-  prints, so a moved submodule still needs approval; one whose commit is absent is an error.
+  submodule path reads as the commit id its tree entry records, after a fixed prefix that no file
+  read can return, so a moved submodule still needs approval and a submodule never compares equal
+  to a file. It reads the same whether or not that commit is in the repository, and the working
+  tree does not change it.
   The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
   refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
   value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White
