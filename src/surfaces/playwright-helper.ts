@@ -702,8 +702,8 @@ function readinessRef(screenId: string): string {
  * so the two surfaces word and decide it the same way. It reads the readiness measurement when the
  * screen declares a signal, and the stops of the keyboard walk when the caller found a blank page.
  * A walk that did not run, was cut short, or met a page that shows content gives no stops, so the
- * blank-page detector makes no claim: a cut-short walk is already not covered by its own truncation
- * draft.
+ * blank-page detector makes no claim: a cut-short walk is already not covered by its own gap, which
+ * the walk gives the page.
  */
 function unseenGap(
   screenId: string,

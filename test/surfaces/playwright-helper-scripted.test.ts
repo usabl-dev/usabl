@@ -147,8 +147,11 @@ describe('checkPage on a page with nothing rendered', () => {
     const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
 
     expect(result.verdict).toBe('not_covered');
-    expect(result.gaps).toEqual([]);
-    expect(result.needsReview.map((draft) => draft.rule)).toEqual(['keyboard-walk-truncated']);
+    // The one gap is the walk's own, never the blank-page gap, and the walk makes no draft.
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]?.reason).toContain('the keyboard walk was cut short');
+    expect(result.gaps[0]?.ref).not.toMatch(/^readiness:/);
+    expect(result.needsReview).toEqual([]);
   });
 
   it('makes no blank-page claim when the keyboard walk is turned off, so the page reads as its other checks found it', async () => {

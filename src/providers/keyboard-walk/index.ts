@@ -5,6 +5,7 @@
  */
 import type {
   AxNode,
+  CoverageGap,
   Draft,
   Fact,
   FocusUnreadable,
@@ -216,27 +217,37 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
     'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
 };
 
-function truncatedWalkDraft(
-  screenId: string,
+/**
+ * The coverage gap for a walk that was cut short. A gap, never a draft: a draft could be accepted
+ * onto the evidence floor and carried, and then every later run read verified while the controls
+ * past the cut were never walked. A gap keeps the screen not covered until the walk completes.
+ * Every reason the walk can stop short of the end gives this same gap. The ref is the screen's
+ * url, as for other gaps about one screen. The reason holds counts and engine words, never page
+ * text.
+ */
+function truncatedWalkGap(
+  screen: { id: string; url: string },
   reason: Exclude<StopReason, 'complete'>,
   stopsWalked: number,
-): Draft {
+): CoverageGap {
   return {
-    rule: 'keyboard-walk-truncated',
-    layer: 'walk',
-    severity: 'serious',
-    evidenceClass: 'deterministic',
-    screenId,
-    elementPath: '',
-    elementName: null,
-    role: null,
-    whatUserExperiences:
-      'Part of the keyboard path through this screen was never walked, so accessibility barriers past that point are unknown.',
-    why: TRUNCATION_WHY[reason](stopsWalked),
-    fix: TRUNCATION_FIX[reason],
-    evidence: {},
-    confidence: 'unverified',
+    ref: screen.url,
+    state: 'not-covered',
+    reason: `${cutShortLead(screen)} ${TRUNCATION_WHY[reason](stopsWalked)} Accessibility barriers past that point are unknown. ${TRUNCATION_FIX[reason]}`,
   };
+}
+
+function cutShortLead(screen: { id: string }): string {
+  return `on screen ${screen.id}, the keyboard walk was cut short, so this screen is not covered.`;
+}
+
+/**
+ * Whether a gap is the one this walk gives a screen when it was cut short. For measurement only,
+ * such as the sensitivity runner, which reads a defect the walk caught as caught even though the
+ * same defect cut the walk short. Nothing that decides a verdict reads it.
+ */
+export function isCutShortWalkGap(gap: CoverageGap, screen: { id: string; url: string }): boolean {
+  return gap.state === 'not-covered' && gap.ref === screen.url && gap.reason.startsWith(cutShortLead(screen));
 }
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
@@ -332,15 +343,14 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         }
       }
 
-      // A walk cut short returns the same empty or short list as a clean screen. Saying so as an
-      // unverified deterministic finding puts the gate on not_covered instead of a false pass.
-      if (stopReason !== 'complete') {
-        drafts.push(truncatedWalkDraft(ctx.screen.id, stopReason, stopsWalked));
-      }
+      // A walk cut short returns the same empty or short list as a clean screen. Saying so as a
+      // coverage gap on the screen puts the gate on not_covered instead of a false pass, and a gap
+      // is never floored or carried.
+      const gaps = stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked)];
 
       // The record is measurement for checkPage's blank-page check. It is not a draft and decides
       // nothing here. A walk that was cut short says so, and that check then does not read it.
-      return { drafts, walk: { stops: transcript, complete: stopReason === 'complete' } };
+      return { drafts, gaps, walk: { stops: transcript, complete: stopReason === 'complete' } };
     },
   };
 }

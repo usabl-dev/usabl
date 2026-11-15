@@ -3,7 +3,7 @@ import type { AxNode, Draft, FocusUnreadable, Page, ProviderContext, ProviderOut
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
-import { draftsOf, testConfig } from '../helpers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 const BODY_PATH = 'html > body:nth-child(2)';
@@ -63,6 +63,17 @@ function unnamedLinksThenBody(paths: string[]): ScriptedPageSpec {
 
 function rules(drafts: Array<{ rule: string }>): string[] {
   return drafts.map((draft) => draft.rule);
+}
+
+// The reason of each gap the walk reported. A walk that was cut short reports one gap on the
+// screen, never a draft, so nothing about it can be floored or carried.
+function cutShort(output: Draft[] | ProviderOutput): string[] {
+  const gaps = gapsOf(output);
+  for (const gap of gaps) {
+    expect(gap).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
+    expect(gap.reason).toContain(`on screen ${SCREEN.id}, the keyboard walk was cut short, so this screen is not covered.`);
+  }
+  return gaps.map((gap) => gap.reason);
 }
 
 function currentIndex(cursor: number, bodyAt?: number): number {
@@ -340,40 +351,34 @@ describe('makeKeyboardWalkProvider', () => {
       onTab: () => clock.advance(60),
     });
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
 
     const walked = drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive');
     expect(walked.length).toBeGreaterThan(0);
     expect(walked.length).toBeLessThan(paths.length);
 
-    const truncated = drafts.filter((d) => d.rule === 'keyboard-walk-truncated');
-    expect(truncated).toHaveLength(1);
-    expect(truncated[0]).toMatchObject({
-      layer: 'walk',
-      evidenceClass: 'deterministic',
-      confidence: 'unverified',
-      screenId: SCREEN.id,
-    });
-    expect(truncated[0]?.why).toMatch(/\d+ tab stop/);
+    expect(rules(drafts)).not.toContain('keyboard-walk-truncated');
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/\d+ tab stop/);
+    expect(reasons[0]).toContain('time budget');
   });
 
   it('discloses truncation when the walk stops at the tab cap', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 2 });
     const page = await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#c', '#d']));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
 
-    expect(drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive')).toHaveLength(2);
-    const truncated = drafts.filter((d) => d.rule === 'keyboard-walk-truncated');
-    expect(truncated).toHaveLength(1);
-    expect(truncated[0]).toMatchObject({
-      evidenceClass: 'deterministic',
-      confidence: 'unverified',
-    });
-    expect(truncated[0]?.why).toMatch(/\d+ tab stop/);
+    expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive', 'keyboard-walk-unnamed-interactive']);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('after 2 tab stop(s)');
   });
 
-  it('emits no truncation draft when the walk reaches the end of the page inside the budget', async () => {
+  it('reports no gap when the walk reaches the end of the page inside the budget', async () => {
     const clock = makeClock();
     const provider = makeKeyboardWalkProvider({ tabCap: 10, wallClockMs: 1_000, now: clock.now });
     const page = await makeScriptedPage({
@@ -381,19 +386,33 @@ describe('makeKeyboardWalkProvider', () => {
       onTab: () => clock.advance(10),
     });
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive']);
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-unnamed-interactive']);
+    expect(gapsOf(output)).toEqual([]);
   });
 
-  it('emits no truncation draft when the walk ends on the document body', async () => {
+  it('reports no gap when the walk ends exactly at the stop cap with the walk complete', async () => {
+    // Three controls and the body fill the cap of four stops. The Tab that confirms the end is not
+    // a stop of its own.
+    const provider = makeKeyboardWalkProvider({ tabCap: 4 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3 });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
+  });
+
+  it('reports no gap when the walk ends on the document body', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(unnamedLinkPage(['html > body:nth-child(2)']));
     page.activeElementIs = async (selector) => selector === 'body';
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(drafts).toEqual([]);
+    expect(draftsOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
   });
 
   it('confirms the end of the walk when one more Tab lands on any stop already walked', async () => {
@@ -417,7 +436,9 @@ describe('makeKeyboardWalkProvider', () => {
 
     // A new element at the path of a later stop is not the start of the focus order.
     const newLater = await makeScriptedPage({ ...spec, afterBody: '#b', afterBodyKey: 'node-9' });
-    expect(rules(draftsOf(await provider.run(makeContext(newLater))))).toEqual(['keyboard-walk-truncated']);
+    const laterOutput = await provider.run(makeContext(newLater));
+    expect(draftsOf(laterOutput)).toEqual([]);
+    expect(cutShort(laterOutput)).toHaveLength(1);
   });
 
   it('leaves focus on the body after a complete walk, so the next Tab lands on the first stop', async () => {
@@ -458,11 +479,12 @@ describe('makeKeyboardWalkProvider', () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: '#c' });
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]).toMatchObject({ confidence: 'unverified', evidenceClass: 'deterministic', elementPath: '' });
-    expect(drafts[0]?.why).toBe(
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(
       'After 1 tab stop(s), focus moved to the document body, but one more Tab did not go back to a control the keyboard walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the controls after that point may never have been walked.',
     );
   });
@@ -477,14 +499,14 @@ describe('makeKeyboardWalkProvider', () => {
     page.bodyHoldsFocus = async () => page.activeElementIs('body');
 
     const output = await provider.run(makeContext(page));
-    const drafts = draftsOf(output);
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]).toMatchObject({ confidence: 'unverified', evidenceClass: 'deterministic', elementPath: '' });
-    expect(drafts[0]?.why).toBe(
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(
       'After 2 tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.',
     );
-    expect(drafts[0]?.fix).toBe(
+    expect(reasons[0]).toContain(
       'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
     );
     expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(false);
@@ -497,7 +519,9 @@ describe('makeKeyboardWalkProvider', () => {
       throw new Error('the browser could not read focus');
     };
 
-    expect(rules(draftsOf(await provider.run(makeContext(page))))).toEqual(['keyboard-walk-truncated']);
+    const output = await provider.run(makeContext(page));
+    expect(draftsOf(output)).toEqual([]);
+    expect(cutShort(output)).toHaveLength(1);
   });
 
   it('still ends complete when Tab moved past the last control and no element holds focus', async () => {
@@ -505,7 +529,9 @@ describe('makeKeyboardWalkProvider', () => {
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
     page.bodyHoldsFocus = async () => false;
 
-    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+    const output = await provider.run(makeContext(page));
+    expect(draftsOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
   });
 
   it('discloses truncation when one more Tab after the body leaves focus on the body', async () => {
@@ -513,17 +539,21 @@ describe('makeKeyboardWalkProvider', () => {
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: BODY_PATH });
     page.activeElementIs = async (selector) => selector === 'body' && (await page.activePath()) === BODY_PATH;
 
-    expect(rules(draftsOf(await provider.run(makeContext(page))))).toEqual(['keyboard-walk-truncated']);
+    const output = await provider.run(makeContext(page));
+    expect(draftsOf(output)).toEqual([]);
+    expect(cutShort(output)).toHaveLength(1);
   });
 
   it('discloses truncation when no stop was walked and one more Tab lands on a control', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage({ ...namedButtonPage([BODY_PATH]), bodyAt: 0, afterBody: '#second' });
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]?.why).toContain('After 0 tab stop(s)');
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('After 0 tab stop(s)');
   });
 
   // A closed shadow root or a frame from another origin gives every control inside it the path of
@@ -541,14 +571,16 @@ describe('makeKeyboardWalkProvider', () => {
         unreadable: [null, reason, reason, null],
       });
 
-      const drafts = draftsOf(await provider.run(makeContext(page)));
+      const output = await provider.run(makeContext(page));
+      const drafts = draftsOf(output);
 
-      expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive', 'keyboard-walk-truncated']);
+      expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive']);
       expect(drafts[0]?.elementPath).toBe('#first');
-      expect(drafts[1]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
-      expect(drafts[1]?.why).toContain(words);
-      expect(drafts[1]?.why).toContain('After 1 tab stop(s)');
-      expect(drafts[1]?.fix).toContain('by hand');
+      const reasons = cutShort(output);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0]).toContain(words);
+      expect(reasons[0]).toContain('After 1 tab stop(s)');
+      expect(reasons[0]).toContain('by hand');
     });
   }
 
@@ -559,9 +591,10 @@ describe('makeKeyboardWalkProvider', () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one', '#outside']));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap']);
     expect(drafts[0]).toEqual({
       rule: 'keyboard-walk-trap',
       layer: 'walk',
@@ -578,20 +611,23 @@ describe('makeKeyboardWalkProvider', () => {
       evidence: { extra: { cycle: ['#one', '#two'], rowRead: { kind: 'none' } } },
       confidence: 'fail',
     });
-    expect(drafts[1]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
-    expect(drafts[1]?.why).toBe(
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(
       'After 3 tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.',
     );
-    expect(JSON.stringify(drafts)).not.toContain('Page text');
+    expect(JSON.stringify([drafts, gapsOf(output)])).not.toContain('Page text');
   });
 
   it('reports a control that keeps focus on every Tab as a trap of one stop', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(namedButtonPage(['#stuck', '#stuck', '#stuck']));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap']);
+    expect(cutShort(output)).toHaveLength(1);
     expect(drafts[0]?.elementPath).toBe('#stuck');
     expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#stuck']);
     expect(drafts[0]?.why).toContain('1 control(s)');
@@ -603,14 +639,15 @@ describe('makeKeyboardWalkProvider', () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(namedButtonPage(['#one', '#two', '#one'], [['#dialog'], ['#dialog'], ['#dialog']]));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
-    expect(drafts[0]?.why).toBe(
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(
       'After 2 tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.',
     );
-    expect(drafts[0]?.fix).toContain('dialog');
+    expect(reasons[0]).toContain('check the dialog on a screen of its own');
   });
 
   it('reads a cycle inside a modal dialog nested in another as staying inside the outer one', async () => {
@@ -619,10 +656,12 @@ describe('makeKeyboardWalkProvider', () => {
       namedButtonPage(['#one', '#two', '#one'], [['#outer', '#outer >> #inner'], ['#outer'], ['#outer', '#outer >> #inner']]),
     );
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]?.why).toContain('modal dialog');
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('modal dialog');
   });
 
   // Stops walked before the cycle began sit outside the dialog. Only the cycle is judged, so this
@@ -632,11 +671,13 @@ describe('makeKeyboardWalkProvider', () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one'], [[], ['#d'], ['#d'], ['#d']]));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
-    expect(drafts[0]?.why).toContain('After 3 tab stop(s)');
-    expect(drafts[0]?.why).toContain('inside one open modal dialog');
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('After 3 tab stop(s)');
+    expect(reasons[0]).toContain('inside one open modal dialog');
   });
 
   it('reports a trap when the modal dialog does not hold every stop of the cycle', async () => {
@@ -644,19 +685,22 @@ describe('makeKeyboardWalkProvider', () => {
     // The first stop is before the cycle and outside the dialog. The cycle itself leaves it.
     const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one'], [[], ['#dialog'], [], ['#dialog']]));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap']);
     expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#one', '#two']);
+    expect(cutShort(output)).toHaveLength(1);
   });
 
   it('reads a cycle in two different modal dialogs as a trap', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage(namedButtonPage(['#one', '#two', '#one'], [['#first-dialog'], ['#second-dialog'], ['#first-dialog']]));
 
-    const drafts = draftsOf(await provider.run(makeContext(page)));
+    const output = await provider.run(makeContext(page));
 
-    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-trap']);
+    expect(cutShort(output)).toHaveLength(1);
   });
 
   it('reports the same trap draft on every run of the same page', async () => {
@@ -713,7 +757,7 @@ describe('the walk record the keyboard walk returns', () => {
 
     const output = await provider.run(makeContext(page));
 
-    expect(rules(draftsOf(output))).toContain('keyboard-walk-truncated');
+    expect(cutShort(output)).toHaveLength(1);
     expect(walkOf(output)?.complete).toBe(false);
     expect(walkOf(output)?.stops.map((stop) => stop.elementPath)).toEqual(['#a', '#b']);
   });
@@ -724,7 +768,8 @@ describe('the walk record the keyboard walk returns', () => {
 
     const output = await provider.run(makeContext(page));
 
-    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-truncated']);
+    expect(draftsOf(output)).toEqual([]);
+    expect(cutShort(output)).toHaveLength(1);
     expect(walkOf(output)?.complete).toBe(false);
   });
 });
