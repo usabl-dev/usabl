@@ -138,7 +138,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     if (!HEAD_COMMIT_ID.test(pr.headSha)) {
       process.stderr.write(
         'usabl: pull_request.head.sha in the event file that GITHUB_EVENT_PATH names is not a full commit id ' +
-          '(40 or 64 hex characters), so usabl did not pass it to git. GitHub writes a full commit id there, ' +
+          '(40 or 64 lowercase hex characters), so usabl did not pass it to git. GitHub writes a full commit id there, ' +
           'so this event file is not one GitHub wrote for a pull request. Check where GITHUB_EVENT_PATH points.\n',
       );
       return 2;

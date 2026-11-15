@@ -116,7 +116,7 @@ describe('enforce policy refuses a head SHA that is not a commit id', () => {
       expect(out.code).toBe(2);
       expect(out.stderr).toContain('pull_request.head.sha');
       expect(out.stderr).toContain('GITHUB_EVENT_PATH');
-      expect(out.stderr).toContain('a full commit id (40 or 64 hex characters)');
+      expect(out.stderr).toContain('a full commit id (40 or 64 lowercase hex characters)');
       if (sha.trim() !== '') expect(out.stderr).not.toContain(sha.trim());
       expect(readersMade).toBe(0);
       expect(gitCalls).toEqual([]);
