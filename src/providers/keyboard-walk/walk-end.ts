@@ -10,6 +10,9 @@ import type { Page } from '../../contracts/index.js';
 export interface WalkStopIdentity {
   path: string;
   key: string | null;
+  // Set when the stop was a region the walk cannot read into, such as a closed shadow root or a
+  // frame from another origin. Its path is the path of the host or the frame.
+  unreadable?: true;
 }
 
 // How a walk that reached the body ended. 'confirmed': the focus order ended there. 'unconfirmed':
@@ -64,7 +67,14 @@ async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[
   if (walked.length === 0) {
     return page.activeElementIs('body');
   }
-  if ((await page.activeFocusUnreadable()) !== null || (await page.activeElementIs('body'))) {
+  // A region the walk cannot read gives every control inside it the path of its host or frame. When
+  // the first stop of the page is such a region, the Tab after the end lands inside it again, and
+  // the region's own path is all the walk can match. Only a stop walked as a region matches it.
+  if ((await page.activeFocusUnreadable()) !== null) {
+    const regionPath = await page.activePath();
+    return walked.some((stop) => stop.unreadable === true && stop.path === regionPath);
+  }
+  if (await page.activeElementIs('body')) {
     return false;
   }
   const path = await page.activePath();

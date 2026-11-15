@@ -67,11 +67,23 @@ function rules(drafts: Array<{ rule: string }>): string[] {
 
 // The reason of each gap the walk reported. A walk that was cut short reports one gap on the
 // screen, never a draft, so nothing about it can be floored or carried.
+const CUT_SHORT_LEAD = `on screen ${SCREEN.id}, the keyboard walk was cut short, so this screen is not covered.`;
+const REGION_LEAD = `on screen ${SCREEN.id}, the keyboard walk could not read inside a region`;
+
 function cutShort(output: Draft[] | ProviderOutput): string[] {
-  const gaps = gapsOf(output);
+  const gaps = gapsOf(output).filter((gap) => !gap.reason.startsWith(REGION_LEAD));
   for (const gap of gaps) {
     expect(gap).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
-    expect(gap.reason).toContain(`on screen ${SCREEN.id}, the keyboard walk was cut short, so this screen is not covered.`);
+    expect(gap.reason).toContain(CUT_SHORT_LEAD);
+  }
+  return gaps.map((gap) => gap.reason);
+}
+
+// The reason of each gap for a region the walk could not read into and walked past.
+function unreadRegions(output: Draft[] | ProviderOutput): string[] {
+  const gaps = gapsOf(output).filter((gap) => gap.reason.startsWith(REGION_LEAD));
+  for (const gap of gaps) {
+    expect(gap).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
   }
   return gaps.map((gap) => gap.reason);
 }
@@ -558,31 +570,100 @@ describe('makeKeyboardWalkProvider', () => {
 
   // A closed shadow root or a frame from another origin gives every control inside it the path of
   // the host or the frame. Read as paths alone, the second control is a return to the first and
-  // the walk ends as complete, with nothing said about the controls after it.
+  // the walk ends as complete, with nothing said about the controls after it. Ending the walk there
+  // instead left every control after the region unwalked, so a defect after it was never found.
+  // The walk counts the region as one stop it could not read, keeps pressing Tab until focus is
+  // back in content it can read, and walks on. The region is a gap of its own.
   for (const [reason, where, words] of [
     ['closed-shadow-root', 'into a closed shadow root', 'closed shadow root'],
     ['frame-unreadable', 'into a frame from another origin', 'frame from another origin'],
     ['focus-too-deep', 'deeper than the read follows', 'more shadow roots and frames'],
   ] as const) {
-    it(`discloses truncation instead of a cycle when focus moves ${where}`, async () => {
+    it(`walks past the region when focus moves ${where}, and finds the defect after it`, async () => {
       const provider = makeKeyboardWalkProvider({ tabCap: 10 });
       const page = await makeScriptedPage({
-        ...unnamedLinkPage(['#first', '#host', '#host', '#after']),
-        unreadable: [null, reason, reason, null],
+        ...unnamedLinkPage(['#first', '#host', '#host', '#after', BODY_PATH]),
+        unreadable: [null, reason, reason, null, null],
+        bodyAt: 4,
       });
 
       const output = await provider.run(makeContext(page));
       const drafts = draftsOf(output);
 
-      expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive']);
-      expect(drafts[0]?.elementPath).toBe('#first');
-      const reasons = cutShort(output);
-      expect(reasons).toHaveLength(1);
-      expect(reasons[0]).toContain(words);
-      expect(reasons[0]).toContain('After 1 tab stop(s)');
-      expect(reasons[0]).toContain('by hand');
+      // The region itself gives no draft: the walk cannot read the control that has focus there.
+      expect(drafts.map((draft) => draft.elementPath)).toEqual(['#first', '#after']);
+      expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive', 'keyboard-walk-unnamed-interactive']);
+      expect(cutShort(output)).toEqual([]);
+      const regions = unreadRegions(output);
+      expect(regions).toHaveLength(1);
+      expect(regions[0]).toContain(words);
+      expect(regions[0]).toContain('at tab stop 2');
+      expect(regions[0]).toContain('by hand');
+      expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(true);
     });
   }
+
+  it('counts two regions in a row as two stops it could not read', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({
+      ...namedButtonPage(['#first', '#frame-a', '#frame-b', '#frame-b', '#after', BODY_PATH]),
+      unreadable: [null, 'frame-unreadable', 'frame-unreadable', 'frame-unreadable', null, null],
+      bodyAt: 5,
+      // A stop the walk cannot read has no node id, as in Chromium.
+      keys: ['node-1', null, null, null, 'node-5', null],
+    });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(cutShort(output)).toEqual([]);
+    expect(unreadRegions(output)).toHaveLength(2);
+  });
+
+  it('ends the walk complete when the region is the first stop and the Tab after the body lands in it again', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({
+      ...namedButtonPage(['#frame', '#frame', '#after', BODY_PATH]),
+      unreadable: ['frame-unreadable', 'frame-unreadable', null, null],
+      bodyAt: 3,
+    });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(cutShort(output)).toEqual([]);
+    expect(unreadRegions(output)).toHaveLength(1);
+    expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(true);
+  });
+
+  it('is cut short when focus does not come back out of a region within its bound', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 500 });
+    const paths = ['#first', ...Array.from({ length: 300 }, () => '#widget')];
+    const page = await makeScriptedPage({
+      ...namedButtonPage(paths),
+      unreadable: [null, ...Array.from({ length: 300 }, () => 'closed-shadow-root' as const)],
+    });
+
+    const output = await provider.run(makeContext(page));
+
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('pressed Tab 100 times inside a region it cannot read, and focus did not come back out');
+    // The walk stops at the bound, long before the stop cap.
+    expect(Array.isArray(output) ? 0 : (output.walk?.stops.length ?? 0)).toBeLessThan(150);
+  });
+
+  it('reads a region it meets again after other stops as a cycle, never as a new region', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({
+      ...namedButtonPage(['#first', '#frame', '#after', '#frame', '#later']),
+      unreadable: [null, 'frame-unreadable', null, 'frame-unreadable', null],
+    });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-trap']);
+    expect(cutShort(output)).toHaveLength(1);
+  });
 
   // A focus trap: Tab from the second control goes back to the first, so focus never reaches the
   // body and the controls after the trap are never walked. Read as a completed cycle, the walk

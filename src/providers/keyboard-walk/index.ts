@@ -162,9 +162,9 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 // never reached the rest of the page. 'end-unconfirmed' means focus reached the body, but one more
 // Tab did not go back to the start of the focus order, so a script dropped focus in the middle of the
 // page. 'body-focused' means a script put focus on the body itself, or the page could not say
-// whether it did, so the walk cannot tell where the focus order ends. The others mean evidence is
-// missing: the budget ran out, or focus moved somewhere the walk cannot tell one control from
-// another.
+// whether it did, so the walk cannot tell where the focus order ends. 'region-unbounded' means focus
+// went into a region the walk cannot read and did not come back out within REGION_TAB_BOUND presses
+// of Tab. The others mean the budget ran out.
 type StopReason =
   | 'complete'
   | 'wall-clock'
@@ -173,7 +173,29 @@ type StopReason =
   | 'modal-dialog'
   | 'end-unconfirmed'
   | 'body-focused'
-  | FocusUnreadable;
+  | 'region-unbounded';
+
+// The most presses of Tab the walk spends inside one region it cannot read before it stops. A
+// region whose own controls trap focus would otherwise hold the walk until the stop cap, and the
+// walk cannot see a cycle in there, because every control has the path of the host or the frame.
+const REGION_TAB_BOUND = 100;
+
+// A region the walk cannot read into: a closed shadow root, a frame it cannot read, or focus under
+// more shadow roots and frames than it follows. Every control inside has the path of the host or
+// the frame, so the walk counts the region as one stop and walks on once focus comes back out.
+interface UnreadRegion {
+  path: string;
+  kind: FocusUnreadable;
+  // The tab stop, counted from 1, at which focus first went into the region.
+  stop: number;
+}
+
+const REGION_KIND: Record<FocusUnreadable, string> = {
+  'closed-shadow-root': 'a closed shadow root, where the keyboard walk cannot tell one control from another',
+  'frame-unreadable':
+    'a frame the keyboard walk cannot read, such as a frame from another origin or the frame of an object, embed, or fencedframe element',
+  'focus-too-deep': 'focus under more shadow roots and frames than the keyboard walk follows',
+};
 
 const STOP_REASON_OF_END: Record<WalkEnd, StopReason> = {
   confirmed: 'complete',
@@ -192,12 +214,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, bu
     `The keyboard walk ran out of its time budget of ${budget.wallClockMs ?? 0} ms after ${stops} tab stop(s), before focus reached the end of the page.`,
   'tab-cap': (stops, budget) =>
     `The keyboard walk reached its limit of ${budget.tabCap} tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
-  'closed-shadow-root': (stops) =>
-    `After ${stops} tab stop(s), focus moved into a closed shadow root, where the keyboard walk cannot tell one control from another.`,
-  'frame-unreadable': (stops) =>
-    `After ${stops} tab stop(s), focus moved into a frame the keyboard walk cannot read, such as a frame from another origin or the frame of an object, embed, or fencedframe element.`,
-  'focus-too-deep': (stops) =>
-    `After ${stops} tab stop(s), focus moved under more shadow roots and frames than the keyboard walk follows.`,
+  'region-unbounded': (stops) =>
+    `After ${stops} tab stop(s), the keyboard walk pressed Tab ${REGION_TAB_BOUND} times inside a region it cannot read, and focus did not come back out. A keyboard user may be trapped there, and the controls after it were never walked.`,
   'focus-trap': (stops) =>
     `After ${stops} tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.`,
   'modal-dialog': (stops) =>
@@ -218,14 +236,13 @@ function budgetFix(screenId: string, setting: 'tabCap' | 'wallClockMs'): string 
   );
 }
 const UNREADABLE_FIX =
-  'Check the controls past this point by hand. To let usabl walk them, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.';
+  'Check the controls inside this region by hand. To let usabl walk them, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.';
 
 const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string) => string> = {
   'wall-clock': (screenId) => budgetFix(screenId, 'wallClockMs'),
   'tab-cap': (screenId) => budgetFix(screenId, 'tabCap'),
-  'closed-shadow-root': () => UNREADABLE_FIX,
-  'frame-unreadable': () => UNREADABLE_FIX,
-  'focus-too-deep': () => UNREADABLE_FIX,
+  'region-unbounded': () =>
+    'Check by hand whether Tab can leave this region. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
   'focus-trap': () => 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
   'modal-dialog': () =>
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
@@ -260,6 +277,22 @@ function truncatedWalkGap(
 
 function cutShortLead(screen: { id: string }): string {
   return `on screen ${screen.id}, the keyboard walk was cut short, so this screen is not covered.`;
+}
+
+/**
+ * The coverage gap for one region the walk walked past and could not read into. The walk went on
+ * to the controls after it, but the controls inside it were not checked, so the screen is not
+ * covered. The reason holds the kind of region and the stop it was met at, never page text.
+ */
+function unreadRegionGap(screen: { id: string; url: string }, region: UnreadRegion): CoverageGap {
+  return {
+    ref: screen.url,
+    state: 'not-covered',
+    reason:
+      `on screen ${screen.id}, the keyboard walk could not read inside a region at tab stop ${region.stop}: ` +
+      `${REGION_KIND[region.kind]}. The walk went on past it, but the controls inside it were not checked, so this ` +
+      `screen is not covered. ${UNREADABLE_FIX}`,
+  };
 }
 
 /**
@@ -310,6 +343,10 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       let stopsWalked = 0;
       // Falling out of the loop means the cap ran out, so that is the honest default.
       let stopReason: StopReason = 'tab-cap';
+      // Every region the walk could not read into, in the order it met them.
+      const regions: UnreadRegion[] = [];
+      // The region focus is in now, and how many presses of Tab have kept it there.
+      let inRegion: { path: string; tabs: number } | null = null;
 
       for (let i = 0; i < tabCap; i += 1) {
         if (deadline !== null && now() >= deadline) {
@@ -321,15 +358,21 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         for (const stop of stops) {
           transcript.push({ ...stop, index: i });
         }
-        // Inside a closed shadow root or a frame the walk cannot read, every control has the path
-        // of the host or the frame, so a repeated path proves nothing. The walk ends there and says
-        // so, rather than read the second control as a completed cycle.
-        const unreadable = await ctx.page.activeFocusUnreadable();
-        if (unreadable !== null) {
-          stopReason = unreadable;
-          break;
-        }
         const path = tabStopPath(stops[0]?.elementPath ?? '', i);
+        // Inside a closed shadow root or a frame the walk cannot read, every control has the path
+        // of the host or the frame, so a repeated path there proves nothing. While focus stays in
+        // the same region, the walk presses Tab again until focus is back in content it can read,
+        // up to a bound, and then walks the controls after it.
+        const unreadable = await ctx.page.activeFocusUnreadable();
+        if (unreadable !== null && inRegion !== null && inRegion.path === path) {
+          inRegion.tabs += 1;
+          if (inRegion.tabs >= REGION_TAB_BOUND) {
+            stopReason = 'region-unbounded';
+            break;
+          }
+          continue;
+        }
+        inRegion = unreadable === null ? null : { path, tabs: 1 };
         // A stop seen before is a cycle. The body check runs after this one in the same iteration,
         // and an iteration that finds focus on the body ends the walk, so the body is never in
         // seenPaths and a cycle here never passed through it: Tab can no longer reach the rest of
@@ -347,6 +390,15 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
           break;
         }
         seenPaths.add(path);
+
+        // A region is one stop the walk could not read: no name, role, or draft can be read there,
+        // and a check must not read their absence as an accessibility barrier.
+        if (unreadable !== null) {
+          stopsWalked += 1;
+          regions.push({ path, kind: unreadable, stop: stopsWalked });
+          walked.push({ path, key: null, unreadable: true, modals: await ctx.page.activeModalDialogs() });
+          continue;
+        }
 
         // Browsers move focus to the document body after the last Tab stop and
         // before cycling to the first control. That ends the walk. It is not an
@@ -374,7 +426,12 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       // A walk cut short returns the same empty or short list as a clean screen. Saying so as a
       // coverage gap on the screen puts the gate on not_covered instead of a false pass, and a gap
       // is never floored or carried.
-      const gaps = stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget)];
+      // Each region the walk walked past is a gap of its own: the controls inside it were not
+      // checked, even when the walk reached the end of the page.
+      const gaps = [
+        ...regions.map((region) => unreadRegionGap(ctx.screen, region)),
+        ...(stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget)]),
+      ];
 
       // The record is measurement for checkPage's blank-page check. It is not a draft and decides
       // nothing here. A walk that was cut short says so, and that check then does not read it.
