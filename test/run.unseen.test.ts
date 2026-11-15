@@ -357,6 +357,59 @@ describe('unseen screens', () => {
   });
 });
 
+// A screen with nothing to Tab to has a walk that stays on the body. In the CLI no readiness signal
+// can tell a page that rendered from one that did not, so the screen is not covered whatever the
+// signal says.
+describe('a body-only screen is not covered whatever its readiness signal says', () => {
+  const walked = {
+    jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+    inventories: { screenId: 'inventories', url: config.surfaces[2]!.url, stops: realStops('a:nth-child(3)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+  };
+
+  function bodyOnlyScreen(readiness: Partial<ScreenScan>): ScreenScan {
+    return {
+      screenId: 'overview',
+      url: config.surfaces[0]!.url,
+      stops: bodyOnlyStops,
+      drafts: [],
+      gaps: [],
+      applicability: [],
+      reachedSelectorPresent: null,
+      ...readiness,
+    };
+  }
+
+  async function runWith(overview: ScreenScan) {
+    return run(makeFakeDeps({ ...guardOk, changed: changedAll, scans: { overview, ...walked } }), config);
+  }
+
+  it('does not cover a blank page whose selector names its empty mount point and held', async () => {
+    const r = await runWith(bodyOnlyScreen({ reachedSelectorPresent: true, reachedWhenSelector: '#app' }));
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.exitCode).toBe(3);
+    expect(r.receipt).toBeNull();
+    const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('keyboard stop');
+  });
+
+  it('does not cover a blank page whose declared selector did not hold', async () => {
+    const r = await runWith(bodyOnlyScreen({ reachedSelectorPresent: false, reachedWhenSelector: 'main article' }));
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+    const gap = r.screens.find((s) => s.screenId === 'overview')?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('main article');
+  });
+
+  it('does not cover a blank page whose only signal is a response that arrived', async () => {
+    const r = await runWith(bodyOnlyScreen({ reachedResponseSeen: true, reachedWhenResponse: '/api/overview' }));
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+  });
+});
+
 describe('a crashed screen whose body has an id', () => {
   // The path of a body with an id is that id, so the blank-page detector that read the path tail
   // never saw this body. The scan is built by the real check runner and step runner over a page

@@ -67,6 +67,10 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     press: async () => {},
     click: async () => {},
     activeElementIs: async () => false,
+    // No script on a fake page moves focus, so the body never holds focus itself.
+    bodyHoldsFocus: async () => false,
+    // A fake page has no DOM, so it shows no content. A scripted blank page then stays a blank page.
+    pageShowsContent: async () => false,
     activeElementWithin: async () => false,
     armAnnouncementCapture: async () => {},
     // A fake page never changes on its own, so it has settled the moment an action ends. A test

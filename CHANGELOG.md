@@ -367,6 +367,30 @@
   a clean name. A topic map that is not valid YAML is now refused by file and position, because
   the YAML reader's own error quotes the raw line. Gate effect: none; init writes the same
   drafts.
+- `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
+  nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
+  walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
+  them with the blank-page detector the CLI runs on its transcript. When the walk was complete and
+  every stop stayed on the body, `checkPage` reads once whether the page shows content: rendered
+  text that is not white space, or a rendered `img`, `svg`, `canvas`, `video`, `picture`,
+  `object`, `embed`, or `role="img"` element with a box, in the document, an open shadow root, or
+  a same-origin frame. A CSS background image, hidden content, a closed shadow root, and a frame
+  from another origin do not count, and a failed read counts as no content. Gate effect: a page
+  that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
+  words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
+  to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
+  covered by its own draft, and with `keyboardWalk: false` there are no stops, so `checkPage`
+  makes no blank-page claim.
+- A script that puts focus on the body in the middle of the page no longer makes the keyboard
+  walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
+  focus on the body, and the next Tab landed on the first control, as at the real end of the
+  focus order. Gate effect: such a screen was `verified` with the controls after that point never
+  walked; it is now `not_covered`, with a `keyboard-walk-truncated` draft that says a script moved
+  focus to the document body. A `focus-order` requirement on such a page was a fail on a control
+  the walk never reached; it is now needs review.
+- The `checkPage` gaps for a page that did not settle, before its address was read or while
+  readiness waited for its declared signal, keep only the first line of the browser's error,
+  neutralized. The later lines can be a call log that quotes the page's markup. No gate effect.
 - The sticky comment step in the gate that `usabl install --ci` and `usabl install --docs-ci`
   write updates only a comment that GitHub Actions wrote and that starts with the usabl marker.
   It took the first comment by any bot that held the marker anywhere, so it could overwrite

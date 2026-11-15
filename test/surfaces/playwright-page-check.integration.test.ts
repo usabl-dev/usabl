@@ -50,6 +50,31 @@ const IMAGE_ALT_HTML = `<!doctype html>
   </body>
 </html>`;
 
+// A page whose application never rendered into its mount point.
+const BLANK_APP_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>App</title>
+  </head>
+  <body id="app"></body>
+</html>`;
+
+// A page of text with nothing to Tab to. It shows content, so checkPage checks it as on main.
+const TEXT_ONLY_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Terms</title>
+  </head>
+  <body>
+    <main>
+      <h1>Terms</h1>
+      <p>These terms apply to every account.</p>
+    </main>
+  </body>
+</html>`;
+
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Playwright page', () => {
   let browser: Browser;
 
@@ -108,6 +133,60 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
 
       expect(result.verdict).toBe('regression');
       expect(result.failures.some((f) => f.rule === 'image-alt')).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // A page whose application never rendered: the body has an id and nothing in it. Every Tab leaves
+  // focus on the body, so the walk's stops are all on the body, and checkPage reads them with the
+  // detector the CLI runs on its transcript.
+  it('is not_covered, with the CLI gap for a blank page, when nothing rendered and no readiness signal is declared', async () => {
+    const { context, page } = await openPage(BLANK_APP_HTML);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps).toHaveLength(1);
+      expect(result.gaps[0]).toMatchObject({ ref: 'readiness:page', state: 'not-covered' });
+      expect(result.gaps[0]?.reason).toContain('Every keyboard stop stayed on the document body');
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('checks a page of text with nothing to Tab to and no readiness signal, as on main', async () => {
+    const { context, page } = await openPage(TEXT_ONLY_HTML);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.gaps).toEqual([]);
+      expect(result.needsReview).toEqual([]);
+      expect(result.verdict).toBe('verified');
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('still checks a page with one control as before', async () => {
+    const { context, page } = await openPage(CLEAN_HTML);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.gaps).toEqual([]);
+      expect(result.verdict).toBe('verified');
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('makes no blank-page claim when the keyboard walk is turned off', async () => {
+    const { context, page } = await openPage(BLANK_APP_HTML);
+    try {
+      const result = await checkPage(page, { keyboardWalk: false });
+
+      expect(result.gaps.filter((gap) => gap.ref === 'readiness:page')).toEqual([]);
     } finally {
       await context.close();
     }
@@ -726,6 +805,37 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a decl
 
   it('checks the page when the declared selector matches', async () => {
     const result = await check(ordersPage(MOUNT_NOW), '#orders');
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('regression');
+    expect(result.failures.map((failure) => failure.rule)).toContain('image-alt');
+  });
+
+  it('is not_covered for a blank page whose selector names its empty mount point', async () => {
+    const blank = '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Clusters</title></head><body id="app"></body></html>';
+    const result = await check(blank, '#app');
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
+    expect(result.gaps[0]?.reason).toContain('Every keyboard stop stayed on the document body');
+  });
+
+  it('checks a page whose only content is inside an open shadow root when its selector holds', async () => {
+    const shadow =
+      '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Clusters</title></head><body><main>' +
+      '<x-card id="card"></x-card></main><script>customElements.define("x-card", class extends HTMLElement { constructor() { super();' +
+      ' this.attachShadow({ mode: "open" }).innerHTML = "<h1>Clusters</h1>"; } });</script></body></html>';
+    const result = await check(shadow, '#card');
+
+    expect(result.gaps).toEqual([]);
+    expect(result.needsReview).toEqual([]);
+    expect(result.drafts.map((draft) => draft.rule)).not.toContain('keyboard-walk-truncated');
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('checks a page with a control when the declared selector holds, and the walk adds no gap', async () => {
+    const result = await check(ordersPage(MOUNT_NOW).replace('</main>', '<button type="button">Refresh</button></main>'), '#orders');
 
     expect(result.gaps).toEqual([]);
     expect(result.verdict).toBe('regression');

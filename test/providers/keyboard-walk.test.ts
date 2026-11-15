@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AxNode, FocusUnreadable, Page, ProviderContext, Step } from '../../src/contracts/index.js';
+import type { AxNode, Draft, FocusUnreadable, Page, ProviderContext, ProviderOutput, Step, WalkRecord } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -467,6 +467,47 @@ describe('makeKeyboardWalkProvider', () => {
     );
   });
 
+  // A script that focuses a body with a tabindex in the middle of the page leaves focus on the body,
+  // and the next Tab starts from the body and lands on the first control, as at the real end of the
+  // focus order. Read as the end, the controls after that point were never walked and the walk
+  // read as complete.
+  it('discloses truncation when a script put focus on the body itself in the middle of the page', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => page.activeElementIs('body');
+
+    const output = await provider.run(makeContext(page));
+    const drafts = draftsOf(output);
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', evidenceClass: 'deterministic', elementPath: '' });
+    expect(drafts[0]?.why).toBe(
+      'After 2 tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.',
+    );
+    expect(drafts[0]?.fix).toBe(
+      'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
+    );
+    expect(Array.isArray(output) ? undefined : output.walk?.complete).toBe(false);
+  });
+
+  it('discloses truncation when the page cannot say whether the body itself has focus', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => {
+      throw new Error('the browser could not read focus');
+    };
+
+    expect(rules(draftsOf(await provider.run(makeContext(page))))).toEqual(['keyboard-walk-truncated']);
+  });
+
+  it('still ends complete when Tab moved past the last control and no element holds focus', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2, afterBody: '#a' });
+    page.bodyHoldsFocus = async () => false;
+
+    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+  });
+
   it('discloses truncation when one more Tab after the body leaves focus on the body', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: BODY_PATH });
@@ -627,5 +668,63 @@ describe('makeKeyboardWalkProvider', () => {
 
     expect(second).toEqual(first);
     expect(first[0]?.evidence.extra?.['cycle']).toEqual(['#b', '#c']);
+  });
+});
+
+// checkPage collects no transcript of its own, so the walk hands back the stops it reached, for the
+// blank-page check only.
+describe('the walk record the keyboard walk returns', () => {
+  function walkOf(output: Draft[] | ProviderOutput): WalkRecord | undefined {
+    return Array.isArray(output) ? undefined : output.walk;
+  }
+
+  it('records each stop it reached, the body stop at the end, and that the walk was complete', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', BODY_PATH]), bodyAt: 2 });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(walkOf(output)?.complete).toBe(true);
+    expect(walkOf(output)?.stops.map((stop) => [stop.index, stop.elementPath, stop.onBody])).toEqual([
+      [0, '#a', undefined],
+      [1, '#b', undefined],
+      [2, BODY_PATH, true],
+    ]);
+  });
+
+  it('records one stop on the body for a page with nothing to Tab to', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(unnamedLinkPage(['#app']));
+    page.activeElementIs = async (selector) => selector === 'body';
+
+    const output = await provider.run(makeContext(page));
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(walkOf(output)).toEqual({
+      stops: [expect.objectContaining({ index: 0, elementPath: '#app', onBody: true })],
+      complete: true,
+    });
+  });
+
+  it('says the walk was not complete when it was cut short', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 2 });
+    const page = await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#c']));
+
+    const output = await provider.run(makeContext(page));
+
+    expect(rules(draftsOf(output))).toContain('keyboard-walk-truncated');
+    expect(walkOf(output)?.complete).toBe(false);
+    expect(walkOf(output)?.stops.map((stop) => stop.elementPath)).toEqual(['#a', '#b']);
+  });
+
+  it('says the walk was not complete when one more Tab after the body did not confirm the end', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage([BODY_PATH]), bodyAt: 0, afterBody: '#second' });
+
+    const output = await provider.run(makeContext(page));
+
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-truncated']);
+    expect(walkOf(output)?.complete).toBe(false);
   });
 });

@@ -35,7 +35,7 @@
  *
  * This unit reports coverage. It must never mint a verdict.
  */
-import type { CoverageGap, ScreenScan } from '../contracts/index.js';
+import type { CoverageGap, ScreenScan, TranscriptStop } from '../contracts/index.js';
 
 export interface UnseenPass {
   screens: ScreenScan[]; // same order as the input, unseen screens stripped of drafts and applicability
@@ -56,7 +56,16 @@ export interface UnseenPass {
  * of evidence rather than evidence the screen was blank.
  */
 function isBodyOnly(scan: ScreenScan): boolean {
-  return scan.stops.length > 0 && scan.stops.every((stop) => stop.onBody === true);
+  return walkStayedOnBody(scan.stops);
+}
+
+/**
+ * Whether every stop of a keyboard walk had focus on the body, with at least one stop. This is the
+ * one body-only detector: the unseen pass reads it, and checkPage reads it on the stops the keyboard
+ * walk returns before it adds its own content condition.
+ */
+export function walkStayedOnBody(stops: readonly TranscriptStop[]): boolean {
+  return stops.length > 0 && stops.every((stop) => stop.onBody === true);
 }
 
 function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {

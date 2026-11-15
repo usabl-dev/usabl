@@ -859,10 +859,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   gives a node id for both, a path match alone counts only for the first stop walked. A page
   script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
   body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
-  control not yet walked, so the walk ends with the truncation draft instead. A walk that reaches
-  no stop is complete only when the extra Tab leaves focus on the body, and that page is left to
-  the blank-page detector, which runs in the CLI only. `checkPage` has no blank-page detector, so
-  there a blank page is caught only by a `reachedWhen` readiness signal.
+  control not yet walked, so the walk ends with the truncation draft instead. A page script that
+  calls `focus()` on a body with a `tabindex` in the middle of the page makes the next Tab start
+  again at the first control. The end rule reads whether the body itself holds focus, in the read
+  world, before the extra Tab, and that walk ends with the truncation draft too. A walk that
+  reaches no stop is complete only when the extra Tab leaves focus on the body, and that page is
+  left to the blank-page detector. In `checkPage` the detector reads the stops the keyboard walk
+  returns, and a page whose walk stayed on the body and that shows no content is a gap there
+  too, unless the caller turned the walk off. A page there with nothing to Tab to that shows text
+  or an image is checked as before.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
