@@ -6,7 +6,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import { readDesignAxTree, readFullAxTree } from './ax-tree.js';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead, UnreadRegionName } from '../contracts/index.js';
 import { BOX_LIMITS } from '../primitives/box-limits.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
@@ -1321,6 +1321,78 @@ async function readFocus(cdp: CDPSession): Promise<FocusRead> {
     return backendNodeId === null ? { kind: 'none' } : { kind: 'element', backendNodeId };
   } finally {
     await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
+  }
+}
+
+// The element the shared focus read stops at, even where it cannot read further: the frame owner of
+// a frame it cannot enter, the host of a closed shadow root, or the element at the depth limit.
+const DEEP_FOCUS_ELEMENT_EXPRESSION = `(function () {
+  ${DEEP_FOCUS_IMPL}
+  return deepFocus().element;
+})()`;
+
+// The address a frame owner shows, as the element states it: src for an iframe, a frame, or an
+// embed, data for an object. The property, not the attribute, so a relative address comes back
+// resolved against the document. Anything else gives an empty string.
+const FRAME_ADDRESS_FUNCTION = `function () {
+  const tag = this.localName;
+  const address = tag === 'object' ? this.data : tag === 'iframe' || tag === 'frame' || tag === 'embed' ? this.src : '';
+  return typeof address === 'string' ? address : '';
+}`;
+
+// The origin of a frame address, or null when it has none a listing can name: no address, an
+// address that does not parse, or one that is not http or https, such as about:blank or data:.
+function frameOriginOf(address: string): string | null {
+  try {
+    const url = new URL(address);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The name of the region focus is in when the walk cannot read inside it, or null when it can.
+ * Read in the read world, as readFocus reads, so page script cannot answer for it. A closed shadow
+ * root is named by the tag of its host, from the browser's own DOM read. A frame is named by the
+ * origin of the address its owner element states. That is the address the page gave it, so a frame
+ * that later moved to another address keeps the origin of the first one. Focus past the depth
+ * limit is not named.
+ */
+async function readUnreadRegion(cdp: CDPSession): Promise<UnreadRegionName | null> {
+  const focus = await readFocus(cdp);
+  if (focus.kind !== 'unreadable') {
+    return null;
+  }
+  if (focus.reason === 'focus-too-deep') {
+    return { kind: 'unnamed' };
+  }
+  const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the region that holds focus');
+  const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+    expression: DEEP_FOCUS_ELEMENT_EXPRESSION,
+    contextId,
+    objectGroup: 'usabl-region',
+    includeCommandLineAPI: false,
+  });
+  const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
+  if (objectId === null) {
+    return focus.reason === 'frame-unreadable' ? { kind: 'frame', origin: null } : { kind: 'unnamed' };
+  }
+  try {
+    if (focus.reason === 'closed-shadow-root') {
+      const described: unknown = await cdp.send('DOM.describeNode', { objectId });
+      const tag = readString(getProp(getProp(described, 'node'), 'localName'));
+      return tag === null || tag === '' ? { kind: 'unnamed' } : { kind: 'shadow-host', tag: tag.toLowerCase() };
+    }
+    const answered: unknown = await cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: FRAME_ADDRESS_FUNCTION,
+      returnByValue: true,
+    });
+    const address = readString(getProp(getProp(answered, 'result'), 'value')) ?? '';
+    return { kind: 'frame', origin: frameOriginOf(address) };
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: 'usabl-region' }).catch(() => undefined);
   }
 }
 
@@ -2808,6 +2880,9 @@ function wrapPage(
     async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'unreadable' ? focus.reason : null;
+    },
+    async activeUnreadRegion(): Promise<UnreadRegionName | null> {
+      return readUnreadRegion(cdp);
     },
     async focusedNodeId(): Promise<number | null> {
       const focus = await readFocus(cdp);

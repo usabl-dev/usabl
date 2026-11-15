@@ -50,6 +50,31 @@ function walkPage(controls: number, end: boolean): Page {
   });
 }
 
+/**
+ * A page with a cross-origin chat frame between two controls: #c0, the frame, #c1, then the body,
+ * and the next Tab goes back to #c0. Focus inside the frame cannot be read.
+ */
+function regionPage(): Page {
+  const order = ['#c0', '#chat', '#c1', BODY];
+  let cursor = -1;
+  const pathAt = (): string => order[cursor % order.length] ?? BODY;
+  const inFrame = (): boolean => pathAt() === '#chat';
+  return makeFakePage({
+    currentUrl: async () => URL,
+    focusBody: async () => {
+      cursor = -1;
+    },
+    tab: async () => {
+      cursor += 1;
+    },
+    activePath: async () => pathAt(),
+    activeElementIs: async (selector) => selector === 'body' && pathAt() === BODY,
+    activeFocusUnreadable: async () => (inFrame() ? 'frame-unreadable' : null),
+    activeUnreadRegion: async () => (inFrame() ? { kind: 'frame', origin: 'https://chat.example.com' } : null),
+    activeNode: async () => (pathAt() === BODY || inFrame() ? null : { name: 'Open job', role: 'button', states: {} }),
+  });
+}
+
 function depsWith(page: () => Page, files: Record<string, string>, runConfig: UsablConfig = config): Deps {
   const all = { 'usabl.config.json': '{}', 'src/JobsPage.tsx': 'export {};\n', ...files };
   const base = makeFakeDeps({ files: all, headContents: all, changed: [{ code: 'M', path: 'src/JobsPage.tsx' }] });
@@ -130,6 +155,26 @@ describe('a keyboard walk that was cut short', () => {
     expect(cut.verdict).toBe('not_covered');
     expect(cut.coverage.gaps.find((g) => g.ref === URL)?.reason).toContain('keyboardWalk.perSurface.jobs.tabCap');
     expect(done.verdict).toBe('verified');
+  });
+
+  it('is not covered when the walk meets a region it cannot read that no listing names, and verified with a known limit when the config lists it', async () => {
+    const listed: UsablConfig = {
+      ...config,
+      keyboardWalk: { perSurface: { jobs: { unreadableRegions: [{ frameOrigin: 'https://chat.example.com' }] } } },
+    };
+
+    const unlisted = await run(depsWith(() => regionPage(), {}), config);
+    const known = await run(depsWith(() => regionPage(), {}, listed), listed);
+
+    expect(unlisted.verdict).toBe('not_covered');
+    expect(unlisted.receipt).toBeNull();
+    expect(unlisted.coverage.gaps.find((g) => g.ref === URL)?.reason).toContain('a frame from https://chat.example.com');
+
+    expect(known.verdict).toBe('verified');
+    expect(known.coverage.gaps).toEqual([]);
+    expect(known.screens[0]?.notes).toEqual([
+      { ref: 'provider:keyboard-walk/unread-region', reason: expect.stringContaining('so this region was not checked') },
+    ]);
   });
 
   it('still verifies a screen whose walk ends exactly at the stop cap with the walk complete', async () => {

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { AxNode, Draft, FocusUnreadable, Page, ProviderContext, ProviderOutput, Step, WalkRecord } from '../../src/contracts/index.js';
+import type {
+  AxNode,
+  Draft,
+  FocusUnreadable,
+  Page,
+  ProviderContext,
+  ProviderOutput,
+  Step,
+  UnreadableRegionListing,
+  UnreadRegionName,
+  WalkRecord,
+} from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -850,6 +861,104 @@ describe('the keyboard walk budget of one screen', () => {
       contextWith(await makeScriptedPage(spec(long)), { [SCREEN.id]: { wallClockMs: 10_000 } }),
     );
     expect(gapsOf(done)).toEqual([]);
+  });
+});
+
+// Product call 2, choice (a): a region the walk cannot read into is a not-covered gap, unless the
+// team lists that region for that screen in the guarded config. A listed region is a disclosed
+// limit, never a checked part of the screen.
+describe('regions the team lists for a screen', () => {
+  const FRAME = { kind: 'frame', origin: 'https://chat.example.com' } as const;
+  const HOST = { kind: 'shadow-host', tag: 'chat-widget' } as const;
+
+  async function regionPage(name: UnreadRegionName | null): Promise<Page> {
+    const page = await makeScriptedPage({
+      ...namedButtonPage(['#first', '#host', '#host', '#after', BODY_PATH]),
+      unreadable: [null, 'frame-unreadable', 'frame-unreadable', null, null],
+      bodyAt: 4,
+    });
+    page.activeUnreadRegion = async () => ((await page.activeFocusUnreadable()) === null ? null : name);
+    return page;
+  }
+
+  function listing(regions: UnreadableRegionListing[]): ProviderContext['config'] {
+    return { ...testConfig(), keyboardWalk: { perSurface: { [SCREEN.id]: { unreadableRegions: regions } } } };
+  }
+
+  async function walkWith(name: UnreadRegionName | null, regions: UnreadableRegionListing[] | null): Promise<ProviderOutput> {
+    const page = await regionPage(name);
+    const config = regions === null ? testConfig() : listing(regions);
+    const output = await makeKeyboardWalkProvider({ tabCap: 10 }).run({ page, screen: SCREEN, config });
+    return Array.isArray(output) ? { drafts: output } : output;
+  }
+
+  it('gives an unlisted region a gap that names it and says how to list it', async () => {
+    const output = await walkWith(FRAME, null);
+
+    const regions = unreadRegions(output);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toContain('a frame from https://chat.example.com');
+    expect(regions[0]).toContain(`keyboardWalk.perSurface.${SCREEN.id}.unreadableRegions`);
+    expect(regions[0]).toContain('{"frameOrigin": "https://chat.example.com"}');
+    expect(output.notes ?? []).toEqual([]);
+  });
+
+  it('reads a listed frame as a disclosed limit, never a gap and never checked', async () => {
+    const output = await walkWith(FRAME, [{ frameOrigin: 'https://chat.example.com' }]);
+
+    expect(gapsOf(output)).toEqual([]);
+    expect(output.notes).toEqual([
+      {
+        ref: 'provider:keyboard-walk/unread-region',
+        reason: expect.stringContaining('a frame from https://chat.example.com'),
+      },
+    ]);
+    expect(output.notes?.[0]?.reason).toContain('was not checked');
+    expect(output.notes?.[0]?.reason).toContain('lists it as a known limit');
+  });
+
+  it('reads a listed closed shadow root by the tag of its host', async () => {
+    const output = await walkWith(HOST, [{ shadowHost: 'chat-widget' }]);
+
+    expect(gapsOf(output)).toEqual([]);
+    expect(output.notes?.map((note) => note.reason)).toEqual([expect.stringContaining('a closed shadow root in a chat-widget element')]);
+  });
+
+  it('keeps a region a gap when the listing names another region, and reports the listing that matched nothing', async () => {
+    const output = await walkWith(FRAME, [{ frameOrigin: 'https://other.example.com' }, { shadowHost: 'chat-widget' }]);
+
+    expect(unreadRegions(output)).toHaveLength(1);
+    const stale = (output.notes ?? []).map((note) => note.reason);
+    expect(stale).toHaveLength(2);
+    expect(stale[0]).toContain('{"frameOrigin": "https://other.example.com"}');
+    expect(stale[0]).toContain('matched no region the keyboard walk met');
+    expect(stale[1]).toContain('{"shadowHost": "chat-widget"}');
+    // A stale listing is not a known limit: nothing went unchecked because of it.
+    expect((output.notes ?? []).map((note) => note.ref)).toEqual([
+      'provider:keyboard-walk/stale-region-listing',
+      'provider:keyboard-walk/stale-region-listing',
+    ]);
+  });
+
+  it('never matches a frame with no address it can name, nor focus too deep to name', async () => {
+    for (const name of [{ kind: 'frame', origin: null } as const, { kind: 'unnamed' } as const, null]) {
+      const output = await walkWith(name, [{ frameOrigin: 'https://chat.example.com' }]);
+      expect(unreadRegions(output)).toHaveLength(1);
+    }
+  });
+
+  it('reports no stale listing from a walk that was cut short, since it did not see the whole page', async () => {
+    const page = await makeScriptedPage(namedButtonPage(['#a', '#b', '#c', '#d']));
+    const output = await makeKeyboardWalkProvider({ tabCap: 2 }).run({ page, screen: SCREEN, config: listing([{ shadowHost: 'chat-widget' }]) });
+
+    expect(cutShort(output)).toHaveLength(1);
+    expect(Array.isArray(output) ? [] : (output.notes ?? [])).toEqual([]);
+  });
+
+  it('scrubs the page-derived name in the gap', async () => {
+    const output = await walkWith({ kind: 'shadow-host', tag: 'x-widget token=SECRETPOISON' }, null);
+
+    expect(unreadRegions(output)[0]).not.toContain('SECRETPOISON');
   });
 });
 

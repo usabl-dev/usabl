@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CoverageGap, Draft, Page } from '../../src/contracts/index.js';
+import type { CoverageGap, Draft, Page, ProviderOutput, UnreadableRegionListing } from '../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -524,7 +524,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         ['keyboard-walk-unnamed-interactive', '#trailing'],
         [UNREAD_REGION, ''],
       ]);
-      expect(cutReason(walked)).toContain('frame from another origin');
+      // The frame is named by the origin of its address, the name a listing in the config uses.
+      expect(cutReason(walked)).toContain('a frame from http://localhost:');
+      expect(cutReason(walked)).toContain('{"frameOrigin": "http://localhost:');
     } finally {
       await opened.close();
     }
@@ -607,7 +609,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         ['keyboard-walk-unnamed-interactive', '#trailing'],
         [UNREAD_REGION, ''],
       ]);
-      expect(cutReason(walked)).toContain('object');
+      // An object frame is named by the origin of its data address, as an iframe is by its src.
+      expect(cutReason(walked)).toContain('a frame from http://127.0.0.1:');
       // Wherever the object's controls sit in the tab order, a stop inside them reads as unreadable.
       await opened.focusBody();
       const reasons: Array<string | null> = [];
@@ -617,6 +620,76 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       }
       expect(reasons[0]).toBeNull();
       expect(reasons).toContain('frame-unreadable');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // A region the team lists for the screen in usabl.config.json is a known limit: a note, not a
+  // gap. The name the browser reads must be the name the listing uses, or the listing never matches.
+  async function walkListed(page: Page, unreadableRegions: UnreadableRegionListing[]): Promise<ProviderOutput> {
+    const provider = makeKeyboardWalkProvider({ tabCap: 40 });
+    const config = { ...testConfig(), keyboardWalk: { perSurface: { [SCREEN.id]: { unreadableRegions } } } };
+    const output = await provider.run({ page, screen: SCREEN, config });
+    return Array.isArray(output) ? { drafts: output } : output;
+  }
+
+  it('names a frame from another origin by its origin, and reads it as a known limit once it is listed', async () => {
+    const opened = await open('/cross-origin-frame');
+    try {
+      const frameOrigin = new URL(fixture.url('/')).origin.replace('127.0.0.1', 'localhost');
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'frame', origin: frameOrigin });
+
+      const listed = await walkListed(opened, [{ frameOrigin }]);
+      expect(gapsOf(listed)).toEqual([]);
+      expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+      expect(listed.notes?.[0]?.reason).toContain(`a frame from ${frameOrigin}`);
+      expect(draftsOf(listed).map((draft) => [draft.rule, draft.elementPath])).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+
+      const other = await walkListed(opened, [{ frameOrigin: 'https://chat.example.com' }]);
+      expect(gapsOf(other)).toHaveLength(1);
+      expect(other.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/stale-region-listing']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('names a closed shadow root by the tag of its host, and reads it as a known limit once it is listed', async () => {
+    const opened = await open('/closed-shadow-buttons');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'shadow-host', tag: 'x-closed' });
+
+      const listed = await walkListed(opened, [{ shadowHost: 'x-closed' }]);
+      expect(gapsOf(listed)).toEqual([]);
+      expect(listed.notes?.[0]?.reason).toContain('a closed shadow root in a x-closed element');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('names a closed shadow root inside a same-origin frame by the tag of its host', async () => {
+    const opened = await open('/closed-shadow-in-frame');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'shadow-host', tag: 'x-closed' });
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('reads no region where focus can be read', async () => {
+    const opened = await open('/closed-shadow-buttons');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toBeNull();
     } finally {
       await opened.close();
     }

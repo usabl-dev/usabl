@@ -343,6 +343,32 @@ describe('checkPage and the keyboard walk budget', () => {
     expect(result.verdict).toBe('not_covered');
   });
 
+  it('reads a region its screen lists in usabl.config.json as a known limit, and an unlisted one as a gap', async () => {
+    const regionPage = (): Page => {
+      const page = scriptedPage(['#save', '#chat', '#cancel']);
+      const inChat = async (): Promise<boolean> => (await page.activePath()) === '#chat';
+      page.activeFocusUnreadable = async () => ((await inChat()) ? 'frame-unreadable' : null);
+      page.activeUnreadRegion = async () => ((await inChat()) ? { kind: 'frame', origin: 'https://chat.example.com' } : null);
+      const named = page.activeNode;
+      page.activeNode = async () => ((await inChat()) ? null : named());
+      return page;
+    };
+
+    adopted.page = regionPage();
+    const unlisted = await checkPage(pwPage(), { projectRoot: await project() });
+    expect(unlisted.verdict).toBe('not_covered');
+    expect(unlisted.gaps.map((gap) => gap.reason)).toEqual([expect.stringContaining('a frame from https://chat.example.com')]);
+
+    adopted.page = regionPage();
+    const listed = await checkPage(pwPage(), {
+      screenId: 'clusters',
+      projectRoot: await projectWithWalk({ perSurface: { clusters: { unreadableRegions: [{ frameOrigin: 'https://chat.example.com' }] } } }),
+    });
+    expect(listed.gaps).toEqual([]);
+    expect(listed.verdict).toBe('verified');
+    expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+  });
+
   it('refuses a budget out of range before it touches the page', async () => {
     adopted.page = scriptedPage(rows);
 

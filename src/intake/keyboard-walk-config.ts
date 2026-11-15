@@ -7,7 +7,7 @@
  * has an upper bound: a walk past it costs more time than a gate can wait, and a value past it is
  * almost always a typo. checkPage checks its own options with the same bounds.
  */
-import type { KeyboardWalkConfig, KeyboardWalkScreenConfig } from '../contracts/index.js';
+import type { KeyboardWalkConfig, KeyboardWalkScreenConfig, UnreadableRegionListing } from '../contracts/index.js';
 import { configError } from './config-error.js';
 import { describeIdProblem } from './id-grammar.js';
 
@@ -16,7 +16,67 @@ export const MAX_WALK_TAB_CAP = 2000;
 // The most time one walk spends, five minutes.
 export const MAX_WALK_WALL_CLOCK_MS = 300_000;
 
-const SCREEN_KEYS = new Set(['tabCap', 'wallClockMs']);
+const SCREEN_KEYS = new Set(['tabCap', 'wallClockMs', 'unreadableRegions']);
+
+// The most regions one screen may list. A screen with more is not one a reviewer can judge.
+export const MAX_UNREADABLE_REGIONS = 20;
+
+// A tag name as the browser reports it for an element that can hold a shadow root: lowercase, a
+// letter first, then letters, digits, dots, underscores, and hyphens. A custom element's name
+// also needs a hyphen, and the few built-in elements that can hold one have none.
+const TAG_NAME = /^[a-z][a-z0-9._-]{0,99}$/;
+
+/**
+ * The regions one screen accepts the walk cannot read into, each named the way the walk names
+ * what it met. Refused unless each entry names exactly one region in the one form the walk
+ * compares, so a listing can never read as wider or narrower than what it matches.
+ */
+function parseUnreadableRegions(raw: unknown, label: string): UnreadableRegionListing[] {
+  if (!Array.isArray(raw) || raw.length > MAX_UNREADABLE_REGIONS) {
+    throw configError`${label} must be a list of at most ${String(MAX_UNREADABLE_REGIONS)} regions, each {"frameOrigin": "https://chat.example.com"} or {"shadowHost": "chat-widget"}`;
+  }
+  return raw.map((entry, index): UnreadableRegionListing => {
+    const at = `${label}[${String(index)}]`;
+    if (!isObject(entry) || Object.keys(entry).length !== 1) {
+      throw configError`${at} must name one region: {"frameOrigin": "https://chat.example.com"} for a frame, or {"shadowHost": "chat-widget"} for a closed shadow root`;
+    }
+    const frameOrigin = entry['frameOrigin'];
+    if (frameOrigin !== undefined) {
+      return { frameOrigin: parseFrameOrigin(frameOrigin, `${at}.frameOrigin`) };
+    }
+    const shadowHost = entry['shadowHost'];
+    if (shadowHost !== undefined) {
+      if (typeof shadowHost !== 'string' || !TAG_NAME.test(shadowHost)) {
+        throw configError`${at}.shadowHost must be the tag name of the element that holds the closed shadow root, in lowercase, such as chat-widget`;
+      }
+      return { shadowHost };
+    }
+    throw configError`${at} has an unknown key. The keys it accepts are frameOrigin and shadowHost.`;
+  });
+}
+
+// A bare http or https origin, as judge.allowOrigins takes one. A path, a query, a fragment, or a
+// user name would read as a narrower listing than the walk compares, because it compares the
+// origin only. The origin is stored the way the walk names a frame, so a default port is dropped.
+// The value is never printed back, so a token in a refused one stays out of the message.
+function parseFrameOrigin(raw: unknown, label: string): string {
+  let origin: string | null = null;
+  if (typeof raw === 'string') {
+    try {
+      const url = new URL(raw);
+      const bare = url.pathname === '/' && url.search === '' && url.hash === '' && url.username === '' && url.password === '';
+      origin = bare && (url.protocol === 'http:' || url.protocol === 'https:') ? url.origin : null;
+      // A bare "?" or "#" parses to an empty query or fragment, but it is still not a bare origin.
+      if (origin !== null && /[?#]/.test(raw)) origin = null;
+    } catch {
+      origin = null;
+    }
+  }
+  if (origin === null) {
+    throw configError`${label} must be a bare http or https origin such as https://chat.example.com, with no path, query, or fragment`;
+  }
+  return origin;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -55,10 +115,14 @@ function parseScreen(raw: unknown, label: string): KeyboardWalkScreenConfig {
   // A misspelled key would leave the default budget on the screen without a word.
   for (const key of Object.keys(raw)) {
     if (!SCREEN_KEYS.has(key)) {
-      throw configError`${label} has an unknown key "${key}". The keys it accepts are tabCap and wallClockMs.`;
+      throw configError`${label} has an unknown key "${key}". The keys it accepts are tabCap, wallClockMs, and unreadableRegions.`;
     }
   }
-  return parseWalkBudget({ tabCap: raw['tabCap'], wallClockMs: raw['wallClockMs'] }, label);
+  const budget = parseWalkBudget({ tabCap: raw['tabCap'], wallClockMs: raw['wallClockMs'] }, label);
+  const regionsRaw = raw['unreadableRegions'];
+  return regionsRaw === undefined
+    ? budget
+    : { ...budget, unreadableRegions: parseUnreadableRegions(regionsRaw, `${label}.unreadableRegions`) };
 }
 
 export function parseKeyboardWalkConfig(raw: unknown): KeyboardWalkConfig | undefined {

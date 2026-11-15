@@ -12,6 +12,7 @@ import { buildDeps } from '../deps/build.js';
 import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';
 import { run } from '../run.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
+import { hasKnownLimits, screenNotes } from '../output/notes.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { SANDBOX_OFF_NOTICE } from '../output/sandbox-notice.js';
@@ -76,6 +77,12 @@ export interface OverlayProjection {
   // overlay prints. The sentence is built here from the shared text, so the overlay prints the
   // same words as the terminal and does not keep a copy of its own.
   floorUnconfirmed: (Result['floorUnconfirmed'][number] & { notice: string })[];
+  // The notes providers disclosed about each screen, with each reason framed like a gap's reason.
+  // Disclosure only: the overlay lists them under a heading that says they do not block.
+  notes: Array<{ screenId: string; ref: string; reason: string }>;
+  // True when a region the keyboard walk could not read was listed as a known limit. The overlay
+  // then says the verdict has known limits, so a verified run never reads as a full check.
+  knownLimits: boolean;
   paidDownCount: number;
   // The accessibility outcome with the policy divergence set aside, copied from the gate-owned
   // Result and never computed here. An approval_required run can also carry a real barrier, and the
@@ -423,6 +430,8 @@ export function projectOverlay(
       barriers: entry.barriers,
       notice: unconfirmedNotice(entry),
     })),
+    notes: screenNotes(safe).map((note) => ({ screenId: note.screenId, ref: note.ref, reason: frameUntrusted(note.reason) })),
+    knownLimits: hasKnownLimits(safe),
     accessibilityVerdict: safe.accessibilityVerdict ?? null,
     accessibilityExitCode: safe.accessibilityExitCode ?? null,
   };

@@ -4,6 +4,7 @@
  * It must never emit evidence refs for unchecked surfaces or mint timestamps from local time.
  */
 import type { DocArtifact, Result, TranscriptStop } from '../contracts/index.js';
+import { UNREAD_REGION_NOTE_REF } from '../output/notes.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { buildEvidenceBinding } from './evidence-binding.js';
 
@@ -31,12 +32,19 @@ export function generateKeyboardPaths(result: Result): DocArtifact[] {
       };
     });
 
+    // A region the team listed as one the walk cannot read is a known limit of this walk order, so
+    // the artifact says so beside the stops. The sentence is the keyboard walk's own note.
+    const limits = (Array.isArray(screen.notes) ? screen.notes : [])
+      .filter((note) => note?.ref === UNREAD_REGION_NOTE_REF && typeof note.reason === 'string')
+      .map((note) => neutralize(note.reason));
+
     return {
       kind: 'keyboard-paths',
       surface: screen.screenId,
       entries,
       generatedAt: binding.generatedAt,
       ...(binding.boundToReceipt === undefined ? {} : { boundToReceipt: binding.boundToReceipt }),
+      ...(limits.length === 0 ? {} : { limits }),
     };
   });
 }

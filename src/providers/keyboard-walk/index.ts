@@ -11,9 +11,14 @@ import type {
   FocusUnreadable,
   Page,
   Provider,
+  ProviderNote,
   ProviderOutput,
   TranscriptStop,
+  UnreadableRegionListing,
+  UnreadRegionName,
 } from '../../contracts/index.js';
+import { STALE_REGION_LISTING_NOTE_REF, UNREAD_REGION_NOTE_REF } from '../../output/notes.js';
+import { scrubString } from '../../surfaces/scrub.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
 import { readWalkEnd, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
@@ -188,6 +193,49 @@ interface UnreadRegion {
   kind: FocusUnreadable;
   // The tab stop, counted from 1, at which focus first went into the region.
   stop: number;
+  // What the page says the region is, or null when it could not say. Page-derived.
+  name: UnreadRegionName | null;
+}
+
+// The longest page-derived name a message repeats, so a long one cannot bury the sentence.
+const NAME_LIMIT = 100;
+
+function pageText(text: string): string {
+  const scrubbed = scrubString(text);
+  const characters = [...scrubbed];
+  return characters.length <= NAME_LIMIT ? scrubbed : `${characters.slice(0, NAME_LIMIT).join('')} (cut)`;
+}
+
+// A region as a reader can find it on the page, from what the page says it is. Page-derived, so
+// scrubbed and bounded.
+function regionWords(region: UnreadRegion): string {
+  const name = region.name;
+  if (name?.kind === 'frame') {
+    return name.origin === null ? 'a frame with no address usabl can name' : `a frame from ${pageText(name.origin)}`;
+  }
+  if (name?.kind === 'shadow-host') {
+    return `a closed shadow root in a ${pageText(name.tag)} element`;
+  }
+  return REGION_KIND[region.kind];
+}
+
+// The listing line that would accept this region, or null when the region has no name a listing
+// can use. The line is written in the form the config parser takes.
+function listingLine(name: UnreadRegionName | null): string | null {
+  if (name?.kind === 'frame' && name.origin !== null) return `{"frameOrigin": "${pageText(name.origin)}"}`;
+  if (name?.kind === 'shadow-host') return `{"shadowHost": "${pageText(name.tag)}"}`;
+  return null;
+}
+
+function listingText(listing: UnreadableRegionListing): string {
+  return 'frameOrigin' in listing ? `{"frameOrigin": "${listing.frameOrigin}"}` : `{"shadowHost": "${listing.shadowHost}"}`;
+}
+
+// Whether a listing names the region the walk met. Exact comparison of the one name each form
+// carries, so a listing never matches a region it does not name.
+function listingMatches(listing: UnreadableRegionListing, name: UnreadRegionName | null): boolean {
+  if ('frameOrigin' in listing) return name?.kind === 'frame' && name.origin === listing.frameOrigin;
+  return name?.kind === 'shadow-host' && name.tag === listing.shadowHost;
 }
 
 const REGION_KIND: Record<FocusUnreadable, string> = {
@@ -285,13 +333,45 @@ function cutShortLead(screen: { id: string }): string {
  * covered. The reason holds the kind of region and the stop it was met at, never page text.
  */
 function unreadRegionGap(screen: { id: string; url: string }, region: UnreadRegion): CoverageGap {
+  const line = listingLine(region.name);
+  // A region with a name a listing can use can be accepted, by a person, in the guarded config.
+  const accept =
+    line === null
+      ? ' usabl cannot name this region, so it cannot be listed as a known limit.'
+      : ` If the team accepts that this region is not checked, list ${line} under ` +
+        `keyboardWalk.perSurface.${screen.id}.unreadableRegions in usabl.config.json. That file is guarded, so a ` +
+        'reviewer approves the line, and the region is then shown as a known limit on every result.';
   return {
     ref: screen.url,
     state: 'not-covered',
     reason:
       `on screen ${screen.id}, the keyboard walk could not read inside a region at tab stop ${region.stop}: ` +
-      `${REGION_KIND[region.kind]}. The walk went on past it, but the controls inside it were not checked, so this ` +
-      `screen is not covered. ${UNREADABLE_FIX}`,
+      `${regionWords(region)}. The walk went on past it, but the controls inside it were not checked, so this ` +
+      `screen is not covered. ${UNREADABLE_FIX}${accept}`,
+  };
+}
+
+// The note for a region the team listed: a disclosed limit. Not a gap, so it does not hold the
+// screen at not covered, and it says plainly that the region was not checked.
+function listedRegionNote(screen: { id: string }, region: UnreadRegion): ProviderNote {
+  return {
+    ref: UNREAD_REGION_NOTE_REF,
+    reason:
+      `on screen ${screen.id}, the keyboard walk could not read inside ${regionWords(region)} at tab stop ${region.stop}, ` +
+      `so this region was not checked. usabl.config.json lists it as a known limit for this screen under ` +
+      `keyboardWalk.perSurface.${screen.id}.unreadableRegions, so it does not block. Check the controls inside it by hand.`,
+  };
+}
+
+// The note for a listing that matched no region on a walk that reached the end of the page, so a
+// stale line is seen and can be removed.
+function staleListingNote(screen: { id: string }, listing: UnreadableRegionListing): ProviderNote {
+  return {
+    ref: STALE_REGION_LISTING_NOTE_REF,
+    reason:
+      `on screen ${screen.id}, the listing ${listingText(listing)} under keyboardWalk.perSurface.${screen.id}.unreadableRegions ` +
+      'in usabl.config.json matched no region the keyboard walk met. The region may be gone, or named another way now. ' +
+      'Remove the line or correct it.',
   };
 }
 
@@ -395,7 +475,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // and a check must not read their absence as an accessibility barrier.
         if (unreadable !== null) {
           stopsWalked += 1;
-          regions.push({ path, kind: unreadable, stop: stopsWalked });
+          regions.push({ path, kind: unreadable, stop: stopsWalked, name: await ctx.page.activeUnreadRegion() });
           walked.push({ path, key: null, unreadable: true, modals: await ctx.page.activeModalDialogs() });
           continue;
         }
@@ -426,16 +506,41 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       // A walk cut short returns the same empty or short list as a clean screen. Saying so as a
       // coverage gap on the screen puts the gate on not_covered instead of a false pass, and a gap
       // is never floored or carried.
-      // Each region the walk walked past is a gap of its own: the controls inside it were not
-      // checked, even when the walk reached the end of the page.
-      const gaps = [
-        ...regions.map((region) => unreadRegionGap(ctx.screen, region)),
-        ...(stopReason === 'complete' ? [] : [truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget)]),
-      ];
+      // Each region the walk walked past is a gap of its own, because the controls inside it were
+      // not checked, even when the walk reached the end of the page. A region the team lists for
+      // this screen in the config is a disclosed limit instead: a note, which is never a gap and
+      // never reads as checked. Under a trusted ref the listing comes from the trusted config.
+      const listings = own?.unreadableRegions ?? [];
+      const matched = new Set<number>();
+      const gaps: CoverageGap[] = [];
+      const notes: ProviderNote[] = [];
+      for (const region of regions) {
+        const index = listings.findIndex((listing) => listingMatches(listing, region.name));
+        if (index === -1) {
+          gaps.push(unreadRegionGap(ctx.screen, region));
+        } else {
+          matched.add(index);
+          notes.push(listedRegionNote(ctx.screen, region));
+        }
+      }
+      if (stopReason !== 'complete') {
+        gaps.push(truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget));
+      } else {
+        // Only a walk that reached the end of the page saw every region, so only then is a listing
+        // that matched nothing known to be stale.
+        listings.forEach((listing, index) => {
+          if (!matched.has(index)) notes.push(staleListingNote(ctx.screen, listing));
+        });
+      }
 
       // The record is measurement for checkPage's blank-page check. It is not a draft and decides
       // nothing here. A walk that was cut short says so, and that check then does not read it.
-      return { drafts, gaps, walk: { stops: transcript, complete: stopReason === 'complete' } };
+      return {
+        drafts,
+        gaps,
+        ...(notes.length === 0 ? {} : { notes }),
+        walk: { stops: transcript, complete: stopReason === 'complete' },
+      };
     },
   };
 }

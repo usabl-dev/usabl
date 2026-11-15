@@ -7,7 +7,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseUsablConfig } from '../../src/intake/config.js';
-import { MAX_WALK_TAB_CAP, MAX_WALK_WALL_CLOCK_MS, parseWalkBudget } from '../../src/intake/keyboard-walk-config.js';
+import {
+  MAX_UNREADABLE_REGIONS,
+  MAX_WALK_TAB_CAP,
+  MAX_WALK_WALL_CLOCK_MS,
+  parseWalkBudget,
+} from '../../src/intake/keyboard-walk-config.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -85,6 +90,71 @@ describe('keyboardWalk in usabl.config.json', () => {
     const perSurface = config.keyboardWalk?.perSurface ?? {};
     expect(Object.hasOwn(perSurface, '__proto__')).toBe(true);
     expect(({} as Record<string, unknown>)['tabCap']).toBeUndefined();
+  });
+});
+
+// The regions one screen accepts the keyboard walk cannot read. Each entry names one region in the
+// one form the walk compares, so a listing never reads as wider or narrower than what it matches.
+describe('keyboardWalk.perSurface.<id>.unreadableRegions', () => {
+  function regions(list: unknown) {
+    return parseUsablConfig(configJson({ perSurface: { jobs: { unreadableRegions: list } } })).keyboardWalk?.perSurface?.['jobs'];
+  }
+
+  it('reads a frame by its origin and a closed shadow root by the tag of its host', () => {
+    expect(regions([{ frameOrigin: 'https://chat.example.com' }, { shadowHost: 'chat-widget' }])).toEqual({
+      unreadableRegions: [{ frameOrigin: 'https://chat.example.com' }, { shadowHost: 'chat-widget' }],
+    });
+  });
+
+  it('writes an origin with a trailing slash or a default port the way the walk names it', () => {
+    expect(regions([{ frameOrigin: 'https://chat.example.com/' }])?.unreadableRegions).toEqual([{ frameOrigin: 'https://chat.example.com' }]);
+    expect(regions([{ frameOrigin: 'https://chat.example.com:443' }])?.unreadableRegions).toEqual([{ frameOrigin: 'https://chat.example.com' }]);
+    expect(regions([{ frameOrigin: 'http://127.0.0.1:8080' }])?.unreadableRegions).toEqual([{ frameOrigin: 'http://127.0.0.1:8080' }]);
+  });
+
+  it('refuses an origin with a path, a query, or a fragment, or one that is not http or https', () => {
+    for (const frameOrigin of [
+      'https://chat.example.com/widget',
+      'https://chat.example.com/?token=SECRETPOISON',
+      'https://chat.example.com/#top',
+      'chat.example.com',
+      'ftp://chat.example.com',
+      'data:text/html,hi',
+      42,
+    ]) {
+      expect(() => regions([{ frameOrigin }])).toThrow('keyboardWalk.perSurface.jobs.unreadableRegions[0].frameOrigin must be a bare http or https origin');
+    }
+  });
+
+  it('never prints an origin it refuses, so a token in it stays out of the message', () => {
+    expect(() => regions([{ frameOrigin: 'https://chat.example.com/?token=SECRETPOISON' }])).not.toThrow('SECRETPOISON');
+  });
+
+  it('refuses a host tag that is not a lowercase tag name', () => {
+    for (const shadowHost of ['Chat-Widget', 'chat widget', '', '1-widget', 'div>', 7]) {
+      expect(() => regions([{ shadowHost }])).toThrow('keyboardWalk.perSurface.jobs.unreadableRegions[0].shadowHost must be the tag name');
+    }
+  });
+
+  it('refuses an entry that names two regions, none, or one with a key it does not know', () => {
+    expect(() => regions([{ frameOrigin: 'https://chat.example.com', shadowHost: 'chat-widget' }])).toThrow('unreadableRegions[0] must name one region');
+    expect(() => regions([{}])).toThrow('unreadableRegions[0] must name one region');
+    expect(() => regions(['https://chat.example.com'])).toThrow('unreadableRegions[0] must name one region');
+    expect(() => regions([{ frameSrc: 'https://chat.example.com' }])).toThrow('unreadableRegions[0] has an unknown key');
+  });
+
+  it('refuses a value that is not a list, and a list longer than the bound', () => {
+    expect(() => regions({ frameOrigin: 'https://chat.example.com' })).toThrow(
+      `keyboardWalk.perSurface.jobs.unreadableRegions must be a list of at most ${MAX_UNREADABLE_REGIONS} regions`,
+    );
+    const many = Array.from({ length: MAX_UNREADABLE_REGIONS + 1 }, () => ({ shadowHost: 'chat-widget' }));
+    expect(() => regions(many)).toThrow('must be a list of at most 20 regions');
+    expect(regions(many.slice(0, MAX_UNREADABLE_REGIONS))?.unreadableRegions).toHaveLength(20);
+  });
+
+  it('sits beside the walk budget of the same screen', () => {
+    const config = parseUsablConfig(configJson({ perSurface: { jobs: { tabCap: 600, unreadableRegions: [{ shadowHost: 'chat-widget' }] } } }));
+    expect(config.keyboardWalk?.perSurface?.['jobs']).toEqual({ tabCap: 600, unreadableRegions: [{ shadowHost: 'chat-widget' }] });
   });
 });
 

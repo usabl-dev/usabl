@@ -47,6 +47,22 @@ describe('the keyboard walk settings and the trusted ref', () => {
     expect((await resolveIntakeConfig(gitWith({}), working, undefined)).keyboardWalk).toEqual(working.keyboardWalk);
   });
 
+  it('read the regions a screen lists as known limits from the trusted config, so a pull request cannot list its own', async () => {
+    const listed = (shadowHost: string, config: UsablConfig): UsablConfig => ({
+      ...config,
+      keyboardWalk: { perSurface: { clusters: { unreadableRegions: [{ shadowHost }] } } },
+    });
+    const trusted = listed('chat-widget', testConfig());
+    const head = listed('payment-form', testConfig());
+
+    const resolved = await resolveIntakeConfig(gitWith({ 'usabl.config.json': JSON.stringify(trusted) }), head, 'origin/main');
+    const missing = await resolveIntakeConfig(gitWith({}), head, 'origin/main');
+
+    expect(resolved.keyboardWalk?.perSurface?.['clusters']?.unreadableRegions).toEqual([{ shadowHost: 'chat-widget' }]);
+    expect(missing.keyboardWalk).toBeUndefined();
+    expect(withoutRuntimeSettings(head).keyboardWalk).toBeUndefined();
+  });
+
   it('are taken out of the head copy the judge plans from when the trusted ref has no config', () => {
     expect(withoutRuntimeSettings(withWalk(testConfig(), 2000)).keyboardWalk).toBeUndefined();
   });

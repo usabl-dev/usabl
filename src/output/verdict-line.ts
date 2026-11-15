@@ -15,6 +15,7 @@
 import type { Result } from '../contracts/index.js';
 import { ownEntry, wholeNumberText } from './carried.js';
 import { listFileNotes } from './file-notes.js';
+import { hasKnownLimits } from './notes.js';
 
 export interface VerdictLine {
   symbol: string;
@@ -25,7 +26,16 @@ export interface VerdictLine {
   // to check and reached no verdict. All leave `verdict` null, and they are different facts, so
   // each is named on its own.
   noVerdict: boolean;
+  // True when the run reached a verdict and a region the keyboard walk could not read was listed
+  // as a known limit. The line then says "with known limits" after the exit code, so a reader
+  // never takes the verdict for a check of the whole screen.
+  knownLimits?: boolean;
 }
+
+const KNOWN_LIMITS_NOTE = 'with known limits';
+
+// Fits the 78 columns the meaning sentence holds to.
+const VERIFIED_WITH_LIMITS_MEANING = 'No new accessibility barrier blocks this change. Some parts were not checked.';
 
 const VERDICT_WORDS: Record<string, string> = {
   verified: 'VERIFIED',
@@ -129,21 +139,28 @@ export function describeVerdict(result: Result): VerdictLine {
       noVerdict: true,
     };
   }
+  // A listed region is a known limit. Only the verified meaning changes, because it is the one a
+  // reader could take for a check of everything. A blocked verdict already says it is blocked.
+  const knownLimits = hasKnownLimits(result);
+  const meaning = ownEntry(VERDICT_MEANINGS, result.verdict) ?? 'usabl reached a verdict it has no words for.';
   return {
     symbol: ownEntry(VERDICT_SYMBOLS, result.verdict) ?? '',
     word: ownEntry(VERDICT_WORDS, result.verdict) ?? UNRECOGNIZED_VERDICT_WORD,
     exitCode: result.exitCode,
-    meaning: ownEntry(VERDICT_MEANINGS, result.verdict) ?? 'usabl reached a verdict it has no words for.',
+    meaning: knownLimits && result.verdict === 'verified' ? VERIFIED_WITH_LIMITS_MEANING : meaning,
     noVerdict: false,
+    ...(knownLimits ? { knownLimits: true } : {}),
   };
 }
 
 /**
- * The verdict word and exit code with no symbol, for readers that gain nothing from one. A note,
- * when given, goes inside the parentheses after the exit code, so it is read with the verdict.
+ * The verdict word and exit code with no symbol, for readers that gain nothing from one. Known
+ * limits, then a note when given, go inside the parentheses after the exit code, so they are read
+ * with the verdict.
  */
 export function formatVerdictWord(line: VerdictLine, note?: string): string {
-  const suffix = note === undefined ? '' : `, ${note}`;
+  const notes = [...(line.knownLimits === true ? [KNOWN_LIMITS_NOTE] : []), ...(note === undefined ? [] : [note])];
+  const suffix = notes.map((text) => `, ${text}`).join('');
   return `${line.word} (exit ${formatExitCode(line.exitCode)}${suffix})`;
 }
 

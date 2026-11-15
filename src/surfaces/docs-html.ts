@@ -148,6 +148,22 @@ function renderStatus(artifact: DocArtifact, hasEvidence: boolean): string {
   );
 }
 
+/**
+ * The known limits of a keyboard walk order: each region the walk could not read that the team
+ * listed. Shown under the status so a verified card never reads as the whole focus order. Empty
+ * when there are none. A saved report can be edited, so a value that is not a list of strings
+ * shows nothing, and every sentence is escaped.
+ */
+function renderLimits(artifact: DocArtifact): string {
+  const limits = Array.isArray(artifact.limits) ? artifact.limits.filter((limit) => typeof limit === 'string') : [];
+  if (limits.length === 0) return '';
+  const items = limits.map((limit) => `<li>${escapeHtml(limit)}</li>`).join('');
+  return (
+    `<p class="artifact__limits">Known limits: the keyboard walk could not read these regions, so the controls inside them ` +
+    `are not in this walk order and were not checked.</p><ul class="artifact__limits-list">${items}</ul>`
+  );
+}
+
 /** One artifact rendered as a captioned, scoped table (or an empty note). */
 function renderArtifact(artifact: DocArtifact): string {
   const label = KIND_LABEL[artifact.kind];
@@ -163,6 +179,7 @@ function renderArtifact(artifact: DocArtifact): string {
   parts.push(`<h3 class="artifact__title">${escapeHtml(label)}</h3>`);
   parts.push(renderStatus(artifact, hasEvidence));
   if (drafted) parts.push(PAGE_DRAFTED_NOTE);
+  parts.push(renderLimits(artifact));
 
   if (artifact.entries.length === 0) {
     parts.push(
