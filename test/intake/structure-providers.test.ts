@@ -798,6 +798,56 @@ describe('hidden white space in every check that looks a name up', () => {
     expect(drafts[0]?.why).toContain('2 focus stops have names that differ from "Refresh" only in white space that cannot be seen');
   });
 
+  // A person who approves the result must see every guess it rests on, not only the first.
+  it('names every design name that rests on a near stop, in design order, with the true count', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage([`Save${NBSP}`, `Delete${NBSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      'Focus stops have names that differ from 2 names in the design only in white space that cannot be seen: ' +
+        '"Save" by a stop named "Save" followed by a no-break space; "Delete" by a stop named "Delete" followed by a no-break space. ' +
+        'usabl cannot tell whether these are the controls the design means, and it does not guess.',
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 2, nearDesignNames: 2 });
+  });
+
+  it('names each near stop of one design name, and says how many were left out', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage([`Save${NBSP}`, `Delete${NBSP}`, `Delete${ZWSP}`, `Delete${NBSP}${NBSP}`, `Delete${ZWSP}${ZWSP}`, `Delete${NBSP}${ZWSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain(
+      '"Delete" by stops named "Delete" followed by a no-break space or "Delete" followed by a zero width space or ' +
+        '"Delete", a no-break space, then a no-break space, or 2 more. usabl cannot tell',
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 6, nearDesignNames: 2 });
+  });
+
+  it('bounds the list of near design names, and says how many were left out', async () => {
+    const design = Array.from({ length: 17 }, (_, index) => `Name ${index + 1}`);
+    const drafts = await run(req({ type: 'focus-order', sequence: design }), tabbingPage(design.map((name) => `${name}${NBSP}`)));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    const why = drafts[0]?.why ?? '';
+    expect(why).toContain('differ from 17 names in the design');
+    expect(why).toContain('"Name 15" by a stop named "Name 15" followed by a no-break space; and 2 more names. usabl cannot tell');
+    expect(why).not.toContain('"Name 16"');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 17, nearDesignNames: 17 });
+  });
+
+  it('names the near stops too when a name is also on two focus stops', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage(['Save', 'Save', `Delete${NBSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('"Save" is on 2 focus stops');
+    expect(drafts[0]?.why).toContain('A focus stop is named "Delete" followed by a no-break space, and the design names it "Delete".');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 1, nearDesignNames: 1 });
+  });
+
   it('still fails a heading whose name differs only in white space when its level differs', async () => {
     const page = pageWith({ '#h': { name: `Users${NBSP}`, role: 'heading', states: { level: 3 } } });
     const drafts = await run(req({ type: 'heading', name: 'Users', level: 1 }), page);
