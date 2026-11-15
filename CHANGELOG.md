@@ -374,8 +374,10 @@
   every stop stayed on the body, `checkPage` reads once whether the page shows content: rendered
   text that is not white space, or a rendered `img`, `svg`, `canvas`, `video`, `picture`,
   `object`, `embed`, or `role="img"` element with a box, in the document, an open shadow root, or
-  a same-origin frame. A CSS background image, hidden content, a closed shadow root, and a frame
-  from another origin do not count, and a failed read counts as no content. Gate effect: a page
+  a same-origin frame. A visible `iframe` or `frame` element with a box counts too, whatever its
+  origin, so a page whose only content is a frame from another origin is checked. A CSS
+  background image, hidden content, a closed shadow root, and what a frame from another origin
+  holds are not read, and a failed read counts as no content. Gate effect: a page
   that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
   words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
   to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
