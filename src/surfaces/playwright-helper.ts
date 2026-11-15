@@ -20,9 +20,10 @@ import type {
   ScreenScan,
   SurfaceConfig,
   UsablConfig,
+  WalkRecord,
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
-import { markUnseenScreens } from '../coverage/unseen.js';
+import { markUnseenScreens, walkStayedOnBody } from '../coverage/unseen.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
 import { readStorageStateEnv } from '../deps/session.js';
@@ -37,6 +38,7 @@ import {
   measureReachability,
   measureReadiness,
   readApiResponses,
+  readContentShown,
   readinessSignalOf,
   selectorHeldBeforeWalk,
   signalTimeoutMsFor,
@@ -53,6 +55,8 @@ import {
   type LandingObservation,
 } from '../providers/redirected.js';
 import { attachRowScopeToDrafts } from '../providers/row-scope.js';
+import { firstLine } from '../primitives/first-line.js';
+import { neutralize } from '../primitives/neutralize.js';
 import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
@@ -378,14 +382,15 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       });
     // The providers, then the same row keys the CLI attaches, so a finding here carries the
     // identity it has in usabl check.
-    const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[]; notes: ProviderNote[] }> => {
+    // The walk record goes only to the blank-page check below.
+    const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[]; notes: ProviderNote[]; walk: WalkRecord | undefined }> => {
       const provided = await runProviders(
         providers,
         { page, screen, config: PAGE_CHECK_CONFIG, profile },
         pageCheckCapabilities(providers),
       );
       const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
-      return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps], notes: provided.notes };
+      return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps], notes: provided.notes, walk: provided.walk };
     };
 
     // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the
@@ -433,7 +438,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     if (before !== null) {
       await page.markWalkStart();
     }
-    const { drafts, gaps, notes } = await runChecks();
+    const { drafts, gaps, notes, walk } = await runChecks();
     // Rule A again, as the CLI reads it after the checks: an identity request refused during the
     // checks means the page was not reached signed in.
     const late = landing === null ? null : await lateRefusalGap(page, screenId, landing);
@@ -446,13 +451,21 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     if (moved !== null) {
       return finish([], [...gaps, moved]);
     }
-    if (before === null || signal === null || config === null) {
-      return finish(drafts, gaps, notes);
-    }
-    // Measured again after the checks, as the CLI does. A part holds only if it held both times.
-    // An unseen page loses its notes with its drafts: they describe a page that is not the screen.
-    const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
-    const unseen = unseenGap(screenId, signal, held);
+    // The readiness signal is measured again after the checks, as the CLI does. A part holds only
+    // if it held both times. The walk's stops go to the same blank-page detector the CLI runs on
+    // its transcript. An unseen page loses its notes with its drafts: they describe a page that is
+    // not the screen.
+    const readiness =
+      before === null || signal === null || config === null
+        ? null
+        : { signal, measured: heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl)) };
+    // checkPage reports a blank page, and only a blank page: the walk ran to its confirmed end, every
+    // stop stayed on the body, and the page shows no content. A page with nothing to Tab to that
+    // shows text or an image is checked, as before. What the page shows is read once, here, after
+    // the walk and the checks.
+    const blank =
+      walk?.complete === true && walkStayedOnBody(walk.stops) && !(await readContentShown(page)) ? walk : undefined;
+    const unseen = unseenGap(screenId, readiness, blank);
     return unseen === null ? finish(drafts, gaps, notes) : finish([], [...gaps, unseen]);
   } finally {
     // Releases the CDP session and the listeners adoption added. The caller's page stays open.
@@ -488,12 +501,15 @@ async function readinessBeforeChecks(
   try {
     readiness = await page.gotoReady(readyWhen);
   } catch (error: unknown) {
+    // A browser error's later lines can be a call log that quotes the page's markup, so the gap
+    // keeps only the first line, as the settle gap does.
+    const cause = neutralize(firstLine(errorMessage(error))) || 'the error had no message';
     return {
       gap: {
         ref: readinessRef(screenId),
         state: 'not-covered',
         reason: scrubString(
-          `checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+          `checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: ${cause}`,
         ),
       },
     };
@@ -502,9 +518,10 @@ async function readinessBeforeChecks(
   // The wait's outcome decides, as in the CLI, so a selector that appeared after the cap ran out
   // still reads as not held.
   const selectorHeld = readyWhen === undefined || selectorHeldBeforeWalk(readiness, measured.selectorPresent);
+  // No walk has run yet, so only the signal is read here.
   const gap = selectorHeld
-    ? unseenGap(screenId, signal, measured)
-    : unseenGap(screenId, signal, { ...measured, selectorPresent: false }, signalWaitMs);
+    ? unseenGap(screenId, { signal, measured }, undefined)
+    : unseenGap(screenId, { signal, measured: { ...measured, selectorPresent: false } }, undefined, signalWaitMs);
   return gap === null ? { measured } : { gap };
 }
 
@@ -613,9 +630,12 @@ async function settleBeforeAddressRead(page: Page, screenId: string): Promise<Co
     await page.gotoReady();
     return null;
   } catch (error: unknown) {
+    // A browser error's later lines can be a call log that quotes the page's markup, so the gap
+    // keeps only the first line.
+    const cause = neutralize(firstLine(errorMessage(error))) || 'the error had no message';
     return landingGap(
       screenId,
-      `checkPage waited for the page to settle before it read the page's address, and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+      `checkPage waited for the page to settle before it read the page's address, and the page did not settle, so it was not checked: ${cause}`,
     );
   }
 }
@@ -678,36 +698,42 @@ function readinessRef(screenId: string): string {
 }
 
 /**
- * The CLI's unseen-screen gap for a readiness measurement, or null when every declared part held.
- * Built by markUnseenScreens itself, so the two surfaces word and decide it the same way.
+ * The CLI's unseen-screen gap, or null when the page is seen. Built by markUnseenScreens itself,
+ * so the two surfaces word and decide it the same way. It reads the readiness measurement when the
+ * screen declares a signal, and the stops of the keyboard walk when the caller found a blank page.
+ * A walk that did not run, was cut short, or met a page that shows content gives no stops, so the
+ * blank-page detector makes no claim: a cut-short walk is already not covered by its own truncation
+ * draft.
  */
 function unseenGap(
   screenId: string,
-  signal: ReadinessSignal,
-  measured: ReadinessMeasurement,
+  readiness: { signal: ReadinessSignal; measured: ReadinessMeasurement } | null,
+  walk: WalkRecord | undefined,
   signalWaitMs?: number,
 ): CoverageGap | null {
+  const signal = readiness?.signal ?? null;
+  const measured = readiness?.measured ?? null;
   const scan: ScreenScan = {
     screenId,
     url: readinessRef(screenId),
-    stops: [],
+    stops: walk?.complete === true ? walk.stops : [],
     drafts: [],
     gaps: [],
     applicability: [],
     notes: [],
-    reachedSelectorPresent: measured.selectorPresent,
-    reachedWhenSelector: signal.selector,
+    reachedSelectorPresent: measured?.selectorPresent ?? null,
+    reachedWhenSelector: signal?.selector ?? null,
     ...(signalWaitMs === undefined ? {} : { signalWaitMs }),
-    ...(signal.response === null
+    ...(signal === null || signal.response === null
       ? {}
-      : { reachedResponseSeen: measured.responseSeen, reachedWhenResponse: signal.response }),
+      : { reachedResponseSeen: measured?.responseSeen ?? null, reachedWhenResponse: signal.response }),
   };
   const marked = markUnseenScreens([scan]).screens[0];
   const gap = marked?.gaps[0];
   if (gap === undefined) {
     return null;
   }
-  const reason = measured.responseSeen === false ? `${gap.reason} ${ADOPTED_RESPONSE_NOTE}` : gap.reason;
+  const reason = measured?.responseSeen === false ? `${gap.reason} ${ADOPTED_RESPONSE_NOTE}` : gap.reason;
   return { ref: gap.ref, state: 'not-covered', reason: scrubString(reason) };
 }
 

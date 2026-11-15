@@ -802,6 +802,95 @@ const ACTIVE_ELEMENT_IS_FUNCTION = `function (query) {
   return document.querySelector(query) === document.activeElement;
 }`;
 
+// Whether the body is itself the focused element. document.activeElement also returns the body
+// when no element has focus, as after Tab moves past the last control, so the read asks the
+// browser's own :focus state, which matches only the element that holds focus.
+const BODY_HOLDS_FOCUS_FUNCTION = `function () {
+  const body = document.body;
+  return body instanceof HTMLElement && document.activeElement === body && body.matches(':focus');
+}`;
+
+/**
+ * Whether the page shows content: rendered text that is not white space, or a rendered image or
+ * media element. innerText does not reach into a shadow root, and design system components render
+ * there, so the read walks the nodes itself: the document from the body, each open shadow root, and
+ * each same-origin frame.
+ *
+ * A text node counts when it holds a character that is not white space, the element that holds it
+ * passes the browser's checkVisibility (not display none, not visibility hidden, not opacity 0), and
+ * it is laid out in at least one box with a width and a height. An img, svg, canvas, video, picture,
+ * object, or embed element, or an element whose role is img, counts when it passes the same
+ * visibility test and its box has a width and a height. A CSS background image is not content: the
+ * element that shows it is empty.
+ *
+ * Node types are compared by number, because a frame's nodes come from another realm. A closed
+ * shadow root and a frame from another origin cannot be read, so what they show is not counted. A
+ * walk past the node limit has not found content, and says so. Exported for its tests.
+ */
+export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
+  const NODE_LIMIT = 200000;
+  const FRAME_DEPTH_LIMIT = 8;
+  const MEDIA_TAGS = ['img', 'svg', 'canvas', 'video', 'picture', 'object', 'embed'];
+  let visited = 0;
+  // A browser that cannot say whether an element is visible gets no benefit of the doubt: a wrong
+  // guess must read as no content, never as content.
+  const visible = (element) =>
+    typeof element.checkVisibility === 'function' &&
+    element.checkVisibility({ visibilityProperty: true, opacityProperty: true }) === true;
+  const mediaShows = (element) => {
+    const role = (element.getAttribute('role') || '').trim().split(' ')[0];
+    if (!MEDIA_TAGS.includes(element.localName) && role !== 'img') return false;
+    if (!visible(element)) return false;
+    const box = element.getBoundingClientRect();
+    return box.width > 0 && box.height > 0;
+  };
+  const textShows = (text) => {
+    if (text.data.trim().length === 0) return false;
+    const parent = text.parentNode;
+    const owner = parent === null ? null : parent.nodeType === 11 ? parent.host : parent;
+    if (owner === null || owner === undefined || owner.nodeType !== 1 || !visible(owner)) return false;
+    const range = text.ownerDocument.createRange();
+    range.selectNodeContents(text);
+    const boxes = range.getClientRects();
+    for (let index = 0; index < boxes.length; index += 1) {
+      if (boxes[index].width > 0 && boxes[index].height > 0) return true;
+    }
+    return false;
+  };
+  const walk = (root, depth) => {
+    const pending = [root];
+    while (pending.length > 0) {
+      const node = pending.pop();
+      visited += 1;
+      if (visited > NODE_LIMIT) return false;
+      if (node.nodeType === 3) {
+        if (textShows(node)) return true;
+        continue;
+      }
+      if (node.nodeType === 1) {
+        const tag = node.localName;
+        if (tag === 'script' || tag === 'style' || tag === 'template') continue;
+        if (mediaShows(node)) return true;
+        if (node.shadowRoot) pending.push(node.shadowRoot);
+        if ((tag === 'iframe' || tag === 'frame') && depth < FRAME_DEPTH_LIMIT && visible(node)) {
+          let inner = null;
+          try {
+            inner = node.contentDocument;
+          } catch (error) {
+            inner = null;
+          }
+          if (inner && inner.body && walk(inner.body, depth + 1)) return true;
+        }
+      }
+      for (let child = node.lastChild; child !== null; child = child.previousSibling) {
+        pending.push(child);
+      }
+    }
+    return false;
+  };
+  return document.body ? walk(document.body, 0) : false;
+}`;
+
 // Whether the focused element is the first element a selector matches or sits inside it.
 const ACTIVE_ELEMENT_WITHIN_FUNCTION = `function (query) {
   const root = document.querySelector(query);
@@ -2672,6 +2761,12 @@ function wrapPage(
     },
     async activeElementIs(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_IS_FUNCTION, [selector])) === true;
+    },
+    async bodyHoldsFocus(): Promise<boolean> {
+      return (await callInWorld(cdp, READ_WORLD, 'read focus', BODY_HOLDS_FOCUS_FUNCTION)) === true;
+    },
+    async pageShowsContent(): Promise<boolean> {
+      return (await callInWorld(cdp, READ_WORLD, 'read what the page shows', PAGE_SHOWS_CONTENT_FUNCTION)) === true;
     },
     async activeElementWithin(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;

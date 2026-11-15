@@ -6,6 +6,7 @@ import type {
   ProviderContext,
   ProviderOutput,
   RuleApplicability,
+  WalkRecord,
 } from '../../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { ProviderRunFailed, runProviders } from '../../src/providers/index.js';
@@ -209,6 +210,57 @@ describe('runProviders', () => {
     const result = await runProviders([notAList, bare], await makeContext(), ['live']);
 
     expect(result.notes).toEqual([]);
+  });
+
+  it('carries the walk record of a provider to the caller, beside the drafts and never as one', async () => {
+    const walk = { stops: [{ index: 0, elementPath: '#app', announcement: [], onBody: true as const }], complete: true };
+    const provider: Provider = {
+      id: 'walker',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [draft], walk }),
+    };
+
+    const result = await runProviders([provider], await makeContext(), ['live']);
+
+    expect(result.walk).toEqual(walk);
+    expect(result.drafts).toEqual([draft]);
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('has no walk record when no provider returned one, or the one returned is not a record', async () => {
+    const bare: Provider = { id: 'bare', layer: 'fake', capabilities: ['live'], run: async () => [draft] };
+    const odd: Provider = {
+      id: 'odd',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async () => ({ drafts: [], walk: { stops: 'not a list', complete: true } }) as unknown as ProviderOutput,
+    };
+    const noFlag: Provider = {
+      id: 'no-flag',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async () => ({ drafts: [], walk: { stops: [] } }) as unknown as ProviderOutput,
+    };
+
+    const result = await runProviders([bare, odd, noFlag], await makeContext(), ['live']);
+
+    expect('walk' in result).toBe(false);
+  });
+
+  it('keeps the first walk record when more than one provider returns one', async () => {
+    const first: WalkRecord = { stops: [{ index: 0, elementPath: '#app', announcement: [], onBody: true }], complete: true };
+    const second: WalkRecord = { stops: [{ index: 0, elementPath: '#save', announcement: [] }], complete: true };
+    const walker = (id: string, walk: WalkRecord): Provider => ({
+      id,
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [], walk }),
+    });
+
+    const result = await runProviders([walker('one', first), walker('two', second)], await makeContext(), ['live']);
+
+    expect(result.walk).toEqual(first);
   });
 
   it('treats a provider output with no applicability key as reporting none', async () => {

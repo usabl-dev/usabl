@@ -3,10 +3,19 @@
  * It must never mint a verdict, and it must never guess when the AX node is missing.
  * Missing focus metadata stays unverified so the gate can disclose uncertainty honestly.
  */
-import type { AxNode, Draft, Fact, FocusUnreadable, Page, Provider } from '../../contracts/index.js';
+import type {
+  AxNode,
+  Draft,
+  Fact,
+  FocusUnreadable,
+  Page,
+  Provider,
+  ProviderOutput,
+  TranscriptStop,
+} from '../../contracts/index.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
-import { walkEndConfirmed, type WalkStopIdentity } from './walk-end.js';
+import { readWalkEnd, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
 
 const INTERACTIVE_ROLES = new Set([
   'button',
@@ -147,8 +156,10 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 // focus went back to a stop it had already reached without passing through the body, so the walk
 // never reached the rest of the page. 'end-unconfirmed' means focus reached the body, but one more
 // Tab did not go back to the start of the focus order, so a script dropped focus in the middle of the
-// page. The others mean evidence is missing: the budget ran out, or focus moved somewhere the walk
-// cannot tell one control from another.
+// page. 'body-focused' means a script put focus on the body itself, or the page could not say
+// whether it did, so the walk cannot tell where the focus order ends. The others mean evidence is
+// missing: the budget ran out, or focus moved somewhere the walk cannot tell one control from
+// another.
 type StopReason =
   | 'complete'
   | 'wall-clock'
@@ -156,7 +167,14 @@ type StopReason =
   | 'focus-trap'
   | 'modal-dialog'
   | 'end-unconfirmed'
+  | 'body-focused'
   | FocusUnreadable;
+
+const STOP_REASON_OF_END: Record<WalkEnd, StopReason> = {
+  confirmed: 'complete',
+  unconfirmed: 'end-unconfirmed',
+  'body-focused': 'body-focused',
+};
 
 const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) => string> = {
   'wall-clock': (stops) =>
@@ -175,6 +193,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
     `After ${stops} tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.`,
   'end-unconfirmed': (stops) =>
     `After ${stops} tab stop(s), focus moved to the document body, but one more Tab did not go back to a control the keyboard walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the controls after that point may never have been walked.`,
+  'body-focused': (stops) =>
+    `After ${stops} tab stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the keyboard walk cannot tell where the focus order ends. The controls after that point may never have been walked.`,
 };
 
 const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
@@ -192,6 +212,8 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
   'end-unconfirmed':
     'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, so Tab moves through every control to the end of the page, then check the screen again.',
+  'body-focused':
+    'Find the script on this screen that moves focus to the document body, so Tab moves through every control to the end of the page, then check the screen again.',
 };
 
 function truncatedWalkDraft(
@@ -232,7 +254,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
     // This walk traverses the real focus order, which only describes what a keyboard user meets
     // when it starts from the page as loaded. An opened or dismissed widget rewrites that order.
     requiresPristinePage: true,
-    async run(ctx): Promise<Draft[]> {
+    async run(ctx): Promise<ProviderOutput> {
       await ctx.page.focusBody();
 
       // The budget is anchored per run, not per provider. One instance walks every screen in a
@@ -244,6 +266,8 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       const drafts: Draft[] = [];
       const seenPaths = new Set<string>();
       const walked: WalkedStop[] = [];
+      // Every stop Tab reached, the body stop included, for checkPage's blank-page check only.
+      const transcript: TranscriptStop[] = [];
       let stopsWalked = 0;
       // Falling out of the loop means the cap ran out, so that is the honest default.
       let stopReason: StopReason = 'tab-cap';
@@ -255,6 +279,9 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         }
 
         const stops = await stepRunner.run(ctx.page, [{ do: 'tab' }]);
+        for (const stop of stops) {
+          transcript.push({ ...stop, index: i });
+        }
         // Inside a closed shadow root or a frame the walk cannot read, every control has the path
         // of the host or the frame, so a repeated path proves nothing. The walk ends there and says
         // so, rather than read the second control as a completed cycle.
@@ -287,7 +314,7 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // unnamed focusable element. A script that blurs a control, or stops Tab and drops focus,
         // also leaves focus on the body, in the middle of the page, so one more Tab confirms it.
         if (await ctx.page.activeElementIs('body')) {
-          stopReason = (await walkEndConfirmed(ctx.page, walked)) ? 'complete' : 'end-unconfirmed';
+          stopReason = STOP_REASON_OF_END[await readWalkEnd(ctx.page, walked)];
           break;
         }
 
@@ -311,7 +338,9 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         drafts.push(truncatedWalkDraft(ctx.screen.id, stopReason, stopsWalked));
       }
 
-      return drafts;
+      // The record is measurement for checkPage's blank-page check. It is not a draft and decides
+      // nothing here. A walk that was cut short says so, and that check then does not read it.
+      return { drafts, walk: { stops: transcript, complete: stopReason === 'complete' } };
     },
   };
 }

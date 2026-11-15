@@ -515,6 +515,21 @@ describe('focus order requirement', () => {
     expect(drafts[0]?.evidence.extra).toMatchObject({ heard: ['Create user'] });
   });
 
+  it('is unconfirmed, never a fail, when a script puts focus on the body itself in the middle of the page', async () => {
+    // A script focuses a body with a tabindex after "Refresh". The next Tab then starts from the
+    // body and lands on the first control, which looks like the end of the focus order, so the walk
+    // would read two of the three names and fail the order on a control it never reached.
+    const page = scriptedPage([stop('#s0', 'Create user', 'k0'), stop('#s1', 'Refresh', 'k1'), 'body', stop('#s0', 'Create user', 'k0')]);
+    page.bodyHoldsFocus = async () => page.activeElementIs('body');
+    const drafts = await run(r, page);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toBe(
+      'After 2 focus stop(s), a script moved focus to the document body itself, so the next Tab starts again from the top of the page and the walk cannot tell where the focus order ends. The rest of the order was not read.',
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ heard: ['Create user', 'Refresh'] });
+  });
+
   it('is unconfirmed, never a fail, when a script stops Tab and focus stays on the body', async () => {
     const page = scriptedPage([stop('#s0', 'Create user', 'k0'), 'body', 'body']);
     const drafts = await run(r, page);

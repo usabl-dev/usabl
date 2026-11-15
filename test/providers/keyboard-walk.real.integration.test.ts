@@ -174,6 +174,12 @@ function pages(crossOrigin: string): Record<string, string> {
       '<button type="button">One</button><button type="button" id="blurs">Two</button><button type="button">Three</button>' +
         `<script>document.getElementById('blurs').addEventListener('focus', (event) => event.target.blur());</script>`,
     ),
+    // A focus handler that puts focus on a body with a tabindex, in the middle of the page. The next
+    // Tab starts from the body and lands on the first control, as at the real end of the order.
+    '/end-body-focus': page(
+      '<button type="button" id="one">One</button><button type="button" id="to-body">Two</button><button type="button" id="three">Three</button>' +
+        `<script>document.body.tabIndex = -1; document.getElementById('to-body').addEventListener('focus', () => document.body.focus());</script>`,
+    ),
     // The same on the first control, so the walk reaches no stop before focus falls to the body.
     '/end-blur-first': page(
       '<button type="button" id="blurs">One</button><button type="button">Two</button>' +
@@ -636,6 +642,46 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       }
     });
   }
+
+  // The end rule tells the two ways focus reaches the body apart by whether the body itself holds
+  // focus. This records that Chromium gives the two different answers.
+  it('Chromium: no element holds focus after the last control, and the body holds it after a script focuses it', async () => {
+    const end = await open('/end-three');
+    try {
+      await end.focusBody();
+      for (let i = 0; i < 4; i += 1) {
+        await end.tab();
+      }
+      expect(await end.activeElementIs('body')).toBe(true);
+      expect(await end.bodyHoldsFocus()).toBe(false);
+    } finally {
+      await end.close();
+    }
+    const scripted = await open('/end-body-focus');
+    try {
+      await scripted.focusBody();
+      await scripted.tab();
+      await scripted.tab();
+      expect(await scripted.activeElementIs('body')).toBe(true);
+      expect(await scripted.bodyHoldsFocus()).toBe(true);
+      await scripted.tab();
+      expect(await scripted.activePath()).toBe('#one');
+    } finally {
+      await scripted.close();
+    }
+  });
+
+  it('ends with a truncation gap when a script puts focus on the body itself mid page', async () => {
+    const opened = await open('/end-body-focus');
+    try {
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('document body itself');
+    } finally {
+      await opened.close();
+    }
+  });
 
   // Ordinary pages whose walk must still end complete.
   for (const path of ['/end-three', '/end-one', '/end-none', '/end-banner', '/end-rerender', '/end-skip-link']) {

@@ -1,7 +1,8 @@
 /**
  * Provider execution seam for accessibility checks.
  * Providers return drafts, and optionally a record of which rules applied. This unit must never
- * decide a verdict, and it must never read applicability as evidence of anything.
+ * decide a verdict, and it must never read applicability as evidence of anything. A walk record a
+ * provider returns is passed through for checkPage's blank-page check and read for nothing else.
  * A denied or failing provider becomes an explicit CoverageGap so coverage is honest.
  */
 import type {
@@ -14,6 +15,8 @@ import type {
   ProviderOutput,
   ProviderRunResult,
   RuleApplicability,
+  TranscriptStop,
+  WalkRecord,
 } from '../contracts/index.js';
 import { firstLine } from '../primitives/first-line.js';
 
@@ -83,16 +86,30 @@ function orderByPageEffect(providers: Provider[]): Provider[] {
  * spreading a string into the record one character at a time. This is the only seam that reads a
  * provider return, so it is the only place that needs the check.
  */
-function normalizeOutput(output: Draft[] | ProviderOutput): Required<ProviderOutput> {
+function normalizeOutput(output: Draft[] | ProviderOutput): Required<Omit<ProviderOutput, 'walk'>> & { walk: WalkRecord | null } {
   if (Array.isArray(output)) {
-    return { drafts: output, applicability: [], gaps: [], notes: [] };
+    return { drafts: output, applicability: [], gaps: [], notes: [], walk: null };
   }
   return {
     drafts: Array.isArray(output.drafts) ? output.drafts : [],
     applicability: Array.isArray(output.applicability) ? output.applicability : [],
     gaps: Array.isArray(output.gaps) ? output.gaps : [],
     notes: Array.isArray(output.notes) ? output.notes : [],
+    walk: walkRecordOf(output.walk),
   };
+}
+
+// A walk record is read only when it has a list of stops and says whether the walk was complete.
+// Anything else is no record, so it can make no blank-page claim either way.
+function walkRecordOf(walk: unknown): WalkRecord | null {
+  if (typeof walk !== 'object' || walk === null) {
+    return null;
+  }
+  const { stops, complete } = walk as { stops?: unknown; complete?: unknown };
+  if (!Array.isArray(stops) || typeof complete !== 'boolean') {
+    return null;
+  }
+  return { stops: stops as TranscriptStop[], complete };
 }
 
 export async function runProviders(
@@ -106,6 +123,8 @@ export async function runProviders(
   const applicability: RuleApplicability[] = [];
   // Disclosures carried beside the drafts. They never become gaps, so they never block a screen.
   const notes: ProviderNote[] = [];
+  // Measurement for checkPage's blank-page check, never a draft. See WalkRecord.
+  let walk: WalkRecord | null = null;
 
   let mutatedBy: string | null = null;
 
@@ -136,6 +155,7 @@ export async function runProviders(
       // A provider that isolates its own checks discloses each failed check as a scoped gap.
       // Merge those beside the gaps this seam raises for a whole provider that threw or was denied.
       gaps.push(...output.gaps);
+      walk ??= output.walk;
     } catch (err) {
       // Thrown provider work is disclosed as a gap so we never silently pass coverage.
       const message = err instanceof Error ? err.message : String(err);
@@ -148,5 +168,5 @@ export async function runProviders(
     }
   }
 
-  return { drafts, gaps, applicability, notes };
+  return walk === null ? { drafts, gaps, applicability, notes } : { drafts, gaps, applicability, notes, walk };
 }
