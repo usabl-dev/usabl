@@ -301,6 +301,33 @@ async function objectType(cwd: string, object: string): Promise<string | null> {
   }
 }
 
+// How the reader reads a submodule path: this prefix, then the commit id the tree records for it.
+// It starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
+// can return this text, and a submodule never compares equal to a file, whatever the file holds.
+const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
+
+// The commit id the tree at the ref records for a submodule at the path, or null when the path is
+// not a submodule there. ls-tree reads the tree entry only, so the answer is the same whether or not
+// the submodule's commit is in the repository, which it usually is not, and it does not depend on
+// the working tree. ls-tree matches each path given after -- by its exact name, never as a pattern.
+async function submoduleCommit(cwd: string, ref: string, path: string): Promise<string | null> {
+  let output: string;
+  try {
+    output = await runGit(cwd, ['ls-tree', '-z', '--end-of-options', ref, '--', path]);
+  } catch {
+    return null;
+  }
+  for (const entry of splitNul(output)) {
+    const tab = entry.indexOf('\t');
+    if (tab < 0 || entry.slice(tab + 1) !== path) continue;
+    const [mode, type, id] = entry.slice(0, tab).split(' ');
+    if (mode === '160000' && type === 'commit' && id !== undefined && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(id)) {
+      return id;
+    }
+  }
+  return null;
+}
+
 export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}): GitReader {
   const cwd = options.cwd ?? process.cwd();
   // The buffer size is an option only so tests can reach the over-limit path with a small repository.
@@ -347,16 +374,17 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
           throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
         // cat-file blob refuses a folder and a submodule entry. git show prints a folder's listing,
-        // or the submodule's commit when that commit is in the repository, which is never the
-        // bytes of a file. So the guard reads a policy file that became a folder, or the reverse,
-        // and a moved submodule, as a change an approval can clear. A submodule whose commit is
-        // not here has no type git can read, so it still throws. The closing -- makes git read the
-        // argument as an object name only, so a working tree file with that name is never read in
-        // its place.
+        // which is never the bytes of a file. So the guard reads a policy file that became a
+        // folder, or the reverse, as a change an approval can clear. The closing -- makes git read
+        // the argument as an object name only, so a working tree file with that name is never read
+        // in its place.
         if (code !== null && /bad file/i.test(stderr)) {
-          const type = await objectType(cwd, `${ref}:${path}`);
-          if (type === 'tree' || type === 'commit') {
+          if ((await objectType(cwd, `${ref}:${path}`)) === 'tree') {
             return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+          }
+          const submodule = await submoduleCommit(cwd, ref, path);
+          if (submodule !== null) {
+            return `${SUBMODULE_READ_PREFIX}${submodule}\n`;
           }
         }
         throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;

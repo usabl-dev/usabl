@@ -37,7 +37,12 @@ re-baseline to green.
   `<ref>:<path>` as a path when a working tree file had that exact name, so a file a pull request
   commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
   same reason. A path that is a folder at the ref is read with `git show <ref>:<path> --`, which
-  also reads the argument as an object name only. The git reader, the history reader, and the ledger reader accept none of these
+  also reads the argument as an object name only. A path that is a submodule at the ref is read as
+  the commit id its tree entry records, from `git ls-tree --end-of-options <ref> -- <path>`, after a
+  fixed prefix that starts with a lone surrogate (U+D800). No file read can return that character,
+  so a submodule never compares equal to a file. The read does not need the submodule's commit,
+  which is usually not in the repository, and does not depend on the working tree. A guarded path
+  that is a submodule compares as changed exactly when its recorded commit changed. The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
   character. White space includes non-ASCII spaces that git itself allows in a ref name, and
