@@ -154,6 +154,49 @@ refused: reconcile it by hand.
 - The history workflow's `history-append` job needs `contents: write`. If you cannot grant
   it, leave `usabl-history.yml` out; every run then says tracking is off.
 
+## When the keyboard walk is cut short
+
+A screen is not covered when its keyboard walk stopped before the end of the page. The gap
+starts `on screen <id>, the keyboard walk was cut short` and says why and what to do:
+
+- **It reached its limit of tab stops, or ran out of its time budget.** A long table page has
+  more stops than the default of 200, or takes longer than 15 seconds. Raise the budget for that
+  screen in `usabl.config.json`, up to 2000 stops and 300000 ms:
+
+  ```json
+  "keyboardWalk": { "perSurface": { "jobs": { "tabCap": 600, "wallClockMs": 60000 } } }
+  ```
+
+  In a Playwright test, pass the `tabCap` or `wallClockMs` option of `checkPage`. Or split the
+  screen so its focus order fits one walk.
+- **Focus went back to a control it had reached, or stayed in an open modal dialog.** Fix the
+  keyboard trap, or point the screen at a state with no dialog open and check the dialog on a
+  screen of its own.
+- **A script moved focus to the body, or one more Tab did not confirm the end.** Find the script
+  that blurs a control or stops the Tab key.
+
+Each fix to `usabl.config.json` is a change to a guarded file, so the pull request needs
+approval, and in CI the gate reads the trusted copy.
+
+A floor written by an older version can hold a `keyboard-walk-truncated` entry. The run then
+reports a gap on `.usabl-evidence.json` that names the screens. Run `usabl baseline` (or
+`usabl baseline --partial` while a screen is still not covered) to rewrite the floor without it.
+
+## When the keyboard walk cannot read a region
+
+A closed shadow root or a frame from another origin hides its controls from the walk. The walk
+goes on past it, and the screen gets a gap that names the region, such as `a frame from
+https://chat.example.com`. Check the controls inside by hand. To let usabl walk them, use an open
+shadow root or a frame from the same origin. If the team accepts that the region is not checked,
+list it for that screen, using the line the gap gives:
+
+```json
+"keyboardWalk": { "perSurface": { "support": { "unreadableRegions": [{ "frameOrigin": "https://chat.example.com" }] } } }
+```
+
+A listed region is a known limit, not a gap. Every result says `with known limits` and lists the
+region. A listing that matched no region on a full walk is reported, so remove or correct it.
+
 ## What has been proven
 
 The pin fill, the port read, the branch read, and the printed steps are covered by unit

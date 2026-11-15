@@ -962,8 +962,10 @@ applicability.
 
 Tab through the page and record/assert focus: the focused element's accessible name
 and role at each step and after each interaction, read from the accessibility tree over
-CDP. Bounded with a Tab cap around 200, cycle detection, a wall-clock ceiling, and
-per-node partial tree reads.
+CDP. Bounded with a stop cap (200 tab stops by default), cycle detection, a time cap (15
+seconds by default in the CLI, the stop hook, and the overlay), and per-node partial tree reads.
+A screen sets its own stop cap and time cap in `keyboardWalk.perSurface` (section 22), and a
+Playwright test passes the `tabCap` and `wallClockMs` options of `checkPage`.
 
 Runs a small set of data-step kinds passed as data: `tab`, `press-escape`, `activate`,
 and `assert-announced(region, contains)`.
@@ -990,8 +992,8 @@ a later stop's path does not confirm the end. After the extra Tab, the walk disc
 Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
 where it did before the end was confirmed. A walk that reached no stop is complete only when
 the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
-below. Anything else ends with `keyboard-walk-truncated` as `unverified`, whose `why` says one
-more Tab did not go back to a control the walk had reached. Focus can also reach the body
+below. Anything else is cut short (below), and the gap says one more Tab did not go back to a
+control the walk had reached. Focus can also reach the body
 because a page script called `focus()` on a body that has a `tabindex`, in the middle of the
 page. usabl's own `focusBody`, which starts the walk, gives the body `tabindex="-1"` when it has
 none, so a page's `document.body.focus()` moves focus to the body mid walk even on a page that set
@@ -999,14 +1001,13 @@ no `tabindex` itself. The next Tab from a focused body starts again at the first
 alone would read that as the end. At the real end no element has focus, and
 `document.activeElement` only falls back to the body. So before the extra Tab, the end rule
 reads whether the body itself holds focus (`Page.bodyHoldsFocus`, the browser's own `:focus`
-state, read in an isolated world). When it does, or when the read fails, the walk ends with
-`keyboard-walk-truncated` as `unverified`, whose `why` says a script moved focus to the
-document body itself. The focus order check on design requirements uses the same end rule
+state, read in an isolated world). When it does, or when the read fails, the walk is cut short,
+and the gap says a script moved focus to the document body itself. The focus order check on design requirements uses the same end rule
 (`providers/keyboard-walk/walk-end.ts`). A page with one control or a skip
 link wraps as any other page does. Tab that brings focus back to
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
-never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
-`keyboard-walk-truncated` as `unverified`, and the cycle is the stops from the first visit of
+never reached the rest of the page. So a cycle never ends the walk as complete. The walk is cut
+short, and the cycle is the stops from the first visit of
 the repeated stop to the last stop before the repeat. Only those stops are judged, never the
 stops walked before the cycle began. A cycle that one open modal dialog holds in full is read as
 expected, because a modal dialog may keep focus inside itself. The gap then says focus stayed
@@ -1018,6 +1019,32 @@ Trap), and the walk also emits one deterministic `keyboard-walk-trap` draft: sev
 element path, and `evidence.extra.cycle`, the path of each stop of the cycle in Tab order. The
 draft carries no page text: no name, no role, no label. A control that keeps focus on every
 Tab is a trap of one stop.
+
+**A walk that was cut short.** A walk that stops before its end rule confirms the end of the
+focus order is cut short. Every reason is read the same way: the stop cap, the time cap, a
+cycle (a trap or one open modal dialog), an extra Tab that did not confirm the end, a script that
+moved focus to the body, and a region the walk cannot read that Tab did not leave (below). The
+keyboard walk gives the screen one `not-covered` coverage gap, with the screen's url as its ref.
+The reason starts `on screen <id>, the keyboard walk was cut short, so this screen is not
+covered.`, says why and after how many tab stops, says that accessibility barriers past that
+point are unknown, and says what to do. For the stop cap and the time cap it names the setting
+in `usabl.config.json` (`keyboardWalk.perSurface.<id>.tabCap` or `.wallClockMs`) and the
+`checkPage` option of the same name. The reason holds counts and usabl's own words, never page
+text.
+
+It is a gap, never a draft. A draft can be accepted onto the evidence floor. When the walk
+gave a `keyboard-walk-truncated` draft, a baseline taken while the walk was cut short floored it,
+and every later run carried it and read verified, although the controls past the cut were never
+walked. The gate never floors or carries a gap, so a screen whose walk was cut short is never
+verified and gets no receipt. `usabl baseline` writes no entry for it, and a full baseline
+refuses while the screen is not covered (`usabl baseline --partial` writes the other screens).
+A floor written before this change can still hold `keyboard-walk-truncated` entries. The gate
+reads them as one `not-covered` gap on `.usabl-evidence.json` that names their screens and the
+command that rewrites the floor without them (`usabl baseline`, or `usabl baseline --partial`).
+It never carries such an entry, never claims it fixed, and never shows it as headroom or as a
+barrier not seen. A walk that ends exactly at its stop cap with the end confirmed is complete:
+the extra Tab that confirms the end is not a stop. The trap draft (`keyboard-walk-trap`) stays a
+draft beside the gap.
 
 An open modal dialog is read at each stop, by `Page.activeModalDialogs`, from the element
 that has focus up the flat tree: a slotted element climbs through its slot, a shadow root
@@ -1051,10 +1078,60 @@ element that shows a document, or a `fencedframe`, is found through the browser'
 over CDP (the browser gives a frame owner a frame id or a content document), and focus on it
 counts as a frame the read cannot see into. When focus moves into a closed shadow root, into
 a frame from another origin, into such a frame owner, or under more than 1024 shadow roots
-and frames, the walk cannot tell one control there from another. It stops and emits
-`keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
-covered instead of passing. A closed shadow root that does not hold focus, such as one
-inside a focusable host, is walked past as usual.
+and frames, the walk cannot tell one control there from another. A closed shadow root that
+does not hold focus, such as one inside a focusable host, is walked past as usual.
+
+**A region the walk cannot read.** Such a region does not end the walk. The walk counts it as
+one tab stop that it could not read and keeps pressing Tab. Each Tab that leaves focus in the
+same region is not a new stop. When focus is readable again, the walk goes on from there, so the
+controls after the region are checked. If 100 Tabs in a row leave focus in the region, Tab may
+never leave it, and the walk is cut short. A region the walk meets again at a later stop is a
+cycle, like any other stop met again, and the end rule matches a region stop by its path. The
+controls inside the region were not checked, so each region gives the screen its own
+`not-covered` gap. The reason says at which tab stop the walk met it and what it is, and says to
+check its controls by hand, or to use an open shadow root or a same-origin frame so usabl can
+walk them.
+
+**A region the team lists.** A team that accepts that a region is not checked lists it for that
+screen under `keyboardWalk.perSurface.<id>.unreadableRegions` in `usabl.config.json`. A listed
+region is not a gap. It is a known limit: a provider note with ref
+`provider:keyboard-walk/unread-region` that says the region was not checked and is listed, so it
+does not block. Every surface shows it. The verdict line says `with known limits` after the exit
+code, and a verified run's meaning says some parts were not checked. The terminal summary, the
+self-check, and the stop hook print the note under `disclosed, does not block`. The pull
+request comment heading says `with known limits` and the note is listed under `Disclosed, does
+not block`. The overlay shows `Verified, with known limits` and lists the note in its coverage
+footer. The docs output adds the note to the screen's keyboard walk order as a known limit.
+`usabl.config.json` is guarded, so a pull request that adds a listing needs approval, and in CI
+the walk reads the listing from the trusted ref, as it reads the rest of the config. With a
+trusted ref that has no readable config, no listing applies. A listing that matched no region on
+a walk that reached the end of the page is stale. It gets a note with ref
+`provider:keyboard-walk/stale-region-listing` that asks for the line to be removed or corrected.
+It is not a known limit. A walk that was cut short reports no stale listing, because it did not
+see the whole page.
+
+How a region is named. The name is read in an isolated world from the browser's own DOM over
+CDP, so page script cannot answer for it.
+
+- A frame is named by the origin of the address its owner element states: `src` for an `iframe`,
+  `frame`, or `embed` element, `data` for an `object` element. It is listed as
+  `{"frameOrigin": "https://chat.example.com"}`. An origin does not change with the frame's place
+  in the page, its rows, or its text, and a third-party widget keeps one origin across releases.
+  The listing must be a bare `http` or `https` origin, with no path, query, fragment, or user
+  name, because the walk compares the origin only. A default port is dropped, as the browser
+  drops it. Known limit: a frame that moved to another address after it loaded keeps the origin
+  of the address its element states.
+- A closed shadow root is named by the tag of its host element, listed as
+  `{"shadowHost": "chat-widget"}`. The tag is the name the component registered, so it does not
+  change with the host's place in the page or its content. The listing must be a lowercase tag
+  name.
+- A frame whose address is not `http` or `https` (no address, `about:blank`, `data:`, or a
+  `fencedframe`), and focus under more shadow roots and frames than the walk follows, have no name
+  a listing can use. They are always gaps, and the gap says so.
+
+A listing names one region, and a screen lists at most 20. Every name the page gives is passed
+through `scrub.ts` and cut to 100 characters before it is printed, and a listed origin is never
+printed back in a refusal.
 
 **A blank page.** Each stop of the transcript the check runner collects records whether the body
 had focus there (`onBody`), read from the page in an isolated world. A screen where every stop
@@ -1103,8 +1180,9 @@ browser that cannot say whether an element is visible gets no benefit of the dou
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
 as no content, so the page is reported blank.
 
-A walk that was cut short gives no stops to read, and its own `keyboard-walk-truncated` draft
-already keeps the page from verifying. A walk that did not run, because the caller passed
+A walk that was cut short gives a record that says it was not complete, so the blank-page check
+does not read it and makes no blank-page claim. Its own gap already keeps the page from
+verifying. A walk that did not run, because the caller passed
 `keyboardWalk: false`, gives no stops either, so `checkPage` makes no blank-page claim and the
 page reads as its other checks found it. A blank page checked that way is caught only by a
 `reachedWhen` readiness signal that the page fails.
@@ -2792,7 +2870,9 @@ are what `usabl baseline` counted when it wrote the floor.
 
 `.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
 owner writes it in an `approval_required` accept commit. Advisory findings are never
-written to the floor. The accept loop converges: after the acceptance commit lands, the
+written to the floor. Nor is a keyboard walk that was cut short: it is a coverage gap, not a
+finding, and an old floor entry for one is read as a gap that asks for the floor to be
+rewritten (section 7.3). The accept loop converges: after the acceptance commit lands, the
 next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
 coverage cannot be re-established). Every count must be a safe whole number, and a floor whose
 counts add up past the largest whole number a JavaScript number holds exactly is refused, because a
@@ -3096,8 +3176,11 @@ and the field, never the value.
 
 **Why it cannot make a run greener.** The history only lowers counts on floor identities. A lower
 count can turn a carried finding into a new one, and can take away a `fixed` finding, a headroom
-line, or an unconfirmed notice. It cannot add a carried finding, and it cannot remove a gap,
-because a version 3 floor raises neither of the floor gaps. A forged history that claims higher
+line, or an unconfirmed notice. It cannot add a carried finding. It cannot remove a gap a screen
+needs: a version 3 floor raises neither of the floor version gaps, and the one other floor gap,
+for an old `keyboard-walk-truncated` entry (section 7.3), only asks for the floor to be
+rewritten. If the history drops such an entry, that gap goes with it, but a walk that is still
+cut short gives its screen its own gap on every run. A forged history that claims higher
 counts stops a release and nothing more; one that names identities the floor does not hold is
 ignored. A forged history can still lower counts and block pull requests. Protecting the branch
 with a ruleset (no force push, no deletion, updates only from the default-branch job) is the
@@ -5645,8 +5728,9 @@ on which Unicode version the running Node build carries.
 The same grammar governs every operator-authored and derived id on the `usabl` command path:
 `surfaces[].id`, `usabl.routes.json` `screenId`, the screen id the router fallback derives from a
 route path in application source, `usabl.docs.json` `pageId`, requirement ids and the surface a
-requirement names (section 13), the keys of `noiseBudget.perSurface`, which are screen ids matched
-against one by exact comparison, and every id that `usabl init` and `usabl init --docs` derive. An
+requirement names (section 13), the keys of `noiseBudget.perSurface` and of
+`keyboardWalk.perSurface`, which are screen ids matched against one by exact comparison, and
+every id that `usabl init` and `usabl init --docs` derive. An
 authored id that fails is refused at parse. A derived id that fails is never minted. At run time
 the router fallback sets such a route aside and the planner records it as a `skipped` coverage
 gap whenever a wide-blast change would have queued it, so the gate reads it as not covered
@@ -5806,6 +5890,38 @@ when it starts, so every page of that process shares it. The CLI and the overlay
 path. With a trusted ref, `"require"` in either the working tree or the trusted-ref
 `usabl.config.json` wins, so a pull request cannot turn a required sandbox off for its own scan.
 Any other value is refused when the config is read, and the refusal names the field.
+
+`keyboardWalk` is optional. It sets the keyboard walk of each screen, keyed by screen id under
+`perSurface`, the same way `noiseBudget.perSurface` is keyed, so it works for a configured
+surface and for a screen from routes:
+
+```json
+"keyboardWalk": {
+  "perSurface": {
+    "jobs": { "tabCap": 600, "wallClockMs": 60000 },
+    "support": { "unreadableRegions": [{ "frameOrigin": "https://chat.example.com" }, { "shadowHost": "chat-widget" }] }
+  }
+}
+```
+
+- `tabCap` is the most tab stops the walk takes on the screen, a whole number from 1 to 2000.
+  The default is 200. A screen with more than 2000 tab stops is better split into several screens.
+- `wallClockMs` is the most time the walk takes on the screen, a whole number of milliseconds
+  from 1 to 300000 (five minutes). The default is 15000.
+- `unreadableRegions` lists the regions the team accepts the walk cannot read on this screen, at
+  most 20. Each entry is `{"frameOrigin": "<bare http or https origin>"}` or
+  `{"shadowHost": "<lowercase tag name>"}`, exactly one key. Section 7.3 says how a region is
+  named, what a listed region shows, and when a listing is reported as stale.
+
+A walk that runs out of its stop cap or time cap is cut short, which is a `not-covered` gap on
+the screen, and the gap names the setting to raise (section 7.3). Each value outside its bounds,
+an unknown key, an entry that names two regions or none, and a screen key the id grammar refuses
+is refused when the config is read, and the message names the field. A refused origin or tag is
+never printed back. `checkPage` takes `tabCap` and `wallClockMs` as options with the same
+bounds, and an option wins over the config for that call. These settings are in the guarded
+config, so a pull request that changes them needs approval, and in CI they are read from the
+trusted ref. With a trusted ref that has no readable config they are left out, and the judge
+leaves them out of the head copy it plans from.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
