@@ -2404,15 +2404,17 @@ because a selector that a shared header or shell matches is on the other page to
 application ran on load to its own canonical address is not a move, because the comparison is with
 the address at load, not the configured one.
 
-**When it is read.** After the keyboard walk and after every provider that only reads the page,
-right before the first provider that clicks, types, or navigates: a flow or voice requirement, or
-the PatternFly probes. A flow may move the route on purpose, and its own rules judge that: a flow
-step that changes the path is already a `navigated` gap, and the silent change rule reads each
-step. So a move after that point does not drop what the walk and the read-only providers measured.
-When no provider acts on the page, the address is read at the very end instead, next to the second
-Rule A read, after the row and source reads and the readiness measure. There is no second read at
-the end when a provider acted: it could not tell a flow's intended move from a timer, and any gap
-it raised would make the whole screen not covered.
+**When it is read.** After the keyboard walk and every other provider, right before the first
+provider that may move the page on purpose: a flow or a voice contract, the providers marked
+`navigatesOnPurpose`. Those run after every other provider, the PatternFly probes included. The
+probes click and press Escape but never mean to leave the page, so a move while they run, such as
+a sign-in timer that fires then, is leaving the screen. A flow may move the route on purpose, and
+its own rules judge that: a flow step that changes the path is already a `navigated` gap, and the
+silent change rule reads each step. So a move after that point does not drop what was measured on
+the screen before it. When no flow or voice contract runs, the address is read at the very end
+instead, next to the second Rule A read, after the row and source reads and the readiness measure.
+There is no second read at the end when a flow or voice contract ran: it could not tell an intended
+move from a timer, and any gap it raised would make the whole screen not covered.
 
 **What it does.** When the two addresses name different screens, or an address cannot be read, the
 screen is a `not-covered` gap. The gap names both addresses: origin, path, and the route of a hash
@@ -2458,9 +2460,8 @@ What this read does not catch:
   `/admin.php?page=clusters` to `/admin.php?page=login`;
 - a page that leaves its screen and comes back to the same address before the read;
 - a page that changes its content without changing its address;
-- a move after the first provider that acts on the page, such as a timer that fires while a flow
-  runs, or a PatternFly probe click that navigates. The flow's own rules see a flow step's path
-  change; nothing here sees the rest.
+- a move while the flows and voice contracts run, such as a timer that fires then. The flow's own
+  rules see a flow step's path change; nothing here sees the rest.
 
 For the first two, configure the screen's `url` with its query or fragment. For any of them, a
 `reachedWhen` selector that the other page lacks is measured again after the checks, and one that

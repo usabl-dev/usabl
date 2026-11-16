@@ -736,13 +736,13 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
 
 /**
  * Whether the page stayed on its screen while it was checked. The rules above judge how the page
- * loaded. This judges whether it was still that page once the walk and the checks that only read
- * the page were done: a focus handler that navigates, or an auth timer that sends the page to a
- * sign-in page, moves it after load, and the checks then measure the other page.
+ * loaded. This judges whether it was still that page once the walk and every check before the
+ * flows and voice contracts were done: a focus handler that navigates, or an auth timer that sends
+ * the page to a sign-in page, moves it after load, and the checks then measure the other page.
  *
  * `loadedUrl` is the address the page reported at load, so a redirect the application ran on load
  * to its own canonical address is not read as a move. `checkedUrl` is the address read before the
- * first provider that acts on the page, or after every provider when none does; see check-runner.ts.
+ * first flow or voice contract, or after every provider when none runs; see check-runner.ts.
  * They are compared with stayedOnScreen: the origin, the path, and the query and fragment only when
  * they name a route. See there.
  *
@@ -791,7 +791,7 @@ export function leftScreenGap(
   return gapFor(
     requestedUrl,
     `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}. When it loaded, ${atLoad}; after the walk and the ` +
-      `checks that only read the page, ${afterChecks}. ${outcome} The origin and the path are compared. The ` +
+      `checks, before any flow or voice contract, ${afterChecks}. ${outcome} The origin and the path are compared. The ` +
       'query counts only when the configured url of the screen has one, and the fragment only when it names a ' +
       'route: one that starts with #/ or #!, or any fragment when the configured url has one. Any other change ' +
       'to the query or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If a ' +

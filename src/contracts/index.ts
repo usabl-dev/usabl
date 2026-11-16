@@ -1317,6 +1317,12 @@ export interface Provider {
   // Set when the provider clicks triggers or presses keys during its run. Every provider that runs
   // after one of these sees a page that is no longer the page the browser loaded.
   mutatesPageState?: boolean;
+  // Set when the provider's steps may move the page to another route on purpose, as a flow or a
+  // voice contract can when it activates a link. It runs after every other provider, and the check
+  // runner reads the page address right before it, so a move before that point leaves the screen
+  // and an intended move after it is judged by the provider's own rules. A provider that clicks
+  // but never means to leave the page, such as the PatternFly probes, does not set it.
+  navigatesOnPurpose?: boolean;
   // Set when the provider's evidence only holds on the page as it loaded, such as a walk of the
   // real focus order. Running it on a changed page yields thin or empty results that read as clean.
   requiresPristinePage?: boolean;

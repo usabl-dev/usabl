@@ -1194,8 +1194,10 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
 
 describe('makeCheckRunner and where the address is read when a provider acts on the page', () => {
   // Flow and voice requirements click and type, and a flow may move the route on purpose. The
-  // address is read before the first provider that acts on the page, so an intended move after that
-  // point does not drop the findings the read-only providers took on the screen.
+  // address is read before the first provider that may move the page on purpose, so an intended
+  // move after that point does not drop the findings taken on the screen before it. A provider that
+  // acts on the page but never means to leave it, such as the PatternFly probes, runs before that
+  // read, so a move while it runs is still leaving.
   const HASH_SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/#/clusters' };
 
   async function hashPage(): Promise<{ page: Page; go: (url: string) => void }> {
@@ -1223,9 +1225,23 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
     layer: 'flow',
     capabilities: ['live'],
     mutatesPageState: true,
+    navigatesOnPurpose: true,
     run: async (): Promise<Draft[]> => {
       go('http://127.0.0.1:5173/#/settings');
       return [];
+    },
+  });
+
+  // A provider like the PatternFly rulepack: it clicks and presses Escape, and never means to move
+  // the page. `during` runs inside its run, so a test can move the page while it runs.
+  const prober = (during: () => void = () => {}): Provider => ({
+    id: 'pf-rulepack',
+    layer: 'pf',
+    capabilities: ['live'],
+    mutatesPageState: true,
+    run: async (): Promise<Draft[]> => {
+      during();
+      return [makeDraft('pf-rule')];
     },
   });
 
@@ -1240,13 +1256,36 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
     return markUnseenScreens([scan]).screens[0]!;
   }
 
-  it('keeps the findings taken before a hash-routed flow that moves the route on purpose', async () => {
+  it('keeps the axe and rulepack findings taken before a hash-routed flow that moves the route on purpose', async () => {
     const { page, go } = await hashPage();
 
-    const scan = await scanWith(page, [routingFlow(go), readOnly]);
+    const scan = await scanWith(page, [routingFlow(go), prober(), readOnly]);
 
     expect(scan.gaps).toEqual([]);
-    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+  });
+
+  it('does not verify a page that a provider acting on it moved, with no flow present', async () => {
+    // A probe click that navigates, or anything else that moves the page while the rulepack runs.
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [readOnly, prober(() => go('http://127.0.0.1:5173/#/login'))]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('does not verify a page that a sign-in timer moves while the rulepack runs, with a flow present', async () => {
+    // The timer fires while the probes run, before any flow. The flow then moves the route on
+    // purpose, which would hide the earlier move if the address were read only before the probes.
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [routingFlow(go), prober(() => go('http://127.0.0.1:5173/#/login')), readOnly]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('http://127.0.0.1:5173/#/login');
+    expect(scan.drafts).toEqual([]);
   });
 
   it('still does not verify a page that a timer moves during the walk, with a flow present', async () => {
@@ -1295,6 +1334,25 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
     const scan = await scanWith(page, [readOnly, moving]);
 
     expect(scan.gaps).toHaveLength(1);
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('reads the address at the very end on a screen with no flow or voice contract', async () => {
+    // No provider may move the page on purpose, so the read waits for everything, including the
+    // row read after the providers. The page moves during that row read, after the rulepack ran, so
+    // only a read at the very end sees it.
+    const { page, go } = await hashPage();
+    Object.assign(page, {
+      rowContext: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, prober()]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
     expect(scan.drafts).toEqual([]);
   });
 });

@@ -10,7 +10,9 @@ import type {
 } from '../../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { ProviderRunFailed, runProviders } from '../../src/providers/index.js';
+import { makeScanProviders } from '../../src/providers/core-stack.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
+import { LEVEL1_REQUIREMENTS } from '../../src/measure/sensitivity/level1.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
 import { testConfig } from '../helpers.js';
@@ -53,7 +55,7 @@ async function makeContext(): Promise<ProviderContext> {
 function recorder(
   calls: string[],
   id: string,
-  flags: Partial<Pick<Provider, 'mutatesPageState' | 'requiresPristinePage'>> = {},
+  flags: Partial<Pick<Provider, 'mutatesPageState' | 'requiresPristinePage' | 'navigatesOnPurpose'>> = {},
 ): Provider {
   return {
     id,
@@ -477,39 +479,85 @@ describe('runProviders', () => {
     expect(calls).toEqual(['plain-a', 'plain-b', 'mutator-a', 'mutator-b']);
   });
 
-  it('calls beforePageChanges once, after every read-only provider and before the first that acts', async () => {
+  it('runs a provider that may move the page on purpose after every other provider that acts on it', async () => {
+    const calls: string[] = [];
+    const ctx = await makeContext();
+
+    await runProviders(
+      [
+        recorder(calls, 'flow-a', { mutatesPageState: true, navigatesOnPurpose: true }),
+        recorder(calls, 'prober-a', { mutatesPageState: true }),
+        recorder(calls, 'plain-a'),
+        recorder(calls, 'flow-b', { mutatesPageState: true, navigatesOnPurpose: true }),
+        recorder(calls, 'prober-b', { mutatesPageState: true }),
+      ],
+      ctx,
+      ['live'],
+    );
+
+    expect(calls).toEqual(['plain-a', 'prober-a', 'prober-b', 'flow-a', 'flow-b']);
+  });
+
+  it('marks only the flow and voice providers of the scan stack as moving the page on purpose', () => {
+    // The scan stack with one flow and one voice requirement. The PatternFly rulepack clicks, but
+    // never means to leave the page, so it runs before the address read and has no such flag.
+    const stack = makeScanProviders(LEVEL1_REQUIREMENTS);
+    const navigating = stack.filter((provider) => provider.navigatesOnPurpose === true).map((provider) => provider.id);
+    const flowAndVoice = LEVEL1_REQUIREMENTS.requirements
+      .filter((requirement) => requirement.assertion.type === 'flow' || requirement.assertion.type === 'voice')
+      .map((requirement) => `intake:${requirement.id}`);
+
+    expect(flowAndVoice.length).toBeGreaterThanOrEqual(2);
+    expect(navigating.sort()).toEqual(flowAndVoice.sort());
+    expect(stack.find((provider) => provider.id === 'pf-rulepack')?.mutatesPageState).toBe(true);
+    expect(stack.find((provider) => provider.id === 'pf-rulepack')?.navigatesOnPurpose).toBeUndefined();
+    // The caller order already lists the rulepack before every requirement provider.
+    const ids = stack.map((provider) => provider.id);
+    expect(Math.max(...flowAndVoice.map((id) => ids.indexOf(id)))).toBeGreaterThan(ids.indexOf('pf-rulepack'));
+    expect(Math.min(...flowAndVoice.map((id) => ids.indexOf(id)))).toBeGreaterThan(ids.indexOf('pf-rulepack'));
+  });
+
+  it('calls beforeIntendedNavigation once, after every other provider and before the first that may move the page', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();
 
     const result = await runProviders(
       [
-        recorder(calls, 'mutator-a', { mutatesPageState: true }),
+        recorder(calls, 'flow-a', { mutatesPageState: true, navigatesOnPurpose: true }),
+        recorder(calls, 'prober', { mutatesPageState: true }),
         recorder(calls, 'plain-a'),
-        recorder(calls, 'mutator-b', { mutatesPageState: true }),
-        recorder(calls, 'plain-b'),
+        recorder(calls, 'flow-b', { mutatesPageState: true, navigatesOnPurpose: true }),
       ],
       ctx,
       ['live'],
       {
-        beforePageChanges: async () => {
+        beforeIntendedNavigation: async () => {
           calls.push('read address');
         },
       },
     );
 
-    expect(calls).toEqual(['plain-a', 'plain-b', 'read address', 'mutator-a', 'mutator-b']);
+    expect(calls).toEqual(['plain-a', 'prober', 'read address', 'flow-a', 'flow-b']);
     expect(result.gaps).toEqual([]);
   });
 
-  it('does not call beforePageChanges when no provider that acts on the page runs', async () => {
+  it('does not call beforeIntendedNavigation for a provider that only acts on the page, or one that does not run', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();
     const hook = vi.fn(async () => {});
-    const denied: Provider = { ...recorder(calls, 'needs-net', { mutatesPageState: true }), capabilities: ['network'] };
+    const denied: Provider = {
+      ...recorder(calls, 'needs-net', { mutatesPageState: true, navigatesOnPurpose: true }),
+      capabilities: ['network'],
+    };
 
-    await runProviders([recorder(calls, 'plain-a'), denied], ctx, ['live'], { beforePageChanges: hook });
+    await runProviders(
+      [recorder(calls, 'plain-a'), recorder(calls, 'prober', { mutatesPageState: true }), denied],
+      ctx,
+      ['live'],
+      { beforeIntendedNavigation: hook },
+    );
 
-    expect(calls).toEqual(['plain-a']);
+    expect(calls).toEqual(['plain-a', 'prober']);
     expect(hook).not.toHaveBeenCalled();
   });
 

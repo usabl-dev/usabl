@@ -21,6 +21,7 @@ import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { isGradientContrastReview } from '../../src/primitives/gradient-contrast.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
+import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { readPageImages } from '../../src/providers/page-images.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -159,6 +160,19 @@ const CONTENT_PAGES: Record<string, string> = {
     'Home',
     '<main><h1>Home</h1><button id="open" type="button">Open</button></main>' +
       "<script>document.getElementById('open').addEventListener('focus', () => { if (location.hostname === '127.0.0.1') { location.href = `http://localhost:${location.port}${location.pathname}`; } });</script>",
+  ),
+  // A PatternFly page whose disclosure control sends the page to /moved-clean.html when it is
+  // clicked. Focus does nothing, so the walk stays. The PatternFly rulepack clicks the control in its
+  // dialog probe, so the page moves while the rulepack runs, the way a sign-in timer firing then
+  // would. It is a disclosure control, not aria-haspopup="dialog", so the probe makes no draft when
+  // no dialog opens: a draft would send the source read after the providers to an element that is
+  // gone, and the real driver waits 30 seconds for it.
+  '/pf-click-moves.html': contentPage(
+    'Clusters',
+    '<div class="pf-v6-c-page"><main><h1>Clusters</h1>' +
+      '<button id="open" type="button" class="pf-v6-c-button" aria-expanded="false" aria-controls="details">Show details</button>' +
+      '<div id="details" hidden>Details</div></main></div>' +
+      "<script>document.getElementById('open').addEventListener('click', () => { location.href = '/moved-clean.html'; });</script>",
   ),
   // Two panel buttons. Focusing one sets the address hash to its panel, the way a tab panel does,
   // so the walk leaves the page at #panel-2 on the same path.
@@ -1249,6 +1263,27 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
     expect(scan?.gaps[0]?.reason).toContain('left its screen');
     expect(scan?.gaps[0]?.reason).toContain('http://localhost:');
+    expect(scan?.drafts).toEqual([]);
+  }, 30_000);
+
+  it('does not cover a screen whose page moves while the PatternFly rulepack runs', async () => {
+    const url = `${fixture.url}pf-click-moves.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider, makeRulepackProvider()],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'clusters', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'clusters', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
     expect(scan?.drafts).toEqual([]);
   }, 30_000);
 

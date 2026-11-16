@@ -67,12 +67,19 @@ function dirtyPageGap(providerId: string, mutatorId: string): CoverageGap {
 
 /**
  * Providers that change the page run last, so a provider reading the loaded page still sees it.
- * Each group keeps the caller's order, because a provider list is also a stated running order.
+ * Among those, a provider that may move the page on purpose (a flow or a voice contract) runs after
+ * the ones that only click and never mean to leave, such as the PatternFly probes, so the address
+ * read taken before the first of them comes after every provider that should leave the page where
+ * it was. The core stack already lists the probes before the requirement providers, so this keeps
+ * the order every CLI scan had. Each group keeps the caller's order, because a provider list is
+ * also a stated running order.
  */
 function orderByPageEffect(providers: Provider[]): Provider[] {
+  const navigates = (provider: Provider): boolean => provider.navigatesOnPurpose === true;
   return [
-    ...providers.filter((provider) => provider.mutatesPageState !== true),
-    ...providers.filter((provider) => provider.mutatesPageState === true),
+    ...providers.filter((provider) => provider.mutatesPageState !== true && !navigates(provider)),
+    ...providers.filter((provider) => provider.mutatesPageState === true && !navigates(provider)),
+    ...providers.filter(navigates),
   ];
 }
 
@@ -114,12 +121,13 @@ function walkRecordOf(walk: unknown): WalkRecord | null {
 
 export interface RunProvidersOptions {
   /**
-   * Called once, after every provider that only reads the page has run and right before the first
-   * provider that acts on it (mutatesPageState) runs. Not called when no such provider runs. The
-   * check runner reads the page address here, so a move the walk or a read-only provider saw is
-   * told apart from a move a flow makes on purpose. It decides nothing and returns nothing.
+   * Called once, after every other provider has run and right before the first provider that may
+   * move the page on purpose (navigatesOnPurpose, a flow or a voice contract) runs. Not called when
+   * no such provider runs. The check runner reads the page address here, so a move the walk, a
+   * read-only provider, or the PatternFly probes saw is told apart from a move a flow makes on
+   * purpose. It decides nothing and returns nothing.
    */
-  beforePageChanges?: () => Promise<void>;
+  beforeIntendedNavigation?: () => Promise<void>;
 }
 
 export async function runProviders(
@@ -138,6 +146,7 @@ export async function runProviders(
   let walk: WalkRecord | null = null;
 
   let mutatedBy: string | null = null;
+  let navigationAnnounced = false;
 
   for (const provider of orderByPageEffect(providers)) {
     const denied = deniedCapabilities(provider, allowed);
@@ -153,11 +162,13 @@ export async function runProviders(
       continue;
     }
 
+    if (provider.navigatesOnPurpose === true && !navigationAnnounced) {
+      navigationAnnounced = true;
+      await options.beforeIntendedNavigation?.();
+    }
+
     // Recorded before the run because a provider that throws mid-probe has already clicked.
     if (provider.mutatesPageState === true) {
-      if (mutatedBy === null) {
-        await options.beforePageChanges?.();
-      }
       mutatedBy ??= provider.id;
     }
 

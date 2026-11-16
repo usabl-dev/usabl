@@ -439,14 +439,14 @@ the tool errored, not because the page is accessible.
 - A scan that reached the wrong page, such as a sign-in page served in place of a screen with
   a dead session, is a coverage gap, never a measurement of that screen. Three heuristics catch
   a refused data request, a password field, and a redirect to a page with a password field. The CLI
-  reads the address again on every screen, after the walk and the read-only providers and before
-  the first provider that clicks, types, or navigates. A page whose origin, path, or route moved
+  reads the address again on every screen, after the walk and every other provider, the PatternFly
+  probes included, and before the first flow or voice contract. A page whose origin, path, or route moved
   from the address it loaded at, or that cannot report its address, is the same gap. A route is a
   hash route (`#/` or `#!`), or the query or the fragment when the configured url has one. So a
   focus handler or an auth timer that navigates is caught when it changes one of those before that
   read. The read does not catch: a move and a move back before it; content that changes without
   the address; a plain fragment router on a screen configured without a fragment; a query router on
-  a screen configured without a query; and a move after the first provider that acts on the page.
+  a screen configured without a query; and a move while the flows and voice contracts run.
   A `reachedWhen` selector that the other page lacks, measured again after all the checks, can
   catch each of these. See ground-truth section 8. A
   per-surface readiness signal (`reachedWhen`: a selector, a data response path, or both) is the
