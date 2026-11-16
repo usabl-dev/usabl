@@ -131,6 +131,12 @@ function pages(crossOrigin: string): Record<string, string> {
         ` root.innerHTML = '<button type="button">Alpha</button><button type="button">Beta</button><button type="button">Gamma</button>';` +
         ` root.querySelectorAll('button')[1].addEventListener('focus', (event) => event.target.blur()); } });</script>`,
     ),
+    // A focusable host whose closed shadow root holds two buttons. Tab goes to the host, then into
+    // its buttons, which have the host's path, then to the unnamed button after the host.
+    '/closed-shadow-focusable-host': page(
+      '<button type="button">First</button><x-hostbox tabindex="0" aria-label="Box"></x-hostbox><button type="button" id="trailing"></button>' +
+        closedElement('x-hostbox', '<button type="button">Alpha</button><button type="button">Beta</button>'),
+    ),
     // A focusable host with a closed shadow root that holds nothing focusable. Focus sits on the
     // host itself, which the walk can name, so it walks on.
     '/closed-shadow-host': page(
@@ -696,6 +702,32 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       expect(gaps[0]?.reason).toContain('the keyboard walk was cut short');
       expect(gaps[0]?.reason).toContain('one more Tab did not go back to a control the keyboard walk had already reached');
       expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // The host is a readable stop, and the buttons inside its closed root have the host's path. The
+  // walk read that repeat as a keyboard trap at fail, with focus not trapped.
+  it('claims no keyboard trap when Tab goes from a focusable host into its closed shadow root', async () => {
+    const opened = await open('/closed-shadow-focusable-host');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeFocusUnreadable()).toBeNull();
+      await opened.tab();
+      expect(await opened.activeFocusUnreadable()).toBe('closed-shadow-root');
+
+      const walked = await walk(opened);
+      expect(walked.drafts.map((draft) => draft.rule)).not.toContain('keyboard-walk-trap');
+      const reasons = walked.gaps.filter((gap) => !gap.reason.startsWith(REGION_LEAD)).map((gap) => gap.reason);
+      expect(reasons).toEqual([expect.stringContaining('the keyboard walk was cut short')]);
+
+      const listed = await walkListed(opened, [{ shadowHost: 'x-hostbox' }]);
+      expect(listed.walk?.complete).toBe(false);
+      expect(draftsOf(listed).map((draft) => draft.rule)).not.toContain('keyboard-walk-trap');
+      expect(gapsOf(listed)).toEqual([expect.objectContaining({ reason: expect.stringContaining('the keyboard walk was cut short') })]);
     } finally {
       await opened.close();
     }

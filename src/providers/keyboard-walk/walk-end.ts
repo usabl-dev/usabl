@@ -24,8 +24,13 @@ export const REGION_TAB_BOUND = 100;
 // How a walk that reached the body ended. 'confirmed': the focus order ended there. 'unconfirmed':
 // one more Tab did not go back to a stop the walk reached, so a script dropped focus mid-page.
 // 'body-focused': a script put focus on the body itself, or the page could not say whether it did,
-// so the end cannot be told. Only 'confirmed' makes a walk complete.
-export type WalkEnd = 'confirmed' | 'unconfirmed' | 'body-focused';
+// so the end cannot be told. 'out-of-time': the walk's time budget ran out while the end rule pressed
+// Tab out of a first region, so the end was not read. Only 'confirmed' makes a walk complete.
+export type WalkEnd = 'confirmed' | 'unconfirmed' | 'body-focused' | 'out-of-time';
+
+// Whether the walk's time budget has run out, read through the walk's own injected clock. A walk
+// with no time budget passes nothing, and the end rule then never runs out.
+export type OutOfTime = () => boolean;
 
 /**
  * Whether focus on the body is the end of the focus order. In Chromium, Tab after the last control
@@ -42,7 +47,11 @@ export type WalkEnd = 'confirmed' | 'unconfirmed' | 'body-focused';
  * transcript the CLI collects, and in checkPage the stops the keyboard walk returns. If the next Tab
  * lands on a control instead, a script dropped focus before the walk reached it.
  */
-export async function readWalkEnd(page: Page, walked: readonly WalkStopIdentity[]): Promise<WalkEnd> {
+export async function readWalkEnd(
+  page: Page,
+  walked: readonly WalkStopIdentity[],
+  outOfTime: OutOfTime = () => false,
+): Promise<WalkEnd> {
   // At the end of the focus order no element has focus, and document.activeElement only falls back
   // to the body. A script that calls focus() on a body with a tabindex puts focus on the body
   // itself, in the middle of the page, and the next Tab from there starts again at the first
@@ -57,7 +66,7 @@ export async function readWalkEnd(page: Page, walked: readonly WalkStopIdentity[
   let end: WalkEnd = 'body-focused';
   if (!bodyFocused) {
     await page.tab();
-    end = (await landedOnWalkedStop(page, walked)) ? 'confirmed' : 'unconfirmed';
+    end = await landedOnWalkedStop(page, walked, outOfTime);
   }
   // Flows and voice contracts run after the walk on the same page and start from wherever focus
   // is. Before the end was confirmed, the walk left focus on the body, so the next Tab went to the
@@ -69,22 +78,23 @@ export async function readWalkEnd(page: Page, walked: readonly WalkStopIdentity[
   return end;
 }
 
-async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[]): Promise<boolean> {
+async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[], outOfTime: OutOfTime): Promise<WalkEnd> {
+  const confirmedIf = (landed: boolean): WalkEnd => (landed ? 'confirmed' : 'unconfirmed');
   if (walked.length === 0) {
-    return page.activeElementIs('body');
+    return confirmedIf(await page.activeElementIs('body'));
   }
   // A region the walk cannot read gives every control inside it the path of its host or frame, so
   // landing in a walked region proves nothing by itself: a control inside it that blurs itself
   // drops focus to the body mid-page, and the next Tab goes to the next control of the same region.
   if ((await page.activeFocusUnreadable()) !== null) {
-    return backAtFirstRegion(page, walked);
+    return backAtFirstRegion(page, walked, outOfTime);
   }
   if (await page.activeElementIs('body')) {
-    return false;
+    return 'unconfirmed';
   }
   const path = await page.activePath();
   const key = await page.activeElementKey();
-  return walked.some((stop, index) => {
+  const landed = walked.some((stop, index) => {
     if (key !== null && stop.key === key) {
       return true;
     }
@@ -95,39 +105,51 @@ async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[
     const bothKnown = key !== null && stop.key !== null;
     return stop.path === path && (!bothKnown || index === 0);
   });
+  return confirmedIf(landed);
 }
 
 /**
  * Focus is in a region the walk cannot read, on the Tab after the body. That is the start of the
  * focus order again only when the first stop walked is this region, and Tab out of it, pressed at
  * most REGION_TAB_BOUND times, lands on the second stop walked, or on the body when the region was
- * the only stop. Anything else leaves the end unconfirmed.
+ * the only stop. Anything else leaves the end unconfirmed. Those presses spend the walk's time
+ * budget like any other, so the budget is read before each one, and a walk that runs out there
+ * ends out of time.
  */
-async function backAtFirstRegion(page: Page, walked: readonly WalkStopIdentity[]): Promise<boolean> {
+async function backAtFirstRegion(page: Page, walked: readonly WalkStopIdentity[], outOfTime: OutOfTime): Promise<WalkEnd> {
   const regionPath = await page.activePath();
   const [first, second] = walked;
   if (first?.unreadable !== true || first.path !== regionPath) {
-    return false;
+    return 'unconfirmed';
   }
   for (let presses = 0; presses < REGION_TAB_BOUND; presses += 1) {
+    if (outOfTime()) {
+      return 'out-of-time';
+    }
     await page.tab();
     const unreadable = (await page.activeFocusUnreadable()) !== null;
     const path = await page.activePath();
     if (unreadable && path === regionPath) {
       continue;
     }
-    if (second === undefined) {
-      return !unreadable && (await page.activeElementIs('body'));
-    }
-    if (unreadable || second.unreadable === true) {
-      // A second region is matched by its path, the only thing the walk can read of it.
-      return unreadable && second.unreadable === true && second.path === path;
-    }
-    if (await page.activeElementIs('body')) {
-      return false;
-    }
-    const key = await page.activeElementKey();
-    return key !== null && second.key !== null ? second.key === key : second.path === path;
+    return (await onSecondStop(page, second, unreadable, path)) ? 'confirmed' : 'unconfirmed';
   }
-  return false;
+  return 'unconfirmed';
+}
+
+// Whether focus, just out of a first region, is where the walk went after that region: the second
+// stop walked, or the body when the region was the only stop.
+async function onSecondStop(page: Page, second: WalkStopIdentity | undefined, unreadable: boolean, path: string): Promise<boolean> {
+  if (second === undefined) {
+    return !unreadable && (await page.activeElementIs('body'));
+  }
+  if (unreadable || second.unreadable === true) {
+    // A second region is matched by its path, the only thing the walk can read of it.
+    return unreadable && second.unreadable === true && second.path === path;
+  }
+  if (await page.activeElementIs('body')) {
+    return false;
+  }
+  const key = await page.activeElementKey();
+  return key !== null && second.key !== null ? second.key === key : second.path === path;
 }

@@ -1115,6 +1115,85 @@ describe('the end of a walk that met a region it cannot read', () => {
     expect(cutShort(output)).toHaveLength(1);
   });
 
+  // A host with a tabindex is a readable stop with its own path. Tab then goes into the controls of
+  // its closed shadow root, which have the same path. That repeat is not evidence of a trap.
+  const FOCUSABLE_HOST: State[] = [
+    { path: '#first' },
+    { path: 'chat-widget' },
+    { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+    { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+    { path: '#after' },
+    { path: BODY_PATH, body: true },
+    { path: '#first' },
+  ];
+
+  it('claims no keyboard trap when Tab goes from a focusable host into its closed shadow root', async () => {
+    const output = await walkStates(FOCUSABLE_HOST, testConfig());
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toEqual([expect.stringContaining('went into a region the keyboard walk cannot read inside a control it had just reached')]);
+    expect(unreadRegions(output)).toHaveLength(1);
+  });
+
+  it('is not a pass when that host is listed, because the walk cannot tell where focus is', async () => {
+    const output = await walkStates(FOCUSABLE_HOST, LISTED);
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toHaveLength(1);
+    expect(output.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+  });
+
+  it('still reports a keyboard trap among readable controls on a page with a region', async () => {
+    const output = await walkStates(
+      [
+        { path: '#x' },
+        { path: '#a' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#b' },
+        { path: '#a' },
+      ],
+      testConfig(),
+    );
+
+    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-trap']);
+    expect(draftsOf(output)[0]?.confidence).toBe('fail');
+    expect(cutShort(output)).toHaveLength(1);
+  });
+
+  // The end rule presses Tab out of a first region, up to 100 times. Those presses spend the walk's
+  // time budget like any other, so a walk that runs out of time there is cut short by the time cap.
+  it('counts the presses out of a first region against the time cap', async () => {
+    const states: State[] = [
+      { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+      { path: '#after' },
+      { path: BODY_PATH, body: true },
+      // The Tab after the body lands in the region again, and the next 50 stay there.
+      ...Array.from({ length: 50 }, (): State => ({ path: 'chat-widget', unreadable: 'closed-shadow-root' })),
+      { path: '#after' },
+    ];
+    const walkWithBudget = async (wallClockMs: number): Promise<ProviderOutput> => {
+      const clock = makeClock();
+      const page = linearPage(states, HOST);
+      const tab = page.tab;
+      page.tab = async () => {
+        clock.advance(10);
+        await tab();
+      };
+      const output = await makeKeyboardWalkProvider({ tabCap: 20, wallClockMs, now: clock.now }).run({ page, screen: SCREEN, config: LISTED });
+      return Array.isArray(output) ? { drafts: output } : output;
+    };
+
+    const short = await walkWithBudget(100);
+    expect(short.walk?.complete).toBe(false);
+    expect(cutShort(short)).toEqual([expect.stringContaining('ran out of its time budget of 100 ms')]);
+
+    const long = await walkWithBudget(10_000);
+    expect(long.walk?.complete).toBe(true);
+    expect(gapsOf(long)).toEqual([]);
+  });
+
   it('claims no keyboard trap for content slotted into a closed shadow root between its own controls', async () => {
     // Tab order: a button in the root, a light-DOM link slotted into it, another button in the root.
     // Both buttons read as the host, so the host's path comes back after the slotted link.

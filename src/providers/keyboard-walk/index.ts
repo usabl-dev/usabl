@@ -173,8 +173,9 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 // whether it did, so the walk cannot tell where the focus order ends. 'region-unbounded' means focus
 // went into a region the walk cannot read and did not come back out within REGION_TAB_BOUND presses
 // of Tab. 'region-reentered' means focus went back into a region it had walked past, which the walk
-// cannot tell apart from a trap or from content slotted into the region. The others mean the budget
-// ran out.
+// cannot tell apart from a trap or from content slotted into the region. 'region-in-host' means
+// focus went from a control it could read into a region at that control's own path, such as a host
+// with a tabindex and then its closed shadow root. The others mean the budget ran out.
 type StopReason =
   | 'complete'
   | 'wall-clock'
@@ -184,7 +185,8 @@ type StopReason =
   | 'end-unconfirmed'
   | 'body-focused'
   | 'region-unbounded'
-  | 'region-reentered';
+  | 'region-reentered'
+  | 'region-in-host';
 
 // A region the walk cannot read into: a closed shadow root, a frame it cannot read, or focus under
 // more shadow roots and frames than it follows. Every control inside has the path of the host or
@@ -250,6 +252,7 @@ const STOP_REASON_OF_END: Record<WalkEnd, StopReason> = {
   confirmed: 'complete',
   unconfirmed: 'end-unconfirmed',
   'body-focused': 'body-focused',
+  'out-of-time': 'wall-clock',
 };
 
 // The budget one walk ran with, so a gap can name the limit it hit.
@@ -270,6 +273,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, bu
     `After ${stops} tab stop(s), the keyboard walk pressed Tab ${REGION_TAB_BOUND} times inside a region it cannot read, and focus did not come back out. A keyboard user may be trapped there, and the controls after it were never walked.`,
   'region-reentered': (stops) =>
     `After ${stops} tab stop(s), focus went back into a region the keyboard walk cannot read, after it had left that region. Content slotted into a closed shadow root between its own controls does this, and so can a keyboard trap. The walk cannot tell which, so the controls after that point may never have been walked.`,
+  'region-in-host': (stops) =>
+    `After ${stops} tab stop(s), focus went into a region the keyboard walk cannot read inside a control it had just reached, such as a closed shadow root in an element that can take focus itself. Every control in there has that element's path, so the walk cannot tell where focus is or where Tab goes next, and the controls after that point may never have been walked.`,
   'focus-trap': (stops) =>
     `After ${stops} tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.`,
   'modal-dialog': (stops) =>
@@ -301,6 +306,8 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string,
     'Check by hand whether Tab can leave this region. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
   'region-reentered': () =>
     'Check by hand where Tab goes inside this region and after it. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
+  'region-in-host': () =>
+    'Check by hand the controls inside this element and after it. To let usabl walk them, use an open shadow root, or remove the tabindex from the host element so Tab goes straight to the controls inside it.',
   'focus-trap': () => 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
   'modal-dialog': () =>
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
@@ -502,6 +509,16 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
             stopReason = 'region-reentered';
             break;
           }
+          // Focus is in a region at the path of a readable stop walked before: a host with a
+          // tabindex, then the controls of its closed shadow root, which all have the host's path.
+          // That is not evidence of a trap either. The region is recorded, so a listing still names
+          // it, and the walk is cut short, because it cannot tell where focus is in there.
+          if (unreadable !== null) {
+            stopsWalked += 1;
+            regions.push({ path, kind: unreadable, stop: stopsWalked, name: await ctx.page.activeUnreadRegion() });
+            stopReason = 'region-in-host';
+            break;
+          }
           const cycle = walked.slice(walked.findIndex((stop) => stop.path === path));
           if (cycleInsideOneModal(cycle)) {
             stopReason = 'modal-dialog';
@@ -527,7 +544,8 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // unnamed focusable element. A script that blurs a control, or stops Tab and drops focus,
         // also leaves focus on the body, in the middle of the page, so one more Tab confirms it.
         if (await ctx.page.activeElementIs('body')) {
-          stopReason = STOP_REASON_OF_END[await readWalkEnd(ctx.page, walked)];
+          // The end rule can press Tab out of a first region, so it reads the same time budget.
+          stopReason = STOP_REASON_OF_END[await readWalkEnd(ctx.page, walked, () => deadline !== null && now() >= deadline)];
           break;
         }
 
