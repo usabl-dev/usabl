@@ -497,7 +497,7 @@ describe('checkPage and the keyboard walk budget', () => {
     adopted.page = scriptedPage(rows);
 
     await expect(checkPage(pwPage(), { projectRoot: await project(), tabCap: 5000 })).rejects.toThrow(
-      'checkPage() options.tabCap must be a whole number of Tab stops from 1 to 2000',
+      'checkPage() options.tabCap must be a whole number of presses of Tab from 1 to 2000',
     );
     await expect(checkPage(pwPage(), { projectRoot: await project(), wallClockMs: 0 })).rejects.toThrow(
       'checkPage() options.wallClockMs must be a whole number of milliseconds from 1 to 300000',

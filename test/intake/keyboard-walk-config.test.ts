@@ -48,7 +48,7 @@ describe('keyboardWalk in usabl.config.json', () => {
   it('refuses a stop cap out of range, with a plain message that names the field and the bound', () => {
     for (const bad of [0, -1, 1.5, 2001, '600', null, 1e100]) {
       expect(() => parseUsablConfig(configJson({ perSurface: { jobs: { tabCap: bad } } }))).toThrow(
-        'keyboardWalk.perSurface.jobs.tabCap must be a whole number of Tab stops from 1 to 2000',
+        'keyboardWalk.perSurface.jobs.tabCap must be a whole number of presses of Tab from 1 to 2000',
       );
     }
   });
@@ -161,6 +161,6 @@ describe('keyboardWalk.perSurface.<id>.unreadableRegions', () => {
 describe('parseWalkBudget, shared with the checkPage options', () => {
   it('checks a value with the same bounds and names the label it was given', () => {
     expect(parseWalkBudget({ tabCap: 10, wallClockMs: 1000 }, 'checkPage() options')).toEqual({ tabCap: 10, wallClockMs: 1000 });
-    expect(() => parseWalkBudget({ tabCap: 5000 }, 'checkPage() options')).toThrow('checkPage() options.tabCap must be a whole number of Tab stops from 1 to 2000');
+    expect(() => parseWalkBudget({ tabCap: 5000 }, 'checkPage() options')).toThrow('checkPage() options.tabCap must be a whole number of presses of Tab from 1 to 2000');
   });
 });

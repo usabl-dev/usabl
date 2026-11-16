@@ -95,7 +95,7 @@ export function parseWalkBudget(raw: { tabCap?: unknown; wallClockMs?: unknown }
   const budget: KeyboardWalkScreenConfig = {};
   if (raw.tabCap !== undefined) {
     if (!inRange(raw.tabCap, MAX_WALK_TAB_CAP)) {
-      throw configError`${label}.tabCap must be a whole number of Tab stops from 1 to ${String(MAX_WALK_TAB_CAP)}. A screen with more Tab stops than that is better split into several screens.`;
+      throw configError`${label}.tabCap must be a whole number of presses of Tab from 1 to ${String(MAX_WALK_TAB_CAP)}. A screen with more Tab stops than that is better split into several screens.`;
     }
     budget.tabCap = raw.tabCap;
   }
