@@ -41,44 +41,67 @@ re-baseline to green.
   the commit id its tree entry records, from `git ls-tree --end-of-options <ref> -- <path>`. The read
   does not need the submodule's commit, which is usually not in the repository, and does not depend
   on the working tree.
-- The guard compares every guarded path as stored bytes, never as decoded text. The local guard,
-  the CI policy check, and the Stop hook's session pins all use one byte read, which gives one of
-  five kinds of entry: nothing at the path, a file with its mode (100644 or 100755) and its bytes,
-  a symbolic link with its link text, a submodule with the commit its tree entry records, or a
-  folder with its tree id. Two paths are equal only when they are the same kind with the same mode
-  and content. At a ref the mode comes from `git ls-tree --full-tree`, and the blob is read by the
-  id that listing gives. On the working tree the file reader uses `lstat` and `readlink`, so it
-  reads what git would store: a link by its text, never by what it points at, a path below a
-  linked folder as nothing, and the owner's executable bit as 100755 or 100644, as git maps it.
-  Before, a guarded file swapped for a symbolic link whose link text equals the old content, or a
-  file whose executable bit changed, compared equal in CI, in the pins, and in the receipt policy
-  hash, and the local guard followed a link while CI read its text. With `core.fileMode` false,
-  git ignores the executable bit on disk, and the local guard does the same: two regular files
-  compare by their bytes only, so a file system with no executable bit does not read every
-  guarded file as changed. A link is still its own entry there. `core.symlinks` false is not
-  followed: a link git checked out as a plain file reads as a file against a link at the ref, so
-  the local guard reports it as changed on every run, which fails safe. Before, the guard compared
-  decoded text, so a file
-  whose byte `0xFE` became `0xFF` read as unchanged, since both decode to U+FFFD. That matters for
-  a guarded folder that holds a binary, such as a wasm file. A submodule was read as text after a
-  prefix that starts with a lone surrogate (U+D800). That kept it apart from any file in a text
-  compare, but the session pins hashed the text as UTF-8, where the surrogate becomes U+FFFD. So a
-  file that held `0xFF` or U+FFFD and then `submodule commit <id>` pinned the same as the submodule
-  at that commit. Now a submodule is its own kind of entry, so no file compares or pins equal to
-  one, whatever the file holds. The config is decoded for parsing from the same byte read the
-  compare used.
-- The session pins hash a form that cannot collide across kinds: a fixed label, the kind, the
-  mode, the length of what follows, then the bytes, the link text, the commit id, or the tree id.
-  Each pin is stored as `v3:` and the hash. A pin file written by an earlier release holds bare
-  hashes with no version, or `v2:` pins that left out the mode, and a pin of another format never
-  equals a `v3:` pin, so the next stop reads every guarded path in it as changed, reports drift,
-  and asks for review. The hook keeps stored pins when it finds drift, so
-  this holds for each stop until the session ends; a new session records new pins. That is the
-  safe direction: an old pin never vouches that nothing changed. A missing ledger and an empty one
-  now pin differently too.
+- The guard compares guarded file content as git stores it, never as decoded text. At a ref, the
+  local guard, the CI policy check, and the Stop hook's session pins read each guarded path from
+  one `git ls-tree -r --full-tree -z` listing per ref, which gives its mode and object id. Two refs
+  store the same thing at a path when the mode and the id are equal, so no file content is read
+  at a ref. The mode tells the kinds apart: 100644 or 100755 for a file, 120000 for a symbolic
+  link, 160000 for a submodule. On the working tree, the file reader uses `lstat` and `readlink`
+  and reads what git would store: a file's bytes and the owner's executable bit as 100755 or
+  100644, as git maps it, a link's text, and a path below a linked folder as nothing. The local
+  guard computes the blob id of those bytes, as `git hash-object` does, and compares it with the
+  trusted id. The config is decoded for parsing from the same working tree read the compare
+  used.
+- What that closes. A guarded file whose byte `0xFE` became `0xFF` read as unchanged, since both
+  decode to U+FFFD. A guarded file swapped for a symbolic link whose link text equals the old
+  content, or a file whose executable bit changed, compared equal in CI, in the pins, and in the
+  receipt policy hash. A submodule was read as text after a prefix that starts with a lone
+  surrogate (U+D800), and the session pins hashed that text as UTF-8, so a file that held `0xFF` or
+  U+FFFD and then `submodule commit <id>` pinned the same as the submodule at that commit. Each is
+  now a change.
+- Every git command the reader runs reads a path by its exact name. It runs with
+  `GIT_LITERAL_PATHSPECS=1`, set in the one place the reader builds git's environment. Without it,
+  git reads a path that starts with pathspec magic, such as `:(top)x.json` or `:(literal)x.json`,
+  as an instruction, and lists `x.json` instead. An edit to such a guarded file, or a new one,
+  then read as absent at both refs, and the CI policy check passed with no code owner approval.
+- A guarded symbolic link is compared by its link text and by what it resolves to inside the
+  repository. Every reader of a guarded file reads through the link, so a pull request that edits
+  only an unguarded target would otherwise steer a guarded path, such as a manifest the run reads,
+  with no approval. The guard follows the link from its own folder, through each folder and link
+  on the way, at most 8 links in all, the guarded link included. The CI policy check does this at
+  both refs, the pins at HEAD, and the local guard on the working tree and at the trusted ref. Two
+  sides are equal only when the link text is equal and both resolve to the same path with the same
+  mode and id. A link that resolves outside the repository, to an absolute path, into a loop, past
+  8 links, or to nothing compares as changed, every time, even against itself. Locally, a link that
+  resolves to a folder also compares as changed: the folder's content cannot be compared without
+  reading all of it. In the pins, a link that does not resolve pins the same on every stop; the
+  local guard reports it as changed on each of those stops instead.
+- With `core.fileMode` false, git ignores the executable bit on disk, and the local guard does the
+  same: two regular files compare by their bytes only, so a file system with no executable bit does
+  not read every guarded file as changed. A link is still its own entry there. `core.symlinks`
+  false is not followed: a link git checked out as a plain file reads as a file against a link at
+  the ref, so the local guard reports it as changed on every run, which fails safe.
+- A guarded file name that is not valid UTF-8 is decoded, with U+FFFD for each bad byte, as it was
+  before this change. The listings decode it, so the guard keys the entry by that decoded name. In
+  the CI policy check and the pins, a change to such a file is seen through the entry git listed.
+  Two such names in one folder that decode to the same text can hide one another there. The local
+  guard cannot open the file by its decoded name, so it reports the name as changed on every run.
+- A guarded file of any size is compared, at refs by its id and on the working tree by hashing
+  its bytes. A text read of a policy file usabl parses, such as the config, over the 10 MiB limit
+  stops with a refusal that names the file and says to keep it under that size.
+- The session pins hash a fixed label and what HEAD stores at each guarded path, as JSON of short
+  strings: nothing, or the mode and the id, and for a link also the path it resolves to and the
+  mode and id there. Two different entries never give the same input. Each pin is stored as `v4:`
+  and the hash. A pin file written by an earlier release holds bare hashes with no version. Those
+  say nothing this usabl can compare, so the Stop hook does not read them as drift and does not
+  take what is committed now as the baseline either. It says the pins are from an older usabl,
+  that drift was not checked, and how to get new pins (start a new session, or delete the pin
+  file), and it runs the full check instead of trusting a stored receipt. A missing ledger and an
+  empty one pin differently.
 - The receipt policy hash is built from each guarded path's mode and blob id at HEAD, so a mode
   change alone changes it. A receipt minted before this holds a hash of the ids alone, so it stops
-  matching once and the screens are checked again. That is the safe direction too.
+  matching once and the screens are checked again. That is the safe direction. The receipt policy
+  hash does not follow links.
 - In the CI policy check, which compares two refs, a guarded path that is a submodule compares as
   changed exactly when its recorded commit changed. The local guard, which compares the working
   tree with a ref and which the Stop hook runs, reads the working tree side through the file
@@ -86,10 +109,12 @@ re-baseline to green.
   guarded submodule as changed on every run, whether or not it moved. That fails safe, and it stays
   so on purpose: the commit checked out in a submodule can only be read by running git inside it,
   and a wrong "unchanged" would let a stop take the receipt fast path past a moved submodule.
-- `usabl enforce policy` hands the guard the git reader's byte read. The policy check's own reader
-  type, in `src/surfaces/policy-enforce.ts`, still names only the text read and the listing, so the
-  guard takes the byte read as optional there. A reader without it, such as one a test builds, is
-  compared as text, as before.
+- `usabl enforce policy` hands the guard the git reader's tree entry read. The policy check's own
+  reader type, in `src/surfaces/policy-enforce.ts`, still names only the text read and the
+  listing, so the guard takes the tree entry read as optional there. A reader without it, such as
+  one a test builds, is compared as text, as before. Tests of `usabl enforce policy` through the
+  command line cover a byte change, a link swap, and a mode change, so a reader that loses the
+  tree entry read fails them.
 - The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
