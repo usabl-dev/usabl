@@ -119,6 +119,17 @@ const CONTENT_PAGES: Record<string, string> = {
     'Frame',
     `<iframe id="frame" title="Inner" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame from another origin</p>')}"></iframe>`,
   ),
+  // The same frame from another origin, hidden. A hidden frame shows nothing on the page.
+  '/hidden-cross-origin-frame.html': contentPage(
+    'Frame',
+    `<iframe id="frame" title="Inner" style="display: none" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a hidden frame</p>')}"></iframe>`,
+  ),
+  // The same frame from another origin, visible but with no box. The border is removed too,
+  // because a frame's default border alone gives it a box.
+  '/boxless-cross-origin-frame.html': contentPage(
+    'Frame',
+    `<iframe id="frame" title="Inner" style="width: 0; height: 0; border: 0" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame with no box</p>')}"></iframe>`,
+  ),
   '/hidden-content.html': contentPage(
     'Hidden',
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
@@ -917,7 +928,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     ['/open-shadow-text.html', true],
     ['/closed-shadow-text.html', false],
     ['/frame-text.html', true],
-    ['/cross-origin-frame-text.html', false],
+    // The read cannot see into the frame, but the visible frame itself shows on the page.
+    ['/cross-origin-frame-text.html', true],
+    ['/hidden-cross-origin-frame.html', false],
+    ['/boxless-cross-origin-frame.html', false],
     ['/hidden-content.html', false],
     ['/background-only.html', false],
   ] as const) {
