@@ -663,7 +663,10 @@ describe('makeKeyboardWalkProvider', () => {
     expect(Array.isArray(output) ? 0 : (output.walk?.stops.length ?? 0)).toBeLessThan(150);
   });
 
-  it('reads a region it meets again after other stops as a cycle, never as a new region', async () => {
+  // Every control inside the region has the region's path, so meeting that path again is not
+  // evidence of a keyboard trap: content slotted into a closed shadow root between its own controls
+  // reads this way too. The walk cannot tell, so it is cut short, and it claims no trap.
+  it('is cut short with no trap when it meets a region again after other stops, never as a new region', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 10 });
     const page = await makeScriptedPage({
       ...namedButtonPage(['#first', '#frame', '#after', '#frame', '#later']),
@@ -672,8 +675,11 @@ describe('makeKeyboardWalkProvider', () => {
 
     const output = await provider.run(makeContext(page));
 
-    expect(rules(draftsOf(output))).toEqual(['keyboard-walk-trap']);
-    expect(cutShort(output)).toHaveLength(1);
+    expect(draftsOf(output)).toEqual([]);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('focus went back into a region the keyboard walk cannot read');
+    expect(unreadRegions(output)).toHaveLength(1);
   });
 
   // A focus trap: Tab from the second control goes back to the first, so focus never reaches the
