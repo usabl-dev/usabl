@@ -11,8 +11,8 @@
  * a character was refused and the grammar reason otherwise, and never the id or the text it was
  * derived from. This unit formats text only. It must never decide which ids are refused.
  */
-import { operatorText } from '../intake/config-error.js';
 import { describeIdRefusal, type IdGrammarRefusal } from '../intake/id-grammar.js';
+import { shownText } from './shown-text.js';
 
 /** One id init could not use: where it came from and why the grammar refused it. */
 export interface UnusableId {
@@ -60,7 +60,10 @@ export function unusableIdsError(context: RefusalContext, items: readonly Unusab
   const needsNormalizing = items.some((item) => item.refusal.problem === 'not-nfc');
   const lines = [
     `${context.command} refused to write ${context.written}: ${count} usabl would refuse to read. ${context.loss} so nothing was written.`,
-    ...items.map((item) => `  ${operatorText(item.source)}: ${item.origin} ${describeIdRefusal(item.refusal)}`),
+    // A source is a file name from the repository. Its control characters are labelled, so a file
+    // whose name holds a control sequence never reads as another file. A source that is already
+    // labelled has no control character left, so labelling it again changes nothing.
+    ...items.map((item) => `  ${shownText(item.source)}: ${item.origin} ${describeIdRefusal(item.refusal)}`),
     `Fix: ${context.fix}.` +
       (needsNormalizing
         ? ' An id that is not in NFC form must be normalized to NFC, or retyped, so that it is.'

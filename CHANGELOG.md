@@ -404,6 +404,44 @@
   and the gap for each region the walk could not read go with the findings, because they
   describe the other page. Gate effect: none. The result stays `not_covered`, and the one gap
   left names the cause.
+- A focus order check no longer lets a name on more than one stop hide a missing name or a wrong
+  order. With a design of `Save`, `Export` and a Tab walk of `Save`, `Save`, the result was needs
+  review, though focus never reached `Export`. The missing and order checks now run first, over
+  every stop a name could be, and the check fails when either fails. Needs review for a name on
+  more than one stop is the result only when the rest of the check passes. Gate effect: a focus
+  order requirement that read as needs review now fails when a name is never reached or the order
+  is wrong on every reading.
+- A focus order that is needs review names every open question, in design order: each design name
+  that only a near stop matches, with the stops that could be it, and each design name that is on
+  more than one stop, with how many stops it is on. With a design of `Save`, `Delete` and a walk
+  where each name ends in a no-break space, the reason named `Save` only, and
+  `sameButForWhiteSpace` was 1. With a walk of `Save`, `Save`, `Delete`, `Delete`, it named only
+  `Save`. The reason now names both in each case, at most 15 names and 3 near stops for each with a
+  count of the rest. `sameButForWhiteSpace` counts the distinct near stops of every such name, so a
+  stop near two design names counts once, and the new `nearDesignNames` counts the names. Gate
+  effect: none; the result is still needs review.
+- The git reader reads a submodule path as the commit id its tree entry records, from the root of
+  the tree whatever folder usabl runs in, after a fixed prefix that no file read can return. It
+  read the path with `git show`, which prints the commit and its whole patch: the text changed with
+  the working tree's `.gitattributes`, a large patch failed with "stdout maxBuffer length
+  exceeded", and the read failed when the submodule's commit was not in the repository, which is
+  the normal state of a submodule. Gate effect: in the CI policy check, which compares two refs, a
+  guarded path that is a submodule now compares as changed exactly when its recorded commit
+  changed, where it stopped the guard with an error when that commit was absent. The local guard
+  reads the working tree side of the path as a file, so it reports a guarded submodule as changed
+  on every run, which fails safe. The prefix keeps a submodule apart from a file in every check
+  that compares the reads as text, but the Stop hook's session pins hash the read as UTF-8, where
+  a file that holds U+FFFD and the same id line pins the same as the submodule. The CI policy check
+  still sees that change. The repair is a guarded change that waits on the owner.
+- `usabl init` and `usabl init --docs` print every string that comes from a file in the
+  repository with each control character shown as a label such as `<U+001B>`: route paths,
+  include targets, file and folder names, package names, and topic names. A route path such as
+  `//ev<ESC>]0;x<BEL>il` and an `include::` target that held ESC and BEL reached the terminal
+  raw, and a file name in the refusal for an unusable id lost its control sequence, so it read as
+  a clean name. A topic map that is not valid YAML is now refused by file and position, because
+  the YAML reader's own error quotes the raw line. The error printed when a file cannot be read,
+  such as an include target too long for the file system or a link to itself, labels each control
+  character in the path too. Gate effect: none; init writes the same drafts.
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
@@ -412,12 +450,14 @@
   text that is not white space, or a rendered `img`, `svg`, `canvas`, `video`, `picture`,
   `object`, `embed`, or `role="img"` element with a box, in the document, an open shadow root, or
   a same-origin frame. A CSS background image, hidden content, a closed shadow root, and a frame
-  from another origin do not count, and a failed read counts as no content. Gate effect: a page
-  that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
-  words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
-  to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
-  covered by its own gap, and with `keyboardWalk: false` there are no stops, so `checkPage`
-  makes no blank-page claim.
+  the read cannot see into, such as one from another origin, do not count, even when the frame
+  has a box, and a failed read counts as no content. When every stop stayed on the body and the
+  only content is such a frame, the page is reported not covered; check it by serving the frame
+  from the same origin, or by hand. Gate effect: a page that shows no content is now
+  `not_covered`, with a `readiness:<screenId>` gap worded as the CLI words it, whether or not its
+  readiness signal held. A page of text or images with nothing to Tab to is checked as before. The
+  CLI result is unchanged. A walk that was cut short is already not covered by its own gap, and
+  with `keyboardWalk: false` there are no stops, so `checkPage` makes no blank-page claim.
 - A script that puts focus on the body in the middle of the page no longer makes the keyboard
   walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
   focus on the body, and the next Tab landed on the first control, as at the real end of the
@@ -512,8 +552,13 @@
   named `<ref>...HEAD` made the diff of a missing ref list no changed files. A path that is a
   folder at the ref reads as it did before: the listing `git show` prints for it, with the
   argument read as an object name only, so a file that becomes a folder still needs approval. A
-  submodule path whose commit is in the repository also reads as before, as the commit `git show`
-  prints, so a moved submodule still needs approval; one whose commit is absent is an error.
+  submodule path reads as the commit id its tree entry records, after a fixed prefix that no file
+  read can return, so a moved submodule still needs approval and, compared as text, a submodule
+  never equals a file. The Stop hook's session pins hash the read instead, and there a file that
+  holds U+FFFD and the same id line pins the same as the submodule, as the submodule entry above
+  says.
+  It reads the same whether or not that commit is in the repository, and the working tree does not
+  change it.
   The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
   refuse them before any git call: an empty value, a value that starts with `-` or `^`, and a
   value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control character. White

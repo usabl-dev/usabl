@@ -823,6 +823,11 @@ const BODY_HOLDS_FOCUS_FUNCTION = `function () {
  * visibility test and its box has a width and a height. A CSS background image is not content: the
  * element that shows it is empty.
  *
+ * A visible frame counts only through what the read sees inside its document. A frame the read
+ * cannot see into, such as one from another origin, is not counted even when it has a box: it may
+ * hold a blank app, an error page, or a third-party widget, so it is no evidence that the page
+ * rendered. A frame past the depth limit is not read and not counted.
+ *
  * Node types are compared by number, because a frame's nodes come from another realm. A closed
  * shadow root and a frame from another origin cannot be read, so what they show is not counted. A
  * walk past the node limit has not found content, and says so. Exported for its tests.

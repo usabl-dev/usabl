@@ -613,18 +613,10 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   const names = walk.names;
   const extra = { heard: names };
   // Where each expected name sits in the walk. A name on two stops could mean either stop, and
-  // picking one would be a guess.
+  // picking one would be a guess, so that is asked about only once the rest of the check passes.
   const positions = sequence.map((wanted) =>
     names.flatMap((name, index) => (sameName(name, wanted) ? [index] : [])),
   );
-  const repeatedAt = positions.findIndex((at) => at.length > 1);
-  if (repeatedAt !== -1) {
-    return unconfirmed(
-      `"${sequence[repeatedAt] ?? ''}" is on ${positions[repeatedAt]?.length ?? 0} focus stops, so usabl cannot tell which one the design means, and it does not guess.`,
-      'Give each control in the design a name no other focus stop has, or check this order by hand.',
-      extra,
-    );
-  }
 
   const fail = (whatUserExperiences: string): Draft[] => [
     draft(requirement, 'focus-order', 'fail', {
@@ -660,8 +652,8 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   }
   // The order holds when one stop can be chosen for each name, each later than the one before.
   // The earliest stop that works is always the best choice, so one pass decides it. When no choice
-  // works, the result fails whichever stop a near match truly is: either the order is wrong, or the
-  // name is missing.
+  // works, the result fails whichever stop a near match or a name on two stops truly is: either the
+  // order is wrong, or the name is missing.
   let previous = -1;
   for (let index = 0; index < sequence.length; index += 1) {
     const at = candidates[index] ?? [];
@@ -677,19 +669,90 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
     previous = next;
   }
 
-  // Every other part of the check passes, so the hidden white space is the only open question. A
-  // stop whose name differs from the design only in hidden white space is most likely the control
-  // the design means, so this asks for review and names the character, as the name check does.
-  const nearAt = positions.findIndex((at) => at.length === 0);
-  if (nearAt !== -1) {
-    const wanted = sequence[nearAt] ?? '';
-    const near = (candidates[nearAt] ?? []).map((stop) => names[stop] ?? '');
-    return unconfirmed(hiddenSpaceWhy('A focus stop', 'focus stops', 'control', near, wanted), HIDDEN_SPACE_FIX, {
-      ...extra,
-      sameButForWhiteSpace: near.length,
-    });
+  // Every other part of the check passes, so what is left is which stop a name means. A name on two
+  // stops could mean either one, and usabl does not guess. A stop whose name differs from the design
+  // only in hidden white space is most likely the control the design means, so the check asks for
+  // review and names the character, as the name check does. Each open question is named, so a
+  // person who approves the result has seen every guess it rests on.
+  const why: string[] = [];
+  const fixes: string[] = [];
+  // Every design name on more than one stop, once each, in design order.
+  const repeated: Array<{ wanted: string; stops: number }> = [];
+  sequence.forEach((wanted, index) => {
+    const stops = positions[index]?.length ?? 0;
+    if (stops > 1 && !repeated.some((entry) => entry.wanted === wanted)) repeated.push({ wanted, stops });
+  });
+  if (repeated.length > 0) {
+    why.push(repeatedFocusNamesWhy(repeated));
+    fixes.push('Give each control in the design a name no other focus stop has, or check this order by hand.');
   }
-  return [];
+  const nearNames = sequence.flatMap((wanted, index) =>
+    (positions[index] ?? []).length === 0
+      ? [{ wanted, stops: candidates[index] ?? [], near: (candidates[index] ?? []).map((stop) => names[stop] ?? '') }]
+      : [],
+  );
+  const [onlyNear] = nearNames;
+  if (onlyNear !== undefined) {
+    why.push(
+      nearNames.length === 1
+        ? hiddenSpaceWhy('A focus stop', 'focus stops', 'control', onlyNear.near, onlyNear.wanted)
+        : nearFocusNamesWhy(nearNames),
+    );
+    fixes.push(HIDDEN_SPACE_FIX);
+  }
+  if (why.length === 0) {
+    return [];
+  }
+  return unconfirmed(why.join(' '), fixes.join(' '), {
+    ...extra,
+    ...(onlyNear === undefined
+      ? {}
+      : {
+          // A stop can be near more than one design name, so the count is of distinct stops.
+          sameButForWhiteSpace: new Set(nearNames.flatMap((entry) => entry.stops)).size,
+          nearDesignNames: nearNames.length,
+        }),
+  });
+}
+
+// The reason for a focus order where design names are each on more than one stop. One name keeps
+// the short wording. More names are each named, in design order, with how many stops each is on,
+// bounded as the list of stops a fail names is. The names are the design's own text.
+function repeatedFocusNamesWhy(entries: ReadonlyArray<{ wanted: string; stops: number }>): string {
+  const [only] = entries;
+  if (entries.length === 1 && only !== undefined) {
+    return `"${only.wanted}" is on ${only.stops} focus stops, so usabl cannot tell which one the design means, and it does not guess.`;
+  }
+  const shown = entries.slice(0, FOCUS_STOPS_SHOWN).map(({ wanted, stops }) => `"${wanted}" on ${stops}`);
+  const left = entries.length - shown.length;
+  const more = left > 0 ? `, and ${left} more ${left === 1 ? 'name' : 'names'}` : '';
+  return (
+    `${entries.length} names in the design are each on more than one focus stop: ${shown.join(', ')}${more}. ` +
+    'usabl cannot tell which stop the design means for each, and it does not guess.'
+  );
+}
+
+// How many near stops the reason spells for one design name. The evidence keeps every stop.
+const NEAR_STOPS_SHOWN = 3;
+
+// The reason for a focus order where more than one design name is matched only by stops whose
+// names differ from it in hidden white space. Each design name is named, in design order, with the
+// stops that could be it. The list is bounded as the list of stops a fail names is, and says how
+// many were left out. The visible text is the design's own; only the white space comes from the
+// page, and it is named, not copied.
+function nearFocusNamesWhy(entries: ReadonlyArray<{ wanted: string; near: readonly string[] }>): string {
+  const shown = entries.slice(0, FOCUS_STOPS_SHOWN).map(({ wanted, near }) => {
+    const spelled = near.slice(0, NEAR_STOPS_SHOWN).map((name) => spelledName(name));
+    const left = near.length - spelled.length;
+    const stops = near.length === 1 ? `a stop named ${spelled[0] ?? ''}` : `stops named ${spelled.join(' or ')}`;
+    return `${spelledName(wanted)} by ${stops}${left > 0 ? `, or ${left} more` : ''}`;
+  });
+  const left = entries.length - shown.length;
+  const more = left > 0 ? `; and ${left} more ${left === 1 ? 'name' : 'names'}` : '';
+  return (
+    `Focus stops have names that differ from ${entries.length} names in the design only in white space that cannot be seen: ` +
+    `${shown.join('; ')}${more}. usabl cannot tell whether these are the controls the design means, and it does not guess.`
+  );
 }
 
 // Why the box read cannot stand for the area a pointer can hit, one phrase per BoxLimit.

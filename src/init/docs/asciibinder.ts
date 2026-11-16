@@ -14,6 +14,7 @@ import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js'
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
 import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { shownText } from '../shown-text.js';
 import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
@@ -62,7 +63,9 @@ function collectLeaves(node: unknown, dirChain: string[], out: Leaf[], notes: st
   }
 
   const name = stringField(rec, 'Name') ?? '(unnamed)';
-  notes.push(`Review: topic "${name}" has neither Topics nor File and was skipped.`);
+  // The name, and every Dir, File, and path printed below, come from the topic map in the
+  // repository, so each is printed with its control characters labelled.
+  notes.push(`Review: topic "${shownText(name)}" has neither Topics nor File and was skipped.`);
 }
 
 async function discoverSharedGlobs(fs: DocsInitFs): Promise<string[]> {
@@ -71,6 +74,26 @@ async function discoverSharedGlobs(fs: DocsInitFs): Promise<string[]> {
     if ((await fs.glob([pattern])).length > 0) found.push(pattern);
   }
   return found.length > 0 ? found : ['images/**'];
+}
+
+// The YAML reader's own error quotes the lines around the problem, raw, and that text can hold a
+// terminal control sequence. The refusal names the file and the position instead, and labels the
+// reader's reason, which can quote a tag or a key from the file.
+function loadTopicMap(raw: string): unknown[] {
+  try {
+    return yaml.loadAll(raw);
+  } catch (error: unknown) {
+    if (!(error instanceof yaml.YAMLException)) throw error;
+    const mark = error.mark as { line?: unknown; column?: unknown } | undefined;
+    const where =
+      typeof mark?.line === 'number' && typeof mark.column === 'number'
+        ? ` at line ${mark.line + 1}, column ${mark.column + 1}`
+        : '';
+    throw new Error(
+      `usabl init --docs could not read ${TOPIC_MAP_PATH}: it is not valid YAML${where} (${shownText(error.reason)}). ` +
+        'Nothing was written. Fix the file, then run usabl init --docs again.',
+    );
+  }
 }
 
 export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
@@ -82,7 +105,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
   const notes: string[] = [];
   // js-yaml v4 load/loadAll use the safe default schema, so no custom tag can construct a
   // runtime type. The topic map is multi-document, one YAML document per top-level guide.
-  const documents = yaml.loadAll(raw);
+  const documents = loadTopicMap(raw);
 
   const leaves: Leaf[] = [];
   for (const document of documents) {
@@ -109,7 +132,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     const deduped = `${candidate}-${suffix}`;
     usedPageIds.add(deduped);
     notes.push(
-      `Review: two topics resolved to pageId "${candidate}". The second was renamed "${deduped}". Confirm the ids before you commit this file.`,
+      `Review: two topics resolved to pageId "${shownText(candidate)}". The second was renamed "${shownText(deduped)}". Confirm the ids before you commit this file.`,
     );
     return deduped;
   };
@@ -118,13 +141,15 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     const chainWithFile = [...leaf.dirChain, leaf.file];
     const assemblyFile = posix.normalize(`${chainWithFile.join('/')}.adoc`);
     if (assemblyFile.startsWith('..') || posix.isAbsolute(assemblyFile)) {
-      notes.push(`Review: topic "${leaf.file}" resolves to "${assemblyFile}", which escapes the repo root, and was skipped.`);
+      notes.push(
+        `Review: topic "${shownText(leaf.file)}" resolves to "${shownText(assemblyFile)}", which escapes the repo root, and was skipped.`,
+      );
       continue;
     }
 
     const content = await fs.readFile(assemblyFile);
     if (content === null) {
-      notes.push(`Review: topic source ${assemblyFile} does not exist and was skipped.`);
+      notes.push(`Review: topic source ${shownText(assemblyFile)} does not exist and was skipped.`);
       continue;
     }
 
@@ -132,7 +157,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     // Defense in depth so a hostile Dir or File name cannot smuggle a url the sidecar parser
     // would reject. Legitimate AsciiBinder path parts never contain these.
     if (url.includes('@') || /%2e|%2f|%5c/i.test(url)) {
-      notes.push(`Review: topic "${leaf.file}" produced an unsafe url "${url}" and was skipped.`);
+      notes.push(`Review: topic "${shownText(leaf.file)}" produced an unsafe url "${shownText(url)}" and was skipped.`);
       continue;
     }
 
@@ -151,7 +176,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     const pageId = uniquePageId(candidate);
     const graph = await buildAdocIncludeGraph(fs, assemblyFile);
     for (const gap of graph.unresolved) {
-      notes.push(`Review: unresolved include in ${gap.from}: "${gap.target}" (${gap.reason}).`);
+      notes.push(`Review: unresolved include in ${shownText(gap.from)}: "${shownText(gap.target)}" (${gap.reason}).`);
     }
 
     pages.push({ pageId, url, assemblyFile, sources: graph.sources });

@@ -138,6 +138,28 @@ describe('usabl init --app on a monorepo', () => {
     expect(note).not.toContain('‮');
   });
 
+  // A package name is text from a package.json in the repository. A control sequence in it is
+  // labelled, not removed, so the note names the package as it is really written.
+  it('labels a control sequence in the workspace package name', async () => {
+    const name = '@mono/w\u001b]0;pwn\u0007idgets';
+    const files: Record<string, string> = {
+      ...monorepo(),
+      'package.json': JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*', 'libs/*'] }),
+      'libs/widgets/package.json': JSON.stringify({ name }),
+    };
+    const adminManifest = JSON.parse(files['packages/admin/package.json'] ?? '{}') as Record<string, Record<string, string>>;
+    files['packages/admin/package.json'] = JSON.stringify({
+      ...adminManifest,
+      dependencies: { ...(adminManifest['dependencies'] ?? {}), [name]: 'workspace:*' },
+    });
+    const admin = await inferInit(memoryFs(files), { appDir: 'packages/admin' });
+    const note = admin.notes.find((line) => line.includes('libs/widgets'));
+    expect(note).toMatch(/^Review: /);
+    expect(note).not.toContain('\u001b');
+    expect(note).not.toContain('\u0007');
+    expect(note).toContain('depends on @mono/w<U+001B>]0;pwn<U+0007>idgets in libs/widgets');
+  });
+
   // A config drafted with --app checks that app only. The other apps init can see are named, so a
   // reader does not take the config to cover the whole repository.
   it('names the apps that --app leaves out', async () => {

@@ -18,6 +18,7 @@ import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js'
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
 import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { shownText } from '../shown-text.js';
 import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
@@ -154,7 +155,7 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
     const deduped = `${candidate}-${suffix}`;
     usedPageIds.add(deduped);
     notes.push(
-      `Review: two assemblies resolved to pageId "${candidate}". The second was renamed "${deduped}". Confirm the ids before you commit this file.`,
+      `Review: two assemblies resolved to pageId "${shownText(candidate)}". The second was renamed "${shownText(deduped)}". Confirm the ids before you commit this file.`,
     );
     return deduped;
   };
@@ -169,14 +170,18 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       const target = matchIncludeTarget(line);
       if (target === null) continue;
 
+      // The target, the master path, and every file name below come from the repository, so each
+      // is printed with its control characters labelled.
       const assemblyFile = resolveRepoPath(master, target);
       if (assemblyFile === null) {
-        notes.push(`Review: include "${target}" in ${master} escapes the repo root and was skipped.`);
+        notes.push(`Review: include "${shownText(target)}" in ${shownText(master)} escapes the repo root and was skipped.`);
         continue;
       }
       const assemblyContent = await fs.readFile(assemblyFile);
       if (assemblyContent === null) {
-        notes.push(`Review: include "${target}" in ${master} points at a missing file and was skipped.`);
+        notes.push(
+          `Review: include "${shownText(target)}" in ${shownText(master)} points at a missing file and was skipped.`,
+        );
         continue;
       }
 
@@ -200,13 +205,13 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       const pageId = uniquePageId(candidate);
       if (anchor === null) {
         notes.push(
-          `Review: no anchor found in ${assemblyFile}. The pageId "${pageId}" was guessed from the filename. Confirm it before you commit this file.`,
+          `Review: no anchor found in ${shownText(assemblyFile)}. The pageId "${shownText(pageId)}" was guessed from the filename. Confirm it before you commit this file.`,
         );
       }
 
       const graph = await buildAdocIncludeGraph(fs, assemblyFile);
       for (const gap of graph.unresolved) {
-        notes.push(`Review: unresolved include in ${gap.from}: "${gap.target}" (${gap.reason}).`);
+        notes.push(`Review: unresolved include in ${shownText(gap.from)}: "${shownText(gap.target)}" (${gap.reason}).`);
       }
 
       const url = `/${slug(titleDir)}/${fileBaseSlug(assemblyFile)}/index.html`;
