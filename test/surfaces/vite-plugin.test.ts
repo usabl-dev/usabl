@@ -1661,6 +1661,7 @@ function makeDeps(): Deps {
     git: {
       writeTree: async () => 'tree',
       show: async () => null,
+      showBytes: async () => null,
       statusZ: async () => [],
       diffNameOnly: async () => [],
       lsTree: async () => ({}),

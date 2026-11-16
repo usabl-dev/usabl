@@ -1086,9 +1086,23 @@ export interface BrowserDriver {
   open(url: string): Promise<Page>;
   close(): Promise<void>;
 }
+/**
+ * One path as git or the file system stores it, never decoded, for the guard to compare. Two byte
+ * sequences that are not valid UTF-8 can decode to the same text, so a compare of decoded text can
+ * read a changed file as unchanged. Each kind is its own entry: a file never equals a submodule or
+ * a folder, whatever the file holds. A folder is read by its tree id, so two equal ids hold the
+ * same files.
+ */
+export type StoredEntry =
+  | { kind: 'file'; bytes: Uint8Array }
+  | { kind: 'submodule'; commit: string }
+  | { kind: 'folder'; tree: string };
 export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
+  // The path at the ref as git stores it, or null when the ref has nothing there. Same refusals and
+  // errors as show. The guard compares guarded paths only through this read.
+  showBytes(ref: string, path: string): Promise<StoredEntry | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
   diffNameOnly(ref: string): Promise<string[]>;
@@ -1101,6 +1115,12 @@ export interface GitReader {
 }
 export interface FsGlob {
   readFile(path: string): Promise<string | null>;
+  // The file's bytes, never decoded, or null in exactly the cases readFile returns null, a folder
+  // included. The file system has no git, so it never reads a submodule's commit: a submodule path
+  // is a folder or nothing, and reads as null. The real reader and the fakes have it. It is
+  // optional because many readers wrap readFile for coverage planning and never reach the guard.
+  // The local guard given a reader without it compares both sides as text, as it did before.
+  readBytes?(path: string): Promise<StoredEntry | null>;
   glob(patterns: string[]): Promise<string[]>;
 }
 export interface CheckRunner {

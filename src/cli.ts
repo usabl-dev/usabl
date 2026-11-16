@@ -15,7 +15,7 @@ import { dirname, isAbsolute, relative, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
-import type { Result, UsablConfig } from './contracts/index.js';
+import type { GitReader, Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
@@ -145,13 +145,18 @@ async function runEnforce(opts: CliOptions): Promise<number> {
       return 2;
     }
     const git = makeGitReader();
+    // The guard compares guarded paths through showBytes when the reader has it, so a change in
+    // bytes that decode to the same text still reads as a policy change. Without it the guard
+    // compares text. The reader is built here so the policy check's type stays as it is.
+    const policyGit: Pick<GitReader, 'show' | 'lsFilesUnder' | 'showBytes'> = {
+      show: (ref, path) => git.show(ref, path),
+      lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
+      showBytes: (ref, path) => git.showBytes(ref, path),
+    };
     const outcome = await enforcePolicy(result, {
       trustedRef: opts.trustedRef,
       pr,
-      git: {
-        show: (ref, path) => git.show(ref, path),
-        lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
-      },
+      git: policyGit,
       listReviews: () => listPullReviews(pr.number),
       readPermission: (login) => readRepositoryPermission(login),
     });

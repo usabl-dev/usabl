@@ -582,6 +582,62 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub/file.txt')).resolves.toBeNull();
   });
 
+  // showBytes is the read the guard compares. It keeps a blob's bytes as git stores them, and a
+  // submodule and a folder are each their own kind of entry.
+  it('showBytes keeps bytes that are not valid UTF-8 as they are', async () => {
+    await writeFile(join(repoPath, 'fe.bin'), Buffer.from([0xfe, 0x41]));
+    await writeFile(join(repoPath, 'ff.bin'), Buffer.from([0xff, 0x41]));
+    await runGit(repoPath, ['add', 'fe.bin', 'ff.bin']);
+    await runGit(repoPath, ['commit', '-m', 'two invalid bytes']);
+    const git = makeGitReader({ cwd: repoPath });
+    // The text read decodes both to the same text. The byte read keeps them apart.
+    expect(await git.show('HEAD', 'fe.bin')).toBe(await git.show('HEAD', 'ff.bin'));
+    const fe = await git.showBytes('HEAD', 'fe.bin');
+    const ff = await git.showBytes('HEAD', 'ff.bin');
+    expect(fe?.kind === 'file' ? [...fe.bytes] : fe).toEqual([0xfe, 0x41]);
+    expect(ff?.kind === 'file' ? [...ff.bytes] : ff).toEqual([0xff, 0x41]);
+  });
+
+  it('showBytes reads an absent file as null and a large file whole', async () => {
+    const large = Buffer.alloc(3 * 1024 * 1024, 0x78);
+    await writeFile(join(repoPath, 'large.bin'), large);
+    await runGit(repoPath, ['add', 'large.bin']);
+    await runGit(repoPath, ['commit', '-m', 'large']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.showBytes('HEAD', 'missing.tsx')).resolves.toBeNull();
+    await expect(git.showBytes('HEAD', 'screen.tsx/below')).resolves.toBeNull();
+    const read = await git.showBytes('HEAD', 'large.bin');
+    expect(read?.kind).toBe('file');
+    expect(read?.kind === 'file' ? Buffer.from(read.bytes).equals(large) : false).toBe(true);
+  });
+
+  it('showBytes reads a submodule as its recorded commit, never as a file that holds the id line', async () => {
+    const absent = 'deadbeef'.repeat(5);
+    await writeFile(join(repoPath, 'idline'), Buffer.concat([Buffer.from([0xff]), Buffer.from(`submodule commit ${absent}\n`)]));
+    await runGit(repoPath, ['add', 'idline']);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${absent},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule and a lookalike file']);
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.showBytes('HEAD', 'sub')).resolves.toEqual({ kind: 'submodule', commit: absent });
+    expect((await git.showBytes('HEAD', 'idline'))?.kind).toBe('file');
+    await expect(git.showBytes('HEAD', 'sub/file.txt')).resolves.toBeNull();
+  });
+
+  it('showBytes reads a folder as its tree id, never a working tree file named <ref>:<folder path>', async () => {
+    const tree = await runGit(repoPath, ['rev-parse', 'main:src/gate']);
+    await mkdir(join(repoPath, 'main:src'), { recursive: true });
+    await writeFile(join(repoPath, 'main:src/gate'), 'decoy\n', 'utf8');
+    await runGit(repoPath, ['add', 'main:src/gate']);
+    await runGit(repoPath, ['commit', '-m', 'a file named like the folder read']);
+    await expect(makeGitReader({ cwd: repoPath }).showBytes('main', 'src/gate')).resolves.toEqual({ kind: 'folder', tree });
+  });
+
+  it('showBytes throws the missing ref error, as show does', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.showBytes('origin/nosuch', 'screen.tsx')).rejects.toThrow(/git cannot read origin\/nosuch/);
+    await expect(git.showBytes('-x', 'screen.tsx')).rejects.toThrow(/cannot use "-x" as a git ref/);
+  });
+
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
     const odd = 'café\tline\r\nno newline at the end ';
     const large = 'x'.repeat(3 * 1024 * 1024);

@@ -24,6 +24,7 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeStopHookRunnerPorts, runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
 import { NO_TRUSTED_BRANCH_NOTE, type StartingCommit } from '../../src/surfaces/stop-hook-scope.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
+import { sha256 } from '../../src/primitives/canonical.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -207,6 +208,27 @@ describe.skipIf(REAL_UID === null)('Stop hook session pins on a shared temp dire
     const result = await stop('session-drift');
 
     expect(result.stdout).toContain('guarded policy drift');
+  });
+
+  it('reads a pin file an earlier release wrote, with no version, as drift, even when nothing changed', async () => {
+    const path = await pinPathFor('session-unversioned');
+    const recorded = JSON.parse(await readFile(path, 'utf8')) as Record<string, string>;
+    // An earlier release stored the bare sha256 of the decoded text. Here that is the digest of
+    // exactly what is committed, so only the missing version tells the two apart.
+    const unversioned = Object.fromEntries(
+      Object.keys(recorded).map((key) => [key, sha256(key === 'usabl.config.json' ? 'committed config' : '')]),
+    );
+    await writeFile(path, JSON.stringify(unversioned));
+
+    const first = await stop('session-unversioned');
+    const second = await stop('session-unversioned');
+
+    for (const result of [first, second]) {
+      expect(result.stdout).toContain('guarded policy drift');
+      expect(result.engineRan()).toBe(false);
+    }
+    // The stored pins are kept, so a retry cannot clear the drift.
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(unversioned);
   });
 
   it('never re-pins over a pin file of ours that does not parse, and says how to reset it', async () => {

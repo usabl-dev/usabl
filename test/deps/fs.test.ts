@@ -42,6 +42,20 @@ describe('makeFsGlob', () => {
     await expect(fsGlob.readFile('src/App.tsx/package.json')).resolves.toBeNull();
   });
 
+  it('readBytes keeps bytes that are not valid UTF-8, and reads null where readFile does', async () => {
+    await writeFile(join(workspacePath, 'fe.bin'), Buffer.from([0xfe, 0x41]));
+    await writeFile(join(workspacePath, 'ff.bin'), Buffer.from([0xff, 0x41]));
+    const fsGlob = makeFsGlob({ cwd: workspacePath });
+    expect(await fsGlob.readFile('fe.bin')).toBe(await fsGlob.readFile('ff.bin'));
+    const fe = await fsGlob.readBytes?.('fe.bin');
+    const ff = await fsGlob.readBytes?.('ff.bin');
+    expect(fe?.kind === 'file' ? [...fe.bytes] : fe).toEqual([0xfe, 0x41]);
+    expect(ff?.kind === 'file' ? [...ff.bytes] : ff).toEqual([0xff, 0x41]);
+    await expect(fsGlob.readBytes?.('src/Missing.tsx')).resolves.toBeNull();
+    await expect(fsGlob.readBytes?.('src')).resolves.toBeNull();
+    await expect(fsGlob.readBytes?.('src/App.tsx/package.json')).resolves.toBeNull();
+  });
+
   it('matches nothing for a glob under a file', async () => {
     const fsGlob = makeFsGlob({ cwd: workspacePath });
 

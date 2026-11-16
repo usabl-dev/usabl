@@ -5,6 +5,21 @@ import type { ScreenScan } from '../../src/contracts/index.js';
 const scan: ScreenScan = { screenId: 'clusters', url: 'http://x/clusters', stops: [], drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null };
 
 describe('makeFakeDeps', () => {
+  it('reads bytes through the text reads, so a test that replaces show or readFile changes both', async () => {
+    const deps = makeFakeDeps({ files: { 'a.json': 'working' }, headContents: { 'a.json': 'head' } });
+    const bytesOf = (entry: Awaited<ReturnType<typeof deps.git.showBytes>>): string | null =>
+      entry?.kind === 'file' ? new TextDecoder().decode(entry.bytes) : null;
+    expect(bytesOf(await deps.git.showBytes('HEAD', 'a.json'))).toBe('head');
+    expect(bytesOf((await deps.fs.readBytes?.('a.json')) ?? null)).toBe('working');
+    await expect(deps.git.showBytes('HEAD', 'missing.json')).resolves.toBeNull();
+    deps.git.show = async () => 'replaced head';
+    deps.fs.readFile = async () => 'replaced working';
+    expect(bytesOf(await deps.git.showBytes('HEAD', 'a.json'))).toBe('replaced head');
+    expect(bytesOf((await deps.fs.readBytes?.('a.json')) ?? null)).toBe('replaced working');
+    const spread = { ...deps.git, show: async () => 'spread head' };
+    expect(bytesOf(await spread.showBytes('HEAD', 'a.json'))).toBe('spread head');
+  });
+
   it('provides a fixed clock and version metadata', () => {
     const deps = makeFakeDeps({ now: '2026-08-19T00:00:00.000Z', runnerVersion: '0.0.0-test' });
     expect(deps.clock()).toBe('2026-08-19T00:00:00.000Z');

@@ -4,7 +4,7 @@
  * hands it back as the page's own address, so a fake page is always where it was sent.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
-import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions } from '../contracts/index.js';
+import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions, StoredEntry } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
@@ -129,6 +129,16 @@ function normalizePrefix(prefix: string): string {
   return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
 }
 
+/**
+ * The fake byte read: the fake text read, as UTF-8 bytes. The fakes store text only, so the two
+ * reads always agree. The byte reads call the text read on the same object at call time, so a test
+ * that replaces show or readFile changes what the guard reads too. A test that needs bytes that are
+ * not UTF-8, or a submodule, uses a real repository.
+ */
+export function storedEntryOf(text: string | null): StoredEntry | null {
+  return text === null ? null : { kind: 'file', bytes: new TextEncoder().encode(text) };
+}
+
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
   const spec: FakeDepsSpec = { ...DEFAULTS, ...overrides };
   return {
@@ -144,6 +154,9 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     git: {
       writeTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
+      async showBytes(ref, path) {
+        return storedEntryOf(await this.show(ref, path));
+      },
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],
       lsTree: async (_ref, paths) => {
@@ -173,6 +186,9 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     },
     fs: {
       readFile: async (path) => spec.files[path] ?? null,
+      async readBytes(path) {
+        return storedEntryOf(await this.readFile(path));
+      },
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
     requirements: spec.requirements ?? { version: 1, requirements: [] },

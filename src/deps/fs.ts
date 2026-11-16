@@ -53,6 +53,17 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
         throw err;
       }
     },
+    async readBytes(path) {
+      try {
+        const bytes = await readFile(resolve(cwd, path));
+        return { kind: 'file', bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) };
+      } catch (err) {
+        if (isMissingFile(err)) {
+          return null;
+        }
+        throw err;
+      }
+    },
     async glob(patterns) {
       // Return files only. Node's `**` also matches directory nodes (including the
       // base directory itself), and every caller reads a globbed path as a file, so

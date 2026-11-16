@@ -27,11 +27,16 @@ function readErrorCode(err: unknown): number | null {
   return typeof code === 'number' ? code : null;
 }
 
+// A command run for bytes gives its error output as bytes too. git's messages are English (see
+// ENGLISH_MESSAGES), so decoding them as UTF-8 keeps every pattern below working.
 function readErrorStderr(err: unknown): string {
   if (typeof err !== 'object' || err === null) {
     return '';
   }
   const stderr = Reflect.get(err, 'stderr');
+  if (Buffer.isBuffer(stderr)) {
+    return stderr.toString('utf8');
+  }
   return typeof stderr === 'string' ? stderr : '';
 }
 
@@ -231,6 +236,18 @@ async function runGit(
   return stdout;
 }
 
+// The same run as runGit, with the output kept as the bytes git printed. A blob that is not valid
+// UTF-8 would lose bytes in a decode, and two different blobs could then read the same.
+async function runGitBytes(cwd: string, args: string[]): Promise<Uint8Array> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    encoding: 'buffer',
+    maxBuffer: DEFAULT_MAX_BUFFER,
+    env: { ...process.env, ...ENGLISH_MESSAGES },
+  });
+  return new Uint8Array(stdout.buffer, stdout.byteOffset, stdout.byteLength);
+}
+
 // The remote names, for a fetch hint only. A failure gives no names, and the hint then gives both
 // readings of the ref.
 async function listRemotes(cwd: string): Promise<string[]> {
@@ -301,12 +318,45 @@ async function objectType(cwd: string, object: string): Promise<string | null> {
   }
 }
 
-// How the reader reads a submodule path: this prefix, then the commit id the tree records for it.
-// It starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
-// can return this text, and compared as text a submodule never equals a file, whatever the file
-// holds. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone surrogate into
-// U+FFFD, which a file can hold, so a check that hashes the read must not rely on the prefix.
+// How show reads a submodule path: this prefix, then the commit id the tree records for it. It
+// starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
+// can return this text. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone
+// surrogate into U+FFFD, which a file can hold. So no compare or hash of guarded paths uses this
+// text. The guard reads guarded paths with showBytes, where a submodule is its own kind of entry.
 const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
+
+// What a failed `cat-file blob` read means: nothing at the path, a folder, or a submodule. Any
+// other failure is thrown, so a read usabl could not make never passes as an absent file.
+async function readFailedBlob(
+  cwd: string,
+  ref: string,
+  path: string,
+  err: unknown,
+): Promise<{ kind: 'absent' } | { kind: 'folder' } | { kind: 'submodule'; commit: string }> {
+  const code = readErrorCode(err);
+  const stderr = readErrorStderr(err);
+  if (code !== null && isMissingShow(stderr)) {
+    // For a full commit id git gives the missing-file text even when the commit itself is
+    // not in the repository, as in a shallow clone. The file is absent only when the ref
+    // names a commit here. Otherwise usabl could not read the ref at all.
+    if (await namesCommit(cwd, ref)) {
+      return { kind: 'absent' };
+    }
+    throw await refNotFoundError(ref, () => listRemotes(cwd));
+  }
+  // cat-file blob refuses a folder and a submodule entry. So the guard reads a policy file that
+  // became a folder, or the reverse, as a change an approval can clear.
+  if (code !== null && /bad file/i.test(stderr)) {
+    if ((await objectType(cwd, `${ref}:${path}`)) === 'tree') {
+      return { kind: 'folder' };
+    }
+    const commit = await submoduleCommit(cwd, ref, path);
+    if (commit !== null) {
+      return { kind: 'submodule', commit };
+    }
+  }
+  throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
+}
 
 // The commit id the tree at the ref records for a submodule at the path, or null when the path is
 // not a submodule there. ls-tree reads the tree entry only, so the answer is the same whether or not
@@ -366,32 +416,36 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
         return output;
       } catch (err) {
-        const code = readErrorCode(err);
-        const stderr = readErrorStderr(err);
-        if (code !== null && isMissingShow(stderr)) {
-          // For a full commit id git gives the missing-file text even when the commit itself is
-          // not in the repository, as in a shallow clone. The file is absent only when the ref
-          // names a commit here. Otherwise usabl could not read the ref at all.
-          if (await namesCommit(cwd, ref)) {
-            return null;
-          }
-          throw await refNotFoundError(ref, () => listRemotes(cwd));
+        const failed = await readFailedBlob(cwd, ref, path, err);
+        if (failed.kind === 'absent') {
+          return null;
         }
-        // cat-file blob refuses a folder and a submodule entry. git show prints a folder's listing,
-        // which is never the bytes of a file. So the guard reads a policy file that became a
-        // folder, or the reverse, as a change an approval can clear. The closing -- makes git read
-        // the argument as an object name only, so a working tree file with that name is never read
-        // in its place.
-        if (code !== null && /bad file/i.test(stderr)) {
-          if ((await objectType(cwd, `${ref}:${path}`)) === 'tree') {
-            return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
-          }
-          const submodule = await submoduleCommit(cwd, ref, path);
-          if (submodule !== null) {
-            return `${SUBMODULE_READ_PREFIX}${submodule}\n`;
-          }
+        // git show prints a folder's listing, which is never the bytes of a file. The closing --
+        // makes git read the argument as an object name only, so a working tree file with that
+        // name is never read in its place.
+        if (failed.kind === 'folder') {
+          return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
         }
-        throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
+        return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
+      }
+    },
+    async showBytes(ref, path) {
+      assertReadableRef(ref);
+      try {
+        // The same object read as show, with the blob kept as bytes.
+        return { kind: 'file', bytes: await runGitBytes(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]) };
+      } catch (err) {
+        const failed = await readFailedBlob(cwd, ref, path, err);
+        if (failed.kind === 'absent') {
+          return null;
+        }
+        if (failed.kind === 'folder') {
+          // The tree id names the folder's whole content, so two folders with the same id hold the
+          // same files. --verify reads the argument as an object name only.
+          const tree = (await runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${ref}:${path}`])).trim();
+          return { kind: 'folder', tree };
+        }
+        return { kind: 'submodule', commit: failed.commit };
       }
     },
     async lsTree(ref, paths) {
