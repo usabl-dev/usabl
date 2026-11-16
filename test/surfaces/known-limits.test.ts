@@ -68,7 +68,7 @@ describe('a known limit on every surface', () => {
   it('says so in the terminal summary verdict line, and lists the region', () => {
     const text = formatSummary(LIMITED);
     expect(text).toContain('VERIFIED (exit 0, with known limits)');
-    expect(text).toContain('Some parts were not checked.');
+    expect(text).toContain('No new accessibility barrier blocks this change. Parts your team listed as known limits were not checked.');
     expect(text).toContain(`settings: ${UNREAD_REGION_NOTE_REF}: ${LIMIT.reason}`);
   });
 

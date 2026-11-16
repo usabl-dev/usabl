@@ -34,8 +34,10 @@ export interface VerdictLine {
 
 const KNOWN_LIMITS_NOTE = 'with known limits';
 
-// Fits the 78 columns the meaning sentence holds to.
-const VERIFIED_WITH_LIMITS_MEANING = 'No new accessibility barrier blocks this change. Some parts were not checked.';
+// Longer than the 78 columns the other meanings fit, so it wraps on a narrow terminal. It says
+// whose list the unchecked parts come from, so a reader knows a person chose to leave them out.
+const VERIFIED_WITH_LIMITS_MEANING =
+  'No new accessibility barrier blocks this change. Parts your team listed as known limits were not checked.';
 
 const VERDICT_WORDS: Record<string, string> = {
   verified: 'VERIFIED',

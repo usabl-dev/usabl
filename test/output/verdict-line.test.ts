@@ -139,9 +139,9 @@ describe('describeVerdict', () => {
       expect(line.word).toBe('VERIFIED');
       expect(formatVerdictWord(line)).toBe('VERIFIED (exit 0, with known limits)');
       expect(formatVerdictLine(line)).toBe('✔ VERIFIED (exit 0, with known limits)');
-      expect(line.meaning).toContain('not checked');
-      expect(line.meaning.endsWith('.')).toBe(true);
-      expect(line.meaning.length).toBeLessThanOrEqual(78);
+      // The owner's wording. It is longer than the 78 columns the other meanings fit, so it wraps
+      // on a narrow terminal, and it says whose list the unchecked parts come from.
+      expect(line.meaning).toBe('No new accessibility barrier blocks this change. Parts your team listed as known limits were not checked.');
     });
 
     it('keeps the note a caller passes after the known limits', () => {
