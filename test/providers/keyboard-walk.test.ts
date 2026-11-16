@@ -830,7 +830,7 @@ describe('the keyboard walk budget of one screen', () => {
 
     const reasons = cutShort(output);
     expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain('reached its limit of 200 tab stops');
+    expect(reasons[0]).toContain('reached its limit of 200 presses of Tab, at 200 tab stop(s)');
     expect(reasons[0]).toContain(`keyboardWalk.perSurface.${SCREEN.id}.tabCap in usabl.config.json`);
     expect(reasons[0]).toContain('the tabCap option of checkPage');
   });
