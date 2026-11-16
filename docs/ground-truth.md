@@ -1104,8 +1104,10 @@ frame from another origin or one sandboxed without `allow-same-origin` (the read
 it holds, so even a visible frame with a box is no evidence that the page rendered: it may hold a
 blank app, an error page, or a third-party widget), a hidden frame, a frame nested more than eight
 frames deep (the read does not follow it), `script`, `style`, and `template` content, and the
-document title. A page whose only content is a frame the read cannot see into is reported not
-covered; the team can check it by serving the frame from the same origin, or by hand. Text that is
+document title. When every stop stayed on the body and the only content is a frame the read cannot
+see into, the page is reported not covered; the team can check it by serving the frame from the
+same origin, or by hand. Focus usually moves into a frame, though, so the walk leaves the body, the
+read does not run, and the page is checked like any other. Text that is
 visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
 browser that cannot say whether an element is visible gets no benefit of the doubt: the element
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
