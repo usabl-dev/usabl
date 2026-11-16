@@ -992,8 +992,13 @@ describe('sameScreenPath', () => {
 describe('stayedOnScreen', () => {
   const BASE = 'http://127.0.0.1:5173';
 
-  it('counts the path always, and never the host, the port, or the query', () => {
-    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'http://localhost:4000/clusters/?page=2')).toBe(true);
+  it('counts the origin and the path always, and the query only when the configured url has one', () => {
+    // Both addresses come from the same browser in the same scan, so the origin differs only when
+    // the page moved: an SSO portal root or a www home page has the same path as the app root.
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/clusters/?page=2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'http://localhost:4000/clusters')).toBe(false);
+    expect(stayedOnScreen('https://app.example.com/', 'https://app.example.com/', 'https://www.example.com/')).toBe(false);
+    expect(stayedOnScreen('https://app.example.com/', 'https://app.example.com/', 'http://app.example.com/')).toBe(false);
     expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/login`)).toBe(false);
   });
 
