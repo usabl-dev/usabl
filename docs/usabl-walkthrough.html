@@ -1871,7 +1871,7 @@ kbd {
 
   <p>Two other details in this sequence deserve a mention because they encode the same instinct.</p>
 
-  <p><strong>The keyboard transcript trims cycles.</strong> The walk stops when focus lands on the body, when focus returns to a path it has already visited, or when the budget runs out. There is a separate 15 second wall clock. Only focus on the body completes the walk. A return to an earlier stop means <kbd>Tab</kbd> never reached the rest of the page. Outside an open modal dialog that is also a keyboard trap. If it stops for any reason other than completing, that is itself a finding, <code>keyboard-walk-truncated</code>, with confidence <code>unverified</code>. A truncated walk is not a clean walk.</p>
+  <p><strong>The keyboard transcript trims cycles.</strong> The walk stops when focus lands on the body, when focus returns to a path it has already visited, or when the budget runs out. There is a separate 15 second wall clock. Only focus on the body completes the walk. A return to an earlier stop means <kbd>Tab</kbd> never reached the rest of the page. Outside an open modal dialog that is also a keyboard trap. If it stops for any reason other than completing, the walk was cut short, and the screen gets a <code>not-covered</code> coverage gap. A walk that was cut short is not a clean walk, and it is never a finding the floor can accept.</p>
 
   <p><strong>Attaching source hints never throws.</strong> The DOM source step reads <code>data-source-file</code> and <code>data-source-line</code> attributes that the Vite plugin stamped onto JSX elements at build time. If reading the attribute throws, on a malformed selector or a non-unique path, the hint is dropped and the finding is kept unchanged. Losing a source hint costs a clickable link. Throwing there would route the whole screen to a coverage gap and discard real findings.</p>
 </section>
@@ -1907,12 +1907,13 @@ kbd {
   <h3>The keyboard walk</h3>
   <p>Presses <kbd>Tab</kbd> up to a configured cap, default 200, and records a transcript. At each stop it captures the element path and a list of announcement tokens: name, role and state pulled from the accessibility tree, plus any live region text drained since the last stop. That transcript is the closest thing in the system to what a screen reader user actually experiences moving through the page.</p>
 
-  <p>It produces four findings:</p>
+  <p>It produces three findings, and coverage gaps for what it could not walk:</p>
   <ul>
     <li><code>keyboard-walk-unnamed-interactive</code>, severity serious, confidence <strong>fail</strong>. An interactive role (button, link, menuitem, checkbox, radio, textbox, combobox, tab, switch, option) reached by <kbd>Tab</kbd> with no accessible name.</li>
     <li><code>keyboard-walk-unconfirmed-focus</code>, confidence <strong>unverified</strong>. Something is focusable but its role and name cannot be read at all.</li>
     <li><code>keyboard-walk-trap</code>, severity critical, confidence <strong>fail</strong>. <kbd>Tab</kbd> took focus around a cycle of controls that never reached the body, outside an open modal dialog (WCAG 2.1.2, No Keyboard Trap). The evidence is the path of each stop of the cycle.</li>
-    <li><code>keyboard-walk-truncated</code>, confidence <strong>unverified</strong>. The walk stopped early, naming the cause and the number of stops reached.</li>
+    <li>A <code>not-covered</code> coverage gap when the walk was cut short, naming the cause, the number of stops reached, and what to do. It is a gap and never a finding, so it can never be accepted onto the evidence floor.</li>
+    <li>A <code>not-covered</code> coverage gap for each region the walk could not read, such as a closed shadow root or a frame from another origin. The walk goes on past it. A region the team lists for the screen in <code>usabl.config.json</code> is a known limit instead, shown on every result.</li>
   </ul>
 
   <p>The split between <code>fail</code> and <code>unverified</code> here is the whole honesty model in miniature. "This control has no name" is a fact and it blocks. "I could not read this control" is an admission and it routes to <code>not_covered</code>.</p>

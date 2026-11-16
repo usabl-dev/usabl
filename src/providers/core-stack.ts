@@ -26,6 +26,8 @@ export interface CoreProviderOptions {
   keyboardWalk?: boolean;
   tabCap?: number;
   wallClockMs?: number;
+  // checkPage sets it for a page with no screenId, so the walk's gap text names only its options.
+  unlabeledPage?: boolean;
 }
 
 /**
@@ -45,11 +47,14 @@ export function makeCoreProviders(options: CoreProviderOptions = {}): Provider[]
     return providers;
   }
 
-  const walkOptions: { wallClockMs: number; tabCap?: number } = {
+  const walkOptions: { wallClockMs: number; tabCap?: number; unlabeledPage?: boolean } = {
     wallClockMs: options.wallClockMs ?? KEYBOARD_WALL_CLOCK_MS,
   };
   if (options.tabCap !== undefined) {
     walkOptions.tabCap = options.tabCap;
+  }
+  if (options.unlabeledPage === true) {
+    walkOptions.unlabeledPage = true;
   }
   providers.push(makeKeyboardWalkProvider(walkOptions));
   return providers;

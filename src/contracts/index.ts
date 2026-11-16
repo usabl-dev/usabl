@@ -661,6 +661,10 @@ export interface DocArtifact {
   }>;
   generatedAt: string;
   boundToReceipt?: string;
+  // The keyboard walk order only: one sentence per region on this screen the walk could not read
+  // and the team listed as a known limit. The controls inside each region were not checked, so the
+  // walk order is not the whole focus order. Absent when the screen has no known limit.
+  limits?: string[];
   // 'page' means usabl drafted the whole artifact from the page, because no content requirement
   // covered the surface. Set on the artifact as well as on each entry, so an artifact with no
   // entries still says where it came from. Absent means it came from content requirements.
@@ -1000,6 +1004,9 @@ export interface Page {
   activeElementKey(): Promise<string | null>;
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
+  // The name of the region focus is in when activeFocusUnreadable reports one, read in the read
+  // world, or null when focus can be read. See UnreadRegionName.
+  activeUnreadRegion(): Promise<UnreadRegionName | null>;
   // The paths of the open modal dialogs that hold the element that has focus, nearest first, in the
   // form activePath gives. A dialog element opened with showModal() is one. So is an element whose
   // first recognized role is dialog or alertdialog with aria-modal true, while it is shown and not
@@ -1239,6 +1246,43 @@ export interface UsablConfig {
   // engine's provider is not registered at all, so a run without this block is the run usabl
   // made before engines existed.
   engines?: EnginesConfig;
+  // How the keyboard walk treats each screen. Part of the guarded config, so under a trusted ref
+  // the walk reads it from the trusted ref only. Absent means the engine defaults on every screen.
+  keyboardWalk?: KeyboardWalkConfig;
+}
+
+// The keyboard walk settings of one screen. Each one left out means the engine default. A walk
+// that runs out of either cap is cut short, and a walk cut short is a coverage gap on the screen.
+export interface KeyboardWalkScreenConfig {
+  // The most Tab stops the walk takes on this screen, from 1 to 2000. Engine default 200.
+  tabCap?: number;
+  // The most whole milliseconds the walk spends on this screen, from 1 to 300000. Engine default
+  // 15000, the same budget checkPage uses.
+  wallClockMs?: number;
+  // Regions on this screen the walk cannot read into that the team has decided to accept, such as
+  // a third-party chat widget. A region the walk meets and this list names is a disclosed limit on
+  // every surface, never a checked part of the screen. Any other such region is a not-covered gap.
+  // The list is guarded policy: under a trusted ref it is read from the trusted ref only.
+  unreadableRegions?: UnreadableRegionListing[];
+}
+
+// One accepted region, named the way the walk names what it met. A frame by the origin of its
+// address, such as "https://chat.example.com". A closed shadow root by the tag name of its host
+// element, such as "chat-widget".
+export type UnreadableRegionListing = { frameOrigin: string } | { shadowHost: string };
+
+// What the walk can say about the region focus is in when it cannot read inside it. A frame gives
+// the origin of its address, or null when it has none the walk can read, such as a srcdoc, data, or
+// fencedframe frame. A closed shadow root gives the tag name of its host. Focus under more shadow
+// roots and frames than the walk follows gives no name. Page-derived text: scrub it before output.
+export type UnreadRegionName =
+  | { kind: 'frame'; origin: string | null }
+  | { kind: 'shadow-host'; tag: string }
+  | { kind: 'unnamed' };
+export interface KeyboardWalkConfig {
+  // Keyed by screen id, the way noiseBudget.perSurface is, so a screen discovered from routes can
+  // have settings as well as one listed in surfaces. Null prototype, so every read is an own key.
+  perSurface?: Record<string, KeyboardWalkScreenConfig>;
 }
 
 // ---- optional commercial engines (the operator holds the license; the package is never a dependency) ----

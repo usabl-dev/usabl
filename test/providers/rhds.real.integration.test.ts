@@ -18,7 +18,7 @@ import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/inde
 import { makeRhdsRulepackProvider } from '../../src/providers/rhds/index.js';
 import { RHDS_RULES } from '../../src/providers/rhds/sources.js';
 import { makeRulepackProvider, PF_RULES } from '../../src/providers/rulepack/index.js';
-import { draftsOf, testConfig } from '../helpers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 // The modules the fixtures use, bundled once for the browser. Icons load on demand from a package
@@ -425,10 +425,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
   it('confirms keyboard focus on the inner button of an rh-button, which delegates focus', async () => {
     const opened = await open('/walk-rh-button');
     try {
-      const drafts = draftsOf(await makeKeyboardWalkProvider({ tabCap: 20 }).run({ page: opened, screen: { id: 'walk', url: '' }, config: testConfig() }));
+      const output = await makeKeyboardWalkProvider({ tabCap: 20 }).run({ page: opened, screen: { id: 'walk', url: '' }, config: testConfig() });
+      const drafts = draftsOf(output);
 
       expect(drafts.filter((draft) => draft.rule === 'keyboard-walk-unconfirmed-focus')).toEqual([]);
-      expect(drafts.filter((draft) => draft.rule === 'keyboard-walk-truncated')).toEqual([]);
+      // The walk was not cut short.
+      expect(gapsOf(output)).toEqual([]);
       // The walk reads the inner button itself: the labelled one is named, the icon-only one is not.
       expect(drafts.map((draft) => [draft.rule, draft.elementPath])).toEqual([['keyboard-walk-unnamed-interactive', '#icon-only >> button:nth-child(1)']]);
       expect(drafts[0]?.role).toBe('button');
@@ -440,10 +442,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
   it('still reads focus inside a closed shadow root as unconfirmed', async () => {
     const opened = await open('/walk-closed');
     try {
-      const drafts = draftsOf(await makeKeyboardWalkProvider({ tabCap: 20 }).run({ page: opened, screen: { id: 'walk', url: '' }, config: testConfig() }));
+      const output = await makeKeyboardWalkProvider({ tabCap: 20 }).run({ page: opened, screen: { id: 'walk', url: '' }, config: testConfig() });
 
-      expect(drafts).toEqual([
-        expect.objectContaining({ rule: 'keyboard-walk-truncated', confidence: 'unverified', why: expect.stringContaining('closed shadow root') }),
+      expect(draftsOf(output)).toEqual([]);
+      expect(gapsOf(output)).toEqual([
+        expect.objectContaining({ state: 'not-covered', reason: expect.stringContaining('closed shadow root') }),
       ]);
     } finally {
       await opened.close();

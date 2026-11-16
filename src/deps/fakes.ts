@@ -93,6 +93,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeElementKey: async () => null,
     // A fake page has no shadow roots or frames, so focus is always where its path says.
     activeFocusUnreadable: async () => null,
+    // So no focus is ever in a region it cannot read.
+    activeUnreadRegion: async () => null,
     // Nor any modal dialog, so no dialog holds focus.
     activeModalDialogs: async () => [],
     // A fake page has no DOM, so no element has a backend node id to report.
