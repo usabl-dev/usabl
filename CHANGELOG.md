@@ -394,7 +394,11 @@
   tell it from a trap. The end of the walk is confirmed through a region only when the region is
   the first stop and Tab out of it lands on the second stop, or on the body when it was the only
   stop. So a control inside a region that blurs itself cuts the walk short, and the controls after
-  the region are never read as walked.
+  the region are never read as walked. A host element with a `tabindex` whose closed shadow root
+  holds controls also cuts the walk short with no `keyboard-walk-trap` draft, listed or not,
+  because Tab goes from the host into controls with the host's path. The presses of Tab the end
+  rule makes out of a first region count against the time cap, so a walk that runs out of time
+  there is cut short by it.
 - `checkPage` reports only the `landing:<screenId>` gap when the page left its screen while the
   checks ran, or when an identity request was refused during them. The gap for a cut short walk
   and the gap for each region the walk could not read go with the findings, because they
