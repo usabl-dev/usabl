@@ -134,6 +134,9 @@ const CONTENT_PAGES: Record<string, string> = {
   // that never rendered into its frame leaves them.
   '/empty-srcdoc-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" srcdoc=""></iframe>'),
   '/about-blank-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" src="about:blank"></iframe>'),
+  // An empty frame sandboxed without allow-same-origin. Its origin is opaque, so the read cannot
+  // see that it is empty.
+  '/sandboxed-empty-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" sandbox="allow-scripts" srcdoc=""></iframe>'),
   '/hidden-content.html': contentPage(
     'Hidden',
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
@@ -932,13 +935,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     ['/open-shadow-text.html', true],
     ['/closed-shadow-text.html', false],
     ['/frame-text.html', true],
-    // The read cannot see into the frame, but the visible frame itself shows on the page.
-    ['/cross-origin-frame-text.html', true],
+    // The read cannot see into a frame from another origin, so the frame is no evidence that the
+    // page rendered. Visible, hidden, or with no box, it is not counted.
+    ['/cross-origin-frame-text.html', false],
     ['/hidden-cross-origin-frame.html', false],
     ['/boxless-cross-origin-frame.html', false],
     // The read can see into these frames, so they count only through what they show.
     ['/empty-srcdoc-frame.html', false],
     ['/about-blank-frame.html', false],
+    ['/sandboxed-empty-frame.html', false],
     ['/hidden-content.html', false],
     ['/background-only.html', false],
   ] as const) {
