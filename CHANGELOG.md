@@ -374,12 +374,14 @@
   every stop stayed on the body, `checkPage` reads once whether the page shows content: rendered
   text that is not white space, or a rendered `img`, `svg`, `canvas`, `video`, `picture`,
   `object`, `embed`, or `role="img"` element with a box, in the document, an open shadow root, or
-  a same-origin frame. A visible `iframe` or `frame` element with a box counts too, whatever its
-  origin, so a page whose only content is a frame from another origin is checked. A CSS
-  background image, hidden content, a closed shadow root, and what a frame from another origin
-  holds are not read, and a failed read counts as no content. Gate effect: a page
-  that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
-  words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
+  a same-origin frame. A visible `iframe` or `frame` element with a box counts by itself only
+  when the read cannot see into it, as for a frame from another origin, so a page whose only
+  content is such a frame is checked. A frame the read can see into counts only through what it
+  shows, so an empty one, such as `about:blank`, is not content. A CSS background image, hidden
+  content, a closed shadow root, what a frame from another origin holds, and a frame nested more
+  than eight frames deep are not counted, and a failed read counts as no content. Gate effect:
+  a page that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as
+  the CLI words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
   to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
   covered by its own draft, and with `keyboardWalk: false` there are no stops, so `checkPage`
   makes no blank-page claim.
