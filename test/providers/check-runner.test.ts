@@ -1015,13 +1015,22 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(scan.gaps[0]?.reason).not.toContain('SECRETPOISON');
   });
 
-  it('still verifies a page that stays on its address', async () => {
+  it('still verifies a page that stays on its address, and keeps its findings', async () => {
+    // A read-only provider stands in for the checks. The real keyboard walk provider would read this
+    // scripted page's cycling focus as a walk cut short, which is a gap of its own.
     const page = await movingPage(SCREEN.url, async () => SCREEN.url);
+    const finds: Provider = {
+      id: 'fake-axe',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => [makeDraft('axe-rule')],
+    };
 
-    const scan = await scanOf(page, [makeKeyboardWalkProvider({ tabCap: 5 })]);
+    const scan = await scanOf(page, [finds]);
 
     expect(scan.gaps).toEqual([]);
     expect(scan.stops.length).toBeGreaterThan(0);
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
   });
 
   it('still verifies a page whose query changes during the walk while its path and fragment stay', async () => {
