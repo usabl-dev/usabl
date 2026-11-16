@@ -313,6 +313,39 @@ describe('checkPage and the keyboard walk budget', () => {
     expect(result.gaps.map((gap) => gap.reason)).toEqual([expect.stringContaining('the tabCap option of checkPage')]);
   });
 
+  // checkPage reads the config only for a labeled page, so a setting under the id `page` would do
+  // nothing. An unlabeled page's walk gaps name only the checkPage options.
+  it('names no usabl.config.json setting in the walk gaps of an unlabeled page, only the checkPage option', async () => {
+    const page = scriptedPage(['#save', '#chat', ...rows]);
+    const inChat = async (): Promise<boolean> => (await page.activePath()) === '#chat';
+    page.activeFocusUnreadable = async () => ((await inChat()) ? 'frame-unreadable' : null);
+    page.activeUnreadRegion = async () => ((await inChat()) ? { kind: 'frame', origin: 'https://chat.example.com' } : null);
+    const named = page.activeNode;
+    page.activeNode = async () => ((await inChat()) ? null : named());
+    adopted.page = page;
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
+
+    const reasons = result.gaps.map((gap) => gap.reason);
+    expect(reasons).toEqual([
+      expect.stringContaining('could not read inside a region'),
+      expect.stringContaining('the keyboard walk was cut short'),
+    ]);
+    for (const reason of reasons) {
+      expect(reason).not.toContain('keyboardWalk.perSurface');
+    }
+    expect(reasons[0]).toContain('the screenId option of checkPage');
+    expect(reasons[1]).toContain('pass the tabCap option of checkPage');
+  });
+
+  it('names the setting of its screen in the walk gap of a labeled page', async () => {
+    adopted.page = scriptedPage(rows);
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project(), tabCap: 10 });
+
+    expect(result.gaps.map((gap) => gap.reason)).toEqual([expect.stringContaining('keyboardWalk.perSurface.clusters.tabCap')]);
+  });
+
   it('completes the walk with the tabCap option raised', async () => {
     adopted.page = scriptedPage(rows);
 

@@ -44,6 +44,9 @@ export interface KeyboardWalkProviderOptions {
   tabCap?: number;
   wallClockMs?: number;
   now?: () => number;
+  // Set by checkPage for a page it was given with no screenId. It reads no config for that page,
+  // so the gap text names only the checkPage options, never a setting under the id `page`.
+  unlabeledPage?: boolean;
 }
 
 function isUnnamedInteractive(node: AxNode): boolean {
@@ -276,19 +279,21 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, bu
 
 // The way to raise a budget, for each kind of user: the setting in usabl.config.json for the CLI,
 // the stop hook, the overlay, and CI, and the checkPage option for a Playwright test. The screen
-// id comes from the operator's config or routes, never from the page.
-function budgetFix(screenId: string, setting: 'tabCap' | 'wallClockMs'): string {
-  return (
-    `To raise it, set keyboardWalk.perSurface.${screenId}.${setting} in usabl.config.json, or in a Playwright test pass ` +
-    `the ${setting} option of checkPage. Or split the screen so its focus order fits one walk.`
-  );
+// id comes from the operator's config or routes, never from the page. A page checkPage was given
+// with no screenId reads no config, so only the checkPage option is named for it.
+function budgetFix(screenId: string, setting: 'tabCap' | 'wallClockMs', unlabeledPage: boolean): string {
+  const how = unlabeledPage
+    ? `To raise it, pass the ${setting} option of checkPage.`
+    : `To raise it, set keyboardWalk.perSurface.${screenId}.${setting} in usabl.config.json, or in a Playwright test pass ` +
+      `the ${setting} option of checkPage.`;
+  return `${how} Or split the screen so its focus order fits one walk.`;
 }
 const UNREADABLE_FIX =
   'Check the controls inside this region by hand. To let usabl walk them, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.';
 
-const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string) => string> = {
-  'wall-clock': (screenId) => budgetFix(screenId, 'wallClockMs'),
-  'tab-cap': (screenId) => budgetFix(screenId, 'tabCap'),
+const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string, unlabeledPage: boolean) => string> = {
+  'wall-clock': (screenId, unlabeledPage) => budgetFix(screenId, 'wallClockMs', unlabeledPage),
+  'tab-cap': (screenId, unlabeledPage) => budgetFix(screenId, 'tabCap', unlabeledPage),
   'region-unbounded': () =>
     'Check by hand whether Tab can leave this region. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
   'region-reentered': () =>
@@ -315,13 +320,14 @@ function truncatedWalkGap(
   reason: Exclude<StopReason, 'complete'>,
   stopsWalked: number,
   budget: WalkBudget,
+  unlabeledPage: boolean,
 ): CoverageGap {
   return {
     ref: screen.url,
     state: 'not-covered',
     reason:
       `${cutShortLead(screen)} ${TRUNCATION_WHY[reason](stopsWalked, budget)} Accessibility barriers past that point are unknown. ` +
-      TRUNCATION_FIX[reason](screen.id),
+      TRUNCATION_FIX[reason](screen.id, unlabeledPage),
   };
 }
 
@@ -334,15 +340,19 @@ function cutShortLead(screen: { id: string }): string {
  * to the controls after it, but the controls inside it were not checked, so the screen is not
  * covered. The reason holds the kind of region and the stop it was met at, never page text.
  */
-function unreadRegionGap(screen: { id: string; url: string }, region: UnreadRegion): CoverageGap {
+function unreadRegionGap(screen: { id: string; url: string }, region: UnreadRegion, unlabeledPage: boolean): CoverageGap {
   const line = listingLine(region.name);
-  // A region with a name a listing can use can be accepted, by a person, in the guarded config.
+  // A region with a name a listing can use can be accepted, by a person, in the guarded config. A
+  // page checkPage was given with no screenId reads no config, so a listing cannot reach it.
   const accept =
     line === null
       ? ' usabl cannot name this region, so it cannot be listed as a known limit.'
-      : ` If the team accepts that this region is not checked, list ${line} under ` +
-        `keyboardWalk.perSurface.${screen.id}.unreadableRegions in usabl.config.json. That file is guarded, so a ` +
-        'reviewer approves the line, and the region is then shown as a known limit on every result.';
+      : unlabeledPage
+        ? ' This page was checked with no screen id, so no listing applies to it. To list this region as a known ' +
+          "limit, pass the page's screen id as the screenId option of checkPage."
+        : ` If the team accepts that this region is not checked, list ${line} under ` +
+          `keyboardWalk.perSurface.${screen.id}.unreadableRegions in usabl.config.json. That file is guarded, so a ` +
+          'reviewer approves the line, and the region is then shown as a known limit on every result.';
   return {
     ref: screen.url,
     state: 'not-covered',
@@ -406,6 +416,7 @@ export function isWalkReachGap(gap: CoverageGap, screen: { id: string; url: stri
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
   const now = options.now ?? (() => Date.now());
+  const unlabeledPage = options.unlabeledPage === true;
   const stepRunner = makeStepRunner();
 
   return {
@@ -545,14 +556,14 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
       for (const region of regions) {
         const index = listings.findIndex((listing) => listingMatches(listing, region.name));
         if (index === -1) {
-          gaps.push(unreadRegionGap(ctx.screen, region));
+          gaps.push(unreadRegionGap(ctx.screen, region, unlabeledPage));
         } else {
           matched.add(index);
           notes.push(listedRegionNote(ctx.screen, region));
         }
       }
       if (stopReason !== 'complete') {
-        gaps.push(truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget));
+        gaps.push(truncatedWalkGap(ctx.screen, stopReason, stopsWalked, budget, unlabeledPage));
       } else {
         // Only a walk that reached the end of the page saw every region, so only then is a listing
         // that matched nothing known to be stale.

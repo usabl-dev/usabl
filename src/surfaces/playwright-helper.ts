@@ -391,6 +391,8 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     labeledScreenId === null && intake.requirements !== null ? NO_REQUIREMENTS : intake.requirements;
   const providers: Provider[] = makeScanProviders(scannedRequirements, {
     ...(options.keyboardWalk === undefined ? {} : { keyboardWalk: options.keyboardWalk }),
+    // An unlabeled page reads no config, so the walk's gaps name only the checkPage options.
+    ...(labeledScreenId === null ? { unlabeledPage: true } : {}),
   });
 
   const config = intake.config;
