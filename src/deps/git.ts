@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { GitReader } from '../contracts/index.js';
+import type { GitReader, TreeEntry } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 
 const execFileAsync = promisify(execFile);
@@ -27,16 +27,11 @@ function readErrorCode(err: unknown): number | null {
   return typeof code === 'number' ? code : null;
 }
 
-// A command run for bytes gives its error output as bytes too. git's messages are English (see
-// ENGLISH_MESSAGES), so decoding them as UTF-8 keeps every pattern below working.
 function readErrorStderr(err: unknown): string {
   if (typeof err !== 'object' || err === null) {
     return '';
   }
   const stderr = Reflect.get(err, 'stderr');
-  if (Buffer.isBuffer(stderr)) {
-    return stderr.toString('utf8');
-  }
   return typeof stderr === 'string' ? stderr : '';
 }
 
@@ -221,7 +216,13 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 // into the user's language. LC_ALL=C keeps it in English whatever the locale, so a missing policy
 // file never reads as a crash on one machine and as absent on another. With -z, file names are
 // raw bytes, so the locale does not change how they are listed.
-const ENGLISH_MESSAGES = { LC_ALL: 'C' };
+//
+// GIT_LITERAL_PATHSPECS=1 makes git read every path as its own exact name. Without it, git reads a
+// path that starts with pathspec magic, such as `:(top)x.json` or `:(literal)x.json`, as an
+// instruction, and lists `x.json` instead, so a guarded file with such a name read as absent at
+// every ref. It is set here, the one place every git command in this reader gets its environment.
+// No command here passes a pattern as a path.
+const GIT_ENVIRONMENT = { LC_ALL: 'C', GIT_LITERAL_PATHSPECS: '1' };
 
 async function runGit(
   cwd: string,
@@ -233,21 +234,13 @@ async function runGit(
     cwd,
     encoding: 'utf8',
     maxBuffer,
-    env: { ...process.env, ...env, ...ENGLISH_MESSAGES },
+    env: { ...process.env, ...env, ...GIT_ENVIRONMENT },
   });
   return stdout;
 }
 
-// The same run as runGit, with the output kept as the bytes git printed. A blob that is not valid
-// UTF-8 would lose bytes in a decode, and two different blobs could then read the same.
-async function runGitBytes(cwd: string, args: string[]): Promise<Uint8Array> {
-  const { stdout } = await execFileAsync('git', args, {
-    cwd,
-    encoding: 'buffer',
-    maxBuffer: DEFAULT_MAX_BUFFER,
-    env: { ...process.env, ...ENGLISH_MESSAGES },
-  });
-  return new Uint8Array(stdout.buffer, stdout.byteOffset, stdout.byteLength);
+function isMaxBufferError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 }
 
 // The remote names, for a fetch hint only. A failure gives no names, and the hint then gives both
@@ -287,7 +280,7 @@ async function runListing(
   try {
     return await runGit(cwd, args, undefined, maxBuffer);
   } catch (err) {
-    if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    if (isMaxBufferError(err)) {
       throw new Error(
         `git ${args[0] ?? ''} printed more than usabl reads, so usabl could not list the files it needs ` +
           `and checked nothing. ${advice}`,
@@ -324,7 +317,7 @@ async function objectType(cwd: string, object: string): Promise<string | null> {
 // starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
 // can return this text. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone
 // surrogate into U+FFFD, which a file can hold. So no compare or hash of guarded paths uses this
-// text. The guard reads guarded paths with showBytes, where a submodule is its own kind of entry.
+// text. The guard reads guarded paths with listEntries, where a submodule has its own mode.
 const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
 
 // What a failed `cat-file blob` read means: nothing at the path, a folder, or a submodule. Any
@@ -360,36 +353,32 @@ async function readFailedBlob(
   throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
 }
 
+const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+// `git ls-tree -z` entries as a Map by name, so a name such as __proto__ is kept as its own key.
+// With `only`, just the entries with one of those exact names. With GIT_LITERAL_PATHSPECS each
+// path after -- is its exact name, never a pattern or pathspec magic.
+function parseTreeEntries(output: string, only?: ReadonlySet<string>): Map<string, TreeEntry> {
+  const entries = new Map<string, TreeEntry>();
+  for (const line of splitNul(output)) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const name = line.slice(tab + 1);
+    if (only !== undefined && !only.has(name)) continue;
+    const [mode, type, id] = line.slice(0, tab).split(' ');
+    if (mode !== undefined && type !== undefined && id !== undefined && FULL_OBJECT_ID.test(id)) {
+      entries.set(name, { mode, type, id });
+    }
+  }
+  return entries;
+}
+
 // The commit id the tree at the ref records for a submodule at the path, or null when the path is
 // not a submodule there. ls-tree reads the tree entry only, so the answer is the same whether or not
 // the submodule's commit is in the repository, which it usually is not, and it does not depend on
 // the working tree. ls-tree matches each path given after -- by its exact name, never as a pattern.
 // --full-tree reads the path from the root of the tree, as <ref>:<path> does. Without it, ls-tree
 // run from a subfolder reads the path under that subfolder.
-const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-
-interface TreeEntry {
-  mode: string;
-  type: string;
-  id: string;
-}
-
-// The tree entry at the path, or null when the tree at the ref has none. Read the same way as
-// submoduleCommit: --full-tree from the root, the path after --, and only an entry with that exact
-// name. A path below a file or inside a submodule has no entry. A ref git cannot read throws.
-async function treeEntry(cwd: string, ref: string, path: string): Promise<TreeEntry | null> {
-  const output = await runGit(cwd, ['ls-tree', '-z', '--full-tree', '--end-of-options', ref, '--', path]);
-  for (const line of splitNul(output)) {
-    const tab = line.indexOf('\t');
-    if (tab < 0 || line.slice(tab + 1) !== path) continue;
-    const [mode, type, id] = line.slice(0, tab).split(' ');
-    if (mode !== undefined && type !== undefined && id !== undefined) {
-      return { mode, type, id };
-    }
-  }
-  return null;
-}
-
 async function submoduleCommit(cwd: string, ref: string, path: string): Promise<string | null> {
   let output: string;
   try {
@@ -439,9 +428,17 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         // object and a working tree file has that exact name, so a file a pull request commits
         // could stand in for a trusted read. --end-of-options keeps a ref that starts with a dash
         // from being read as an option.
-        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
+        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`], undefined, maxBuffer);
         return output;
       } catch (err) {
+        if (isMaxBufferError(err)) {
+          throw new Error(
+            `usabl could not read ${operatorText(path)} at ${operatorText(ref)}: it is larger than the ` +
+              `${String(Math.floor(maxBuffer / (1024 * 1024)))} MiB usabl reads as text, so usabl checked nothing. ` +
+              'Keep a policy file that usabl parses under that size, then run usabl again. The guard ' +
+              'compares a large guarded file without reading it as text.',
+          );
+        }
         const failed = await readFailedBlob(cwd, ref, path, err);
         if (failed.kind === 'absent') {
           return null;
@@ -455,43 +452,33 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
       }
     },
-    async showBytes(ref, path) {
+    async listEntries(ref, paths, { recursive }) {
+      // One ls-tree for every path, so a ref is read once. The mode and the object id say what the
+      // ref stores, so no file content is read. --full-tree reads each path from the root of the
+      // tree, whatever folder usabl runs in.
       assertReadableRef(ref);
-      let entry: TreeEntry | null;
+      if (paths.length === 0) {
+        return new Map();
+      }
+      const unique = [...new Set(paths)].sort();
+      const args = ['ls-tree', '-z', '--full-tree', ...(recursive ? ['-r'] : []), '--end-of-options', ref];
+      if (!(recursive && unique.includes(''))) {
+        args.push('--', ...unique);
+      }
+      let output: string;
       try {
-        entry = await treeEntry(cwd, ref, path);
-      } catch (listingError) {
-        // The tree entry could not be read. The blob read names that failure the way show does,
-        // such as a ref that is not here. If it finds nothing to name, the listing error stands:
-        // an entry usabl could not read never passes as an absent file.
-        try {
-          await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
-        } catch (err) {
-          await readFailedBlob(cwd, ref, path, err);
+        output = await runListing(cwd, args, maxBuffer, GUARDED_LISTING_ADVICE);
+      } catch (err) {
+        // A ref git cannot read is the same error show gives for it, never an empty listing that
+        // would read as no guarded files.
+        if (/not a valid object name|invalid object name|not a tree object|bad object/i.test(readErrorStderr(err))) {
+          throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
-        throw listingError;
+        throw err;
       }
-      if (entry === null) {
-        return null;
-      }
-      if (entry.mode === '160000' && entry.type === 'commit' && FULL_OBJECT_ID.test(entry.id)) {
-        return { kind: 'submodule', commit: entry.id };
-      }
-      // The tree id names the folder's whole content, so two folders with the same id hold the
-      // same files.
-      if (entry.type === 'tree') {
-        return { kind: 'folder', tree: entry.id };
-      }
-      if (entry.type !== 'blob' || !FULL_OBJECT_ID.test(entry.id)) {
-        throw new Error(`git listed ${operatorText(path)} at ${operatorText(ref)} as an entry usabl cannot read.`);
-      }
-      // The blob is read by the id the listing gave, so the mode and the bytes come from the same
-      // tree even if a branch moves between the two reads.
-      const bytes = await runGitBytes(cwd, ['cat-file', 'blob', '--end-of-options', entry.id]);
-      if (entry.mode === '120000') {
-        return { kind: 'symlink', target: bytes };
-      }
-      return { kind: 'file', mode: entry.mode, bytes };
+      // Without recursion, ls-tree also lists what is in a folder named with a trailing slash, so
+      // only the exact names asked for are kept.
+      return parseTreeEntries(output, recursive ? undefined : new Set(unique));
     },
     async tracksFileMode() {
       // git exits 1 when the setting is not there, and then reads the executable bit. Any other

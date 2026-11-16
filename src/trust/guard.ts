@@ -4,7 +4,7 @@
  * It must never mint a verdict or hide unguarded policy edits.
  */
 import { createHash } from 'node:crypto';
-import type { Deps, GitReader, StoredEntry, UsablConfig } from '../contracts/index.js';
+import type { Deps, GitReader, StoredEntry, TreeEntry, UsablConfig } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
@@ -24,124 +24,235 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * What the guard compares for one guarded path on one side. A stored entry is the path as git or
- * the file system holds it, never decoded. Text is only for a ref reader that has no byte read,
- * which compares as the text read did before the byte read existed. Both sides of one compare come
- * from the same kind of reader, so text is never compared with an entry.
+/*
+ * How the guard compares a guarded path.
+ *
+ * At a ref, a path is its tree entry: the mode and the object id from one `git ls-tree` listing
+ * per ref. Two entries are equal when the mode and the id are equal, so no file content is read,
+ * and a file that is not valid UTF-8, an executable bit, and a file swapped for a symbolic link
+ * with the same text are all changes. On the working tree, a path is what git would store from it:
+ * the file's bytes and mode, or a link's text. Its blob id is computed from those bytes, as
+ * `git hash-object` does, and compared with the trusted id.
+ *
+ * A guarded symbolic link is compared by its link text and by what it resolves to inside the
+ * repository, because every reader of a guarded file reads through the link. See resolveLink.
  */
-type GuardRead = StoredEntry | { kind: 'text'; text: string } | null;
+const REGULAR_FILE_MODE = /^100[0-7]{3}$/;
+const SYMLINK_MODE = '120000';
 
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.byteLength !== b.byteLength) {
-    return false;
-  }
-  for (let i = 0; i < a.byteLength; i += 1) {
-    if (a[i] !== b[i]) {
-      return false;
-    }
-  }
-  return true;
-}
+/** The most links the guard follows from a guarded link, the guarded link itself included. */
+export const MAX_GUARDED_LINKS = 8;
 
-/**
- * Equal means the same kind and the same content: for a file the same mode and bytes, for a
- * symbolic link the same link text, and the same commit, tree, or text for the rest. Nothing
- * equals a missing path but a missing path.
- */
-function sameRead(a: GuardRead, b: GuardRead): boolean {
-  if (a === null || b === null) {
-    return a === b;
-  }
-  switch (a.kind) {
-    case 'file':
-      return b.kind === 'file' && a.mode === b.mode && sameBytes(a.bytes, b.bytes);
-    case 'symlink':
-      return b.kind === 'symlink' && sameBytes(a.target, b.target);
-    case 'submodule':
-      return b.kind === 'submodule' && a.commit === b.commit;
-    case 'folder':
-      return b.kind === 'folder' && a.tree === b.tree;
-    case 'text':
-      return b.kind === 'text' && a.text === b.text;
-  }
-}
-
-// The config text to parse, decoded from the same read the compare used, so the scope and the
-// compare can never come from two different moments. Decoding a file this way gives the text a
-// UTF-8 read of it gives. A symbolic link, a folder, or a submodule has no config text: the config
-// loader would read through a link, so the guard reads no scope from one, and the config path
-// compares as changed against a file.
-function configText(read: GuardRead): string | null {
-  if (read === null) {
+// git's blob id for the bytes, with the hash of the id it is compared with: SHA-1 for an id of 40
+// hex characters, SHA-256 for 64. Null for any other id, which then equals nothing.
+function blobIdLike(bytes: Uint8Array, like: string): string | null {
+  const algorithm = like.length === 40 ? 'sha1' : like.length === 64 ? 'sha256' : null;
+  if (algorithm === null) {
     return null;
   }
-  if (read.kind === 'file') {
-    return Buffer.from(read.bytes.buffer, read.bytes.byteOffset, read.bytes.byteLength).toString('utf8');
+  return createHash(algorithm).update(`blob ${String(bytes.byteLength)}\0`).update(bytes).digest('hex');
+}
+
+function decodeText(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
+}
+
+/** One step of a link walk: a link with its text, a folder, or anything else, which ends the walk. */
+type LinkStep<T> = { kind: 'link'; text: string } | { kind: 'folder'; value: T } | { kind: 'leaf'; value: T };
+
+// A link's text joined to the folder the link is in, as path segments from the repository root.
+// Null for text that names no path in the repository: an absolute path, or one whose `..` leaves
+// the root.
+function joinLinkText(folder: readonly string[], text: string): string[] | null {
+  if (text.length === 0 || text.startsWith('/')) {
+    return null;
   }
-  return read.kind === 'text' ? read.text : null;
+  const segments = [...folder];
+  for (const part of text.split('/')) {
+    if (part === '' || part === '.') {
+      continue;
+    }
+    if (part === '..') {
+      if (segments.pop() === undefined) {
+        return null;
+      }
+      continue;
+    }
+    segments.push(part);
+  }
+  return segments;
+}
+
+/**
+ * What a guarded link at `linkPath` with `text` resolves to, inside the repository: the path and
+ * the step there. Each folder on the way is looked up too, so a link in the middle of the path is
+ * followed as the file system follows it. At most MAX_GUARDED_LINKS links are followed, the
+ * guarded one included. Null when the link resolves outside the repository, loops, passes the
+ * limit, or names nothing, and the guard then reads the link as changed. The repository root is
+ * not a path the guard compares, so a link to it is null too.
+ */
+async function resolveLink<T>(
+  linkPath: string,
+  text: string,
+  lookup: (path: string) => Promise<LinkStep<T> | null>,
+): Promise<{ path: string; step: LinkStep<T> } | null> {
+  let followed = 1;
+  let segments = joinLinkText(linkPath.split('/').slice(0, -1), text);
+  while (segments !== null && segments.length > 0) {
+    let next: string[] | null = null;
+    for (let i = 0; i < segments.length; i += 1) {
+      const path = segments.slice(0, i + 1).join('/');
+      const step = await lookup(path);
+      const last = i === segments.length - 1;
+      if (step === null) {
+        return null;
+      }
+      if (step.kind === 'link') {
+        if (followed >= MAX_GUARDED_LINKS) {
+          return null;
+        }
+        followed += 1;
+        const joined = joinLinkText(segments.slice(0, i), step.text);
+        next = joined === null ? null : [...joined, ...segments.slice(i + 1)];
+        break;
+      }
+      if (last) {
+        return { path, step };
+      }
+      if (step.kind === 'leaf') {
+        // A file or a submodule holds no path below it.
+        return null;
+      }
+    }
+    segments = next;
+  }
+  return null;
+}
+
+/** The parts of a git reader the guard compares refs with. */
+type EntryReader = Pick<GitReader, 'show' | 'listEntries'>;
+
+// A lookup of one path at a ref for resolveLink. A link's text is read with show, which reads a
+// link's blob as its text.
+function refLookup(git: EntryReader, ref: string): (path: string) => Promise<LinkStep<TreeEntry> | null> {
+  return async (path) => {
+    const entry = (await git.listEntries(ref, [path], { recursive: false })).get(path);
+    if (entry === undefined) {
+      return null;
+    }
+    if (entry.mode === SYMLINK_MODE) {
+      return { kind: 'link', text: (await git.show(ref, path)) ?? '' };
+    }
+    return entry.type === 'tree' ? { kind: 'folder', value: entry } : { kind: 'leaf', value: entry };
+  };
+}
+
+type WorkingFile = { mode: string; bytes: Uint8Array };
+
+// A lookup of one path on the working tree for resolveLink.
+function workingLookup(readBytes: (path: string) => Promise<StoredEntry | null>): (path: string) => Promise<LinkStep<WorkingFile | null> | null> {
+  return async (path) => {
+    const entry = await readBytes(path);
+    if (entry === null) {
+      return null;
+    }
+    if (entry.kind === 'symlink') {
+      return { kind: 'link', text: decodeText(entry.target) };
+    }
+    return entry.kind === 'folder' ? { kind: 'folder', value: null } : { kind: 'leaf', value: entry };
+  };
+}
+
+/**
+ * What a path at a ref stores, as text that is equal for two paths exactly when they store the
+ * same thing: nothing, or the mode and the id, and for a link also the path it resolves to and
+ * the mode and id there. `resolved` is false for a link that does not resolve, which compares as
+ * changed even against itself. The session pins hash this same text.
+ */
+async function refIdentity(
+  git: EntryReader,
+  ref: string,
+  path: string,
+  entry: TreeEntry | null,
+): Promise<{ text: string; resolved: boolean }> {
+  if (entry === null) {
+    return { text: JSON.stringify(['absent']), resolved: true };
+  }
+  if (entry.mode !== SYMLINK_MODE) {
+    return { text: JSON.stringify([entry.mode, entry.id]), resolved: true };
+  }
+  const target = await resolveLink(path, (await git.show(ref, path)) ?? '', refLookup(git, ref));
+  if (target === null || target.step.kind === 'link') {
+    return { text: JSON.stringify([entry.mode, entry.id, 'unresolved']), resolved: false };
+  }
+  return {
+    text: JSON.stringify([entry.mode, entry.id, target.path, target.step.value.mode, target.step.value.id]),
+    resolved: true,
+  };
+}
+
+/** The reads the local guard compares with, and git's core.fileMode. */
+interface LocalReads {
+  git: EntryReader;
+  readBytes: (path: string) => Promise<StoredEntry | null>;
+  trustedRef: string;
+  tracksMode: boolean;
+}
+
+// A working tree file against a trusted entry. With core.fileMode false, git ignores the executable
+// bit on disk and keeps the mode it recorded for a regular file, so the guard compares the bytes
+// only, and a file system with no executable bit does not read every guarded file as changed.
+function sameFile(reads: LocalReads, file: WorkingFile, trusted: TreeEntry): boolean {
+  if (!REGULAR_FILE_MODE.test(trusted.mode)) {
+    return false;
+  }
+  if (reads.tracksMode && file.mode !== trusted.mode) {
+    return false;
+  }
+  return blobIdLike(file.bytes, trusted.id) === trusted.id;
+}
+
+/**
+ * A working tree path against its trusted entry. A folder on disk is nothing, as git stores no
+ * folder. A link is equal only when its text is equal and both sides resolve, inside the
+ * repository, to the same path holding the same file. A link to a folder compares as changed: the
+ * folder's content cannot be compared without reading all of it.
+ */
+async function sameLocal(reads: LocalReads, path: string, working: StoredEntry | null, trusted: TreeEntry | null): Promise<boolean> {
+  const onDisk = working?.kind === 'folder' ? null : working;
+  if (onDisk === null || trusted === null) {
+    return onDisk === null && trusted === null;
+  }
+  if (onDisk.kind === 'file') {
+    return sameFile(reads, onDisk, trusted);
+  }
+  if (trusted.mode !== SYMLINK_MODE || blobIdLike(onDisk.target, trusted.id) !== trusted.id) {
+    return false;
+  }
+  // The link texts are equal, so both sides resolve the same text.
+  const text = decodeText(onDisk.target);
+  const [local, atRef] = await Promise.all([
+    resolveLink(path, text, workingLookup(reads.readBytes)),
+    resolveLink(path, text, refLookup(reads.git, reads.trustedRef)),
+  ]);
+  if (local === null || atRef === null || local.path !== atRef.path) {
+    return false;
+  }
+  if (local.step.kind !== 'leaf' || atRef.step.kind !== 'leaf' || local.step.value === null) {
+    return false;
+  }
+  return sameFile(reads, local.step.value, atRef.step.value);
 }
 
 /**
  * A reader of guarded paths at refs. The CI policy check hands in a reader typed with show and
- * lsFilesUnder only, from a file outside this folder, so the byte read is optional in this type.
- * The command line hands that check the git reader's byte read, so in CI every guarded path is
- * compared as bytes. A reader with no byte read is read as text, which is what the check did
- * before the byte read existed. Text keeps a submodule apart from any file, but two byte sequences
- * that are not valid UTF-8 can read the same.
+ * lsFilesUnder only, from a file outside this folder, so the tree entry read is optional in this
+ * type. The command line hands that check the git reader's tree entry read, so in CI every guarded
+ * path is compared by mode and id. A reader without one is compared as text on both sides, which
+ * is what the check did before. Text keeps a submodule apart from any file, but two byte sequences
+ * that are not valid UTF-8, and a link and a file with the same text, read the same.
  */
-type RefReader = Pick<GitReader, 'show' | 'lsFilesUnder'> & Partial<Pick<GitReader, 'showBytes'>>;
-
-async function readAtRef(git: RefReader, ref: string, path: string): Promise<GuardRead> {
-  if (git.showBytes !== undefined) {
-    return git.showBytes(ref, path);
-  }
-  const text = await git.show(ref, path);
-  return text === null ? null : { kind: 'text', text };
-}
-
-/**
- * The two reads the local guard compares, and how it compares them. The real file reader and the
- * fakes have a byte read, so both sides are read as stored entries. A file reader built without
- * one, such as a test's own, makes both sides read as text, as the guard did before the byte read
- * existed. The two sides always use the same kind of read, so a byte read is never compared with
- * text.
- *
- * With core.fileMode false, git ignores the executable bit on disk and keeps the mode it recorded
- * for a regular file. The guard does the same: two regular files compare by their bytes only. A
- * file system with no executable bit then does not read every guarded file as changed. A symbolic
- * link is still its own entry, and a change of content is still a change.
- */
-async function localReads(
-  deps: Deps,
-  trustedRef: string,
-): Promise<{
-  working: (path: string) => Promise<GuardRead>;
-  trusted: (path: string) => Promise<GuardRead>;
-  same: (working: GuardRead, trusted: GuardRead) => boolean;
-}> {
-  const fs = deps.fs;
-  const git = deps.git;
-  const readBytes = fs.readBytes;
-  if (readBytes !== undefined) {
-    const tracksMode = await git.tracksFileMode();
-    return {
-      // Called on the reader itself, so a reader whose byte read calls its own readFile still does.
-      working: (path) => readBytes.call(fs, path),
-      trusted: (path) => git.showBytes(trustedRef, path),
-      same: (working, trusted) =>
-        !tracksMode && working?.kind === 'file' && trusted?.kind === 'file'
-          ? sameBytes(working.bytes, trusted.bytes)
-          : sameRead(working, trusted),
-    };
-  }
-  const asText = (text: string | null): GuardRead => (text === null ? null : { kind: 'text', text });
-  return {
-    working: async (path) => asText(await fs.readFile(path)),
-    trusted: async (path) => asText(await git.show(trustedRef, path)),
-    same: sameRead,
-  };
-}
+type RefReader = Pick<GitReader, 'show' | 'lsFilesUnder'> & Partial<Pick<GitReader, 'listEntries'>>;
 
 function parseGuardConfigBytes(raw: string): GuardConfigSource | null {
   try {
@@ -543,6 +654,42 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
 }
 
 /**
+ * The same expansion as expandEntries, from tree entry listings instead of name listings, so one
+ * listing per ref gives both the guarded paths and what each ref stores at them.
+ */
+async function expandWithListings(
+  deps: Deps,
+  entries: GuardedEntry[],
+  refs: readonly string[],
+): Promise<{ paths: string[]; listings: Map<string, Map<string, TreeEntry>> }> {
+  const prefixes = listingPrefixes(entries);
+  const unique = [...new Set(refs)];
+  const [refListings, workingByEntry] = await Promise.all([
+    Promise.all(unique.map((ref) => deps.git.listEntries(ref, prefixes, { recursive: true }))),
+    Promise.all(entries.map((entry) => workingTreeFiles(deps, entry))),
+  ]);
+  const listings = new Map(unique.map((ref, index) => [ref, refListings[index] ?? new Map<string, TreeEntry>()]));
+  const paths = selectGuarded(
+    entries,
+    refListings.flatMap((listing) => [...listing.keys()]),
+    workingByEntry,
+  );
+  return { paths, listings };
+}
+
+// The scope config, or null when the config the guard must read from does not parse. With the
+// config unchanged, that means the guard cannot know what it guards, so it reports the config.
+// With the config changed, the scope comes from the trusted ref even if that read fails, so a pull
+// request cannot hide other guarded files by breaking the config.
+function scopeConfigFrom(configDiverged: boolean, scopeRaw: string | null): GuardConfigSource | 'config-unreadable' {
+  const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
+  if (scopeConfig === null && !configDiverged) {
+    return 'config-unreadable';
+  }
+  return scopeConfig ?? { guardedPaths: [] };
+}
+
+/**
  * Config-first scope is an honesty boundary.
  * If config bytes diverge, guarded set still comes from the trusted ref so a
  * PR cannot hide other dirty policy files by shrinking guardedPaths.
@@ -550,33 +697,76 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
  * CODEOWNERS approval cannot be satisfied by the config owner alone.
  */
 export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<string[]> {
-  const read = await localReads(deps, trustedRef);
-  const [workingConfig, trustedConfig] = await Promise.all([read.working(CONFIG_PATH), read.trusted(CONFIG_PATH)]);
-  const configDiverged = !read.same(workingConfig, trustedConfig);
+  const fs = deps.fs;
+  const readBytes = fs.readBytes;
+  if (readBytes === undefined) {
+    return checkGuardAsText(deps, trustedRef);
+  }
+  const reads: LocalReads = {
+    git: deps.git,
+    // Called on the reader itself, so a reader whose byte read calls its own readFile still does.
+    readBytes: (path) => readBytes.call(fs, path),
+    trustedRef,
+    tracksMode: await deps.git.tracksFileMode(),
+  };
+  const [workingConfig, trustedConfigs] = await Promise.all([
+    reads.readBytes(CONFIG_PATH),
+    deps.git.listEntries(trustedRef, [CONFIG_PATH], { recursive: false }),
+  ]);
+  const configDiverged = !(await sameLocal(reads, CONFIG_PATH, workingConfig, trustedConfigs.get(CONFIG_PATH) ?? null));
 
-  // Scope is trusted-ref config when bytes diverged. Matched bytes can use
-  // working-tree parse because they are the same document.
-  const scopeRaw = configText(configDiverged ? trustedConfig : workingConfig);
-  const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
-  if (scopeConfig === null && !configDiverged) {
+  // Scope is trusted-ref config when the config diverged. An unchanged config can use the
+  // working-tree parse because it is the same document. A config that is a link is read through
+  // the link, as the config loader reads it; the compare above checked what it resolves to.
+  const scopeRaw = configDiverged
+    ? await deps.git.show(trustedRef, CONFIG_PATH)
+    : workingConfig?.kind === 'file'
+      ? decodeText(workingConfig.bytes)
+      : workingConfig?.kind === 'symlink'
+        ? await fs.readFile(CONFIG_PATH)
+        : null;
+  const scope = scopeConfigFrom(configDiverged, scopeRaw);
+  if (scope === 'config-unreadable') {
     return [CONFIG_PATH];
   }
 
-  // Every guarded path is compared as stored bytes. The file reader has no git, so a guarded
-  // submodule reads as a folder or as nothing on the working tree side, never as a commit, and the
-  // local guard reports it as changed on every run. That fails safe. Reading the commit checked out
-  // in the submodule needs git run inside it, and a wrong "unchanged" here would let a stop take
-  // the fast path past a moved submodule. The CI policy check compares two refs, where git records
-  // the commit, so it reads a submodule at the same commit as unchanged.
-  const expanded = await expandConfigGuardedSet(deps, scopeConfig ?? { guardedPaths: [] }, trustedRef);
+  // The file reader has no git, so a guarded submodule reads as a folder or as nothing on the
+  // working tree side, never as a commit, and the local guard reports it as changed on every run.
+  // That fails safe. Reading the commit checked out in the submodule needs git run inside it, and
+  // a wrong "unchanged" here would let a stop take the fast path past a moved submodule. The CI
+  // policy check compares two refs, where git records the commit, so it reads a submodule at the
+  // same commit as unchanged.
+  const { paths, listings } = await expandWithListings(deps, readGuardedEntries(scope), [trustedRef, 'HEAD']);
+  const trustedEntries = listings.get(trustedRef) ?? new Map<string, TreeEntry>();
+  const diverged: string[] = [];
+  for (const path of paths) {
+    const working = await reads.readBytes(path);
+    const trusted = trustedEntries.get(path) ?? null;
+    // Optional ledgers may be absent in both places early in a repo lifecycle.
+    if (!(await sameLocal(reads, path, working, trusted))) {
+      diverged.push(path);
+    }
+  }
+  return diverged.sort();
+}
+
+// The local guard for a file reader without a byte read, such as one a test builds: both sides
+// read as text, as the guard did before it compared what git stores.
+async function checkGuardAsText(deps: Deps, trustedRef: string): Promise<string[]> {
+  const [workingConfig, trustedConfig] = await Promise.all([
+    deps.fs.readFile(CONFIG_PATH),
+    deps.git.show(trustedRef, CONFIG_PATH),
+  ]);
+  const configDiverged = workingConfig !== trustedConfig;
+  const scope = scopeConfigFrom(configDiverged, configDiverged ? trustedConfig : workingConfig);
+  if (scope === 'config-unreadable') {
+    return [CONFIG_PATH];
+  }
+  const expanded = await expandConfigGuardedSet(deps, scope, trustedRef);
   const diverged: string[] = [];
   for (const path of expanded) {
-    const [working, trusted] = await Promise.all([read.working(path), read.trusted(path)]);
-    // Optional ledgers may be absent in both places early in a repo lifecycle.
-    if (working === null && trusted === null) {
-      continue;
-    }
-    if (!read.same(working, trusted)) {
+    const [working, trusted] = await Promise.all([deps.fs.readFile(path), deps.git.show(trustedRef, path)]);
+    if (working !== trusted) {
       diverged.push(path);
     }
   }
@@ -605,35 +795,85 @@ export async function guardScopeAtRefs(
   trustedRef: string,
   workingRef: string,
 ): Promise<{ diverged: string[]; readWide: string[] }> {
-  const [workingConfig, trustedConfig] = await Promise.all([
-    readAtRef(git, workingRef, CONFIG_PATH),
-    readAtRef(git, trustedRef, CONFIG_PATH),
-  ]);
-  const configDiverged = !sameRead(workingConfig, trustedConfig);
-  const scopeRaw = configText(configDiverged ? trustedConfig : workingConfig);
-  const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
-  if (scopeConfig === null && !configDiverged) {
+  const listEntries = git.listEntries;
+  if (listEntries === undefined) {
+    return guardScopeAtRefsAsText(git, trustedRef, workingRef);
+  }
+  const reader: EntryReader = {
+    show: (ref, path) => git.show(ref, path),
+    listEntries: (ref, paths, options) => listEntries.call(git, ref, paths, options),
+  };
+  const configAt = async (ref: string) =>
+    refIdentity(reader, ref, CONFIG_PATH, (await reader.listEntries(ref, [CONFIG_PATH], { recursive: false })).get(CONFIG_PATH) ?? null);
+  const [workingConfig, trustedConfig] = await Promise.all([configAt(workingRef), configAt(trustedRef)]);
+  const configDiverged = !sameIdentity(workingConfig, trustedConfig);
+  const scope = scopeConfigFrom(configDiverged, await git.show(configDiverged ? trustedRef : workingRef, CONFIG_PATH));
+  if (scope === 'config-unreadable') {
     return { diverged: [CONFIG_PATH], readWide: [] };
   }
 
   // Each ref is listed once, and the same matcher the local guard uses selects the guarded files,
   // so a glob entry lists its files at both refs and a file the head deleted is still compared.
-  const entries = readGuardedEntries(scopeConfig ?? { guardedPaths: [] });
+  // The same listing gives each path's mode and id, so no file content is read.
+  const entries = readGuardedEntries(scope);
+  const readWide = [...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice))];
+  const prefixes = listingPrefixes(entries);
+  const [trustedEntries, workingEntries] = await Promise.all([
+    reader.listEntries(trustedRef, prefixes, { recursive: true }),
+    reader.listEntries(workingRef, prefixes, { recursive: true }),
+  ]);
+  const expanded = selectGuarded(entries, [...trustedEntries.keys(), ...workingEntries.keys()]);
+
+  const diverged: string[] = [];
+  for (const path of expanded) {
+    const working = workingEntries.get(path) ?? null;
+    const trusted = trustedEntries.get(path) ?? null;
+    if (working === null && trusted === null) {
+      continue;
+    }
+    const [atWorking, atTrusted] = await Promise.all([
+      refIdentity(reader, workingRef, path, working),
+      refIdentity(reader, trustedRef, path, trusted),
+    ]);
+    if (!sameIdentity(atWorking, atTrusted)) {
+      diverged.push(path);
+    }
+  }
+  return { diverged: diverged.sort(), readWide };
+}
+
+// Two refs store the same thing at a path. A link that does not resolve is never the same.
+function sameIdentity(a: { text: string; resolved: boolean }, b: { text: string; resolved: boolean }): boolean {
+  return a.resolved && b.resolved && a.text === b.text;
+}
+
+// The CI policy check for a reader without the tree entry read: both refs read as text, as the
+// check did before it compared what git stores.
+async function guardScopeAtRefsAsText(
+  git: RefReader,
+  trustedRef: string,
+  workingRef: string,
+): Promise<{ diverged: string[]; readWide: string[] }> {
+  const [workingConfig, trustedConfig] = await Promise.all([
+    git.show(workingRef, CONFIG_PATH),
+    git.show(trustedRef, CONFIG_PATH),
+  ]);
+  const configDiverged = workingConfig !== trustedConfig;
+  const scope = scopeConfigFrom(configDiverged, configDiverged ? trustedConfig : workingConfig);
+  if (scope === 'config-unreadable') {
+    return { diverged: [CONFIG_PATH], readWide: [] };
+  }
+  const entries = readGuardedEntries(scope);
   const readWide = [...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice))];
   const prefixes = listingPrefixes(entries);
   const [trustedFiles, workingFiles] = await Promise.all([
     git.lsFilesUnder(trustedRef, prefixes),
     git.lsFilesUnder(workingRef, prefixes),
   ]);
-  const expanded = selectGuarded(entries, [...trustedFiles, ...workingFiles]);
-
   const diverged: string[] = [];
-  for (const path of expanded) {
-    const [working, trusted] = await Promise.all([readAtRef(git, workingRef, path), readAtRef(git, trustedRef, path)]);
-    if (working === null && trusted === null) {
-      continue;
-    }
-    if (!sameRead(working, trusted)) {
+  for (const path of selectGuarded(entries, [...trustedFiles, ...workingFiles])) {
+    const [working, trusted] = await Promise.all([git.show(workingRef, path), git.show(trustedRef, path)]);
+    if (working !== trusted) {
       diverged.push(path);
     }
   }
@@ -641,50 +881,43 @@ export async function guardScopeAtRefs(
 }
 
 /**
- * The pin format. Each pin is `v3:` and a hash. Releases before v2 stored the bare hash of the
- * decoded text, where a file holding U+FFFD and a submodule's id line could pin the same as that
- * submodule, and two bytes that are not valid UTF-8 pinned the same. v2 hashed the bytes without
- * the mode, so an executable bit, or a file swapped for a symbolic link with the same text, pinned
- * the same. A stored pin with no version or another version never equals a pin of this format, so
- * the stop reads that path as changed. That is the safe direction: the stop reports drift and asks
- * for review, and never takes an old pin as proof that nothing changed.
+ * The pin format. Each pin is `v4:` and a sha256 over a fixed label and what HEAD stores at the
+ * path, as refIdentity gives it: nothing, or the mode and the object id, and for a link also the
+ * path it resolves to and the mode and id there. That text is JSON of short strings, so two
+ * different entries never give the same input. Earlier releases stored the bare hash of the
+ * decoded text, where two bytes that are not valid UTF-8, a file and a link with the same text, or
+ * a file and a submodule could pin the same. A stored pin of any other format never equals a pin
+ * of this one; see pinsAreCurrent for what the Stop hook does with such pins.
  */
-export const SESSION_PIN_FORMAT = 'v3';
+export const SESSION_PIN_FORMAT = 'v4';
 const PIN_PREFIX = `${SESSION_PIN_FORMAT}:`;
 
-/**
- * The hash of one stored entry, over a form that cannot collide across kinds: a fixed label, the
- * kind, the mode, the length of what follows, then the bytes, the link text, the commit id, or the
- * tree id. Every field before the payload is ASCII ended by a line break, and the length bounds the
- * payload, so no two entries of different kinds, modes, or contents hash the same input.
- */
-function pinOf(entry: StoredEntry | null): string {
-  const encoder = new TextEncoder();
-  const [kind, mode, payload]: [string, string, Uint8Array] =
-    entry === null
-      ? ['absent', '-', new Uint8Array(0)]
-      : entry.kind === 'file'
-        ? ['file', entry.mode, entry.bytes]
-        : entry.kind === 'symlink'
-          ? ['symlink', '120000', entry.target]
-          : entry.kind === 'submodule'
-            ? ['submodule', '160000', encoder.encode(entry.commit)]
-            : ['folder', '040000', encoder.encode(entry.tree)];
-  const hash = createHash('sha256');
-  hash.update(encoder.encode(`usabl session pin\n${kind}\n${mode}\n${String(payload.byteLength)}\n`));
-  hash.update(payload);
-  return `${PIN_PREFIX}${hash.digest('hex')}`;
+function pinOf(identity: { text: string }): string {
+  return `${PIN_PREFIX}${createHash('sha256').update(`usabl session pin\n${identity.text}`, 'utf8').digest('hex')}`;
 }
 
 /**
- * Session pins fingerprint committed bytes for later stop-hook reuse.
+ * Whether every stored pin is in the current format. Pins an older usabl wrote say nothing this
+ * usabl can compare, so the Stop hook does not read them as drift and does not take the current
+ * state as the baseline either: it says the pins are from an older usabl and checks the change in
+ * full.
+ */
+export function pinsAreCurrent(pins: SessionPins): boolean {
+  return Object.values(pins).every((pin) => pin.startsWith(PIN_PREFIX));
+}
+
+/**
+ * Session pins fingerprint committed state for later stop-hook reuse: one listing of HEAD gives
+ * each guarded path's mode and id. A link that does not resolve pins the same on every stop, and
+ * the local guard reports it as changed on every stop instead.
  * This unit stays pure and does not write pin state to disk.
  */
 export async function computeSessionPins(deps: Deps, config: UsablConfig): Promise<SessionPins> {
-  const expanded = await expandConfigGuardedSet(deps, config);
+  const { paths, listings } = await expandWithListings(deps, readGuardedEntries(config), ['HEAD']);
+  const head = listings.get('HEAD') ?? new Map<string, TreeEntry>();
   const pins: SessionPins = {};
-  for (const path of expanded) {
-    pins[path] = pinOf(await deps.git.showBytes('HEAD', path));
+  for (const path of paths) {
+    pins[path] = pinOf(await refIdentity(deps.git, 'HEAD', path, head.get(path) ?? null));
   }
   return pins;
 }

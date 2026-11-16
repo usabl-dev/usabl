@@ -62,6 +62,9 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
       try {
         // git stores no file below a symbolic link: it reads the link itself as the entry. A
         // folder above the path that is a link, or anything that is not a folder, means no file.
+        // A folder above swapped for a link after this check is followed, because O_NOFOLLOW below
+        // covers only the last part of the path. The bytes read then are the bytes every consumer
+        // of the path reads.
         const segments = path.split('/').filter((segment) => segment.length > 0);
         for (let i = 1; i < segments.length; i += 1) {
           const above = await lstat(resolve(cwd, segments.slice(0, i).join('/')));
@@ -75,6 +78,9 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
           // The link text, as git stores it, never what the link points at.
           const target = await readlink(full, { encoding: 'buffer' });
           return { kind: 'symlink', target: asBytes(target) };
+        }
+        if (stat.isDirectory()) {
+          return { kind: 'folder' };
         }
         if (!stat.isFile()) {
           return null;

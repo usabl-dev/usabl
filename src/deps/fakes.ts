@@ -4,7 +4,8 @@
  * hands it back as the page's own address, so a fake page is always where it was sent.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
-import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions, StoredEntry } from '../contracts/index.js';
+import { createHash } from 'node:crypto';
+import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions, StoredEntry, TreeEntry } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
@@ -133,13 +134,20 @@ function normalizePrefix(prefix: string): string {
 
 /**
  * The fake byte read: the fake text read, as UTF-8 bytes. The fakes store text only, so the two
- * reads always agree, and every fake file has the mode 100644. The byte reads call the text read
- * on the same object at call time, so a test that replaces show or readFile changes what the guard
- * reads too. A test that needs bytes that are not UTF-8, another mode, a symbolic link, or a
- * submodule uses a real repository.
+ * reads always agree, and every fake file has the mode 100644. The byte read and the tree entries
+ * call the text reads on the same object at call time, so a test that replaces show, readFile, or
+ * lsFilesUnder changes what the guard reads too. A test that needs bytes that are not UTF-8,
+ * another mode, a symbolic link, or a submodule uses a real repository.
  */
 export function storedEntryOf(text: string | null): StoredEntry | null {
   return text === null ? null : { kind: 'file', mode: '100644', bytes: new TextEncoder().encode(text) };
+}
+
+/** The tree entry git would give the fake text: a 100644 blob with git's own SHA-1 id for it. */
+export function treeEntryOf(text: string): TreeEntry {
+  const bytes = new TextEncoder().encode(text);
+  const id = createHash('sha1').update(`blob ${String(bytes.byteLength)}\0`).update(bytes).digest('hex');
+  return { mode: '100644', type: 'blob', id };
 }
 
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
@@ -157,8 +165,16 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     git: {
       writeTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
-      async showBytes(ref, path) {
-        return storedEntryOf(await this.show(ref, path));
+      async listEntries(ref, paths, { recursive }) {
+        const names = recursive ? await this.lsFilesUnder(ref, paths) : [...new Set(paths)];
+        const entries = new Map<string, TreeEntry>();
+        for (const name of names) {
+          const text = await this.show(ref, name);
+          if (text !== null) {
+            entries.set(name, treeEntryOf(text));
+          }
+        }
+        return entries;
       },
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],

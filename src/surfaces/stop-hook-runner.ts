@@ -22,7 +22,7 @@ import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
-import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
+import { checkGuard, computeSessionPins, diffSessionPins, pinsAreCurrent, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
 import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
@@ -960,6 +960,8 @@ export async function runStopHook(
     // then checked under the weaker policy, mints a receipt that matches. Only the pins see that
     // drift, so a stored receipt must never answer a stop before they are compared.
     let pinsCompared = false;
+    // Set when the stored pins are from an older usabl: the stop then skips the receipt fast path.
+    let olderPins = false;
     const parsedSession = parseSessionId(input.sessionId);
     if ('notice' in parsedSession) {
       // No usable session id means no pins to compare. That is never silent: an allow on this stop
@@ -978,6 +980,18 @@ export async function runStopHook(
         pinNotice = pinsNotUsed(
           'the session pin file does not hold pins usabl can read',
           'see "pin fix" in the untrusted text below.',
+          [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
+        );
+      } else if (previousPins !== null && !pinsAreCurrent(previousPins)) {
+        // Pins an older usabl wrote say nothing this usabl can compare. Read as drift, they would
+        // tell the user that policy files changed when nothing did. Replaced, they would take
+        // whatever is committed now as the baseline. So neither: the stop says so, and checks the
+        // change in full below instead of trusting a stored receipt.
+        olderPins = true;
+        pinNotice = pinsNotUsed(
+          'the session pins were recorded by an older usabl, in a format this usabl does not compare, ' +
+            'so this stop checks the change in full',
+          'start a new session, or see "pin fix" in the untrusted text below.',
           [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
         );
       } else {
@@ -1032,7 +1046,7 @@ export async function runStopHook(
     checkCommand = checkCommandFor(scope.baseRevision);
 
     let receiptNotUsed: string | null = null;
-    if (dirtyGuardedPaths.length === 0) {
+    if (dirtyGuardedPaths.length === 0 && !olderPins) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
       // The stored receipt only offers a fast allow. A receipt the hook cannot read or check is no
       // guard failure: the hook drops the fast path and runs the full check below.

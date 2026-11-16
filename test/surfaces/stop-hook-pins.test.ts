@@ -203,14 +203,17 @@ describe.skipIf(REAL_UID === null)('Stop hook session pins on a shared temp dire
 
     // Rewrite the pins the way this user's own earlier stop would have, with a different digest,
     // keeping the private mode. The next stop sees the committed bytes differ from the pin.
-    await writeFile(path, JSON.stringify({ ...recorded, 'usabl.config.json': 'an older digest' }));
+    // The digest keeps the current format, so it is read as a real change, never as pins from an
+    // older usabl.
+    const format = (recorded['usabl.config.json'] ?? '').split(':')[0] ?? '';
+    await writeFile(path, JSON.stringify({ ...recorded, 'usabl.config.json': `${format}:${'0'.repeat(64)}` }));
 
     const result = await stop('session-drift');
 
     expect(result.stdout).toContain('guarded policy drift');
   });
 
-  it('reads a pin file an earlier release wrote, with no version, as drift, even when nothing changed', async () => {
+  it('says pins an earlier release wrote, with no version, are from an older usabl, and checks again', async () => {
     const path = await pinPathFor('session-unversioned');
     const recorded = JSON.parse(await readFile(path, 'utf8')) as Record<string, string>;
     // An earlier release stored the bare sha256 of the decoded text. Here that is the digest of
@@ -224,10 +227,16 @@ describe.skipIf(REAL_UID === null)('Stop hook session pins on a shared temp dire
     const second = await stop('session-unversioned');
 
     for (const result of [first, second]) {
-      expect(result.stdout).toContain('guarded policy drift');
-      expect(result.engineRan()).toBe(false);
+      // Nothing changed, so the stop does not say policy files changed. It says the pins are from
+      // an older usabl, that drift was not checked, and how to get new pins, and it runs the full
+      // check instead of trusting a stored receipt.
+      expect(result.stdout).not.toContain('guarded policy drift');
+      expect(result.stderr).toContain('older usabl');
+      expect(result.stderr).toContain('was not checked');
+      expect(result.stderr).toContain(`delete ${path}`);
+      expect(result.engineRan()).toBe(true);
     }
-    // The stored pins are kept, so a retry cannot clear the drift.
+    // The stored pins are kept, so the current state is never taken as the baseline on its own.
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(unversioned);
   });
 
