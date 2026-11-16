@@ -823,14 +823,13 @@ const BODY_HOLDS_FOCUS_FUNCTION = `function () {
  * visibility test and its box has a width and a height. A CSS background image is not content: the
  * element that shows it is empty.
  *
- * A visible frame the read can see into counts only through what its document shows, so an empty
- * one is not content. A frame the read cannot see into, because its document is null or throws as
- * for another origin, counts by itself when it passes the same visibility test and its box has a
- * width and a height: the frame shows on the page, so a page whose only content is such a frame is
- * not blank. A frame past the depth limit is not read and not counted.
+ * A visible frame counts only through what the read sees inside its document. A frame the read
+ * cannot see into, such as one from another origin, is not counted even when it has a box: it may
+ * hold a blank app, an error page, or a third-party widget, so it is no evidence that the page
+ * rendered. A frame past the depth limit is not read and not counted.
  *
  * Node types are compared by number, because a frame's nodes come from another realm. A closed
- * shadow root and a frame from another origin cannot be read, so what they hold is not counted. A
+ * shadow root and a frame from another origin cannot be read, so what they show is not counted. A
  * walk past the node limit has not found content, and says so. Exported for its tests.
  */
 export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
@@ -878,27 +877,14 @@ export const PAGE_SHOWS_CONTENT_FUNCTION = `function () {
         if (tag === 'script' || tag === 'style' || tag === 'template') continue;
         if (mediaShows(node)) return true;
         if (node.shadowRoot) pending.push(node.shadowRoot);
-        // A frame past the depth limit is not counted at all. The read did not look at it, and a
-        // guess must read as no content, so a page the read cannot finish is reported blank.
         if ((tag === 'iframe' || tag === 'frame') && depth < FRAME_DEPTH_LIMIT && visible(node)) {
           let inner = null;
-          let readable = true;
           try {
             inner = node.contentDocument;
           } catch (error) {
-            readable = false;
+            inner = null;
           }
-          if (inner === null) readable = false;
-          if (!readable) {
-            // A frame the read cannot see into, such as one from another origin, still shows on
-            // the page. A visible one with a box counts by itself.
-            const frameBox = node.getBoundingClientRect();
-            if (frameBox.width > 0 && frameBox.height > 0) return true;
-          } else if (inner && inner.body && walk(inner.body, depth + 1)) {
-            // A frame the read can see into counts only through what its document shows. An empty
-            // one, such as about:blank or a widget still loading, is not content.
-            return true;
-          }
+          if (inner && inner.body && walk(inner.body, depth + 1)) return true;
         }
       }
       for (let child = node.lastChild; child !== null; child = child.previousSibling) {
