@@ -12,3 +12,18 @@ import { operatorPath, operatorText } from '../intake/config-error.js';
 export function shownText(value: string): string {
   return operatorText(operatorPath(value));
 }
+
+/**
+ * The error that stopped `usabl init` or `usabl init --docs`, as the CLI prints it. A file read
+ * that fails for a reason init does not handle, such as a name too long for the file system or a
+ * link to itself, throws an error whose message holds the path, and the path comes from the
+ * repository. Each line keeps its break, so a refusal of several lines reads as written, and each
+ * control character in a line is labelled.
+ */
+export function shownError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .split('\n')
+    .map((line) => operatorPath(line))
+    .join('\n');
+}
