@@ -182,7 +182,9 @@ starts `on screen <id>, the keyboard walk was cut short` and says why and what t
   controls always cuts the walk short, even when it is listed. Check it by hand. Focus that goes
   back into a region after other stops, such as content slotted into a closed shadow root between
   its own controls, is cut short too. The walk cannot tell that from a keyboard trap, so it
-  reports no trap.
+  reports no trap. A host element with a `tabindex` whose closed shadow root holds controls cuts
+  the walk short the same way, listed or not. Use an open shadow root, or remove the `tabindex`
+  from the host so Tab goes straight to the controls inside it.
 
 Each fix to `usabl.config.json` is a change to a guarded file, so the pull request needs
 approval, and in CI the gate reads the trusted copy.

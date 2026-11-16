@@ -1029,8 +1029,9 @@ Tab is a trap of one stop.
 **A walk that was cut short.** A walk that stops before its end rule confirms the end of the
 focus order is cut short. Every reason is read the same way: the stop cap, the time cap, a
 cycle (a trap or one open modal dialog), an extra Tab that did not confirm the end, a script that
-moved focus to the body, a region the walk cannot read that Tab did not leave, and focus that went
-back into a region the walk had walked past (below). The
+moved focus to the body, a region the walk cannot read that Tab did not leave, focus that went
+back into a region the walk had walked past, and focus that went into a region at the path of a
+control it had just walked (below). The
 keyboard walk gives the screen one `not-covered` coverage gap, with the screen's url as its ref.
 The reason starts `on screen <id>, the keyboard walk was cut short, so this screen is not
 covered.`, says why and after how many tab stops, says that accessibility barriers past that
@@ -1101,8 +1102,13 @@ screen by hand, or point a screen of its own at a state where the region is clos
 goes back into a region the walk walked past, after other stops, also cuts the walk short, with no
 `keyboard-walk-trap` draft. Content slotted into a closed shadow root between its own controls
 reads that way with no trap at all, because every control inside the root has the host's path, so
-the repeat is not evidence of a trap. The end rule matches a region stop by its path, only as
-described under How the walk ends. The
+the repeat is not evidence of a trap. A host with a `tabindex` whose closed shadow root holds
+controls is a stop the walk can read, and Tab then goes into the root, where every control has the
+host's path. That repeat is not a trap either. The walk records the region and is cut short, with
+no trap draft, because it cannot tell where focus is in there, even when the region is listed. The
+end rule matches a region stop by its path, only as described under How the walk ends. The presses
+of Tab the end rule makes out of a first region read the walk's time budget, so a walk that runs
+out of time there is cut short by the time cap. The
 controls inside the region were not checked, so each region gives the screen its own
 `not-covered` gap. The reason says at which tab stop the walk met it and what it is, and says to
 check its controls by hand, or to use an open shadow root or a same-origin frame so usabl can
