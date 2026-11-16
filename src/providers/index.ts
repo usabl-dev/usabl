@@ -130,6 +130,13 @@ export interface RunProvidersOptions {
    * provider and is kept with the other gaps. It decides no verdict.
    */
   beforeIntendedNavigation?: (provider: Provider) => Promise<CoverageGap | null>;
+  /**
+   * Called right after each provider that beforeIntendedNavigation let run, with the drafts that
+   * provider added, the same draft objects that are in the result. The check runner keeps them so
+   * it can drop the last flow's own result when the screen's content is gone by the end of the scan.
+   * Called even when the provider threw, with the partial drafts kept from it.
+   */
+  afterIntendedNavigation?: (provider: Provider, drafts: Draft[]) => void;
 }
 
 /**
@@ -178,12 +185,14 @@ export async function runProviders(
       continue;
     }
 
+    let watched = false;
     if (provider.navigatesOnPurpose === true && options.beforeIntendedNavigation !== undefined && appliesToScreen(provider, ctx)) {
       const skipped = await options.beforeIntendedNavigation(provider);
       if (skipped !== null) {
         gaps.push(skipped);
         continue;
       }
+      watched = true;
     }
 
     // Recorded before the run because a provider that throws mid-probe has already clicked.
@@ -191,6 +200,7 @@ export async function runProviders(
       mutatedBy ??= provider.id;
     }
 
+    const draftsBefore = drafts.length;
     try {
       const output = normalizeOutput(await provider.run(ctx));
       drafts.push(...output.drafts);
@@ -209,6 +219,9 @@ export async function runProviders(
       if (err instanceof ProviderRunFailed) {
         drafts.push(...err.drafts.filter((draft) => draft.evidenceClass !== 'deterministic'));
       }
+    }
+    if (watched) {
+      options.afterIntendedNavigation?.(provider, drafts.slice(draftsBefore));
     }
   }
 

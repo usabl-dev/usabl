@@ -2421,17 +2421,29 @@ read point it used: right before a named flow or contract, or at the end of the 
 
 **The readiness selector at the same point.** A `reachedWhen` selector is measured at the read
 point too, so a flow that moves the route on purpose and leaves the screen's own content behind
-does not make the whole screen unseen. The selector has to hold before the walk and at the read
-point. The response part keeps its rule: it counts only requests sent before the walk, read at the
-end.
+does not make the whole screen unseen. For the whole screen, the selector has to hold before the
+walk and at the read point. The response part keeps its rule: it counts only requests sent before
+the walk, read at the end.
 
 **Later flows.** Before each later flow or voice contract that applies to this screen, the address
-is read again and compared with the address at the read point, by the same rule. Once a read shows
-the page left that route, every remaining flow and contract is skipped, each with a `not-covered`
-gap that names it and the flow or contract that ran before the move, both by their requirement id.
-A later flow would otherwise check its requirement on the route an earlier flow moved to and count
-it for this screen. The findings and gaps taken before the move stay. To check both, end the first
-flow on the route it started on, or give the later requirement its own screen.
+is read again and compared with the address at the read point, by the same rule, and the selector
+is measured again. Once a read shows the page left that route, or the selector that held at the
+read point matches nothing, every remaining flow and contract is skipped, each with a `not-covered`
+gap that names it and the flow or contract that ran before the change, both by their requirement
+id. A later flow would otherwise check its requirement on a page an earlier flow moved to and count
+it for this screen. The findings and gaps taken before the change stay. To check both, end the
+first flow on the route and the content it started on, or give the later requirement its own
+screen. A flow that moves away and comes back within its own run is not seen, so the next flow
+runs.
+
+**The last flow.** When a flow or voice contract ran, the selector is measured again at the end of
+the scan. When it held at the read point and matches nothing at the end, the last flow or contract
+that ran gets a `not-covered` gap that names it and the selector, and its own drafts are dropped:
+its result may come from a page that is not this screen, such as a sign-in form swapped in at the
+same address. Every draft taken before it stays. The cost, and a gate effect: on a screen with a
+selector only it has, a last flow that moves the route on purpose and leaves that content behind
+cannot verify. It gets the gap. End it on the route and the content it started on, or check its
+requirement on the screen it moves to.
 
 **What it does.** When the two addresses name different screens, or an address cannot be read, the
 screen is a `not-covered` gap. The gap names both addresses: origin, path, and the route of a hash
@@ -2478,12 +2490,14 @@ What this read does not catch:
 - a page that leaves its screen and comes back to the same address before the read;
 - a page that changes its content without changing its address;
 - a move made by the last flow or voice contract that runs on the screen, or by a timer that fires
-  while it runs. Nothing runs after it to be skipped. The flow's own rules see a flow step's path
-  change; nothing here sees the rest.
+  while it runs, unless the screen's `reachedWhen` selector is gone at the end (see "The last
+  flow"). The flow's own rules see a flow step's path change; nothing here sees the rest;
+- a flow that moves away and comes back within its own run.
 
 For the first two, configure the screen's `url` with its query or fragment. For the first four, a
 `reachedWhen` selector that the other page lacks is measured again at the read point, and one that
-did not hold at both moments makes the screen a gap in `coverage/unseen.ts`.
+did not hold at both moments makes the screen a gap in `coverage/unseen.ts`. For the fifth, the
+same selector gaps the last flow, as above.
 
 `checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
 fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a gap.

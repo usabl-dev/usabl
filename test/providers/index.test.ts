@@ -542,6 +542,38 @@ describe('runProviders', () => {
     expect(result.gaps).toEqual([]);
   });
 
+  it('hands afterIntendedNavigation the drafts each provider that may move the page added, and only for one that ran', async () => {
+    const ctx = await makeContext();
+    const flow = (id: string): Provider => ({
+      id,
+      layer: 'fake',
+      capabilities: ['live'],
+      mutatesPageState: true,
+      navigatesOnPurpose: true,
+      run: async (): Promise<Draft[]> => [{ ...draft, rule: `${id}-rule` }],
+    });
+    const seen: Array<[string, string[]]> = [];
+
+    const result = await runProviders(
+      [{ ...recorder([], 'plain'), run: async () => [draft] }, flow('flow-a'), flow('flow-b'), flow('flow-c')],
+      ctx,
+      ['live'],
+      {
+        beforeIntendedNavigation: async (provider) =>
+          provider.id === 'flow-c' ? { ref: 'provider:flow-c', state: 'not-covered', reason: 'skipped' } : null,
+        afterIntendedNavigation: (provider, added) => {
+          seen.push([provider.id, added.map((d) => d.rule)]);
+        },
+      },
+    );
+
+    expect(seen).toEqual([
+      ['flow-a', ['flow-a-rule']],
+      ['flow-b', ['flow-b-rule']],
+    ]);
+    expect(result.drafts.map((d) => d.rule)).toEqual(['button-name', 'flow-a-rule', 'flow-b-rule']);
+  });
+
   it('skips a provider that may move the page when beforeIntendedNavigation returns a gap for it, and keeps that gap', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();

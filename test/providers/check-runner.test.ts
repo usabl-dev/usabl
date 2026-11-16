@@ -1302,9 +1302,11 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
     expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'intake:flow-save-passed']);
   });
 
-  it('keeps the findings on a screen whose own selector a flow removes when it moves the route on purpose', async () => {
+  it('keeps the findings on a screen whose own selector a flow removes when it moves the route on purpose, and gaps that flow', async () => {
     // The selector is read where the address is, before the flow, so the flow's intended move does
-    // not make the whole screen a gap.
+    // not make the whole screen a gap. It is read again at the end, and it is gone, so the flow's own
+    // result is not confirmed to be on this screen: the flow gets a gap. That is the cost of guarding
+    // the last flow: a last flow that leaves the screen's own content behind cannot verify.
     const { page, go } = await hashPage();
     let flowRan = false;
     Object.assign(page, { queryAll: async () => (flowRan ? [] : [{ selector: 'table#clusters' }]) });
@@ -1315,9 +1317,93 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
 
     const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
 
-    expect(scan.gaps).toEqual([]);
     expect(scan.reachedSelectorPresent).toBe(true);
     expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake-flow', state: 'not-covered' });
+  });
+
+  it('drops the last flow result and gaps it when the content is swapped at the same address while it runs', async () => {
+    // No 401 and no address change: the app swaps a sign-in form in while the only flow runs. The
+    // selector held at the read point and is gone at the end.
+    const { page } = await hashPage();
+    let flowRan = false;
+    Object.assign(page, { queryAll: async () => (flowRan ? [] : [{ selector: 'table#clusters' }]) });
+    const flow: Provider = {
+      id: 'intake:flow-save',
+      layer: 'intake-flow',
+      capabilities: ['live'],
+      mutatesPageState: true,
+      navigatesOnPurpose: true,
+      run: async (): Promise<Draft[]> => {
+        flowRan = true;
+        return [makeDraft('intake:flow-save-passed')];
+      },
+    };
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:flow-save', state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('table#clusters');
+  });
+
+  it('skips the second flow when the selector is gone after the first', async () => {
+    const { page } = await hashPage();
+    let firstRan = false;
+    Object.assign(page, { queryAll: async () => (firstRan ? [] : [{ selector: 'table#clusters' }]) });
+    const first: Provider = {
+      id: 'intake:flow-open',
+      layer: 'intake-flow',
+      capabilities: ['live'],
+      mutatesPageState: true,
+      navigatesOnPurpose: true,
+      run: async (): Promise<Draft[]> => {
+        firstRan = true;
+        return [makeDraft('intake:flow-open-passed')];
+      },
+    };
+    const second = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, first, second], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+    const skipped = scan.gaps.find((gap) => gap.ref === 'provider:intake:flow-save');
+    expect(skipped?.state).toBe('not-covered');
+    expect(skipped?.reason).toContain('intake:flow-open');
+    // The first flow is the last that ran, and the selector is gone at the end too, so its own
+    // result is not confirmed either.
+    expect(scan.gaps.map((gap) => gap.ref).sort()).toEqual(['provider:intake:flow-open', 'provider:intake:flow-save']);
+  });
+
+  it('still verifies a last flow that keeps the selector', async () => {
+    const { page } = await hashPage();
+    Object.assign(page, { queryAll: async () => [{ selector: 'table#clusters' }] });
+    const flow = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'intake:flow-save-passed', 'pf-rule']);
+  });
+
+  it('leaves a flow-free scan as it was: a selector gone after the providers makes the screen unseen', async () => {
+    const { page } = await hashPage();
+    let rowsRead = false;
+    Object.assign(page, {
+      queryAll: async () => (rowsRead ? [] : [{ selector: 'table#clusters' }]),
+      rowContext: async () => {
+        rowsRead = true;
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, prober()], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
   });
 
   it('still fails the selector when it is gone before the flows run', async () => {
