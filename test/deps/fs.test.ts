@@ -52,7 +52,7 @@ describe('makeFsGlob', () => {
     expect(fe?.kind === 'file' ? [...fe.bytes] : fe).toEqual([0xfe, 0x41]);
     expect(ff?.kind === 'file' ? [...ff.bytes] : ff).toEqual([0xff, 0x41]);
     await expect(fsGlob.readBytes?.('src/Missing.tsx')).resolves.toBeNull();
-    await expect(fsGlob.readBytes?.('src')).resolves.toBeNull();
+    await expect(fsGlob.readBytes?.('src')).resolves.toEqual({ kind: 'folder' });
     await expect(fsGlob.readBytes?.('src/App.tsx/package.json')).resolves.toBeNull();
   });
 

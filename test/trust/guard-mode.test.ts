@@ -21,6 +21,7 @@ import {
   computeSessionPins,
   diffSessionPins,
   listDivergedGuardedPathsAtRefs,
+  pinsAreCurrent,
 } from '../../src/trust/guard.js';
 
 const execFileAsync = promisify(execFile);
@@ -202,20 +203,24 @@ describe('the guard compares the file mode', { timeout: 60_000 }, () => {
   });
 });
 
-describe('session pins carry the mode in format v3', { timeout: 60_000 }, () => {
+describe('session pins carry the mode in format v4', { timeout: 60_000 }, () => {
   let root = '';
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('a stored pin in the v2 format is read as changed, even when the file did not change', async () => {
-    root = await repo();
-    const deps = realDeps(root);
-    const next = await computeSessionPins(deps, config);
-    const older = Object.fromEntries(Object.entries(next).map(([path, pin]) => [path, pin.replace(/^v\d+:/, 'v2:')]));
-    expect(Object.values(next).every((pin) => pin.startsWith('v3:'))).toBe(true);
-    expect(diffSessionPins(older, next)).toEqual(Object.keys(next).sort());
-    expect(diffSessionPins(next, await computeSessionPins(deps, config))).toEqual([]);
-  });
+  for (const older of ['v2', 'v3']) {
+    it(`a stored pin in the ${older} format is read as changed and as not current, even when the file did not change`, async () => {
+      root = await repo();
+      const deps = realDeps(root);
+      const next = await computeSessionPins(deps, config);
+      const stored = Object.fromEntries(Object.entries(next).map(([path, pin]) => [path, pin.replace(/^v\d+:/, `${older}:`)]));
+      expect(Object.values(next).every((pin) => pin.startsWith('v4:'))).toBe(true);
+      expect(pinsAreCurrent(next)).toBe(true);
+      expect(pinsAreCurrent(stored)).toBe(false);
+      expect(diffSessionPins(stored, next)).toEqual(Object.keys(next).sort());
+      expect(diffSessionPins(next, await computeSessionPins(deps, config))).toEqual([]);
+    });
+  }
 });

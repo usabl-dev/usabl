@@ -7,6 +7,10 @@ import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin, sessionPinFileName } from '../../src/surfaces/stop-hook-runner.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
+import { SESSION_PIN_FORMAT } from '../../src/trust/guard.js';
+
+// A stored pin in the current format that matches nothing, so the stop reads it as a real change.
+const stalePin = (label: string): string => `${SESSION_PIN_FORMAT}:${label}`;
 
 class MemoryRunnerFs {
   private readonly files = new Map<string, string>();
@@ -190,8 +194,8 @@ describe('stop-hook-runner protocol', () => {
       },
     });
     const previousPins = {
-      'usabl.config.json': 'pin-old',
-      '.usabl-evidence.json': 'pin-old-evidence',
+      'usabl.config.json': stalePin('pin-old'),
+      '.usabl-evidence.json': stalePin('pin-old-evidence'),
     };
     const pinName = sessionPinFileName('session-a', '/repo/one');
     pins.files.set(pinName, JSON.stringify(previousPins, null, 2));
@@ -216,8 +220,8 @@ describe('stop-hook-runner protocol', () => {
       },
     });
     const previousPins = {
-      'usabl.config.json': 'pin-old',
-      '.usabl-waivers.json': 'pin-old-waiver',
+      'usabl.config.json': stalePin('pin-old'),
+      '.usabl-waivers.json': stalePin('pin-old-waiver'),
     };
     const pinName = sessionPinFileName('session-b', '/repo/one');
     pins.files.set(pinName, JSON.stringify(previousPins, null, 2));
@@ -780,7 +784,7 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
     const { ports, pins, stdout } = makePorts();
     const pinName = sessionPinFileName('session-evil', '/repo/one');
     const evilPath = `policy/a.json\n${INJECTED}`;
-    pins.files.set(pinName, JSON.stringify({ [evilPath]: 'old-digest' }));
+    pins.files.set(pinName, JSON.stringify({ [evilPath]: stalePin('old-digest') }));
 
     await runStopHookFromStdin(JSON.stringify({ session_id: 'session-evil' }), ports);
 
@@ -795,7 +799,7 @@ describe('stop-hook-runner session ids, carried values, and pin failures', () =>
   it('frames the drifted paths on an active continuation too', async () => {
     const { ports, pins, stderr } = makePorts();
     const pinName = sessionPinFileName('session-evil-active', '/repo/one');
-    pins.files.set(pinName, JSON.stringify({ [`policy/a.json\n${INJECTED}`]: 'old-digest' }));
+    pins.files.set(pinName, JSON.stringify({ [`policy/a.json\n${INJECTED}`]: stalePin('old-digest') }));
 
     await runStopHookFromStdin(JSON.stringify({ session_id: 'session-evil-active', stop_hook_active: true }), ports);
 

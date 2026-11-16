@@ -197,7 +197,7 @@ describe('trust guard', () => {
 
     // Pins come from committed bytes, never the working copy, in the versioned format.
     expect(previous['src/gate/index.ts']).toBe(committed['src/gate/index.ts']);
-    expect(previous['src/gate/index.ts']).toMatch(/^v3:[0-9a-f]{64}$/);
+    expect(previous['src/gate/index.ts']).toMatch(/^v4:[0-9a-f]{64}$/);
     expect(previous['src/gate/index.ts']).not.toBe(sha256('committed'));
     // A missing ledger and an empty one are different entries, so they pin differently.
     expect(previous['.usabl-evidence.json']).not.toBe(emptyLedger['.usabl-evidence.json']);
