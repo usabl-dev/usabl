@@ -44,14 +44,20 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-/** Equal means the same kind and the same bytes, commit, tree, or text. Nothing equals a missing path but a missing path. */
+/**
+ * Equal means the same kind and the same content: for a file the same mode and bytes, for a
+ * symbolic link the same link text, and the same commit, tree, or text for the rest. Nothing
+ * equals a missing path but a missing path.
+ */
 function sameRead(a: GuardRead, b: GuardRead): boolean {
   if (a === null || b === null) {
     return a === b;
   }
   switch (a.kind) {
     case 'file':
-      return b.kind === 'file' && sameBytes(a.bytes, b.bytes);
+      return b.kind === 'file' && a.mode === b.mode && sameBytes(a.bytes, b.bytes);
+    case 'symlink':
+      return b.kind === 'symlink' && sameBytes(a.target, b.target);
     case 'submodule':
       return b.kind === 'submodule' && a.commit === b.commit;
     case 'folder':
@@ -63,7 +69,9 @@ function sameRead(a: GuardRead, b: GuardRead): boolean {
 
 // The config text to parse, decoded from the same read the compare used, so the scope and the
 // compare can never come from two different moments. Decoding a file this way gives the text a
-// UTF-8 read of it gives. A folder or a submodule has no config text.
+// UTF-8 read of it gives. A symbolic link, a folder, or a submodule has no config text: the config
+// loader would read through a link, so the guard reads no scope from one, and the config path
+// compares as changed against a file.
 function configText(read: GuardRead): string | null {
   if (read === null) {
     return null;
@@ -93,26 +101,45 @@ async function readAtRef(git: RefReader, ref: string, path: string): Promise<Gua
 }
 
 /**
- * The two reads the local guard compares. The real file reader and the fakes have a byte read, so
- * both sides are read as stored bytes. A file reader built without one, such as a test's own, makes
- * both sides read as text, as the guard did before the byte read existed. The two sides always use
- * the same kind of read, so a byte read is never compared with text.
+ * The two reads the local guard compares, and how it compares them. The real file reader and the
+ * fakes have a byte read, so both sides are read as stored entries. A file reader built without
+ * one, such as a test's own, makes both sides read as text, as the guard did before the byte read
+ * existed. The two sides always use the same kind of read, so a byte read is never compared with
+ * text.
+ *
+ * With core.fileMode false, git ignores the executable bit on disk and keeps the mode it recorded
+ * for a regular file. The guard does the same: two regular files compare by their bytes only. A
+ * file system with no executable bit then does not read every guarded file as changed. A symbolic
+ * link is still its own entry, and a change of content is still a change.
  */
-function localReads(
+async function localReads(
   deps: Deps,
   trustedRef: string,
-): { working: (path: string) => Promise<GuardRead>; trusted: (path: string) => Promise<GuardRead> } {
+): Promise<{
+  working: (path: string) => Promise<GuardRead>;
+  trusted: (path: string) => Promise<GuardRead>;
+  same: (working: GuardRead, trusted: GuardRead) => boolean;
+}> {
   const fs = deps.fs;
   const git = deps.git;
   const readBytes = fs.readBytes;
   if (readBytes !== undefined) {
-    // Called on the reader itself, so a reader whose byte read calls its own readFile still does.
-    return { working: (path) => readBytes.call(fs, path), trusted: (path) => git.showBytes(trustedRef, path) };
+    const tracksMode = await git.tracksFileMode();
+    return {
+      // Called on the reader itself, so a reader whose byte read calls its own readFile still does.
+      working: (path) => readBytes.call(fs, path),
+      trusted: (path) => git.showBytes(trustedRef, path),
+      same: (working, trusted) =>
+        !tracksMode && working?.kind === 'file' && trusted?.kind === 'file'
+          ? sameBytes(working.bytes, trusted.bytes)
+          : sameRead(working, trusted),
+    };
   }
   const asText = (text: string | null): GuardRead => (text === null ? null : { kind: 'text', text });
   return {
     working: async (path) => asText(await fs.readFile(path)),
     trusted: async (path) => asText(await git.show(trustedRef, path)),
+    same: sameRead,
   };
 }
 
@@ -523,9 +550,9 @@ async function expandEntries(deps: Deps, entries: GuardedEntry[], trustedRef: st
  * CODEOWNERS approval cannot be satisfied by the config owner alone.
  */
 export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<string[]> {
-  const read = localReads(deps, trustedRef);
+  const read = await localReads(deps, trustedRef);
   const [workingConfig, trustedConfig] = await Promise.all([read.working(CONFIG_PATH), read.trusted(CONFIG_PATH)]);
-  const configDiverged = !sameRead(workingConfig, trustedConfig);
+  const configDiverged = !read.same(workingConfig, trustedConfig);
 
   // Scope is trusted-ref config when bytes diverged. Matched bytes can use
   // working-tree parse because they are the same document.
@@ -549,7 +576,7 @@ export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<strin
     if (working === null && trusted === null) {
       continue;
     }
-    if (!sameRead(working, trusted)) {
+    if (!read.same(working, trusted)) {
       diverged.push(path);
     }
   }
@@ -614,34 +641,37 @@ export async function guardScopeAtRefs(
 }
 
 /**
- * The pin format. Each pin is `v2:` and a hash. An earlier release stored the bare hash of the
+ * The pin format. Each pin is `v3:` and a hash. Releases before v2 stored the bare hash of the
  * decoded text, where a file holding U+FFFD and a submodule's id line could pin the same as that
- * submodule, and two bytes that are not valid UTF-8 pinned the same. A stored pin with no version
- * or another version never equals a pin of this format, so the stop reads that path as changed.
- * That is the safe direction: the stop reports drift and asks for review, and never takes an old
- * pin as proof that nothing changed.
+ * submodule, and two bytes that are not valid UTF-8 pinned the same. v2 hashed the bytes without
+ * the mode, so an executable bit, or a file swapped for a symbolic link with the same text, pinned
+ * the same. A stored pin with no version or another version never equals a pin of this format, so
+ * the stop reads that path as changed. That is the safe direction: the stop reports drift and asks
+ * for review, and never takes an old pin as proof that nothing changed.
  */
-export const SESSION_PIN_FORMAT = 'v2';
+export const SESSION_PIN_FORMAT = 'v3';
 const PIN_PREFIX = `${SESSION_PIN_FORMAT}:`;
 
 /**
  * The hash of one stored entry, over a form that cannot collide across kinds: a fixed label, the
- * kind, the length of what follows, then the bytes, the commit id, or the tree id. Every field
- * before the payload is ASCII ended by a line break, and the length bounds the payload, so no two
- * entries of different kinds or contents hash the same input.
+ * kind, the mode, the length of what follows, then the bytes, the link text, the commit id, or the
+ * tree id. Every field before the payload is ASCII ended by a line break, and the length bounds the
+ * payload, so no two entries of different kinds, modes, or contents hash the same input.
  */
 function pinOf(entry: StoredEntry | null): string {
   const encoder = new TextEncoder();
-  const [kind, payload]: [string, Uint8Array] =
+  const [kind, mode, payload]: [string, string, Uint8Array] =
     entry === null
-      ? ['absent', new Uint8Array(0)]
+      ? ['absent', '-', new Uint8Array(0)]
       : entry.kind === 'file'
-        ? ['file', entry.bytes]
-        : entry.kind === 'submodule'
-          ? ['submodule', encoder.encode(entry.commit)]
-          : ['folder', encoder.encode(entry.tree)];
+        ? ['file', entry.mode, entry.bytes]
+        : entry.kind === 'symlink'
+          ? ['symlink', '120000', entry.target]
+          : entry.kind === 'submodule'
+            ? ['submodule', '160000', encoder.encode(entry.commit)]
+            : ['folder', '040000', encoder.encode(entry.tree)];
   const hash = createHash('sha256');
-  hash.update(encoder.encode(`usabl session pin\n${kind}\n${String(payload.byteLength)}\n`));
+  hash.update(encoder.encode(`usabl session pin\n${kind}\n${mode}\n${String(payload.byteLength)}\n`));
   hash.update(payload);
   return `${PIN_PREFIX}${hash.digest('hex')}`;
 }

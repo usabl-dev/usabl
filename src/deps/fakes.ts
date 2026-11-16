@@ -133,12 +133,13 @@ function normalizePrefix(prefix: string): string {
 
 /**
  * The fake byte read: the fake text read, as UTF-8 bytes. The fakes store text only, so the two
- * reads always agree. The byte reads call the text read on the same object at call time, so a test
- * that replaces show or readFile changes what the guard reads too. A test that needs bytes that are
- * not UTF-8, or a submodule, uses a real repository.
+ * reads always agree, and every fake file has the mode 100644. The byte reads call the text read
+ * on the same object at call time, so a test that replaces show or readFile changes what the guard
+ * reads too. A test that needs bytes that are not UTF-8, another mode, a symbolic link, or a
+ * submodule uses a real repository.
  */
 export function storedEntryOf(text: string | null): StoredEntry | null {
-  return text === null ? null : { kind: 'file', bytes: new TextEncoder().encode(text) };
+  return text === null ? null : { kind: 'file', mode: '100644', bytes: new TextEncoder().encode(text) };
 }
 
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
@@ -185,6 +186,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           .sort();
       },
       headRef: async () => spec.headRef,
+      tracksFileMode: async () => true,
     },
     fs: {
       readFile: async (path) => spec.files[path] ?? null,

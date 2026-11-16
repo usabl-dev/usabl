@@ -187,9 +187,11 @@ function parseStatus(output: string): Array<{ code: string; path: string }> {
 }
 
 // `git ls-tree -z` prints "MODE TYPE SHA\tNAME\0". The name is everything after the first tab.
-// The names are collected in a Map, and Object.fromEntries defines each one as its own key. An
-// assignment on a plain object would drop a file named __proto__ at the repository root, and that
-// file would fall out of the policy hash.
+// Each name maps to "MODE SHA": the mode is kept next to the id, so an executable bit or a file
+// swapped for a symbolic link with the same text, which keeps the id, still changes the policy
+// hash. The names are collected in a Map, and Object.fromEntries defines each one as its own key.
+// An assignment on a plain object would drop a file named __proto__ at the repository root, and
+// that file would fall out of the policy hash.
 function parseLsTree(output: string): Record<string, string> {
   const blobs = new Map<string, string>();
   for (const entry of splitNul(output)) {
@@ -197,9 +199,9 @@ function parseLsTree(output: string): Record<string, string> {
     if (tab < 0) {
       continue;
     }
-    const sha = entry.slice(0, tab).split(' ')[2];
-    if (sha !== undefined) {
-      blobs.set(entry.slice(tab + 1), sha);
+    const [mode, , sha] = entry.slice(0, tab).split(' ');
+    if (mode !== undefined && sha !== undefined) {
+      blobs.set(entry.slice(tab + 1), `${mode} ${sha}`);
     }
   }
   return Object.fromEntries(blobs);
@@ -364,6 +366,30 @@ async function readFailedBlob(
 // the working tree. ls-tree matches each path given after -- by its exact name, never as a pattern.
 // --full-tree reads the path from the root of the tree, as <ref>:<path> does. Without it, ls-tree
 // run from a subfolder reads the path under that subfolder.
+const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+interface TreeEntry {
+  mode: string;
+  type: string;
+  id: string;
+}
+
+// The tree entry at the path, or null when the tree at the ref has none. Read the same way as
+// submoduleCommit: --full-tree from the root, the path after --, and only an entry with that exact
+// name. A path below a file or inside a submodule has no entry. A ref git cannot read throws.
+async function treeEntry(cwd: string, ref: string, path: string): Promise<TreeEntry | null> {
+  const output = await runGit(cwd, ['ls-tree', '-z', '--full-tree', '--end-of-options', ref, '--', path]);
+  for (const line of splitNul(output)) {
+    const tab = line.indexOf('\t');
+    if (tab < 0 || line.slice(tab + 1) !== path) continue;
+    const [mode, type, id] = line.slice(0, tab).split(' ');
+    if (mode !== undefined && type !== undefined && id !== undefined) {
+      return { mode, type, id };
+    }
+  }
+  return null;
+}
+
 async function submoduleCommit(cwd: string, ref: string, path: string): Promise<string | null> {
   let output: string;
   try {
@@ -375,7 +401,7 @@ async function submoduleCommit(cwd: string, ref: string, path: string): Promise<
     const tab = entry.indexOf('\t');
     if (tab < 0 || entry.slice(tab + 1) !== path) continue;
     const [mode, type, id] = entry.slice(0, tab).split(' ');
-    if (mode === '160000' && type === 'commit' && id !== undefined && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(id)) {
+    if (mode === '160000' && type === 'commit' && id !== undefined && FULL_OBJECT_ID.test(id)) {
       return id;
     }
   }
@@ -431,21 +457,49 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     },
     async showBytes(ref, path) {
       assertReadableRef(ref);
+      let entry: TreeEntry | null;
       try {
-        // The same object read as show, with the blob kept as bytes.
-        return { kind: 'file', bytes: await runGitBytes(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]) };
-      } catch (err) {
-        const failed = await readFailedBlob(cwd, ref, path, err);
-        if (failed.kind === 'absent') {
-          return null;
+        entry = await treeEntry(cwd, ref, path);
+      } catch (listingError) {
+        // The tree entry could not be read. The blob read names that failure the way show does,
+        // such as a ref that is not here. If it finds nothing to name, the listing error stands:
+        // an entry usabl could not read never passes as an absent file.
+        try {
+          await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
+        } catch (err) {
+          await readFailedBlob(cwd, ref, path, err);
         }
-        if (failed.kind === 'folder') {
-          // The tree id names the folder's whole content, so two folders with the same id hold the
-          // same files. --verify reads the argument as an object name only.
-          const tree = (await runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${ref}:${path}`])).trim();
-          return { kind: 'folder', tree };
-        }
-        return { kind: 'submodule', commit: failed.commit };
+        throw listingError;
+      }
+      if (entry === null) {
+        return null;
+      }
+      if (entry.mode === '160000' && entry.type === 'commit' && FULL_OBJECT_ID.test(entry.id)) {
+        return { kind: 'submodule', commit: entry.id };
+      }
+      // The tree id names the folder's whole content, so two folders with the same id hold the
+      // same files.
+      if (entry.type === 'tree') {
+        return { kind: 'folder', tree: entry.id };
+      }
+      if (entry.type !== 'blob' || !FULL_OBJECT_ID.test(entry.id)) {
+        throw new Error(`git listed ${operatorText(path)} at ${operatorText(ref)} as an entry usabl cannot read.`);
+      }
+      // The blob is read by the id the listing gave, so the mode and the bytes come from the same
+      // tree even if a branch moves between the two reads.
+      const bytes = await runGitBytes(cwd, ['cat-file', 'blob', '--end-of-options', entry.id]);
+      if (entry.mode === '120000') {
+        return { kind: 'symlink', target: bytes };
+      }
+      return { kind: 'file', mode: entry.mode, bytes };
+    },
+    async tracksFileMode() {
+      // git exits 1 when the setting is not there, and then reads the executable bit. Any other
+      // failure also reads as true, so the guard reports a mode change rather than miss one.
+      try {
+        return (await runGit(cwd, ['config', '--bool', '--get', 'core.fileMode'])).trim() !== 'false';
+      } catch {
+        return true;
       }
     },
     async lsTree(ref, paths) {

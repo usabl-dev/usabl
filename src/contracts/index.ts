@@ -1096,12 +1096,15 @@ export interface BrowserDriver {
 /**
  * One path as git or the file system stores it, never decoded, for the guard to compare. Two byte
  * sequences that are not valid UTF-8 can decode to the same text, so a compare of decoded text can
- * read a changed file as unchanged. Each kind is its own entry: a file never equals a submodule or
- * a folder, whatever the file holds. A folder is read by its tree id, so two equal ids hold the
- * same files.
+ * read a changed file as unchanged. Each kind is its own entry: a file never equals a symbolic
+ * link, a submodule, or a folder, whatever the file holds. A file carries the mode git records for
+ * it, 100644 or 100755 (an old repository can hold another regular file mode, which is kept as
+ * written). A symbolic link carries its link text, never the content of what it points at. A
+ * folder is read by its tree id, so two equal ids hold the same files.
  */
 export type StoredEntry =
-  | { kind: 'file'; bytes: Uint8Array }
+  | { kind: 'file'; mode: string; bytes: Uint8Array }
+  | { kind: 'symlink'; target: Uint8Array }
   | { kind: 'submodule'; commit: string }
   | { kind: 'folder'; tree: string };
 export interface GitReader {
@@ -1113,19 +1116,29 @@ export interface GitReader {
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
   diffNameOnly(ref: string): Promise<string[]>;
+  // For each path at the ref, its mode and object id as `<mode> <id>`, such as `100644 <id>`. The
+  // receipt policy hash is built from these, so a change of mode alone, such as an executable bit
+  // or a file swapped for a symbolic link with the same text, changes the hash.
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
   // Every file at a ref that is one of the prefixes or under one, in one listing. An empty prefix
   // stands for the whole tree. No prefixes lists nothing.
   lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
   headRef(): Promise<string>;
+  // Whether git reads the executable bit of working tree files: core.fileMode, true when unset.
+  // With false, git keeps the mode it has recorded and ignores the bit on disk, so the local guard
+  // does the same.
+  tracksFileMode(): Promise<boolean>;
 }
 export interface FsGlob {
   readFile(path: string): Promise<string | null>;
-  // The file's bytes, never decoded, or null in exactly the cases readFile returns null, a folder
-  // included. The file system has no git, so it never reads a submodule's commit: a submodule path
-  // is a folder or nothing, and reads as null. The real reader and the fakes have it. It is
-  // optional because many readers wrap readFile for coverage planning and never reach the guard.
+  // The path as git would store it from the working tree, never decoded and never followed: a
+  // regular file with its bytes and its mode from the executable bit, or a symbolic link with its
+  // link text. Null for nothing there, a folder, and a path below a file or below a symbolic link,
+  // since git stores no file there. The file system has no git, so it never reads a submodule's
+  // commit: a submodule path is a folder or nothing, and reads as null. The real reader and the
+  // fakes have it. It is optional because many readers wrap readFile for coverage planning and
+  // never reach the guard.
   // The local guard given a reader without it compares both sides as text, as it did before.
   readBytes?(path: string): Promise<StoredEntry | null>;
   glob(patterns: string[]): Promise<string[]>;

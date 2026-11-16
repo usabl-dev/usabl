@@ -1668,6 +1668,7 @@ function makeDeps(): Deps {
       lsFiles: async () => [],
       lsFilesUnder: async () => [],
       headRef: async () => 'HEAD',
+      tracksFileMode: async () => true,
     },
     fs: {
       readFile: async () => null,

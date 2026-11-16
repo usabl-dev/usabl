@@ -240,8 +240,10 @@ function normalizeReceiptApplicability(
  * Mint and verify share this one hash function so receipt trust has one fingerprint.
  * Two algorithms would let verify drift into a friendlier hash and still claim valid.
  *
- * We hash HEAD blob shas from lsTree, not working-tree bytes, so receipts bind committed
- * policy state instead of a dirty copy that can change between runs.
+ * We hash HEAD modes and blob shas from lsTree, not working-tree bytes, so receipts bind committed
+ * policy state instead of a dirty copy that can change between runs. The mode is kept next to the
+ * id, so an executable bit, or a file swapped for a symbolic link with the same text, which keeps
+ * the id, still changes the hash.
  */
 export async function computePolicyHash(
   deps: Deps,
