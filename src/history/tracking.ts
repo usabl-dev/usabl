@@ -8,6 +8,7 @@
  * This unit folds and counts. It must never decide a verdict.
  */
 import type { DebtStatus, EvidenceFloor, FloorHeadroom, HistoryReader } from '../contracts/index.js';
+import { TRUNCATED_WALK_RULE } from '../gate/index.js';
 import { FLOOR_VERSION } from '../primitives/identity.js';
 import { off, readHistory, type HistoryRead } from './read.js';
 import { trackDebt, type TrackedIdentity } from './track.js';
@@ -49,20 +50,27 @@ function total(counts: readonly number[]): number {
   return counts.reduce((sum, count) => sum + count, 0);
 }
 
+// The accessibility barriers a floor accepts. An entry an earlier version wrote for a keyboard walk
+// that was cut short is not one: the gate reads it as a gap that asks for the floor to be
+// rewritten, so it is left out of every debt count.
+function barrierCount(floor: EvidenceFloor): number {
+  return total(floor.entries.filter((entry) => entry.rule !== TRUNCATED_WALK_RULE).map((entry) => entry.count));
+}
+
 /**
  * The counts a run reports about its debt. `headroom` is the gate's own floorHeadroom, computed
  * against the effective floor, so what it calls fewer than accepted is what this run fixed of the
  * debt it accepted. `now` is the run's clock value, so the ages are the same for the same date.
  */
 export function debtStatusOf(tracking: DebtTracking, headroom: readonly FloorHeadroom[], now: string): DebtStatus {
-  const floorBarriers = total(tracking.floor.entries.map((entry) => entry.count));
-  const acceptedBarriers = total(tracking.effectiveFloor.entries.map((entry) => entry.count));
+  const floorBarriers = barrierCount(tracking.floor);
+  const acceptedBarriers = barrierCount(tracking.effectiveFloor);
   const fixedThisRun = Math.min(acceptedBarriers, total(headroom.map((entry) => Math.max(0, entry.recorded - entry.observed))));
   const nowMs = Date.parse(now);
   let oldestOpenDays: number | null = null;
   let intermittent = 0;
   for (const identity of tracking.identities) {
-    if (identity.accepted === 0) continue;
+    if (identity.accepted === 0 || identity.entry.rule === TRUNCATED_WALK_RULE) continue;
     if (identity.state === 'intermittent') intermittent += identity.accepted;
     if (identity.firstSeen === null || !Number.isFinite(nowMs)) continue;
     const days = Math.max(0, Math.floor((nowMs - Date.parse(identity.firstSeen)) / DAY_MS));
