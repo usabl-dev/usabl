@@ -1099,6 +1099,28 @@ describe('the end of a walk that met a region it cannot read', () => {
     expect(cutShort(output)).toHaveLength(1);
   });
 
+  it('claims no keyboard trap for content slotted into a closed shadow root between its own controls', async () => {
+    // Tab order: a button in the root, a light-DOM link slotted into it, another button in the root.
+    // Both buttons read as the host, so the host's path comes back after the slotted link.
+    const output = await walkStates(
+      [
+        { path: '#first' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: 'chat-widget > a:nth-child(1)' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#after' },
+        { path: BODY_PATH, body: true },
+        { path: '#first' },
+      ],
+      testConfig(),
+    );
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toEqual([expect.stringContaining('focus went back into a region the keyboard walk cannot read')]);
+    expect(unreadRegions(output)).toHaveLength(1);
+  });
+
   it('is cut short when the region is the first stop and focus does not leave it within its bound', async () => {
     const output = await walkStates(
       [

@@ -169,7 +169,9 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 // page. 'body-focused' means a script put focus on the body itself, or the page could not say
 // whether it did, so the walk cannot tell where the focus order ends. 'region-unbounded' means focus
 // went into a region the walk cannot read and did not come back out within REGION_TAB_BOUND presses
-// of Tab. The others mean the budget ran out.
+// of Tab. 'region-reentered' means focus went back into a region it had walked past, which the walk
+// cannot tell apart from a trap or from content slotted into the region. The others mean the budget
+// ran out.
 type StopReason =
   | 'complete'
   | 'wall-clock'
@@ -178,7 +180,8 @@ type StopReason =
   | 'modal-dialog'
   | 'end-unconfirmed'
   | 'body-focused'
-  | 'region-unbounded';
+  | 'region-unbounded'
+  | 'region-reentered';
 
 // A region the walk cannot read into: a closed shadow root, a frame it cannot read, or focus under
 // more shadow roots and frames than it follows. Every control inside has the path of the host or
@@ -259,6 +262,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, bu
     `The keyboard walk reached its limit of ${budget.tabCap} tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
   'region-unbounded': (stops) =>
     `After ${stops} tab stop(s), the keyboard walk pressed Tab ${REGION_TAB_BOUND} times inside a region it cannot read, and focus did not come back out. A keyboard user may be trapped there, and the controls after it were never walked.`,
+  'region-reentered': (stops) =>
+    `After ${stops} tab stop(s), focus went back into a region the keyboard walk cannot read, after it had left that region. Content slotted into a closed shadow root between its own controls does this, and so can a keyboard trap. The walk cannot tell which, so the controls after that point may never have been walked.`,
   'focus-trap': (stops) =>
     `After ${stops} tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.`,
   'modal-dialog': (stops) =>
@@ -286,6 +291,8 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, (screenId: string)
   'tab-cap': (screenId) => budgetFix(screenId, 'tabCap'),
   'region-unbounded': () =>
     'Check by hand whether Tab can leave this region. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
+  'region-reentered': () =>
+    'Check by hand where Tab goes inside this region and after it. To let usabl walk it, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.',
   'focus-trap': () => 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
   'modal-dialog': () =>
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
@@ -473,6 +480,14 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // keyboard trap. Either way the rest of the page was never walked, so the walk ends with a
         // gap, never as complete.
         if (seenPaths.has(path)) {
+          // Every control inside a region the walk cannot read has the region's path, so meeting
+          // that path again is not evidence of a trap. Content slotted into a closed shadow root
+          // between its own controls reads this way with no trap at all. The walk cannot tell, so
+          // it is cut short and claims nothing.
+          if (walked.some((stop) => stop.unreadable === true && stop.path === path)) {
+            stopReason = 'region-reentered';
+            break;
+          }
           const cycle = walked.slice(walked.findIndex((stop) => stop.path === path));
           if (cycleInsideOneModal(cycle)) {
             stopReason = 'modal-dialog';
