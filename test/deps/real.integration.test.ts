@@ -124,6 +124,16 @@ const CONTENT_PAGES: Record<string, string> = {
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
       `<p style="opacity: 0">Hidden by opacity</p><img src="${GIF}" alt="Hidden chart" width="40" height="40" style="display: none" /></div>`,
   ),
+  // Focusing its only control sends the page to /moved-clean.html, which is what a focus handler
+  // that navigates does. The address does not change at load, so only a read after the checks
+  // can tell. The page it moves to has a link to Tab to and nothing axe reports, so without that
+  // read the walk and the checks pass it.
+  '/navigate-on-focus.html': contentPage(
+    'Clusters',
+    '<main><h1>Clusters</h1><button id="open" type="button">Open</button></main>' +
+      "<script>document.getElementById('open').addEventListener('focus', () => { location.href = '/moved-clean.html'; });</script>",
+  ),
+  '/moved-clean.html': contentPage('Elsewhere', '<main><h1>Elsewhere</h1><p><a href="/">Home</a></p></main>'),
   '/background-only.html': contentPage('Banner', `<div id="banner" style="width: 200px; height: 100px; background-image: url(${GIF})"></div>`),
 };
 
@@ -1153,6 +1163,31 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
     expect(scan.gaps).toEqual([]);
   });
+
+  it('does not cover a screen with no reachedWhen whose page navigates away when a control is focused', async () => {
+    // The page loads at its own address with no password field and no refused request, so none of
+    // the load rules fire. The first Tab focuses the button and the page goes to a clean page,
+    // where axe and the walk would otherwise have run and found nothing.
+    const url = `${fixture.url}navigate-on-focus.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'clusters', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'clusters', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
+    expect(scan?.drafts).toEqual([]);
+    expect(scan?.stops).toEqual([]);
+  }, 30_000);
 
   it('catches a 401 that only arrives after readiness, during the walk', async () => {
     // The timing window, through a real Chromium and a real 401. Readiness needs four equal DOM

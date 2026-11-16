@@ -928,6 +928,181 @@ describe('makeCheckRunner and what a body-only page shows', () => {
   });
 });
 
+describe('makeCheckRunner and a page that leaves its screen during the checks', () => {
+  // The CLI reads the address once at load to judge how the page loaded. A page can still move
+  // after that: a focus handler navigates, or an auth timer sends it to a sign-in page. With no
+  // reachedWhen selector nothing else would notice, and the checks would measure the other page.
+  const SIGN_IN = 'http://127.0.0.1:5173/sign-in';
+
+  // A scripted page whose address is `before` until the first Tab, and `after` from then on.
+  async function movingPage(before: string, after: () => Promise<string>): Promise<Page> {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#second', '#first'], activeNodes: [null, null, null] });
+    let moved = false;
+    const tab = page.tab.bind(page);
+    return Object.assign(page, {
+      tab: async () => {
+        moved = true;
+        await tab();
+      },
+      currentUrl: async () => (moved ? after() : before),
+    });
+  }
+
+  // A provider that reports one accessibility barrier only on the sign-in page.
+  const signInBarrier = (page: Page): Provider => ({
+    id: 'fake-axe',
+    layer: 'fake',
+    capabilities: ['live'],
+    run: async (): Promise<Draft[]> => ((await page.currentUrl()) === SIGN_IN ? [makeDraft('sign-in-rule')] : []),
+  });
+
+  async function scanOf(page: Page, providers: Provider[], surfaces?: SurfaceConfig[]) {
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers,
+      config: testConfig(surfaces === undefined ? {} : { surfaces }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    }).scan(SCREEN);
+    // The unseen pass runs over collected scans after the page is closed. It must not add or
+    // remove anything here, so the scan is read as the gate would read it.
+    return markUnseenScreens([scan]).screens[0]!;
+  }
+
+  function expectLeftScreen(scan: Awaited<ReturnType<typeof scanOf>>) {
+    // Checked first, so a scan with no gap fails on the line that says it would read verified.
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.ref).toBe(SCREEN.url);
+    expect(scan.gaps[0]?.state).toBe('not-covered');
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+    expect(scan.notes).toEqual([]);
+  }
+
+  it('does not verify a screen whose page moves to a clean page on the first Tab', async () => {
+    const page = await movingPage(SCREEN.url, async () => 'http://127.0.0.1:5173/elsewhere');
+
+    const scan = await scanOf(page, [signInBarrier(page)]);
+
+    expectLeftScreen(scan);
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toContain('left');
+    expect(reason).toContain('http://127.0.0.1:5173/clusters');
+    expect(reason).toContain('http://127.0.0.1:5173/elsewhere');
+    expect(reason).toContain('sign in again');
+    expect(reason).toContain('on focus or on a timer');
+  });
+
+  it('reports no finding from the page it moved to when that page carries an accessibility barrier', async () => {
+    const page = await movingPage(SCREEN.url, async () => SIGN_IN);
+
+    const scan = await scanOf(page, [signInBarrier(page)]);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain(SIGN_IN);
+  });
+
+  it('names both addresses without their query or fragment', async () => {
+    const page = await movingPage(`${SCREEN.url}?token=SECRETPOISON`, async () => `${SIGN_IN}?token=SECRETPOISON#state=SECRETPOISON`);
+
+    const scan = await scanOf(page, []);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).not.toContain('SECRETPOISON');
+  });
+
+  it('still verifies a page that stays on its address', async () => {
+    const page = await movingPage(SCREEN.url, async () => SCREEN.url);
+
+    const scan = await scanOf(page, [makeKeyboardWalkProvider({ tabCap: 5 })]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+  });
+
+  it('still verifies a page whose query changes during the walk while its path and fragment stay', async () => {
+    const page = await movingPage(`${SCREEN.url}?tab=a#/list`, async () => `${SCREEN.url}?tab=b#/list`);
+
+    const scan = await scanOf(page, []);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+  });
+
+  it('compares with the address the page loaded at, so a redirect on load is not a move', async () => {
+    const page = await movingPage(`${SCREEN.url}/overview`, async () => `${SCREEN.url}/overview`);
+
+    const scan = await scanOf(page, []);
+
+    expect(scan.gaps).toEqual([]);
+  });
+
+  it('gives a gap when the walk changes only the fragment', async () => {
+    const page = await movingPage(`${SCREEN.url}#details`, async () => `${SCREEN.url}#history`);
+
+    const scan = await scanOf(page, []);
+
+    expectLeftScreen(scan);
+  });
+
+  it('does not verify a screen whose address cannot be read after the checks', async () => {
+    for (const after of [async () => '', async (): Promise<string> => Promise.reject(new Error('page closed'))]) {
+      const page = await movingPage(SCREEN.url, after);
+
+      const scan = await scanOf(page, [signInBarrier(page)]);
+
+      expectLeftScreen(scan);
+      expect(scan.gaps[0]?.reason).toContain('could not report its address');
+    }
+  });
+
+  it('does not verify a screen whose address could not be read at load', async () => {
+    const page = await movingPage('', async () => SCREEN.url);
+
+    const scan = await scanOf(page, []);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain('could not report its address');
+  });
+
+  it('leaves a screen with a reachedWhen selector to the selector, which is read again after the checks', async () => {
+    // A fragment change the walk causes on purpose, such as tab panels that set the hash, keeps the
+    // screen's own content on the page. The selector held before and after, so the screen counts.
+    const page = await movingPage(`${SCREEN.url}#details`, async () => `${SCREEN.url}#history`);
+    Object.assign(page, { queryAll: async () => [{ selector: 'table#clusters' }] });
+
+    const scan = await scanOf(page, [], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(true);
+  });
+
+  it('reports the late refusal, not the move, when both happened', async () => {
+    const page = await movingPage(SCREEN.url, async () => SIGN_IN);
+    let walked = false;
+    Object.assign(page, {
+      markWalkStart: async () => {
+        walked = true;
+      },
+      unauthorizedApiRequests: async () => (walked ? ['http://127.0.0.1:5173/api/me'] : []),
+    });
+
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [signInBarrier(page)],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      sessionConfigured: true,
+    }).scan(SCREEN);
+
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('401');
+  });
+});
+
 describe('makeCheckRunner page images for the docs generator', () => {
   function imagePage(page: Page): Page {
     return Object.assign(page, {

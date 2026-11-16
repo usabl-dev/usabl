@@ -232,13 +232,7 @@ export async function observeLanding(
     reachedWhen: string | ReachedWhenSignal | undefined;
   },
 ): Promise<LandingObservation> {
-  let landedUrl: string | null = null;
-  try {
-    const reported = await page.currentUrl();
-    landedUrl = typeof reported === 'string' && reported.trim().length > 0 ? reported : null;
-  } catch {
-    landedUrl = null;
-  }
+  const landedUrl = await readPageAddress(page);
   let passwordFieldPresent = false;
   try {
     passwordFieldPresent = (await page.countEverywhere(PASSWORD_INPUT_SELECTOR)) > 0;
@@ -261,6 +255,19 @@ export async function observeLanding(
     reachedWhenResponse: signal?.response ?? null,
     apiResponses,
   };
+}
+
+/**
+ * The address the page reports, or null when it cannot say: the read threw, or it gave back an
+ * empty string. Used at load by observeLanding and again after the checks by the check runner.
+ */
+export async function readPageAddress(page: Page): Promise<string | null> {
+  try {
+    const reported = await page.currentUrl();
+    return typeof reported === 'string' && reported.trim().length > 0 ? reported : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -632,5 +639,53 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
       `which asks for a password. That is a sign-in page and not this screen, so ${notMeasured(screenId)} ` +
       'Addresses are shown without their sign-in credentials, query string, or fragment, because ' +
       `any of the three can carry a token. ${SESSION_ADVICE}`,
+  );
+}
+
+/**
+ * Whether the page stayed on its screen while it was checked. The rules above judge how the page
+ * loaded. This judges whether it was still that page when the checks ended: a focus handler that
+ * navigates, or an auth timer that sends the page to a sign-in page, moves it after load, and the
+ * checks then measure the other page.
+ *
+ * `loadedUrl` is the address the page reported at load, so a redirect the application ran on load
+ * to its own canonical address is not read as a move. `checkedUrl` is the address after the checks.
+ * They are compared with sameScreenPath, the rule checkPage uses: path and fragment, host and port
+ * ignored, query ignored.
+ *
+ * Returns null only when both addresses were read and name the same screen. An address that could
+ * not be read at either moment is a gap, because then nothing confirms the checks ran on the screen.
+ * The real browser reports the committed address of an open page, so this costs a real scan nothing.
+ */
+export function leftScreenGap(
+  screenId: string,
+  addresses: { requestedUrl: string; loadedUrl: string | null; checkedUrl: string | null },
+): CoverageGap | null {
+  const { requestedUrl, loadedUrl, checkedUrl } = addresses;
+  if (loadedUrl !== null && checkedUrl !== null && sameScreenPath(loadedUrl, checkedUrl) === true) {
+    return null;
+  }
+  const atLoad =
+    loadedUrl === null ? 'the page could not report its address when it loaded' : `the page loaded at ${sanitizeUrlForDisplay(loadedUrl)}`;
+  const afterChecks =
+    checkedUrl === null
+      ? 'after the checks the page could not report its address'
+      : `after the checks it was at ${sanitizeUrlForDisplay(checkedUrl)}`;
+  const outcome =
+    loadedUrl !== null && checkedUrl !== null
+      ? 'The page left its screen while it was checked, so the checks measured another page'
+      : 'So usabl cannot tell whether the page left its screen while it was checked';
+  return gapFor(
+    requestedUrl,
+    `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}: ${atLoad}, and ${afterChecks}. ${outcome}, and ` +
+      `${notMeasured(screenId)} Only the path and the fragment are compared, so a change to the query alone ` +
+      'still counts as the same screen. If a session expired during the checks, sign in again: mint a new ' +
+      `session, point ${STORAGE_STATE_ENV_VAR} at it, and run usabl again. If a script on the page navigates ` +
+      'on focus or on a timer, find it and stop it from moving the page while it is checked. If the keyboard ' +
+      'walk changes the fragment on purpose, such as tab panels that set the address hash, point the screen ' +
+      'at the address the walk leaves it on, or give the screen a reachedWhen selector that names content only ' +
+      'this screen has. Addresses are shown without their sign-in credentials, query string, or fragment, ' +
+      'because any of them can carry a token, so two addresses that differ only in the fragment look the ' +
+      'same here.',
   );
 }

@@ -35,7 +35,13 @@ import {
   type ReadinessSignal,
 } from './reachability.js';
 import { readPageImages } from './page-images.js';
-import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import {
+  leftScreenGap,
+  observeLanding,
+  readPageAddress,
+  readRefusedRequests,
+  redirectedAwayGap,
+} from './redirected.js';
 import { isBrowserSandboxRefusal } from '../deps/sandbox.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
@@ -264,10 +270,12 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         });
         const readiness = await page.gotoReady(readyWhen);
 
-        // Whether this is the requested screen, signed in. The address and the password count are
-        // read here and only here: providers click and press keys, a click can navigate, so a
-        // later DOM read could not tell what the application did on load from what usabl did to
-        // it afterwards.
+        // Whether this is the requested screen, signed in. Rules A to C judge how the page loaded,
+        // so the address and the password count they read are taken here and only here: providers
+        // click and press keys, a click can navigate, so a later DOM read could not tell what the
+        // application did on load from what usabl did to it afterwards. The address is read once
+        // more after the checks, for a different question: whether the page was still this screen
+        // when they ended. See leftScreenGap below.
         const landing = await observeLanding(page, landingOptions);
         const notReached = redirectedAwayGap(screen.id, landing);
         if (notReached !== null) {
@@ -340,8 +348,8 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // than that had sent nothing at the first read. A refusal recorded by either read means
           // the screen was not reached signed in, and everything collected from it goes with it.
           // This is the second and last read: a refusal that arrives after it is not seen. Only
-          // the refused-request record is re-read; the address and the password count keep their
-          // load-time values for the reason given above.
+          // the refused-request record is re-read for Rule A; the address and the password count
+          // keep their load-time values for the reason given above.
           //
           // The response record is re-read with it, so a refusal the application recovered from
           // during the walk is read against its later answer. Recovery also needs the declared
@@ -354,8 +362,31 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             unauthorizedApiUrls: await readRefusedRequests(page),
             apiResponses: await readApiResponses(page),
           });
+          // The address again, after the checks, compared with the address read at load. A page can
+          // leave its screen while it is checked: a focus handler navigates, or an auth timer sends
+          // it to a sign-in page with no refused identity request. The checks then measured the
+          // other page, so its findings would be reported against this screen, or a clean other
+          // page would read verified. Either way everything collected goes, as for a late refusal.
+          //
+          // A screen with a reachedWhen selector is left to that selector, which was measured again
+          // above and makes an unseen screen a gap in coverage/unseen.ts. That is also the way out
+          // for a walk that changes the fragment on purpose, such as tab panels that set the hash.
+          //
+          // An address that cannot be read now, or could not be read at load, is a gap too: nothing
+          // then confirms the checks ran on this screen, and a gap is the safe direction. The real
+          // browser always reports an open page's address, so this only fires on a broken page.
+          const leftScreen =
+            signal !== null && signal.selector !== null
+              ? null
+              : leftScreenGap(screen.id, {
+                  requestedUrl: screen.url,
+                  loadedUrl: landing.landedUrl,
+                  checkedUrl: await readPageAddress(page),
+                });
           if (lateRefusal !== null) {
             result = notReachedScan(screen, lateRefusal, signal);
+          } else if (leftScreen !== null) {
+            result = notReachedScan(screen, leftScreen, signal);
           } else {
             result = {
               screenId: screen.id,

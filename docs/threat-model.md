@@ -422,7 +422,10 @@ the tool errored, not because the page is accessible.
 
 - A scan that reached the wrong page, such as a sign-in page served in place of a screen with
   a dead session, is a coverage gap, never a measurement of that screen. Three heuristics catch
-  a refused data request, a password field, and a redirect to a page with a password field. A
+  a refused data request, a password field, and a redirect to a page with a password field. On a
+  screen with no `reachedWhen` selector, the address is read again after the checks, and a page
+  whose path or fragment moved from the address it loaded at, or that cannot report its address,
+  is the same gap, so a focus handler or an auth timer that navigates cannot pass another page. A
   per-surface readiness signal (`reachedWhen`: a selector, a data response path, or both) is the
   positive check for what they miss, such as a passkey page, a magic-link page, or an
   authentication wall that answers 200 but does not request the screen's data path or answers it

@@ -81,12 +81,19 @@ interface PageSpec {
   // Refusals that have not arrived at the first read and appear on the next one, which is what a
   // slow application's identity request does.
   lateUnauthorized?: string[];
+  // Where the page moves on the first Tab of the walk, which is what a focus handler that
+  // navigates, or an auth timer that fires during the checks, does.
+  movesTo?: string;
 }
 
 function pageWith(spec: PageSpec = {}): Page {
   let reads = 0;
+  let tabbed = false;
   return makeFakePage({
-    currentUrl: async () => spec.landedUrl ?? SCREEN_URL,
+    currentUrl: async () => (tabbed && spec.movesTo !== undefined ? spec.movesTo : (spec.landedUrl ?? SCREEN_URL)),
+    tab: async () => {
+      tabbed = true;
+    },
     // Selector-aware, because the check runner asks this for the password probe and again for the
     // scanner-artifact settle. Answering both the same way would make every case pay that budget.
     countEverywhere: async (selector: string) =>
@@ -289,5 +296,30 @@ describe('a screen this run did not reach signed in', () => {
 
     expect(r.coverage.gaps).toEqual([]);
     expect(r.findings.some((f) => f.rule === 'page-has-heading-one')).toBe(true);
+  });
+
+  it('is a gap, not verified, when the page moves to a clean page during the walk', async () => {
+    // The screen loaded at its own address and declares no reachedWhen selector. The first Tab
+    // sends it to a clean page, so the checks measured that page and found nothing.
+    const r = await run(
+      depsFor({ movesTo: 'http://app.test/elsewhere' }, { sessionConfigured: true, providers: [] }),
+      config,
+    );
+
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+    expect(r.paidDownCount).toBe(0);
+    expect(r.findings.filter((f) => f.status === 'fixed')).toEqual([]);
+    const gaps = r.coverage.gaps.filter((gap) => gap.reason.includes('left'));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.reason).toContain('http://app.test/elsewhere');
+  });
+
+  it('reports no finding from the page it moved to during the walk', async () => {
+    const r = await run(depsFor({ movesTo: 'http://app.test/sign-in' }, { sessionConfigured: true }), config);
+
+    expect(r.findings.some((f) => f.rule === 'page-has-heading-one')).toBe(false);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.paidDownCount).toBe(0);
   });
 });
