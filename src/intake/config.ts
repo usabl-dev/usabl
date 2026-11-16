@@ -17,6 +17,7 @@ import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
+import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
 import { isPatternSegment, MAX_BRACE_EXPANSIONS } from '../trust/guard.js';
 
@@ -533,6 +534,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const judgeRaw = Reflect.get(root, 'judge');
   const judge = judgeRaw === undefined ? undefined : parseJudge(judgeRaw);
   const engines = parseEngines(Reflect.get(root, 'engines'));
+  const keyboardWalk = parseKeyboardWalkConfig(Reflect.get(root, 'keyboardWalk'));
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
@@ -554,5 +556,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(browserSandbox === undefined ? {} : { browserSandbox }),
     ...(judge === undefined ? {} : { judge }),
     ...(engines === undefined ? {} : { engines }),
+    ...(keyboardWalk === undefined ? {} : { keyboardWalk }),
   };
 }

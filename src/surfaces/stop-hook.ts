@@ -246,6 +246,11 @@ export interface StoredReceiptPinState {
   sessionDriftChecked: boolean;
 }
 
+// A receipt records no known limits, so a run verified with known limits would read on the fast
+// path as a plain verified. usabl check always scans, so it shows them.
+const STORED_RECEIPT_LIMITS =
+  'A stored receipt does not record known limits, so any the scan had are not shown here; run usabl check to see them.';
+
 /**
  * The allow line for a stored receipt that still matches the working tree. The stop hook prints
  * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
@@ -257,7 +262,8 @@ export interface StoredReceiptPinState {
  * Threats 1 and 4). The line names what was compared and nothing more. A receipt binds the tree,
  * the committed policy, the engine, and the scanners as they were when it was minted; it says
  * nothing about the policy at the start of the session. Only a stop that compared the session
- * pins says they match.
+ * pins says they match. A receipt records no known limits, so the line says that any the scan had
+ * are not shown here, and names the command that shows them.
  */
 export function formatStoredReceiptAllow(
   sourceTree: unknown,
@@ -268,7 +274,7 @@ export function formatStoredReceiptAllow(
   const line =
     `VERIFIED (exit 0, stored receipt, not re-scanned${note}): this result comes from a stored receipt. ` +
     'usabl did not scan this change again on this stop. The receipt matches this tree, the committed policy, the engine, and the scanners.' +
-    `${pinClause} You may stop.`;
+    `${pinClause} ${STORED_RECEIPT_LIMITS} You may stop.`;
   return assembleBoundedMessage({
     scaffold: [line],
     keep: 1,

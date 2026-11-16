@@ -10,6 +10,7 @@ import type {
   Capability,
   CoverageGap,
   Draft,
+  KeyboardWalkScreenConfig,
   Page,
   ProfileName,
   Provider,
@@ -29,10 +30,13 @@ import { adoptPage } from '../deps/real.js';
 import { readStorageStateEnv } from '../deps/session.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { assertIdField } from '../intake/input-refusal.js';
+import { parseWalkBudget, walkScreenConfig } from '../intake/keyboard-walk-config.js';
 import { loadRequirements } from '../intake/load.js';
 import { knownSurfaceIds, unknownSurfaceRequirementGaps } from '../intake/requirement-surfaces.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
+import { isWalkReachGap } from '../providers/keyboard-walk/index.js';
+import { UNREAD_REGION_NOTE_REF } from '../output/notes.js';
 import {
   heldThroughout,
   measureReachability,
@@ -79,6 +83,10 @@ export interface PageCheckResult {
   // gap, such as design-system markup a rulepack did not read. Disclosure only: it never changes
   // the verdict.
   notes?: ProviderNote[];
+  // Set by checkPage, and only when true: a region the keyboard walk could not read was listed as a
+  // known limit of this screen, so it was not checked. The summary then says "with known limits",
+  // the words the verdict line of a run uses.
+  knownLimits?: true;
   // Set by checkPage: where it looked for usabl.config.json and whether it found one. A missing
   // config at the default root adds no gap, because a project that does not use usabl config has
   // none, so this field is how a caller can tell "no requirements" from "read the wrong folder".
@@ -122,6 +130,22 @@ export function summarizePageCheck(drafts: Draft[], gaps: CoverageGap[]): PageCh
   return { verdict, failures, needsReview, gaps, drafts, summary, advisory };
 }
 
+/**
+ * Marks a page check whose notes hold a region the team listed as a known limit. The verdict does
+ * not change. The summary says "with known limits" after the verdict, as the verdict line of a run
+ * does, so a test that prints the summary never reads a plain verified.
+ */
+function withKnownLimits(result: PageCheckResult, notes: readonly ProviderNote[]): PageCheckResult {
+  if (!notes.some((note) => note.ref === UNREAD_REGION_NOTE_REF)) {
+    return result;
+  }
+  const lead = `${result.verdict}:`;
+  const summary = result.summary.startsWith(lead)
+    ? `${result.verdict}, with known limits:${result.summary.slice(lead.length)}`
+    : result.summary;
+  return { ...result, summary, knownLimits: true };
+}
+
 export interface CheckPageOptions {
   // The surface id this page is, as usabl.config.json or the route manifest names it. Design
   // requirements are matched to a page by this id, the same way the CLI matches them to a screen.
@@ -131,7 +155,12 @@ export interface CheckPageOptions {
   screenId?: string;
   profile?: ProfileName; // 'app' (default) or 'docs'; 'docs' switches axe to the WCAG 2.2 AA tag set
   keyboardWalk?: boolean; // run the Tab-order walk; defaults to true
-  tabCap?: number; // max Tab presses in the keyboard walk
+  // The keyboard walk budget: the most Tab stops, from 1 to 2000, and the most whole milliseconds,
+  // from 1 to 300000. A walk that runs out is a gap. Each one passed here wins over the budget
+  // usabl.config.json sets for a labeled page's screen under keyboardWalk.perSurface, and each one
+  // left out falls back to it, then to the engine default.
+  tabCap?: number;
+  wallClockMs?: number;
   // The directory that holds usabl.config.json, which is where the CLI reads it. The design
   // requirements it names are loaded from the working tree here, not from a trusted ref. Defaults
   // to the current working directory. Parent directories are never searched. A root passed here
@@ -346,6 +375,8 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
   if (options.screenId !== undefined) {
     assertIdField('checkPage() options', 'screenId', options.screenId);
   }
+  // Checked with the bounds the config uses, before anything touches the page.
+  const walkOptions = parseWalkBudget({ tabCap: options.tabCap, wallClockMs: options.wallClockMs }, 'checkPage() options');
   const profile: ProfileName = options.profile ?? 'app';
   // An unlabeled page is no surface, so no requirement is in scope and each one becomes a gap. Its
   // providers are not built either: the only one that could run is one for a surface literally
@@ -360,10 +391,19 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     labeledScreenId === null && intake.requirements !== null ? NO_REQUIREMENTS : intake.requirements;
   const providers: Provider[] = makeScanProviders(scannedRequirements, {
     ...(options.keyboardWalk === undefined ? {} : { keyboardWalk: options.keyboardWalk }),
-    ...(options.tabCap === undefined ? {} : { tabCap: options.tabCap }),
+    // An unlabeled page reads no config, so the walk's gaps name only the checkPage options.
+    ...(labeledScreenId === null ? { unlabeledPage: true } : {}),
   });
 
   const config = intake.config;
+  // The walk budget of this page: each option passed wins, then the budget usabl.config.json sets
+  // for a labeled page's screen, then the engine default. The walk reads it from the config the
+  // providers are given, under this page's screen id.
+  const configured = labeledScreenId === null || config === null ? undefined : walkScreenConfig(config, labeledScreenId);
+  const walkBudget = { ...configured, ...walkOptions };
+  const perSurface: Record<string, KeyboardWalkScreenConfig> = Object.create(null);
+  perSurface[screenId] = walkBudget;
+  const providerConfig: UsablConfig = { ...PAGE_CHECK_CONFIG, keyboardWalk: { perSurface } };
   const page = await adoptPage(pwPage, config?.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: config.readyTimeoutMs });
   try {
     const screen = { id: screenId, url: pwPage.url() };
@@ -376,7 +416,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // token.
     const finish = (drafts: Draft[], gaps: CoverageGap[], notes: ProviderNote[] = []): PageCheckResult =>
       scrubOutboundData({
-        ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+        ...withKnownLimits(summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]), notes),
         notes,
         project: intake.project,
       });
@@ -386,7 +426,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[]; notes: ProviderNote[]; walk: WalkRecord | undefined }> => {
       const provided = await runProviders(
         providers,
-        { page, screen, config: PAGE_CHECK_CONFIG, profile },
+        { page, screen, config: providerConfig, profile },
         pageCheckCapabilities(providers),
       );
       const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
@@ -439,17 +479,24 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       await page.markWalkStart();
     }
     const { drafts, gaps, notes, walk } = await runChecks();
+    // When the page was not the screen for every check, the gaps the keyboard walk gave about how
+    // far it walked go with the drafts: a walk cut short by a move to a sign-in page, or a region
+    // met on that page, describes the other page, and its fix text would point at the wrong cause.
+    // The landing gap alone names the cause, and it keeps the page not covered. The CLI drops every
+    // gap of a screen it finds was not reached signed in. checkPage drops only these.
+    const otherPage = (landed: CoverageGap): PageCheckResult =>
+      finish([], [...gaps.filter((gap) => !isWalkReachGap(gap, screen)), landed]);
     // Rule A again, as the CLI reads it after the checks: an identity request refused during the
     // checks means the page was not reached signed in.
     const late = landing === null ? null : await lateRefusalGap(page, screenId, landing);
     if (late !== null) {
-      return finish([], [...gaps, late]);
+      return otherPage(late);
     }
     // The address again, after the checks. A page that left its screen while they ran, such as a
     // router that moved to a sign-in page, was not that screen for every check, so its findings go.
     const moved = expected === null ? null : (await addressGap(page, screenId, labeledScreenId !== null, expected, 'after the checks')).gap;
     if (moved !== null) {
-      return finish([], [...gaps, moved]);
+      return otherPage(moved);
     }
     // The readiness signal is measured again after the checks, as the CLI does. A part holds only
     // if it held both times. The walk's stops go to the same blank-page detector the CLI runs on
@@ -702,8 +749,8 @@ function readinessRef(screenId: string): string {
  * so the two surfaces word and decide it the same way. It reads the readiness measurement when the
  * screen declares a signal, and the stops of the keyboard walk when the caller found a blank page.
  * A walk that did not run, was cut short, or met a page that shows content gives no stops, so the
- * blank-page detector makes no claim: a cut-short walk is already not covered by its own truncation
- * draft.
+ * blank-page detector makes no claim: a cut-short walk is already not covered by its own gap, which
+ * the walk gives the page.
  */
 function unseenGap(
   screenId: string,

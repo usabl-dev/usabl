@@ -1,10 +1,10 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Draft, Page } from '../../src/contracts/index.js';
+import type { CoverageGap, Draft, Page, ProviderOutput, UnreadableRegionListing } from '../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
-import { draftsOf, testConfig } from '../helpers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 // A custom element whose open shadow root holds the given markup.
 function openElement(tag: string, shadowHtml: string): string {
@@ -120,6 +120,22 @@ function pages(crossOrigin: string): Record<string, string> {
     '/closed-shadow-buttons': page(
       '<button type="button">First</button><x-closed></x-closed><button type="button" id="trailing"></button>' +
         closedElement('x-closed', '<button type="button">Alpha</button><button type="button">Beta</button>'),
+    ),
+    // A closed shadow root whose second button blurs itself when it gets focus. Focus falls to the
+    // body in the middle of the page, and the next Tab goes to the third button, which has the
+    // host's path like every control in the root. The unnamed button after the host is never walked.
+    '/closed-shadow-blur': page(
+      '<button type="button">First</button><x-blur></x-blur><button type="button" id="trailing"></button>' +
+        `<script>customElements.define('x-blur', class extends HTMLElement { constructor() { super();` +
+        ` const root = this.attachShadow({ mode: 'closed' });` +
+        ` root.innerHTML = '<button type="button">Alpha</button><button type="button">Beta</button><button type="button">Gamma</button>';` +
+        ` root.querySelectorAll('button')[1].addEventListener('focus', (event) => event.target.blur()); } });</script>`,
+    ),
+    // A focusable host whose closed shadow root holds two buttons. Tab goes to the host, then into
+    // its buttons, which have the host's path, then to the unnamed button after the host.
+    '/closed-shadow-focusable-host': page(
+      '<button type="button">First</button><x-hostbox tabindex="0" aria-label="Box"></x-hostbox><button type="button" id="trailing"></button>' +
+        closedElement('x-hostbox', '<button type="button">Alpha</button><button type="button">Beta</button>'),
     ),
     // A focusable host with a closed shadow root that holds nothing focusable. Focus sits on the
     // host itself, which the walk can name, so it walks on.
@@ -252,13 +268,37 @@ async function serve(): Promise<Fixture> {
 
 const SCREEN = { id: 'walk', url: 'http://127.0.0.1/walk' };
 
-async function walk(page: Page): Promise<Draft[]> {
-  const provider = makeKeyboardWalkProvider({ tabCap: 40 });
-  return draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
+// What one walk reported: its drafts, and the gap it gives a screen when it was cut short.
+interface Walked {
+  drafts: Draft[];
+  gaps: CoverageGap[];
 }
 
-function summary(drafts: Draft[]): Array<[string, string]> {
-  return drafts.map((draft) => [draft.rule, draft.elementPath]);
+async function walk(page: Page): Promise<Walked> {
+  const provider = makeKeyboardWalkProvider({ tabCap: 40 });
+  const output = await provider.run({ page, screen: SCREEN, config: testConfig() });
+  return { drafts: draftsOf(output), gaps: gapsOf(output) };
+}
+
+// Each draft as its rule and path, then one entry for each region the walk walked past and could
+// not read into, then one for a walk that was cut short. Both are gaps, never drafts, so they can
+// never be floored or carried.
+const CUT_SHORT = 'walk cut short';
+const UNREAD_REGION = 'region not read';
+const REGION_LEAD = `on screen ${SCREEN.id}, the keyboard walk could not read inside a region`;
+
+function summary(walked: Walked): Array<[string, string]> {
+  return [
+    ...walked.drafts.map((draft): [string, string] => [draft.rule, draft.elementPath]),
+    ...walked.gaps.map((gap): [string, string] => [gap.reason.startsWith(REGION_LEAD) ? UNREAD_REGION : CUT_SHORT, '']),
+  ];
+}
+
+// The reason of the one gap of a walk that was cut short, or of the one region it walked past.
+function cutReason(walked: Walked): string {
+  expect(walked.gaps).toHaveLength(1);
+  expect(walked.gaps[0]).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
+  return walked.gaps[0]?.reason ?? '';
 }
 
 // Each test opens a real page and walks it in Chromium, a few seconds when the machine is idle. The
@@ -293,8 +333,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('reports the unnamed button after a component with two shadow buttons', async () => {
     const opened = await open('/two-shadow-buttons');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
@@ -310,11 +350,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         'html > body:nth-child(2) > main:nth-child(1) > x-three:nth-child(2) >> button:nth-child(2)',
         'html > body:nth-child(2) > main:nth-child(1) > x-three:nth-child(2) >> button:nth-child(3)',
       ]);
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
         ['keyboard-walk-unnamed-interactive', 'html > body:nth-child(2) > main:nth-child(1) > x-three:nth-child(2) >> button:nth-child(3)'],
       ]);
-      expect(drafts[0]?.role).toBe('button');
+      expect(walked.drafts[0]?.role).toBe('button');
     } finally {
       await opened.close();
     }
@@ -323,8 +363,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('walks a shadow root inside a shadow root to the control after it', async () => {
     const opened = await open('/nested-shadow');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
@@ -367,15 +407,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       const stops = await paths(opened, 4);
       expect(stops[0]).toBe(stops[2]);
       expect(stops[0]).not.toBe(stops[1]);
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
         ['keyboard-walk-trap', stops[0]],
-        ['keyboard-walk-truncated', ''],
+        [CUT_SHORT, ''],
       ]);
-      expect(drafts[0]).toMatchObject({ severity: 'critical', confidence: 'fail', evidenceClass: 'deterministic', elementName: null });
-      expect(drafts[0]?.evidence.extra?.['cycle']).toEqual([stops[0], stops[1]]);
-      expect(drafts[1]?.confidence).toBe('unverified');
-      expect(drafts[1]?.why).toContain('controls after the trap were never walked');
+      expect(walked.drafts[0]).toMatchObject({ severity: 'critical', confidence: 'fail', evidenceClass: 'deterministic', elementName: null });
+      expect(walked.drafts[0]?.evidence.extra?.['cycle']).toEqual([stops[0], stops[1]]);
+      expect(cutReason(walked)).toContain('controls after the trap were never walked');
     } finally {
       await opened.close();
     }
@@ -386,14 +425,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
     try {
       const stops = await paths(opened, 3);
       expect(stops).toEqual(['#one', '#two', '#one']);
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
         ['keyboard-walk-trap', '#one'],
-        ['keyboard-walk-truncated', ''],
+        [CUT_SHORT, ''],
       ]);
-      expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#one', '#two']);
-      // The trapped buttons are named One and Two. No page text reaches the drafts.
-      expect(JSON.stringify(drafts)).not.toMatch(/One|Two/);
+      expect(walked.drafts[0]?.evidence.extra?.['cycle']).toEqual(['#one', '#two']);
+      // The trapped buttons are named One and Two. No page text reaches the drafts or the gap.
+      expect(JSON.stringify(walked)).not.toMatch(/One|Two/);
     } finally {
       await opened.close();
     }
@@ -407,7 +446,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
     try {
       const stops = await paths(opened, 2);
       expect(stops).toEqual(['#b', 'html > body:nth-child(2)']);
-      expect(await walk(opened)).toEqual([]);
+      expect(summary(await walk(opened))).toEqual([]);
     } finally {
       await opened.close();
     }
@@ -424,11 +463,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         await opened.focusBody();
         await opened.tab();
         expect(await opened.activeModalDialogs()).toEqual([dialog]);
-        const drafts = await walk(opened);
-        expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-        expect(drafts[0]?.confidence).toBe('unverified');
-        expect(drafts[0]?.why).toContain('inside one open modal dialog');
-        expect(drafts[0]?.why).toContain('the rest of the page was not walked');
+        const walked = await walk(opened);
+        expect(summary(walked)).toEqual([[CUT_SHORT, '']]);
+        expect(cutReason(walked)).toContain('inside one open modal dialog');
+        expect(cutReason(walked)).toContain('the rest of the page was not walked');
       } finally {
         await opened.close();
       }
@@ -442,25 +480,30 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         await opened.focusBody();
         await opened.tab();
         expect(await opened.activeModalDialogs()).toEqual([]);
-        const drafts = await walk(opened);
-        expect(summary(drafts)).toEqual([
+        const walked = await walk(opened);
+        expect(summary(walked)).toEqual([
           ['keyboard-walk-trap', '#a'],
-          ['keyboard-walk-truncated', ''],
+          [CUT_SHORT, ''],
         ]);
-        expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#a', '#b']);
+        expect(walked.drafts[0]?.evidence.extra?.['cycle']).toEqual(['#a', '#b']);
       } finally {
         await opened.close();
       }
     });
   }
 
-  it('discloses a truncated walk when focus moves into a closed shadow root', async () => {
+  // A region the walk cannot read into used to end the walk, so the unnamed button after it was never
+  // reached. The walk now counts the region as one stop it could not read and walks on.
+  it('walks past a closed shadow root that holds focus and reports the unnamed button after it', async () => {
     const opened = await open('/closed-shadow-buttons');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-      expect(drafts[0]?.confidence).toBe('unverified');
-      expect(drafts[0]?.why).toContain('closed shadow root');
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
+        ['keyboard-walk-unnamed-interactive', '#trailing'],
+        [UNREAD_REGION, ''],
+      ]);
+      expect(cutReason(walked)).toContain('closed shadow root');
+      expect(cutReason(walked)).toContain('at tab stop 2');
     } finally {
       await opened.close();
     }
@@ -469,8 +512,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('walks past a focusable host whose closed shadow root holds no focus', async () => {
     const opened = await open('/closed-shadow-host');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
@@ -482,19 +525,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       const stops = await paths(opened, 3);
       expect(new Set(stops).size).toBe(3);
       expect(stops[0]).toContain('iframe:nth-child(1) >> internal:control=enter-frame >> ');
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
   });
 
-  it('discloses a truncated walk when focus moves into a frame from another origin', async () => {
+  it('walks past a frame from another origin and reports the unnamed button after it', async () => {
     const opened = await open('/cross-origin-frame');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-      expect(drafts[0]?.why).toContain('frame from another origin');
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
+        ['keyboard-walk-unnamed-interactive', '#trailing'],
+        [UNREAD_REGION, ''],
+      ]);
+      // The frame is named by the origin of its address, the name a listing in the config uses.
+      expect(cutReason(walked)).toContain('a frame from http://localhost:');
+      expect(cutReason(walked)).toContain('{"frameOrigin": "http://localhost:');
     } finally {
       await opened.close();
     }
@@ -506,8 +554,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       const stops = await paths(opened, 2);
       expect(new Set(stops).size).toBe(2);
       for (const stop of stops) expect(stop).toContain(' >> iframe:nth-child(1)' + FRAME_STEP);
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
@@ -525,8 +573,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       await opened.focusBody();
       await opened.tab();
       expect(await opened.activeNode()).toMatchObject({ name: 'Alpha', role: 'button' });
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
@@ -544,35 +592,41 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       await opened.tab();
       await opened.tab();
       expect(await opened.activeNode()).toMatchObject({ name: 'Inner one', role: 'button' });
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
     } finally {
       await opened.close();
     }
   });
 
-  it('discloses a truncated walk when focus moves into a closed shadow root inside a frame', async () => {
+  it('walks past a closed shadow root inside a frame to the button after the frame', async () => {
     const opened = await open('/closed-shadow-in-frame');
     try {
       await opened.focusBody();
       await opened.tab();
       expect(await opened.activeFocusUnreadable()).toBe('closed-shadow-root');
       expect(await opened.activeNode()).toBeNull();
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-      expect(drafts[0]?.why).toContain('closed shadow root');
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
+        ['keyboard-walk-unnamed-interactive', '#trailing'],
+        [UNREAD_REGION, ''],
+      ]);
+      expect(cutReason(walked)).toContain('closed shadow root');
     } finally {
       await opened.close();
     }
   });
 
-  it('discloses a truncated walk when focus moves into the frame of an object element', async () => {
+  it('walks past the frame of an object element and reports the unnamed button after it', async () => {
     const opened = await open('/object-frame');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-      expect(drafts[0]?.confidence).toBe('unverified');
-      expect(drafts[0]?.why).toContain('object');
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([
+        ['keyboard-walk-unnamed-interactive', '#trailing'],
+        [UNREAD_REGION, ''],
+      ]);
+      // An object frame is named by the origin of its data address, as an iframe is by its src.
+      expect(cutReason(walked)).toContain('a frame from http://127.0.0.1:');
       // Wherever the object's controls sit in the tab order, a stop inside them reads as unreadable.
       await opened.focusBody();
       const reasons: Array<string | null> = [];
@@ -582,6 +636,120 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       }
       expect(reasons[0]).toBeNull();
       expect(reasons).toContain('frame-unreadable');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // A region the team lists for the screen in usabl.config.json is a known limit: a note, not a
+  // gap. The name the browser reads must be the name the listing uses, or the listing never matches.
+  async function walkListed(page: Page, unreadableRegions: UnreadableRegionListing[]): Promise<ProviderOutput> {
+    const provider = makeKeyboardWalkProvider({ tabCap: 40 });
+    const config = { ...testConfig(), keyboardWalk: { perSurface: { [SCREEN.id]: { unreadableRegions } } } };
+    const output = await provider.run({ page, screen: SCREEN, config });
+    return Array.isArray(output) ? { drafts: output } : output;
+  }
+
+  it('names a frame from another origin by its origin, and reads it as a known limit once it is listed', async () => {
+    const opened = await open('/cross-origin-frame');
+    try {
+      const frameOrigin = new URL(fixture.url('/')).origin.replace('127.0.0.1', 'localhost');
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'frame', origin: frameOrigin });
+
+      const listed = await walkListed(opened, [{ frameOrigin }]);
+      expect(gapsOf(listed)).toEqual([]);
+      expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+      expect(listed.notes?.[0]?.reason).toContain(`a frame from ${frameOrigin}`);
+      expect(draftsOf(listed).map((draft) => [draft.rule, draft.elementPath])).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+
+      const other = await walkListed(opened, [{ frameOrigin: 'https://chat.example.com' }]);
+      expect(gapsOf(other)).toHaveLength(1);
+      expect(other.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/stale-region-listing']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('names a closed shadow root by the tag of its host, and reads it as a known limit once it is listed', async () => {
+    const opened = await open('/closed-shadow-buttons');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'shadow-host', tag: 'x-closed' });
+
+      const listed = await walkListed(opened, [{ shadowHost: 'x-closed' }]);
+      expect(gapsOf(listed)).toEqual([]);
+      expect(listed.notes?.[0]?.reason).toContain('a closed shadow root in a x-closed element');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // The Tab after the body lands in the same region again, at the host's path. Read as the end of
+  // the page, the walk read as complete, the listed region left no gap, and the unnamed button
+  // after the host was never walked: a screen read verified with a control nobody checked.
+  it('is cut short when a control inside a listed closed shadow root blurs itself', async () => {
+    const opened = await open('/closed-shadow-blur');
+    try {
+      const listed = await walkListed(opened, [{ shadowHost: 'x-blur' }]);
+      expect(listed.walk?.complete).toBe(false);
+      const gaps = gapsOf(listed);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0]?.reason).toContain('the keyboard walk was cut short');
+      expect(gaps[0]?.reason).toContain('one more Tab did not go back to a control the keyboard walk had already reached');
+      expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // The host is a readable stop, and the buttons inside its closed root have the host's path. The
+  // walk read that repeat as a keyboard trap at fail, with focus not trapped.
+  it('claims no keyboard trap when Tab goes from a focusable host into its closed shadow root', async () => {
+    const opened = await open('/closed-shadow-focusable-host');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeFocusUnreadable()).toBeNull();
+      await opened.tab();
+      expect(await opened.activeFocusUnreadable()).toBe('closed-shadow-root');
+
+      const walked = await walk(opened);
+      expect(walked.drafts.map((draft) => draft.rule)).not.toContain('keyboard-walk-trap');
+      const reasons = walked.gaps.filter((gap) => !gap.reason.startsWith(REGION_LEAD)).map((gap) => gap.reason);
+      expect(reasons).toEqual([expect.stringContaining('the keyboard walk was cut short')]);
+
+      const listed = await walkListed(opened, [{ shadowHost: 'x-hostbox' }]);
+      expect(listed.walk?.complete).toBe(false);
+      expect(draftsOf(listed).map((draft) => draft.rule)).not.toContain('keyboard-walk-trap');
+      expect(gapsOf(listed)).toEqual([expect.objectContaining({ reason: expect.stringContaining('the keyboard walk was cut short') })]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('names a closed shadow root inside a same-origin frame by the tag of its host', async () => {
+    const opened = await open('/closed-shadow-in-frame');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toEqual({ kind: 'shadow-host', tag: 'x-closed' });
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('reads no region where focus can be read', async () => {
+    const opened = await open('/closed-shadow-buttons');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeUnreadRegion()).toBeNull();
     } finally {
       await opened.close();
     }
@@ -633,10 +801,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
     it(`ends with a truncation gap when a handler drops focus to the body mid page (${path})`, async () => {
       const opened = await open(path);
       try {
-        const drafts = await walk(opened);
-        expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-        expect(drafts[0]?.confidence).toBe('unverified');
-        expect(drafts[0]?.why).toContain('one more Tab');
+        const walked = await walk(opened);
+        expect(summary(walked)).toEqual([[CUT_SHORT, '']]);
+        expect(cutReason(walked)).toContain('one more Tab');
       } finally {
         await opened.close();
       }
@@ -674,10 +841,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('ends with a truncation gap when a script puts focus on the body itself mid page', async () => {
     const opened = await open('/end-body-focus');
     try {
-      const drafts = await walk(opened);
-      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
-      expect(drafts[0]?.confidence).toBe('unverified');
-      expect(drafts[0]?.why).toContain('document body itself');
+      const walked = await walk(opened);
+      expect(summary(walked)).toEqual([[CUT_SHORT, '']]);
+      expect(cutReason(walked)).toContain('document body itself');
     } finally {
       await opened.close();
     }
@@ -688,7 +854,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
     it(`ends complete on an ordinary page (${path})`, async () => {
       const opened = await open(path);
       try {
-        expect(await walk(opened)).toEqual([]);
+        expect(summary(await walk(opened))).toEqual([]);
       } finally {
         await opened.close();
       }
@@ -701,7 +867,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('leaves focus on the body after a complete walk, so a flow whose first step is a Tab lands on the first control', async () => {
     const opened = await open('/end-three');
     try {
-      expect(await walk(opened)).toEqual([]);
+      expect(summary(await walk(opened))).toEqual([]);
       const flow = await makeStepRunner().run(opened, [{ do: 'tab' }]);
       expect(flow.map((stop) => stop.elementPath)).toEqual(['#one']);
     } finally {
@@ -712,7 +878,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
   it('leaves nothing its own Tabs announced for the next check to hear', async () => {
     const opened = await open('/end-greets');
     try {
-      expect(await walk(opened)).toEqual([]);
+      expect(summary(await walk(opened))).toEqual([]);
       expect(await opened.drainAnnouncements()).toEqual([]);
     } finally {
       await opened.close();

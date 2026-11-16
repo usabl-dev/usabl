@@ -423,6 +423,38 @@ describe('measureEntry', () => {
     expect(harness.closed).toBe(2);
   });
 
+  // A keyboard trap cuts the walk short, and the walk gives the screen its gap for that. The trap
+  // the walk reported before the cut is still a catch.
+  function cutShortProvider(report: boolean): Provider {
+    return {
+      id: 'fake-walk',
+      layer: 'walk',
+      capabilities: ['live'],
+      async run(ctx) {
+        const node = await ctx.page.axAt('#save');
+        if (node?.name !== '') return [];
+        return {
+          drafts: report ? [draft(ctx, 'keyboard-walk-trap', '#save', { layer: 'walk' })] : [],
+          gaps: [{ ref: ctx.screen.url, state: 'not-covered', reason: `on screen ${ctx.screen.id}, the keyboard walk was cut short, so this screen is not covered. After 1 tab stop(s), focus went back.` }],
+        };
+      },
+    };
+  }
+
+  it('keeps a catch when the defect also cut the keyboard walk short', async () => {
+    const { deps } = setup([cutShortProvider(true)]);
+    expect(await measureEntry(deps, entry({ expectedRules: ['keyboard-walk-trap'] }), SCREEN)).toMatchObject({
+      outcome: 'caught',
+      rules: ['keyboard-walk-trap'],
+    });
+  });
+
+  it('is unreadable, not missed, when the keyboard walk was cut short and nothing was caught', async () => {
+    const { deps } = setup([cutShortProvider(false)]);
+    const measured = await measureEntry(deps, entry({ expectedRules: ['keyboard-walk-trap'] }), SCREEN);
+    expect(measured.outcome).toBe('unreadable');
+  });
+
   it('is unreadable when the edit did not hold', async () => {
     const { deps } = setup([namesProvider()], { refuse: 'the page kept a text name the edit removed' });
     expect(await measureEntry(deps, entry(), SCREEN)).toMatchObject({

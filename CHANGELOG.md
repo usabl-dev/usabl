@@ -4,6 +4,36 @@
 
 ### Added
 
+- A keyboard walk budget for each screen, in `usabl.config.json`:
+  `keyboardWalk.perSurface.<id>.tabCap` (1 to 2000 presses of Tab, default 200) and `.wallClockMs`
+  (1 to 300000 ms, default 15000). `checkPage` takes `tabCap` and `wallClockMs` options with the
+  same bounds. A value out of bounds is refused when the config is read. The gap for a walk that
+  ran out names the setting and the option, and for the stop cap it names both the presses of Tab
+  and the tab stops reached, because a press inside a region the walk cannot read is not a new
+  stop. On a page handed to `checkPage` with no `screenId`, the gap names only the `checkPage`
+  option, because that page reads no config. Gate effect: a long page that was `not_covered`
+  because its walk ran out reads as checked once its screen has a budget that fits. The setting
+  is in the guarded config, so changing it needs approval, and in CI it is read from the trusted
+  ref.
+- A region the keyboard walk cannot read can be listed as a known limit of its screen, under
+  `keyboardWalk.perSurface.<id>.unreadableRegions` in `usabl.config.json`: a frame by its origin
+  (`{"frameOrigin": "https://chat.example.com"}`) or a closed shadow root by its host tag
+  (`{"shadowHost": "chat-widget"}`), at most 20 per screen. Gate effect: a listed region is not a
+  gap, so a screen whose only gap was that region can read `verified`. The run then says
+  `with known limits` in the verdict line, the summary, the pull request comment, the overlay, the
+  stop hook after a scan, and the self-check, and lists the region, and the docs output adds it to
+  the screen's keyboard walk order. The meaning line of such a verified run reads "No new
+  accessibility barrier blocks this change. Parts your team listed as known limits were not
+  checked." The `checkPage` summary says `with known limits` after the verdict, and its result has
+  `knownLimits: true`. A stop that the stop hook allows from a stored receipt does not scan, and a
+  receipt records no known limits, so that line says plain
+  `VERIFIED (exit 0, stored receipt, not re-scanned)` and adds that known limits from the scan are
+  not shown there and that `usabl check` shows them. One listing line covers every region with that name on its screen. A region with 100
+  or more controls inside cuts the walk short even when it is listed, because the bound of 100
+  presses of Tab inside one region is fixed. A listing that matched no region on a full walk is
+  reported as stale. The listing is in the guarded config and the CLI gate reads it from the
+  trusted ref in CI, so a pull request cannot list its own region. `checkPage` reads it from the
+  working tree, also in CI, and is not a gate.
 - Design input from Figma.
   `usabl import figma <file key> --frame <Frame name>=<surface id> --out <file>`
   reads the accessibility stamps in a Figma file and writes draft requirements, each with
@@ -351,6 +381,42 @@
   fragment, in an app that routes with plain fragments (`/app` to `/app#login`), is not caught by
   this read; configure its `url` with the fragment, or give it a `reachedWhen` selector that the
   sign-in page lacks.
+- A keyboard walk that was cut short is a `not-covered` coverage gap on its screen. Before, it was
+  a `keyboard-walk-truncated` draft with confidence `unverified`, and a baseline taken while the
+  walk was cut short accepted it onto the evidence floor. Every later run then carried it and
+  read `verified`, although the controls past the cut were never walked. Every reason the walk
+  can stop early gives the same gap: the stop cap, the time cap, a cycle, an end the extra Tab
+  did not confirm, a script that moved focus to the body, and a region Tab did not leave. Gate
+  effect: such a screen is never verified and gets no receipt, `usabl baseline` writes no entry
+  for it, and a full baseline refuses while it is not covered. `checkPage` makes no blank-page
+  claim from such a walk.
+- An evidence floor that holds a `keyboard-walk-truncated` entry, written by an earlier version,
+  no longer hides a cut short walk. Gate effect: the run gets one `not-covered` gap on
+  `.usabl-evidence.json` that names the screens and says to run `usabl baseline` (or
+  `usabl baseline --partial`) to rewrite the floor without them. The entry is never carried,
+  claimed fixed, shown as headroom, or counted as an accepted accessibility barrier in the debt
+  line. Rewrite the floor once to clear the gap.
+- A region the keyboard walk cannot read, such as a closed shadow root or a frame from another
+  origin, no longer ends the walk. The walk counts it as one stop and keeps pressing Tab until
+  focus is readable again, so the controls after it are checked. Gate effect: each such region is
+  its own `not-covered` gap on the screen, which names the region and the tab stop. A screen that
+  read `not_covered` because the walk stopped at the region can now also show findings on the
+  controls after it. If 100 Tabs leave focus in the region, the walk is cut short. Focus that goes
+  back into a region after other stops, such as content slotted into a closed shadow root between
+  its own controls, cuts the walk short with no `keyboard-walk-trap` draft, because the walk cannot
+  tell it from a trap. The end of the walk is confirmed through a region only when the region is
+  the first stop and Tab out of it lands on the second stop, or on the body when it was the only
+  stop. So a control inside a region that blurs itself cuts the walk short, and the controls after
+  the region are never read as walked. A host element with a `tabindex` whose closed shadow root
+  holds controls also cuts the walk short with no `keyboard-walk-trap` draft, listed or not,
+  because Tab goes from the host into controls with the host's path. The presses of Tab the end
+  rule makes out of a first region count against the time cap, so a walk that runs out of time
+  there is cut short by it.
+- `checkPage` reports only the `landing:<screenId>` gap when the page left its screen while the
+  checks ran, or when an identity request was refused during them. The gap for a cut short walk
+  and the gap for each region the walk could not read go with the findings, because they
+  describe the other page. Gate effect: none. The result stays `not_covered`, and the one gap
+  left names the cause.
 - A focus order check no longer lets a name on more than one stop hide a missing name or a wrong
   order. With a design of `Save`, `Export` and a Tab walk of `Save`, `Save`, the result was needs
   review, though focus never reached `Export`. The missing and order checks now run first, over
@@ -400,12 +466,11 @@
   the read cannot see into, such as one from another origin, do not count, even when the frame
   has a box, and a failed read counts as no content. When every stop stayed on the body and the
   only content is such a frame, the page is reported not covered; check it by serving the frame
-  from the same origin, or by hand. Gate
-  effect: a page that shows no content is now `not_covered`, with a `readiness:<screenId>` gap
-  worded as the CLI words it, whether or not its readiness signal held. A page of text or images
-  with nothing to Tab to is checked as before. The CLI result is unchanged. A walk that was cut
-  short is already not covered by its own draft, and with `keyboardWalk: false` there are no
-  stops, so `checkPage` makes no blank-page claim.
+  from the same origin, or by hand. Gate effect: a page that shows no content is now
+  `not_covered`, with a `readiness:<screenId>` gap worded as the CLI words it, whether or not its
+  readiness signal held. A page of text or images with nothing to Tab to is checked as before. The
+  CLI result is unchanged. A walk that was cut short is already not covered by its own gap, and
+  with `keyboardWalk: false` there are no stops, so `checkPage` makes no blank-page claim.
 - A script that puts focus on the body in the middle of the page no longer makes the keyboard
   walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
   focus on the body, and the next Tab landed on the first control, as at the real end of the

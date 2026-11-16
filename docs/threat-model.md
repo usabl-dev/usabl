@@ -560,8 +560,10 @@ the tool errored, not because the page is accessible.
   dependency are exempt and never gap. That is an accepted miss for a package that ships Markdown
   the app renders, such as help text read with a `?raw` import.
 
-**Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
-time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.
+**Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [x] The keyboard walk
+budget of each screen is a config knob in the guarded config
+(`keyboardWalk.perSurface.<id>.tabCap` and `.wallClockMs`), each with an upper bound. The default
+is the 15s time cap and 200 tab stops.
 
 ---
 
@@ -573,7 +575,10 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 **Controls:**
 
 - The keyboard-walk provider ships a 15s wall-clock cap and the check runner caps transcript
-  tabs at 50, so a single provider cannot spin forever.
+  tabs at 50, so a single provider cannot spin forever. A screen can raise its walk to at most
+  five minutes and 2000 tab stops, only in the guarded config, so a pull request cannot raise its
+  own. A region the walk cannot read that Tab does not leave is bounded at 100 presses, and a walk
+  that hits any bound is cut short, which is a `not-covered` gap.
 - A timed-out or failed scan becomes a coverage gap, which resolves to `not_covered`
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
@@ -869,21 +874,53 @@ outside every table as the control in an accepted row. Either way a new barrier 
   DOM read over CDP, and its focused element is asked for in the read world. So is a frame
   owner other than an `iframe` or `frame`, such as an `object`, `embed`, or `fencedframe`
   element. Focus inside a closed shadow root, a frame from another origin, or such a frame
-  owner ends the walk with an `unverified` truncation draft, never a pass.
-- A Tab cycle that never reaches the body ends the walk with an `unverified` truncation draft,
-  never a pass. The read of the open modal dialogs that hold focus runs in the read world too.
-  A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
-  inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
-  draft stays, so the screen is not covered rather than passed.
+  owner is one stop the walk cannot read. The walk goes on past it, and the region is a
+  `not-covered` gap on the screen, never a pass. A region that Tab does not leave within 100
+  presses cuts the walk short.
+- A walk that was cut short is a `not-covered` coverage gap on its screen, never a draft. As an
+  `unverified` draft it could be accepted onto the evidence floor: a baseline taken while a page
+  stopped the walk early floored the draft, and every later run carried it and read verified
+  while the controls past the cut were never walked. A page that stops the walk early can no
+  longer reach that state. The gate never floors or carries a gap, baseline never writes one,
+  and an old floor entry for a cut short walk is read as a gap that asks for the floor to be
+  rewritten. The stop cap and the time cap are in the guarded config, with upper bounds, so a
+  pull request cannot raise its own.
+- A region the walk cannot read is a known limit, not a gap, only when the team lists it for the
+  screen in `usabl.config.json`. The file is guarded, so the listing needs approval, and in CI the
+  CLI gate reads it from the trusted ref, so a pull request cannot list its own region. `checkPage`
+  reads the working tree copy at `projectRoot`, also in CI, so a pull request's own Playwright test
+  can see its new listing and read verified. `checkPage` is not a gate: the CLI gate still requires
+  approval for the edit. One listing line covers every region with that name on its screen, and a
+  region with 100 or more controls inside cuts the walk short even when it is listed. A listed region is
+  shown as a known limit on every surface, so it never reads as checked. The name a listing
+  matches is read from the browser's own DOM in the read world: the origin of a frame's stated
+  address, or the tag of a closed shadow root's host. A page can choose its own tag or frame
+  address, so a page under review could make an unreadable region match a name the team listed
+  for that screen. The listing is per screen, so it never accepts a region on another screen,
+  and what it accepts is still shown as not checked. The page-derived name is scrubbed and cut
+  to 100 characters before any surface prints it.
+- A Tab cycle that never reaches the body cuts the walk short, never a pass. The read of the
+  open modal dialogs that hold focus runs in the read world too. A page can still mark a
+  container as an ARIA modal dialog, and the walk then reads a trap inside it as the dialog
+  keeping focus, with no `keyboard-walk-trap` draft. The walk is still cut short, so the screen
+  is not covered rather than passed.
 - Focus on the body ends the walk as complete only when one more Tab lands on a stop the walk
   already reached: the same element by the browser's node id, or the same path. When the browser
   gives a node id for both, a path match alone counts only for the first stop walked. A page
   script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
   body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
-  control not yet walked, so the walk ends with the truncation draft instead. A page script that
+  control not yet walked, so the walk is cut short instead. Every control inside a region the walk
+  cannot read has the region's path, so a blur inside a walked region, followed by a Tab to the
+  next control of that region, would match the region's path. Through a region the end is
+  confirmed only when the region is the first stop walked and Tab out of it lands on the second
+  stop walked, or on the body when it was the only stop. Without that, a page under review could
+  blur a control inside a listed region, end the walk as complete, and leave the controls after
+  the region unwalked while the screen read verified. Focus that goes back into a walked region
+  cuts the walk short with no trap draft, so a slotted control cannot make the walk report a trap
+  that is not there. A page script that
   calls `focus()` on a body with a `tabindex` in the middle of the page makes the next Tab start
   again at the first control. The end rule reads whether the body itself holds focus, in the read
-  world, before the extra Tab, and that walk ends with the truncation draft too. A walk that
+  world, before the extra Tab, and that walk is cut short too. A walk that
   reaches no stop is complete only when the extra Tab leaves focus on the body, and that page is
   left to the blank-page detector. In `checkPage` the detector reads the stops the keyboard walk
   returns, and a page whose walk stayed on the body and that shows no content is a gap there

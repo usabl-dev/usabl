@@ -530,7 +530,11 @@ export const overlayClientSource = `(() => {
     if (error) return { key: 'error', word: 'Not verified', symbol: '!' };
     if (!payload || !payload.loaded) return { key: 'pending', word: 'No result yet', symbol: '○' };
     const verdict = payload.verdict;
-    if (verdict === 'verified') return { key: 'verified', word: 'Verified', symbol: '✓' };
+    // A region the team listed as one the keyboard walk cannot read was not checked, so the word
+    // says the verdict has known limits. The coverage footer lists each region.
+    if (verdict === 'verified') {
+      return { key: 'verified', word: payload.knownLimits === true ? 'Verified, with known limits' : 'Verified', symbol: '✓' };
+    }
     if (verdict === 'regression') return { key: 'regression', word: 'Regression', symbol: '✕' };
     if (verdict === 'not_covered') return { key: 'not-covered', word: 'Not covered', symbol: '?' };
     if (verdict === 'approval_required') return { key: 'approval', word: 'Approval required', symbol: '!' };
@@ -2966,6 +2970,20 @@ export const overlayClientSource = `(() => {
     }
     gaps.appendChild(gapList);
     list.appendChild(gaps);
+    // What a check disclosed it did not read, such as a region the keyboard walk could not read
+    // that the team listed as a known limit. Not a gap, and it never changes the verdict, so the
+    // heading says it does not block. Left out when there are no notes, or on an older projection.
+    const notes = Array.isArray(payload.notes) ? payload.notes : [];
+    if (notes.length > 0) {
+      list.appendChild(make('dt', '', 'Disclosed, does not block'));
+      const noteCell = make('dd');
+      const noteList = make('ul', 'gap-list');
+      for (const note of notes) {
+        noteList.appendChild(make('li', 'gap-item', String(note.screenId) + ': ' + displayText(note.reason)));
+      }
+      noteCell.appendChild(noteList);
+      list.appendChild(noteCell);
+    }
     section.appendChild(list);
     return section;
   }

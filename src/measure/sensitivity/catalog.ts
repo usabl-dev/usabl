@@ -454,8 +454,6 @@ export const SENSITIVITY_CATALOG: readonly CatalogEntry[] = [
 export const NOT_EXERCISED_REASONS: Readonly<Record<string, string>> = {
   'keyboard-walk-unconfirmed-focus':
     'It needs a focused element the accessibility tree cannot describe. No edit kind in the catalog makes that happen reliably.',
-  'keyboard-walk-truncated':
-    'It discloses where the walk stopped. The focus trap entry produces it beside keyboard-walk-trap, so no entry expects it on its own.',
   'rhds-accordion-header-parent': 'It needs an element moved under a new parent. No edit kind moves an element.',
   'rhds-dialog-name':
     'A closed rh-dialog with no name source is reported as unverified by design, and an open one needs the real component. The fixture uses small stand-in elements that do not model a dialog.',

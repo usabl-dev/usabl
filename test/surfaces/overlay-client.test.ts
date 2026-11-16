@@ -3846,3 +3846,52 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     await page.context().close();
   });
 });
+
+// A region the team listed as one the keyboard walk cannot read is a known limit. The overlay says
+// the verdict has known limits and lists the region under a heading that says it does not block.
+describe('known limits', { timeout: 60_000 }, () => {
+  const reason =
+    'on screen clusters, the keyboard walk could not read inside a frame from https://chat.example.com at tab stop 2, so this region was not checked.';
+
+  it('names the known limits beside the verdict word and lists the region in the coverage footer', async () => {
+    const limited = result({
+      verdict: 'verified',
+      summary: 'verified: 0 gating findings',
+      findings: [],
+      exitCode: 0,
+      screens: [
+        {
+          screenId: 'clusters',
+          url: 'http://127.0.0.1:5173/clusters',
+          stops: [],
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          notes: [{ ref: 'provider:keyboard-walk/unread-region', reason }],
+          reachedSelectorPresent: null,
+        },
+      ],
+    });
+    const page = await mount(projectOverlay(limited), { path: '/clusters' });
+    const panel = await openPanel(page);
+
+    expect(await bannerWord(page)).toBe('✓Verified, with known limits');
+    expect(await panel.getByText('Disclosed, does not block', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('clusters: ' + reason, { exact: true }).isVisible()).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+    await page.context().close();
+  });
+
+  it('keeps the plain verdict word when the run has no known limit', async () => {
+    const page = await mount(
+      projectOverlay(result({ verdict: 'verified', summary: 'verified: 0 gating findings', findings: [], exitCode: 0 })),
+      { path: '/clusters' },
+    );
+    await openPanel(page);
+
+    expect(await bannerWord(page)).toBe('✓Verified');
+    await page.context().close();
+  });
+});
