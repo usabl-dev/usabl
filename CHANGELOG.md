@@ -372,9 +372,10 @@
   a page that moved during the walk, such as a focus handler that navigates or an auth timer that
   sends it to a sign-in page with no refused identity request, was checked on the other page. The
   address is now read again on every screen, with or without a `reachedWhen` selector, after the
-  walk and the providers that only read the page and before the first provider that clicks or
-  types, such as a flow or voice requirement. It is compared with the address at load. A change of
-  origin or path is leaving the screen. The query counts only when the screen's configured `url`
+  walk and every other provider, the PatternFly probes included, and before the first flow or
+  voice contract. Flows and voice contracts are marked as providers that may move the page on
+  purpose, and they run after every other provider. The new read is compared with the address at
+  load. A change of origin or path is leaving the screen. The query counts only when the screen's configured `url`
   has one. A fragment counts only as a route: one that starts with `#/` or `#!`, or any fragment
   when the configured `url` has one. A plain fragment such as `#tab-2`, which a tab panel sets, is
   not a move. Gate effect: such a screen read `verified` when the other page was clean, or carried
@@ -382,7 +383,7 @@
   addresses and no findings. An address that cannot be read is the same gap. A flow that moves the
   route on purpose keeps the findings taken before it. Limits: the read does not catch a move and a
   move back, content that changes without the address, a plain fragment or query router on a
-  screen configured without that part, or a move after the first provider that acts on the page.
+  screen configured without that part, or a move while the flows and voice contracts run.
   Configure the screen's `url` with its query or fragment, or give it a `reachedWhen` selector that
   the sign-in page lacks.
 - A keyboard walk that was cut short is a `not-covered` coverage gap on its screen. Before, it was
