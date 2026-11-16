@@ -860,8 +860,12 @@ outside every table as the control in an accepted row. Either way a new barrier 
   rewritten. The stop cap and the time cap are in the guarded config, with upper bounds, so a
   pull request cannot raise its own.
 - A region the walk cannot read is a known limit, not a gap, only when the team lists it for the
-  screen in `usabl.config.json`. The file is guarded, so the listing needs approval, and in CI it
-  is read from the trusted ref, so a pull request cannot list its own region. A listed region is
+  screen in `usabl.config.json`. The file is guarded, so the listing needs approval, and in CI the
+  CLI gate reads it from the trusted ref, so a pull request cannot list its own region. `checkPage`
+  reads the working tree copy at `projectRoot`, also in CI, so a pull request's own Playwright test
+  can see its new listing and read verified. `checkPage` is not a gate: the CLI gate still requires
+  approval for the edit. One listing line covers every region with that name on its screen, and a
+  region with 100 or more controls inside cuts the walk short even when it is listed. A listed region is
   shown as a known limit on every surface, so it never reads as checked. The name a listing
   matches is read from the browser's own DOM in the read world: the origin of a frame's stated
   address, or the tag of a closed shadow root's host. A page can choose its own tag or frame
@@ -879,7 +883,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   gives a node id for both, a path match alone counts only for the first stop walked. A page
   script that blurs a control on focus, or a keydown handler that stops Tab and drops focus to the
   body, used to end the walk with zero or few stops and no draft. The extra Tab then lands on a
-  control not yet walked, so the walk is cut short instead. A page script that
+  control not yet walked, so the walk is cut short instead. Every control inside a region the walk
+  cannot read has the region's path, so a blur inside a walked region, followed by a Tab to the
+  next control of that region, would match the region's path. Through a region the end is
+  confirmed only when the region is the first stop walked and Tab out of it lands on the second
+  stop walked, or on the body when it was the only stop. Without that, a page under review could
+  blur a control inside a listed region, end the walk as complete, and leave the controls after
+  the region unwalked while the screen read verified. Focus that goes back into a walked region
+  cuts the walk short with no trap draft, so a slotted control cannot make the walk report a trap
+  that is not there. A page script that
   calls `focus()` on a body with a `tabindex` in the middle of the page makes the next Tab start
   again at the first control. The end rule reads whether the body itself holds focus, in the read
   world, before the extra Tab, and that walk is cut short too. A walk that

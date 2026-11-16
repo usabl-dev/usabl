@@ -988,7 +988,13 @@ first control that goes away during the walk, such as a timed banner whose remov
 control after it to a new path, still wraps to a known stop, and so does a list that re-renders
 and puts a new item at the path of the first stop. When the browser gives a node id for both
 elements, a path match alone counts only for the first stop walked, so another element that took
-a later stop's path does not confirm the end. After the extra Tab, the walk discards what that
+a later stop's path does not confirm the end. When the extra Tab lands in a region the walk
+cannot read (below), the region's path is all the walk can match, and every control inside the
+region has it. A control in the region that blurs itself drops focus to the body mid-page, and the
+next Tab goes to the next control of the same region. So the end is confirmed through a region
+only when the region is the first stop walked, and Tab out of it, pressed at most 100 times, lands
+on the second stop walked, or on the body when the region was the only stop. Anything else is cut
+short. After the extra Tab, the walk discards what that
 Tab announced and puts focus back on the body, so a flow or voice contract that runs next starts
 where it did before the end was confirmed. A walk that reached no stop is complete only when
 the extra Tab leaves focus on the body, and that page is then left to the blank-page detector
@@ -1023,14 +1029,18 @@ Tab is a trap of one stop.
 **A walk that was cut short.** A walk that stops before its end rule confirms the end of the
 focus order is cut short. Every reason is read the same way: the stop cap, the time cap, a
 cycle (a trap or one open modal dialog), an extra Tab that did not confirm the end, a script that
-moved focus to the body, and a region the walk cannot read that Tab did not leave (below). The
+moved focus to the body, a region the walk cannot read that Tab did not leave, and focus that went
+back into a region the walk had walked past (below). The
 keyboard walk gives the screen one `not-covered` coverage gap, with the screen's url as its ref.
 The reason starts `on screen <id>, the keyboard walk was cut short, so this screen is not
 covered.`, says why and after how many tab stops, says that accessibility barriers past that
 point are unknown, and says what to do. For the stop cap and the time cap it names the setting
 in `usabl.config.json` (`keyboardWalk.perSurface.<id>.tabCap` or `.wallClockMs`) and the
-`checkPage` option of the same name. The reason holds counts and usabl's own words, never page
-text.
+`checkPage` option of the same name. A page handed to `checkPage` with no `screenId` reads no
+config, so its gap names only the `checkPage` option. The stop cap counts presses of Tab. A press
+inside a region the walk cannot read is not a new stop, so the gap for the stop cap names both
+numbers, such as `its limit of 200 presses of Tab after 51 tab stop(s)`, and says why they
+differ. The reason holds counts and usabl's own words, never page text.
 
 It is a gap, never a draft. A draft can be accepted onto the evidence floor. When the walk
 gave a `keyboard-walk-truncated` draft, a baseline taken while the walk was cut short floored it,
@@ -1085,8 +1095,14 @@ does not hold focus, such as one inside a focusable host, is walked past as usua
 one tab stop that it could not read and keeps pressing Tab. Each Tab that leaves focus in the
 same region is not a new stop. When focus is readable again, the walk goes on from there, so the
 controls after the region are checked. If 100 Tabs in a row leave focus in the region, Tab may
-never leave it, and the walk is cut short. A region the walk meets again at a later stop is a
-cycle, like any other stop met again, and the end rule matches a region stop by its path. The
+never leave it, and the walk is cut short. The bound of 100 is fixed. A region with 100 or more
+controls inside it always cuts the walk short, even when it is listed (below), so check such a
+screen by hand, or point a screen of its own at a state where the region is closed. Focus that
+goes back into a region the walk walked past, after other stops, also cuts the walk short, with no
+`keyboard-walk-trap` draft. Content slotted into a closed shadow root between its own controls
+reads that way with no trap at all, because every control inside the root has the host's path, so
+the repeat is not evidence of a trap. The end rule matches a region stop by its path, only as
+described under How the walk ends. The
 controls inside the region were not checked, so each region gives the screen its own
 `not-covered` gap. The reason says at which tab stop the walk met it and what it is, and says to
 check its controls by hand, or to use an open shadow root or a same-origin frame so usabl can
@@ -1096,15 +1112,25 @@ walk them.
 screen under `keyboardWalk.perSurface.<id>.unreadableRegions` in `usabl.config.json`. A listed
 region is not a gap. It is a known limit: a provider note with ref
 `provider:keyboard-walk/unread-region` that says the region was not checked and is listed, so it
-does not block. Every surface shows it. The verdict line says `with known limits` after the exit
-code, and a verified run's meaning says some parts were not checked. The terminal summary, the
-self-check, and the stop hook print the note under `disclosed, does not block`. The pull
-request comment heading says `with known limits` and the note is listed under `Disclosed, does
-not block`. The overlay shows `Verified, with known limits` and lists the note in its coverage
-footer. The docs output adds the note to the screen's keyboard walk order as a known limit.
+does not block. The verdict line says `with known limits` after the exit code, and a verified
+run's meaning reads "No new accessibility barrier blocks this change. Parts your team listed as
+known limits were not checked." The terminal summary, the self-check, and the stop hook after a
+scan print the note under `disclosed, does not block`. The pull request comment heading says
+`with known limits` and the note is listed under `Disclosed, does not block`. The overlay shows
+`Verified, with known limits` and lists the note in its coverage footer. The docs output adds the
+note to the screen's keyboard walk order as a known limit. The `checkPage` summary says
+`with known limits` after the verdict, such as `verified, with known limits: 0 blocking, 0 needs
+review, 0 gap(s)`, and its result has `knownLimits: true`. One surface does not show it: a stop
+that the stop hook allows from a stored receipt, with no scan. A receipt records no known
+limits, so that line says plain `VERIFIED (exit 0, stored receipt, not re-scanned)`, and it adds
+that known limits from the scan are not shown there and that `usabl check` shows them.
+One listing line covers every region with that name on its screen, however many the walk meets.
 `usabl.config.json` is guarded, so a pull request that adds a listing needs approval, and in CI
-the walk reads the listing from the trusted ref, as it reads the rest of the config. With a
-trusted ref that has no readable config, no listing applies. A listing that matched no region on
+the CLI gate reads the listing from the trusted ref, as it reads the rest of the config. With a
+trusted ref that has no readable config, no listing applies. `checkPage` is different: it reads
+`usabl.config.json` from the working tree at `projectRoot`, also in CI, so a pull request that
+adds a listing sees it in its own Playwright test. `checkPage` is not a gate, and the CLI gate
+still requires approval for that edit. A listing that matched no region on
 a walk that reached the end of the page is stale. It gets a note with ref
 `provider:keyboard-walk/stale-region-listing` that asks for the line to be removed or corrected.
 It is not a known limit. A walk that was cut short reports no stale listing, because it did not
@@ -4019,9 +4045,10 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   only the pins see that drift. The fast path records or replaces pins exactly as a full run
   does. The line reads "VERIFIED (exit 0, stored receipt, not re-scanned): this result comes
   from a stored receipt. usabl did not scan this change again on this stop. The receipt matches
-  this tree, the committed policy, the engine, and the scanners. You may stop." When this stop
-  compared the pins and found no drift, "Guarded policy files match the session pins." comes
-  before "You may stop." When the pins were not used, the parentheses also carry the
+  this tree, the committed policy, the engine, and the scanners. A stored receipt does not record
+  known limits, so any the scan had are not shown here; run usabl check to see them. You may
+  stop." When this stop compared the pins and found no drift, "Guarded policy files match the
+  session pins." comes before the sentence on known limits. When the pins were not used, the parentheses also carry the
   `session drift not checked` note and the pin notice follows on stderr, as on a full run.
   A receipt is a local file with no signature. A user with a shell on the same machine can
   write one that verifies, so the line says where the result came from (threat model, Threats
@@ -5908,7 +5935,9 @@ surface and for a screen from routes:
 }
 ```
 
-- `tabCap` is the most tab stops the walk takes on the screen, a whole number from 1 to 2000.
+- `tabCap` is the most presses of Tab the walk makes on the screen, a whole number from 1 to 2000.
+  Each press that reaches a readable control is one tab stop, so on most screens it is the most
+  tab stops. A press inside a region the walk cannot read counts toward it and is not a new stop.
   The default is 200. A screen with more than 2000 tab stops is better split into several screens.
 - `wallClockMs` is the most time the walk takes on the screen, a whole number of milliseconds
   from 1 to 300000 (five minutes). The default is 15000.

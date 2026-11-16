@@ -159,9 +159,11 @@ refused: reconcile it by hand.
 A screen is not covered when its keyboard walk stopped before the end of the page. The gap
 starts `on screen <id>, the keyboard walk was cut short` and says why and what to do:
 
-- **It reached its limit of tab stops, or ran out of its time budget.** A long table page has
-  more stops than the default of 200, or takes longer than 15 seconds. Raise the budget for that
-  screen in `usabl.config.json`, up to 2000 stops and 300000 ms:
+- **It reached its limit of presses of Tab, or ran out of its time budget.** A long table page
+  has more stops than the default of 200, or takes longer than 15 seconds. A press of Tab inside a
+  region the walk cannot read counts toward the limit but is not a new stop, so the gap names both
+  numbers. Raise the budget for that screen in `usabl.config.json`, up to 2000 presses and
+  300000 ms:
 
   ```json
   "keyboardWalk": { "perSurface": { "jobs": { "tabCap": 600, "wallClockMs": 60000 } } }
@@ -173,7 +175,14 @@ starts `on screen <id>, the keyboard walk was cut short` and says why and what t
   keyboard trap, or point the screen at a state with no dialog open and check the dialog on a
   screen of its own.
 - **A script moved focus to the body, or one more Tab did not confirm the end.** Find the script
-  that blurs a control or stops the Tab key.
+  that blurs a control or stops the Tab key. A control inside a closed shadow root or a frame
+  that blurs itself gives this gap too.
+- **Focus did not leave a region the walk cannot read, or went back into one.** The walk presses
+  Tab at most 100 times inside one region. That bound is fixed, so a region with 100 or more
+  controls always cuts the walk short, even when it is listed. Check it by hand. Focus that goes
+  back into a region after other stops, such as content slotted into a closed shadow root between
+  its own controls, is cut short too. The walk cannot tell that from a keyboard trap, so it
+  reports no trap.
 
 Each fix to `usabl.config.json` is a change to a guarded file, so the pull request needs
 approval, and in CI the gate reads the trusted copy.
@@ -194,8 +203,14 @@ list it for that screen, using the line the gap gives:
 "keyboardWalk": { "perSurface": { "support": { "unreadableRegions": [{ "frameOrigin": "https://chat.example.com" }] } } }
 ```
 
-A listed region is a known limit, not a gap. Every result says `with known limits` and lists the
-region. A listing that matched no region on a full walk is reported, so remove or correct it.
+A listed region is a known limit, not a gap. Every result of a scan says `with known limits` and
+lists the region. A stop that the stop hook allows from a stored receipt does not scan, and a
+receipt records no known limits, so that line says plain `VERIFIED (exit 0, stored receipt, not
+re-scanned)` and says to run `usabl check` to see them. One listing line covers every region with
+that name on the screen. In CI the gate reads the listing from the trusted ref. `checkPage` reads
+it from the working tree, also in CI, so a pull request's own Playwright test sees a listing the
+pull request adds, and the gate still asks for approval. A listing that matched no region on a
+full walk is reported, so remove or correct it.
 
 ## What has been proven
 
