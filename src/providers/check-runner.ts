@@ -317,10 +317,21 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // that leaves the element in the DOM for a few hundred milliseconds. Content the scanner
           // itself caused is not the page, so the providers wait for it to go.
           await waitForScannerArtifactsToClear(page);
+          // The address for the read after the checks, taken right before the first provider that
+          // clicks, types, or navigates: flow and voice requirements, and the PatternFly probes. A
+          // flow may move the route on purpose, and its own rules judge that, so a move after this
+          // point does not drop what the walk and the read-only providers measured on the screen.
+          // Undefined when no such provider ran; the address is then read after everything below.
+          let addressBeforeActing: { url: string | null } | undefined;
           const providerResult = await runProviders(
             deps.providers,
             { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
             deps.allowedCapabilities,
+            {
+              beforePageChanges: async () => {
+                addressBeforeActing = { url: await readPageAddress(page) };
+              },
+            },
           );
           // The row a finding sits in is read on the same page the providers saw, before anything
           // else changes it, so the gate can key a control repeated in every table row per row.
@@ -376,10 +387,18 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // An address that cannot be read now, or could not be read at load, is a gap too: nothing
           // then confirms the checks ran on this screen, and a gap is the safe direction. The real
           // browser always reports an open page's address, so this only fires on a broken page.
+          //
+          // Which address: the one read before the first provider that acts on the page, when one
+          // ran. There is no second read at the end then. It could not tell an intended flow move
+          // from a timer, and any gap it raised would make the whole screen not covered, so a flow
+          // that moves the route on purpose would lose the screen. A move after that point is left
+          // to the flow's own navigated gap and silent change rule. When no provider acted on the
+          // page, the address is read here, the last read of the page, so it also covers the row
+          // and source reads, the image read, and the readiness measure above.
           const leftScreen = leftScreenGap(screen.id, {
             requestedUrl: screen.url,
             loadedUrl: landing.landedUrl,
-            checkedUrl: await readPageAddress(page),
+            checkedUrl: addressBeforeActing === undefined ? await readPageAddress(page) : addressBeforeActing.url,
           });
           if (lateRefusal !== null) {
             result = notReachedScan(screen, lateRefusal, signal);

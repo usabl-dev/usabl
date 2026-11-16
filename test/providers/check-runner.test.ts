@@ -992,8 +992,8 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(reason).toContain('http://127.0.0.1:5173/elsewhere');
     expect(reason).toContain('sign in again');
     expect(reason).toContain('on focus or on a timer');
-    // A tab panel's fragment no longer leaves the screen, so the advice is about fragment routes.
-    expect(reason).toContain('url with its fragment');
+    // A tab panel's fragment no longer leaves the screen, so the advice is about route parts.
+    expect(reason).toContain('configure the screen url with');
     expect(reason).not.toContain('tab panels');
   });
 
@@ -1137,6 +1137,27 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(scan.gaps[0]?.reason).toContain('http://127.0.0.1:5173/login');
   });
 
+  it('does not verify a page that moves to another origin at the same path', async () => {
+    // An SSO portal root, or a www home page after the session ends, has the path of the app root.
+    const screen = { id: 'home', url: 'https://app.example.com/' };
+    const page = await movingPage(screen.url, async () => 'https://login.example.com/');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+    expect(scan.gaps[0]?.reason).toContain('https://login.example.com/');
+  });
+
+  it('reads the query as part of the route for a screen whose url has one', async () => {
+    const screen = { id: 'admin-clusters', url: 'http://127.0.0.1:5173/admin.php?page=clusters' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/admin.php?page=login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+    expect(scan.gaps[0]?.reason).not.toContain('page=');
+  });
+
   it('reports the late refusal, not the move, when both happened', async () => {
     const page = await movingPage(SCREEN.url, async () => SIGN_IN);
     let walked = false;
@@ -1159,6 +1180,113 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(scan.drafts).toEqual([]);
     expect(scan.gaps).toHaveLength(1);
     expect(scan.gaps[0]?.reason).toContain('401');
+  });
+});
+
+describe('makeCheckRunner and where the address is read when a provider acts on the page', () => {
+  // Flow and voice requirements click and type, and a flow may move the route on purpose. The
+  // address is read before the first provider that acts on the page, so an intended move after that
+  // point does not drop the findings the read-only providers took on the screen.
+  const HASH_SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/#/clusters' };
+
+  async function hashPage(): Promise<{ page: Page; go: (url: string) => void }> {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#second', '#first'], activeNodes: [null, null, null] });
+    let address = HASH_SCREEN.url;
+    Object.assign(page, { currentUrl: async () => address });
+    return {
+      page,
+      go: (url: string) => {
+        address = url;
+      },
+    };
+  }
+
+  const readOnly: Provider = {
+    id: 'fake-axe',
+    layer: 'fake',
+    capabilities: ['live'],
+    run: async (): Promise<Draft[]> => [makeDraft('axe-rule')],
+  };
+
+  // A flow that activates the Settings link, which moves the hash route on purpose.
+  const routingFlow = (go: (url: string) => void): Provider => ({
+    id: 'intake-flow',
+    layer: 'flow',
+    capabilities: ['live'],
+    mutatesPageState: true,
+    run: async (): Promise<Draft[]> => {
+      go('http://127.0.0.1:5173/#/settings');
+      return [];
+    },
+  });
+
+  async function scanWith(page: Page, providers: Provider[]) {
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers,
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    }).scan(HASH_SCREEN);
+    return markUnseenScreens([scan]).screens[0]!;
+  }
+
+  it('keeps the findings taken before a hash-routed flow that moves the route on purpose', async () => {
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [routingFlow(go), readOnly]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+  });
+
+  it('still does not verify a page that a timer moves during the walk, with a flow present', async () => {
+    const { page, go } = await hashPage();
+    const tab = page.tab.bind(page);
+    Object.assign(page, {
+      tab: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        await tab();
+      },
+    });
+
+    const scan = await scanWith(page, [routingFlow(go), readOnly]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('does not verify a page that a read-only provider moved, with a flow present', async () => {
+    const { page, go } = await hashPage();
+    const moving: Provider = {
+      ...readOnly,
+      run: async (): Promise<Draft[]> => {
+        go('http://127.0.0.1:5173/#/login');
+        return [makeDraft('axe-rule')];
+      },
+    };
+
+    const scan = await scanWith(page, [routingFlow(go), moving]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('reads the address after every provider when none acts on the page', async () => {
+    const { page, go } = await hashPage();
+    const moving: Provider = {
+      ...readOnly,
+      run: async (): Promise<Draft[]> => {
+        go('http://127.0.0.1:5173/#/login');
+        return [makeDraft('axe-rule')];
+      },
+    };
+
+    const scan = await scanWith(page, [readOnly, moving]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.drafts).toEqual([]);
   });
 });
 

@@ -451,22 +451,41 @@ function isHashRoute(hash: string): boolean {
 }
 
 /**
+ * The route a hash route names: the fragment up to its own query or a second `#`, with one trailing
+ * slash removed. `#/clusters?page=2` and `#/clusters#tab-2` both name `#/clusters`. Empty for a
+ * fragment that is not a hash route.
+ */
+function hashRouteOf(hash: string): string {
+  if (!isHashRoute(hash)) {
+    return '';
+  }
+  return `#${withoutTrailingSlash(hash.slice(1).split(/[?#]/)[0] ?? '')}`;
+}
+
+/**
  * Whether the page was still on its screen after the checks, by the address read at load and the
  * address read after the checks. Used for that read only; sameScreenPath and the landing rules are
  * unchanged.
  *
+ * The origin (scheme, host, and port) always counts. Both addresses come from the same browser in
+ * the same scan, so the origin differs only when the page moved, for example to an SSO portal at
+ * its root. A redirect to another host on load is already in the loaded address.
+ *
  * The path, with one trailing slash removed, always counts. A change of path is leaving the screen.
- * The query never counts, for the reason given at the top of this file.
  *
- * The fragment counts only when it names a route. A hash route, `#/` or `#!`, is read like a path:
- * the part before its first `?`, with one trailing slash removed. A plain fragment, such as `#tab-2`
- * or `#section`, is a place on the page: a tab panel or an anchor sets it, so gaining, losing, or
- * changing one is not leaving. The exception is a screen whose configured url has a plain fragment,
- * such as `/app#clusters`. That app routes with plain fragments, so on that screen any fragment
- * change is leaving.
+ * The query counts only when the configured url has one. That app routes with the query, such as
+ * `/admin.php?page=clusters`, so on that screen any change to the query is leaving. Otherwise the
+ * query is a filter or a page number and never counts, for the reason given at the top of this file.
  *
- * The limit: on a screen configured without a fragment, an app that routes with plain fragments,
- * `/app` to `/app#login`, is not caught here. A reachedWhen selector that the other page lacks is.
+ * The fragment counts only when it names a route. A hash route, `#/` or `#!`, is read like a path;
+ * see hashRouteOf. A plain fragment, such as `#tab-2` or `#section`, is a place on the page: a tab
+ * panel or an anchor sets it, so gaining, losing, or changing one is not leaving. The exception is
+ * a screen whose configured url has a plain fragment, such as `/app#clusters`. That app routes with
+ * plain fragments, so on that screen any fragment change is leaving.
+ *
+ * The limits: on a screen configured without a fragment, an app that routes with plain fragments,
+ * `/app` to `/app#login`, is not caught here, and on a screen configured without a query, an app
+ * that routes with the query is not caught either. A reachedWhen selector the other page lacks is.
  *
  * Null when any of the three addresses does not parse, so the caller makes it a gap.
  */
@@ -482,17 +501,40 @@ export function stayedOnScreen(configuredUrl: string, loadedUrl: string, checked
     return null;
   }
   const plainFragmentsAreRoutes = configured.hash.length > 0 && !isHashRoute(configured.hash);
+  const queryIsRoute = configured.search.length > 0;
   const routeOf = (parsed: URL): string => {
     const path = withoutTrailingSlash(parsed.pathname);
-    let fragment = '';
-    if (isHashRoute(parsed.hash)) {
-      fragment = `#${withoutTrailingSlash(parsed.hash.slice(1).split('?')[0] ?? '')}`;
-    } else if (plainFragmentsAreRoutes) {
-      fragment = parsed.hash;
-    }
-    return `${path.length === 0 ? '/' : path}${fragment}`;
+    const fragment = isHashRoute(parsed.hash) ? hashRouteOf(parsed.hash) : plainFragmentsAreRoutes ? parsed.hash : '';
+    const query = queryIsRoute ? parsed.search : '';
+    // Each part is kept apart by a character the part before it cannot hold unescaped.
+    return `${parsed.origin} ${path.length === 0 ? '/' : path} ${query} ${fragment}`;
   };
   return routeOf(loaded) === routeOf(checked);
+}
+
+/**
+ * An address the read after the checks prints: sanitizeUrlForDisplay, and the route of a hash
+ * route, so a move from `#/clusters` to `#/login` shows two different addresses. The route is cut
+ * at its own query and at a second `#`, so it carries no more than a path does. A plain fragment
+ * and the query are never printed, because either can carry a token.
+ */
+function displayWithRoute(raw: string): string {
+  const shown = sanitizeUrlForDisplay(raw);
+  try {
+    return `${shown}${hashRouteOf(new URL(raw).hash)}`;
+  } catch {
+    return shown;
+  }
+}
+
+/** Whether an address parses as a URL. */
+function parses(raw: string): boolean {
+  try {
+    new URL(raw);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -694,13 +736,15 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
 
 /**
  * Whether the page stayed on its screen while it was checked. The rules above judge how the page
- * loaded. This judges whether it was still that page when the checks ended: a focus handler that
- * navigates, or an auth timer that sends the page to a sign-in page, moves it after load, and the
- * checks then measure the other page.
+ * loaded. This judges whether it was still that page once the walk and the checks that only read
+ * the page were done: a focus handler that navigates, or an auth timer that sends the page to a
+ * sign-in page, moves it after load, and the checks then measure the other page.
  *
  * `loadedUrl` is the address the page reported at load, so a redirect the application ran on load
- * to its own canonical address is not read as a move. `checkedUrl` is the address after the checks.
- * They are compared with stayedOnScreen: the path and a fragment that names a route. See there.
+ * to its own canonical address is not read as a move. `checkedUrl` is the address read before the
+ * first provider that acts on the page, or after every provider when none does; see check-runner.ts.
+ * They are compared with stayedOnScreen: the origin, the path, and the query and fragment only when
+ * they name a route. See there.
  *
  * Returns null only when both addresses were read and name the same screen. An address that could
  * not be read at either moment is a gap, because then nothing confirms the checks ran on the screen.
@@ -711,30 +755,52 @@ export function leftScreenGap(
   addresses: { requestedUrl: string; loadedUrl: string | null; checkedUrl: string | null },
 ): CoverageGap | null {
   const { requestedUrl, loadedUrl, checkedUrl } = addresses;
-  if (loadedUrl !== null && checkedUrl !== null && stayedOnScreen(requestedUrl, loadedUrl, checkedUrl) === true) {
+  const stayed = loadedUrl !== null && checkedUrl !== null ? stayedOnScreen(requestedUrl, loadedUrl, checkedUrl) : null;
+  if (stayed === true) {
     return null;
   }
+  // An address the page did not report, and one it reported that does not parse, are each said
+  // plainly. Only a comparison that came back false says the page left its screen.
   const atLoad =
-    loadedUrl === null ? 'the page could not report its address when it loaded' : `the page loaded at ${sanitizeUrlForDisplay(loadedUrl)}`;
+    loadedUrl === null
+      ? 'the page could not report its address'
+      : parses(loadedUrl)
+        ? `the page was at ${displayWithRoute(loadedUrl)}`
+        : 'usabl could not read the address the page reported';
   const afterChecks =
     checkedUrl === null
-      ? 'after the checks the page could not report its address'
-      : `after the checks it was at ${sanitizeUrlForDisplay(checkedUrl)}`;
-  const outcome =
-    loadedUrl !== null && checkedUrl !== null
-      ? 'The page left its screen while it was checked, so the checks measured another page'
-      : 'So usabl cannot tell whether the page left its screen while it was checked';
+      ? 'it could not report its address'
+      : parses(checkedUrl)
+        ? `it was at ${displayWithRoute(checkedUrl)}`
+        : 'usabl could not read the address it reported';
+  const unmeasured =
+    `it did not measure ${screenId}: it reports no findings for it and confirms no accepted ` +
+    'accessibility barrier on it as resolved.';
+  let outcome: string;
+  if (stayed === false) {
+    // Only the origin, the path, and the route of a hash route are printed, so a move in the query
+    // or a plain fragment of a screen that routes by them prints two equal addresses.
+    const hidden =
+      displayWithRoute(loadedUrl as string) === displayWithRoute(checkedUrl as string)
+        ? ' The two addresses differ only in a part that is not shown.'
+        : '';
+    outcome = `The page left its screen while it was checked, so the checks measured another page, and ${unmeasured}${hidden}`;
+  } else {
+    outcome = `So usabl cannot tell whether the page stayed on its screen while it was checked, and ${unmeasured}`;
+  }
   return gapFor(
     requestedUrl,
-    `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}: ${atLoad}, and ${afterChecks}. ${outcome}, and ` +
-      `${notMeasured(screenId)} The path is compared, and the fragment only when it names a route: one that ` +
-      'starts with #/ or #!, or any fragment when the configured url of the screen has one. A change to the ' +
-      'query, or to an in-page fragment such as #tab-2, still counts as the same screen. If a session expired ' +
-      `during the checks, sign in again: mint a new session, point ${STORAGE_STATE_ENV_VAR} at it, and run ` +
-      'usabl again. If a script on the page navigates on focus or on a timer, find it and stop it from moving ' +
-      'the page while it is checked. If the app routes with a plain fragment, such as /app#clusters, configure ' +
-      'the screen url with its fragment, so a change to it counts as leaving the screen. Addresses are shown ' +
-      'without their sign-in credentials, query string, or fragment, because any of them can carry a token, ' +
-      'so two addresses that differ only in the fragment look the same here.',
+    `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}. When it loaded, ${atLoad}; after the walk and the ` +
+      `checks that only read the page, ${afterChecks}. ${outcome} The origin and the path are compared. The ` +
+      'query counts only when the configured url of the screen has one, and the fragment only when it names a ' +
+      'route: one that starts with #/ or #!, or any fragment when the configured url has one. Any other change ' +
+      'to the query or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If a ' +
+      `session expired during the checks, sign in again: mint a new session, point ${STORAGE_STATE_ENV_VAR} at ` +
+      'it, and run usabl again. If a script on the page navigates on focus or on a timer, find it and stop it ' +
+      'from moving the page while it is checked. If the app routes with the query or with a plain fragment, ' +
+      'such as /admin?view=clusters or /app#clusters, configure the screen url with that part, so a change to ' +
+      'it counts as leaving the screen. If the fragment in the screen url is only an anchor, not a route, ' +
+      'remove it from the url. Addresses are shown without their sign-in credentials, their query string, and ' +
+      'any fragment that is not a hash route, because any of them can carry a token.',
   );
 }

@@ -112,10 +112,21 @@ function walkRecordOf(walk: unknown): WalkRecord | null {
   return { stops: stops as TranscriptStop[], complete };
 }
 
+export interface RunProvidersOptions {
+  /**
+   * Called once, after every provider that only reads the page has run and right before the first
+   * provider that acts on it (mutatesPageState) runs. Not called when no such provider runs. The
+   * check runner reads the page address here, so a move the walk or a read-only provider saw is
+   * told apart from a move a flow makes on purpose. It decides nothing and returns nothing.
+   */
+  beforePageChanges?: () => Promise<void>;
+}
+
 export async function runProviders(
   providers: Provider[],
   ctx: ProviderContext,
   allowedCapabilities: Capability[],
+  options: RunProvidersOptions = {},
 ): Promise<ProviderRunResult> {
   const allowed = new Set(allowedCapabilities);
   const drafts: Draft[] = [];
@@ -144,6 +155,9 @@ export async function runProviders(
 
     // Recorded before the run because a provider that throws mid-probe has already clicked.
     if (provider.mutatesPageState === true) {
+      if (mutatedBy === null) {
+        await options.beforePageChanges?.();
+      }
       mutatedBy ??= provider.id;
     }
 

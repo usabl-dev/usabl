@@ -477,6 +477,42 @@ describe('runProviders', () => {
     expect(calls).toEqual(['plain-a', 'plain-b', 'mutator-a', 'mutator-b']);
   });
 
+  it('calls beforePageChanges once, after every read-only provider and before the first that acts', async () => {
+    const calls: string[] = [];
+    const ctx = await makeContext();
+
+    const result = await runProviders(
+      [
+        recorder(calls, 'mutator-a', { mutatesPageState: true }),
+        recorder(calls, 'plain-a'),
+        recorder(calls, 'mutator-b', { mutatesPageState: true }),
+        recorder(calls, 'plain-b'),
+      ],
+      ctx,
+      ['live'],
+      {
+        beforePageChanges: async () => {
+          calls.push('read address');
+        },
+      },
+    );
+
+    expect(calls).toEqual(['plain-a', 'plain-b', 'read address', 'mutator-a', 'mutator-b']);
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('does not call beforePageChanges when no provider that acts on the page runs', async () => {
+    const calls: string[] = [];
+    const ctx = await makeContext();
+    const hook = vi.fn(async () => {});
+    const denied: Provider = { ...recorder(calls, 'needs-net', { mutatesPageState: true }), capabilities: ['network'] };
+
+    await runProviders([recorder(calls, 'plain-a'), denied], ctx, ['live'], { beforePageChanges: hook });
+
+    expect(calls).toEqual(['plain-a']);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
   it('records a gap instead of running a pristine-page provider on an already mutated page', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();

@@ -152,6 +152,14 @@ const CONTENT_PAGES: Record<string, string> = {
       "<script>document.getElementById('open').addEventListener('focus', () => { location.href = '/moved-clean.html'; });</script>",
   ),
   '/moved-clean.html': contentPage('Elsewhere', '<main><h1>Elsewhere</h1><p><a href="/">Home</a></p></main>'),
+  // Served at 127.0.0.1, focusing its control sends the page to the same path at localhost, which is
+  // another origin on the same server: the shape of a move to an SSO portal or a www home page that
+  // has the app's path. At localhost the handler does nothing, so the page has a stop to walk.
+  '/origin-move.html': contentPage(
+    'Home',
+    '<main><h1>Home</h1><button id="open" type="button">Open</button></main>' +
+      "<script>document.getElementById('open').addEventListener('focus', () => { if (location.hostname === '127.0.0.1') { location.href = `http://localhost:${location.port}${location.pathname}`; } });</script>",
+  ),
   // Two panel buttons. Focusing one sets the address hash to its panel, the way a tab panel does,
   // so the walk leaves the page at #panel-2 on the same path.
   '/hash-on-focus.html': contentPage(
@@ -1221,6 +1229,27 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
     expect(scan?.drafts).toEqual([]);
     expect(scan?.stops).toEqual([]);
+  }, 30_000);
+
+  it('does not cover a screen whose page moves to another origin at the same path when a control is focused', async () => {
+    const url = `${fixture.url}origin-move.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'home', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'home', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('http://localhost:');
+    expect(scan?.drafts).toEqual([]);
   }, 30_000);
 
   it('still covers a screen with no reachedWhen whose tab panel sets the hash when focused', async () => {
