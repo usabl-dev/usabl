@@ -26,9 +26,9 @@
   accessibility barrier blocks this change. Parts your team listed as known limits were not
   checked." The `checkPage` summary says `with known limits` after the verdict, and its result has
   `knownLimits: true`. A stop that the stop hook allows from a stored receipt does not scan, and a
-  receipt records no known limits, so that line says plain `VERIFIED (exit 0, stored receipt, not
-  re-scanned)` and adds that known limits from the scan are not shown there and that `usabl check`
-  shows them. One listing line covers every region with that name on its screen. A region with 100
+  receipt records no known limits, so that line says plain
+  `VERIFIED (exit 0, stored receipt, not re-scanned)` and adds that known limits from the scan are
+  not shown there and that `usabl check` shows them. One listing line covers every region with that name on its screen. A region with 100
   or more controls inside cuts the walk short even when it is listed, because the bound of 100
   presses of Tab inside one region is fixed. A listing that matched no region on a full walk is
   reported as stale. The listing is in the guarded config and the CLI gate reads it from the
