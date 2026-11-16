@@ -35,6 +35,7 @@ import { loadRequirements } from '../intake/load.js';
 import { knownSurfaceIds, unknownSurfaceRequirementGaps } from '../intake/requirement-surfaces.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
+import { isWalkReachGap } from '../providers/keyboard-walk/index.js';
 import {
   heldThroughout,
   measureReachability,
@@ -455,17 +456,24 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       await page.markWalkStart();
     }
     const { drafts, gaps, notes, walk } = await runChecks();
+    // When the page was not the screen for every check, the gaps the keyboard walk gave about how
+    // far it walked go with the drafts: a walk cut short by a move to a sign-in page, or a region
+    // met on that page, describes the other page, and its fix text would point at the wrong cause.
+    // The landing gap alone names the cause, and it keeps the page not covered. The CLI drops every
+    // gap of a screen it finds was not reached signed in. checkPage drops only these.
+    const otherPage = (landed: CoverageGap): PageCheckResult =>
+      finish([], [...gaps.filter((gap) => !isWalkReachGap(gap, screen)), landed]);
     // Rule A again, as the CLI reads it after the checks: an identity request refused during the
     // checks means the page was not reached signed in.
     const late = landing === null ? null : await lateRefusalGap(page, screenId, landing);
     if (late !== null) {
-      return finish([], [...gaps, late]);
+      return otherPage(late);
     }
     // The address again, after the checks. A page that left its screen while they ran, such as a
     // router that moved to a sign-in page, was not that screen for every check, so its findings go.
     const moved = expected === null ? null : (await addressGap(page, screenId, labeledScreenId !== null, expected, 'after the checks')).gap;
     if (moved !== null) {
-      return finish([], [...gaps, moved]);
+      return otherPage(moved);
     }
     // The readiness signal is measured again after the checks, as the CLI does. A part holds only
     // if it held both times. The walk's stops go to the same blank-page detector the CLI runs on

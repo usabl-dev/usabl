@@ -369,6 +369,69 @@ describe('checkPage and the keyboard walk budget', () => {
     expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
   });
 
+  // A page with a frame from another origin at the second stop and more controls than a cap of 10
+  // walks, so its walk gives both of its gaps: the unread region and the cut short walk. The
+  // first Tab starts the walk, so `onTab` runs as the checks begin.
+  function walkGapPage(onTab: () => void = () => {}): Page {
+    const page = scriptedPage(['#save', '#chat', ...rows]);
+    const inChat = async (): Promise<boolean> => (await page.activePath()) === '#chat';
+    page.activeFocusUnreadable = async () => ((await inChat()) ? 'frame-unreadable' : null);
+    page.activeUnreadRegion = async () => ((await inChat()) ? { kind: 'frame', origin: 'https://chat.example.com' } : null);
+    const named = page.activeNode;
+    page.activeNode = async () => ((await inChat()) ? null : named());
+    const tab = page.tab;
+    page.tab = async () => {
+      onTab();
+      await tab();
+    };
+    return page;
+  }
+
+  it('keeps the cut short gap and the unread region gap for a page that stayed on its screen', async () => {
+    adopted.page = walkGapPage();
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project(), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual([PAGE_URL, PAGE_URL]);
+    expect(result.gaps.map((gap) => gap.reason)).toEqual([
+      expect.stringContaining('could not read inside a region at tab stop 2'),
+      expect.stringContaining('the keyboard walk was cut short'),
+    ]);
+  });
+
+  it('reports only the landing gap when the page left its screen while the checks ran', async () => {
+    let moved = false;
+    const page = walkGapPage(() => {
+      moved = true;
+    });
+    page.currentUrl = async () => (moved ? 'http://127.0.0.1:5173/login' : PAGE_URL);
+    adopted.page = page;
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project(), tabCap: 10 });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+    expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+  });
+
+  it('reports only the landing gap when an identity request was refused while the checks ran', async () => {
+    let tabbed = false;
+    const page = walkGapPage(() => {
+      tabbed = true;
+    });
+    page.unauthorizedApiRequests = async () => (tabbed ? ['http://127.0.0.1:5173/api/me'] : []);
+    adopted.page = page;
+
+    const result = await checkPage(pwPage(), { screenId: 'clusters', projectRoot: await project(), tabCap: 10, signedIn: true });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+    expect(result.gaps[0]?.reason).toContain('came back 401');
+  });
+
   it('refuses a budget out of range before it touches the page', async () => {
     adopted.page = scriptedPage(rows);
 

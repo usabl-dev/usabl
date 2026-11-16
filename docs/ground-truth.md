@@ -4636,7 +4636,11 @@ screen declares no readiness signal, `checkPage` first waits for the page to set
 does, and then reads the address. A page that does not settle is a `landing:<screenId>` gap that
 keeps only the first line of the browser's error, neutralized, because its later lines can be a
 call log that quotes the page's markup. It reads the address again after the checks, and a page that
-left its screen while they ran is the same gap, with its findings dropped. A page at another path or fragment is a `not-covered` gap with ref
+left its screen while they ran is the same gap, with its findings dropped. The keyboard walk's gaps
+from that run go with them: the gap for a walk that was cut short and the gap for each region it
+could not read describe the other page, so the landing gap alone names the cause. The same holds
+when Rule A, read again after the checks, finds a refused request. Other gaps the checks made are
+kept. A page at another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C

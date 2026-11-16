@@ -12,7 +12,7 @@ import type {
   WalkRecord,
 } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
-import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
+import { isWalkReachGap, makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
@@ -1018,5 +1018,28 @@ describe('the walk record the keyboard walk returns', () => {
     expect(draftsOf(output)).toEqual([]);
     expect(cutShort(output)).toHaveLength(1);
     expect(walkOf(output)?.complete).toBe(false);
+  });
+});
+
+// checkPage drops these gaps, with the drafts, when the page left its screen during the checks, so
+// the test is that it names exactly the walk's own gaps for this screen and nothing else.
+describe('isWalkReachGap', () => {
+  it('names the cut short gap and the unread region gap of this screen', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 3 });
+    const page = await makeScriptedPage({
+      ...namedButtonPage(['#first', '#frame', '#after', '#more', BODY_PATH]),
+      unreadable: [null, 'frame-unreadable', null, null, null],
+      bodyAt: 4,
+    });
+
+    const gaps = gapsOf(await provider.run(makeContext(page)));
+
+    expect(gaps).toHaveLength(2);
+    expect(gaps.map((gap) => isWalkReachGap(gap, SCREEN))).toEqual([true, true]);
+    // The same gaps for another screen, and another gap on this screen, are not this walk's.
+    const other = { id: 'orders', url: 'http://127.0.0.1:5173/orders' };
+    expect(gaps.map((gap) => isWalkReachGap(gap, other))).toEqual([false, false]);
+    expect(isWalkReachGap({ ref: SCREEN.url, state: 'not-covered', reason: 'scan cleanup failed: closed' }, SCREEN)).toBe(false);
+    expect(isWalkReachGap({ ref: 'keyboard-walk', state: 'not-covered', reason: 'the walk threw' }, SCREEN)).toBe(false);
   });
 });

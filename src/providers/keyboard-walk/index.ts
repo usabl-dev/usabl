@@ -345,10 +345,14 @@ function unreadRegionGap(screen: { id: string; url: string }, region: UnreadRegi
     ref: screen.url,
     state: 'not-covered',
     reason:
-      `on screen ${screen.id}, the keyboard walk could not read inside a region at tab stop ${region.stop}: ` +
+      `${unreadRegionLead(screen)} ${region.stop}: ` +
       `${regionWords(region)}. The walk went on past it, but the controls inside it were not checked, so this ` +
       `screen is not covered. ${UNREADABLE_FIX}${accept}`,
   };
+}
+
+function unreadRegionLead(screen: { id: string }): string {
+  return `on screen ${screen.id}, the keyboard walk could not read inside a region at tab stop`;
 }
 
 // The note for a region the team listed: a disclosed limit. Not a gap, so it does not hold the
@@ -382,6 +386,20 @@ function staleListingNote(screen: { id: string }, listing: UnreadableRegionListi
  */
 export function isCutShortWalkGap(gap: CoverageGap, screen: { id: string; url: string }): boolean {
   return gap.state === 'not-covered' && gap.ref === screen.url && gap.reason.startsWith(cutShortLead(screen));
+}
+
+/**
+ * Whether a gap is one this walk gives a screen about how far it walked: the cut short gap or an
+ * unread region gap. checkPage reads it to drop those gaps, with the drafts, when the page left
+ * its screen while the checks ran, because they then describe another page. The page stays not
+ * covered by its landing gap, so dropping them never makes it read as checked.
+ */
+export function isWalkReachGap(gap: CoverageGap, screen: { id: string; url: string }): boolean {
+  return (
+    gap.state === 'not-covered' &&
+    gap.ref === screen.url &&
+    (gap.reason.startsWith(cutShortLead(screen)) || gap.reason.startsWith(unreadRegionLead(screen)))
+  );
 }
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
