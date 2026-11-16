@@ -338,6 +338,16 @@
 
 ### Fixed
 
+- The CLI reads a screen's address again after the checks. It read the address once, at load, so
+  a page that moved during the walk, such as a focus handler that navigates or an auth timer that
+  sends it to a sign-in page with no refused identity request, was checked on the other page. The
+  address after the checks is now compared with the address at load by path and fragment, the rule
+  `checkPage` uses, on a screen with no `reachedWhen` selector. Gate effect: such a screen read
+  `verified` when the other page was clean, or carried that page's accessibility barriers; it is
+  now `not_covered`, with one gap that names both addresses and no findings. An address that
+  cannot be read is the same gap. A walk that changes only the fragment, such as tab panels that
+  set the hash, is now a gap too; point the screen's `url` at the address the walk leaves, or give
+  it a `reachedWhen` selector.
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
