@@ -363,10 +363,22 @@
   guarded path that is a submodule now compares as changed exactly when its recorded commit
   changed, where it stopped the guard with an error when that commit was absent. The local guard
   reads the working tree side of the path as a file, so it reports a guarded submodule as changed
-  on every run, which fails safe. The prefix keeps a submodule apart from a file in every check
-  that compares the reads as text, but the Stop hook's session pins hash the read as UTF-8, where
-  a file that holds U+FFFD and the same id line pins the same as the submodule. The CI policy check
-  still sees that change. The repair is a guarded change that waits on the owner.
+  on every run, which fails safe. The guard no longer compares this text: see the entry on
+  comparing guarded paths as stored bytes below.
+- The guard compares guarded paths as stored bytes, never as decoded text, in the local guard,
+  `usabl enforce policy`, and the Stop hook's session pins. A path reads as nothing, a file with
+  its bytes, a submodule with its recorded commit, or a folder with its tree id, and two reads are
+  equal only when they are the same kind with the same content. A guarded file whose byte `0xFE`
+  became `0xFF` read as unchanged, since both decode to U+FFFD, and in the session pins a file
+  that held `0xFF` or U+FFFD and then `submodule commit <id>` pinned the same as the submodule at
+  that commit. Session pins are now stored as `v2:` and a hash over the kind, the length, and the
+  content, so no two kinds pin the same and a missing file pins differently from an empty one.
+  Gate effect: a change to a guarded file's bytes that decode to the same text now needs code
+  owner approval in CI, and the local guard and the Stop hook report it. A pin file written by an
+  earlier release holds pins with no version, so in a session that spans an upgrade every guarded
+  path in it reads as changed, and each stop reports drift as it does for a real change until the
+  session ends. A new session records new pins. That is the safe direction. A guarded submodule
+  still reads as changed on every local run.
 - `usabl init` and `usabl init --docs` print every string that comes from a file in the
   repository with each control character shown as a label such as `<U+001B>`: route paths,
   include targets, file and folder names, package names, and topic names. A route path such as
@@ -489,9 +501,8 @@
   argument read as an object name only, so a file that becomes a folder still needs approval. A
   submodule path reads as the commit id its tree entry records, after a fixed prefix that no file
   read can return, so a moved submodule still needs approval and, compared as text, a submodule
-  never equals a file. The Stop hook's session pins hash the read instead, and there a file that
-  holds U+FFFD and the same id line pins the same as the submodule, as the submodule entry above
-  says.
+  never equals a file. The guard now compares guarded paths through a byte read where a submodule
+  is its own kind of entry, as the entry on stored bytes above says.
   It reads the same whether or not that commit is in the repository, and the working tree does not
   change it.
   The git reader, the history reader, and the ledger reader accept none of these values as a ref, and
