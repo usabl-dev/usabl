@@ -1095,9 +1095,19 @@ when it has either of these:
 - an `img`, `svg`, `canvas`, `video`, `picture`, `object`, or `embed` element, or an element whose
   role is `img`, that passes the same visibility test and whose box has a width and a height.
 
+A visible same-origin frame counts only through what its document shows, by these same rules, so
+an empty one, such as `about:blank` or an empty `srcdoc`, is not content.
+
 What does not count: a CSS background image (the element that shows it is empty), content hidden
-with CSS as above, content in a closed shadow root or in a frame from another origin (the read
-cannot see it), `script`, `style`, and `template` content, and the document title. Text that is
+with CSS as above, content in a closed shadow root, a frame the read cannot see into, such as a
+frame from another origin or one sandboxed without `allow-same-origin` (the read cannot see what
+it holds, so even a visible frame with a box is no evidence that the page rendered: it may hold a
+blank app, an error page, or a third-party widget), a hidden frame, a frame nested more than eight
+frames deep (the read does not follow it), `script`, `style`, and `template` content, and the
+document title. When every stop stayed on the body and the only content is a frame the read cannot
+see into, the page is reported not covered; the team can check it by serving the frame from the
+same origin, or by hand. Focus usually moves into a frame, though, so the walk leaves the body, the
+read does not run, and the page is checked like any other. Text that is
 visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
 browser that cannot say whether an element is visible gets no benefit of the doubt: the element
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
@@ -5068,7 +5078,7 @@ is one draft with rule `intake:<id>`, a layer per kind (`intake-name`, `intake-h
 | `name` | No element has that role and name, and none has it once all white space is collapsed | More than one does, a candidate is out of reach, usabl cannot tell, or no element has the name but one has it once all white space is collapsed (the reason names the character and where it is) |
 | `heading` | No heading has that name, and none has it once all white space is collapsed, or it has another level, or no heading has the name and every heading that has it once all white space is collapsed has another level | More than one does, a candidate is out of reach, usabl cannot tell, its level cannot be read, or no heading has the name but one has it once all white space is collapsed, at the design's level or at a level it cannot read |
 | `landmark` | No landmark of that role (and name, when given, and none has that name once all white space is collapsed) | A named landmark matches more than once, a candidate is out of reach, usabl cannot tell, or no landmark has the name but one has it once all white space is collapsed; with no name, none is found and a candidate is out of reach, the tree has one, or the tree has more than 20000 nodes |
-| `focus-order` | In a walk whose end was confirmed: a name is never reached, and no stop that no other name took has it once all white space is collapsed, or no choice of stops reaches the names in order | A name is on more than one stop, a stop cannot be read, the walk hits its cap of 200 stops, the walk was cut short, or a name is never reached but a stop has it once all white space is collapsed and the rest of the check passes |
+| `focus-order` | In a walk whose end was confirmed: a name is never reached, and no stop that no other name took has it once all white space is collapsed, or no choice of stops reaches the names in order | A stop cannot be read, the walk hits its cap of 200 stops, or the walk was cut short; or the rest of the check passes and a name is on more than one stop, or a name is never reached but a stop has it once all white space is collapsed |
 | `target-size` | The element is smaller than the size in either direction | No element, more than one, a candidate is out of reach, usabl cannot tell, its size cannot be read, or it has a shape usabl does not measure (below) |
 
 A missing element is unknown for `target-size`, not a failure, because the check is about size and
@@ -5089,7 +5099,14 @@ fails when its level differs, because the check fails whichever heading the desi
 focus order check, each such stop is a tentative position for its name. A stop already matched
 exactly to another name is never one, so one control never stands for two names. A name with no
 stop at all fails as never reached, and when no choice of stops gives the design's order, the order
-fails. The result is needs review only when every other part of the check passes.
+fails. A name on more than one stop is the same: each of its stops is a possible position, so a
+name that is on two stops never hides another name that focus never reaches. The result is needs
+review only when every other part of the check passes. The reason then names every open question,
+in design order: each design name on more than one stop, with how many stops it is on, and each
+design name that only a near stop matches, with the stops that could be it. Each list holds at most
+15 names, with at most 3 near stops for each name, and says how many it left out. The evidence keeps
+the counts: `sameButForWhiteSpace` is the number of distinct near stops (a stop near two design
+names counts once), and `nearDesignNames` the number of design names they stand for.
 
 The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
 from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it

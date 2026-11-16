@@ -159,6 +159,52 @@ describe('installCi with a build commit', () => {
     expect(result.exitCode).toBe(2);
     expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(tuned);
   });
+
+  // The pin always differs from the draft, so naming it as the first difference points at the
+  // wrong place. The refusal names the first line that differs for another reason.
+  it('names the edited line, not the pin line, when it refuses a pinned gate', async () => {
+    const pinLine = engineRefLineNumber(USABL_GATE_WORKFLOW);
+    const edited = pinEngineRef(USABL_GATE_WORKFLOW, OTHER_SHA).split('\n');
+    const editAt = edited.length - 3;
+    expect(editAt + 1).toBeGreaterThan(pinLine);
+    edited[editAt] = `${edited[editAt] ?? ''} # edited`;
+    const gate = edited.join('\n');
+    for (const pin of [FILLED, DIRTY]) {
+      const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: gate });
+      const result = await installCi(fs, pin);
+      expect(result.exitCode).toBe(2);
+      expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(gate);
+      expect(result.message).toContain(`the first difference is at line ${editAt + 1} `);
+      expect(result.message).not.toContain(`the first difference is at line ${pinLine} `);
+    }
+    // The placeholder draft with an edit, while this build fills the pin, names the edit too.
+    const placeholder = USABL_GATE_WORKFLOW.split('\n');
+    placeholder[editAt] = `${placeholder[editAt] ?? ''} # edited`;
+    const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: placeholder.join('\n') });
+    const result = await installCi(fs, FILLED);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain(`the first difference is at line ${editAt + 1} `);
+  });
+
+  it('names the pin line when the pin is a branch, because that is the edit', async () => {
+    const pinLine = engineRefLineNumber(USABL_GATE_WORKFLOW);
+    const gate = USABL_GATE_WORKFLOW.replace(`ref: ${ENGINE_REF_PLACEHOLDER}`, 'ref: main');
+    const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: gate });
+    const result = await installCi(fs, FILLED);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain(`the first difference is at line ${pinLine} `);
+  });
+
+  it('still recognises a pinned, unedited gate', async () => {
+    const gate = pinEngineRef(USABL_GATE_WORKFLOW, OTHER_SHA);
+    for (const pin of [FILLED, DIRTY]) {
+      const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: gate });
+      const result = await installCi(fs, pin);
+      expect(result.exitCode).toBe(0);
+      expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(gate);
+      expect(result.message).not.toContain('first difference');
+    }
+  });
 });
 
 describe('installCi without a build commit', () => {

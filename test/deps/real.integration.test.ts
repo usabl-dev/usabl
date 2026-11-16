@@ -119,6 +119,24 @@ const CONTENT_PAGES: Record<string, string> = {
     'Frame',
     `<iframe id="frame" title="Inner" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame from another origin</p>')}"></iframe>`,
   ),
+  // The same frame from another origin, hidden. A hidden frame shows nothing on the page.
+  '/hidden-cross-origin-frame.html': contentPage(
+    'Frame',
+    `<iframe id="frame" title="Inner" style="display: none" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a hidden frame</p>')}"></iframe>`,
+  ),
+  // The same frame from another origin, visible but with no box. The border is removed too,
+  // because a frame's default border alone gives it a box.
+  '/boxless-cross-origin-frame.html': contentPage(
+    'Frame',
+    `<iframe id="frame" title="Inner" style="width: 0; height: 0; border: 0" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame with no box</p>')}"></iframe>`,
+  ),
+  // Visible frames with a box whose documents the read can see into and finds empty, as an app
+  // that never rendered into its frame leaves them.
+  '/empty-srcdoc-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" srcdoc=""></iframe>'),
+  '/about-blank-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" src="about:blank"></iframe>'),
+  // An empty frame sandboxed without allow-same-origin. Its origin is opaque, so the read cannot
+  // see that it is empty.
+  '/sandboxed-empty-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" sandbox="allow-scripts" srcdoc=""></iframe>'),
   '/hidden-content.html': contentPage(
     'Hidden',
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
@@ -917,7 +935,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     ['/open-shadow-text.html', true],
     ['/closed-shadow-text.html', false],
     ['/frame-text.html', true],
+    // The read cannot see into a frame from another origin, so the frame is no evidence that the
+    // page rendered. Visible, hidden, or with no box, it is not counted.
     ['/cross-origin-frame-text.html', false],
+    ['/hidden-cross-origin-frame.html', false],
+    ['/boxless-cross-origin-frame.html', false],
+    // The read can see into these frames, so they count only through what they show.
+    ['/empty-srcdoc-frame.html', false],
+    ['/about-blank-frame.html', false],
+    ['/sandboxed-empty-frame.html', false],
     ['/hidden-content.html', false],
     ['/background-only.html', false],
   ] as const) {

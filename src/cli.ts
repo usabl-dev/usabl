@@ -21,6 +21,7 @@ import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
+import { shownError } from './init/shown-text.js';
 import {
   formatDocsInitReport,
   inferDocsInit,
@@ -138,7 +139,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     if (!HEAD_COMMIT_ID.test(pr.headSha)) {
       process.stderr.write(
         'usabl: pull_request.head.sha in the event file that GITHUB_EVENT_PATH names is not a full commit id ' +
-          '(40 or 64 hex characters), so usabl did not pass it to git. GitHub writes a full commit id there, ' +
+          '(40 or 64 lowercase hex characters), so usabl did not pass it to git. GitHub writes a full commit id there, ' +
           'so this event file is not one GitHub wrote for a pull request. Check where GITHUB_EVENT_PATH points.\n',
       );
       return 2;
@@ -584,8 +585,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         // mapping is worse than a gap, so that surfaces as an error rather than a silent draft.
         draft = await inferDocsInit(docsInitFs);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`usabl: ${message}\n`);
+        // A file read error names a repository path, which can hold a control sequence.
+        process.stderr.write(`usabl: ${shownError(err)}\n`);
         return 2;
       }
       if (draft === null) {
@@ -620,8 +621,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         ...(opts.app === undefined ? {} : { appDir: opts.app }),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`usabl: ${message}\n`);
+      // A file read error names a repository path, which can hold a control sequence.
+      process.stderr.write(`usabl: ${shownError(err)}\n`);
       return 2;
     }
     const result = await writeInitDrafts(initFs, draft, { force: opts.force });
