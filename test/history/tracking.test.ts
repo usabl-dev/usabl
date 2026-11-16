@@ -54,6 +54,18 @@ describe('loadDebtTracking', () => {
 });
 
 describe('debtStatusOf', () => {
+  // An old floor can hold an entry for a keyboard walk that was cut short. The gate reads it as a
+  // gap that asks for the floor to be rewritten, never as an accepted accessibility barrier, so the
+  // debt counts leave it out too.
+  it('leaves an old entry for a cut short keyboard walk out of the debt counts', async () => {
+    const truncated = entryFor(dialogAt(2, { rule: 'keyboard-walk-truncated', layer: 'walk' }), 1);
+    const tracking = await loadDebtTracking(undefined, floorOf([DIALOG, truncated]), 'HEAD');
+
+    const status = debtStatusOf(tracking, [], '2026-10-28T00:00:00.000Z');
+
+    expect(status).toMatchObject({ floorBarriers: 2, acceptedBarriers: 2, confirmedFixed: 0, remaining: 2 });
+  });
+
   it('counts fixed in this run from the headroom against the effective floor', async () => {
     const store = makeFakeHistory({
       refs: { 'origin/usabl/history': 'h1', HEAD: COMMIT_B },

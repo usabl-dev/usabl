@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
+import { STALE_REGION_LISTING_NOTE_REF, UNREAD_REGION_NOTE_REF } from '../../src/output/notes.js';
 import { describeVerdict, formatVerdictLine, formatVerdictWord } from '../../src/output/verdict-line.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
@@ -114,6 +115,63 @@ describe('describeVerdict', () => {
 
     expect(line.word).toBe('NO VERDICT: RUN FAILED');
     expect(line.exitCode).toBe(4);
+  });
+
+  // A region the team listed as one the keyboard walk cannot read is a known limit. A verified run
+  // with one is still verified, but the first line a reader sees must not read as a full check.
+  describe('a run with a region the keyboard walk could not read, listed as a known limit', () => {
+    const LIMIT = { ref: UNREAD_REGION_NOTE_REF, reason: 'on screen home, the keyboard walk could not read inside a frame.' };
+    const screen = (notes: Array<{ ref: string; reason: string }>) => ({
+      screenId: 'home',
+      url: 'http://localhost:5173/',
+      stops: [],
+      drafts: [],
+      gaps: [],
+      applicability: [],
+      notes,
+      reachedSelectorPresent: null,
+      reachedWhenSelector: null,
+    });
+
+    it('says so in the verdict line and the meaning of a verified run', () => {
+      const line = describeVerdict(baseResult({ screens: [screen([LIMIT])] }));
+
+      expect(line.word).toBe('VERIFIED');
+      expect(formatVerdictWord(line)).toBe('VERIFIED (exit 0, with known limits)');
+      expect(formatVerdictLine(line)).toBe('✔ VERIFIED (exit 0, with known limits)');
+      // The owner's wording. It is longer than the 78 columns the other meanings fit, so it wraps
+      // on a narrow terminal, and it says whose list the unchecked parts come from.
+      expect(line.meaning).toBe('No new accessibility barrier blocks this change. Parts your team listed as known limits were not checked.');
+    });
+
+    it('keeps the note a caller passes after the known limits', () => {
+      const line = describeVerdict(baseResult({ screens: [screen([LIMIT])] }));
+
+      expect(formatVerdictWord(line, 'advisory')).toBe('VERIFIED (exit 0, with known limits, advisory)');
+    });
+
+    it('does not mark a run whose notes are about something else, nor a stale listing', () => {
+      const other = describeVerdict(
+        baseResult({
+          screens: [
+            screen([
+              { ref: 'provider:deque', reason: 'only axe rules ran.' },
+              { ref: STALE_REGION_LISTING_NOTE_REF, reason: 'a listing matched no region.' },
+            ]),
+          ],
+        }),
+      );
+
+      expect(formatVerdictWord(other)).toBe('VERIFIED (exit 0)');
+      expect(other.meaning).toBe('No new accessibility barrier blocks this change. It can proceed.');
+    });
+
+    it('marks a blocked run too, without changing what its meaning says', () => {
+      const line = describeVerdict(baseResult({ verdict: 'regression', exitCode: 1, screens: [screen([LIMIT])] }));
+
+      expect(formatVerdictWord(line)).toBe('REGRESSION (exit 1, with known limits)');
+      expect(line.meaning).toBe('This change adds an accessibility barrier. It is blocked until fixed.');
+    });
   });
 
   it('uses no colour: the line carries no escape sequence in any state', () => {

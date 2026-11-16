@@ -21,7 +21,7 @@ import { listFileNotes } from '../output/file-notes.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier, UNRECOGNIZED_GAP_STATE } from '../output/disclosure.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
-import { screenNotes } from '../output/notes.js';
+import { hasKnownLimits, screenNotes } from '../output/notes.js';
 import { debtSentence, trackingOffSentence } from '../output/debt.js';
 import {
   applyNoiseBudget,
@@ -252,8 +252,10 @@ function headlineFor(verdict: Verdict): string {
   return ownEntry(HEADLINE, verdict) ?? 'UNRECOGNIZED VERDICT';
 }
 
-function projectHeadline(verdict: Verdict): string {
-  return `## usabl report: ${headlineFor(verdict)}`;
+// A run with a region the team listed as one the keyboard walk cannot read has known limits, and
+// the headline says so, so a reviewer never takes the verdict for a check of the whole screen.
+function projectHeadline(verdict: Verdict, knownLimits: boolean): string {
+  return `## usabl report: ${headlineFor(verdict)}${knownLimits ? ', with known limits' : ''}`;
 }
 
 // A Result with no verdict is one of two opposite facts, and the shared verdict line tells them
@@ -1113,7 +1115,7 @@ export function projectPrCommentWithin(result: Result, config: UsablConfig | und
   // Every section is printed for a real verdict, "none" included: under a real verdict an empty
   // section is a fact about the run, where under no verdict it would read as a clean one.
   return renderWithinLimit([
-    fixed([COMMENT_MARKER, projectHeadline(safe.verdict), ...renderAccessibilitySplit(safe), ...renderJudge(safe)]),
+    fixed([COMMENT_MARKER, projectHeadline(safe.verdict, hasKnownLimits(safe)),...renderAccessibilitySplit(safe), ...renderJudge(safe)]),
     { kind: 'cut-note' },
     fixed(['', ...renderReceipt(safe), '', ...renderConformance(safe), '', ...renderDebt(safe)]),
     ...findingSections,

@@ -11,10 +11,10 @@ import { PF_RULES } from '../../providers/rulepack/index.js';
 import { RHDS_RULES } from '../../providers/rhds/sources.js';
 
 // The keyboard walk writes these ids. A unit test reads the provider source and keeps this list
-// equal to the ids it writes.
+// equal to the ids it writes. A walk that was cut short is a coverage gap, not a rule, so it has no
+// id here.
 export const KEYBOARD_WALK_RULES: readonly string[] = [
   'keyboard-walk-trap',
-  'keyboard-walk-truncated',
   'keyboard-walk-unconfirmed-focus',
   'keyboard-walk-unnamed-interactive',
 ];

@@ -37,7 +37,14 @@ export type PreparedJudge =
 // no readable config, the head's copy is still used to plan, and these are taken out of it, so the
 // engine defaults apply instead of the head's.
 export function withoutRuntimeSettings(config: UsablConfig): UsablConfig {
-  const { readyTimeoutMs: _ready, signalTimeoutMs: _signal, browserSandbox: _sandbox, judge: _judge, ...rest } = config;
+  const {
+    readyTimeoutMs: _ready,
+    signalTimeoutMs: _signal,
+    browserSandbox: _sandbox,
+    judge: _judge,
+    keyboardWalk: _keyboardWalk,
+    ...rest
+  } = config;
   return rest;
 }
 

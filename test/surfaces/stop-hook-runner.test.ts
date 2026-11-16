@@ -588,6 +588,23 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(h.pins.files.get(pinName)).toBe(firstPins);
   });
 
+  // A receipt records no known limits, so a run that was verified with known limits would read as a
+  // plain verified on every later stop of the same tree. The line says so and names the command
+  // that shows them.
+  it('says on the fast path that a stored receipt does not record known limits, and how to see them', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+
+    expect(await runStopHookFromStdin(sessionStop('session-limits'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(h.engineRuns()).toBe(0);
+    expect(stderr).toContain(
+      'A stored receipt does not record known limits, so any the scan had are not shown here; run usabl check to see them. You may stop.',
+    );
+  });
+
   it('records the first pins of a session when the first stop takes the fast path', async () => {
     const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
     const h = harness(repo);

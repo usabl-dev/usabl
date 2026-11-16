@@ -88,7 +88,11 @@ function accessibilityOutcome(input: GateInput): {
   // the run is not covered. Headroom is different and is deliberately not a gap: see floorHeadroom.
   // So is a floored barrier that is absent on a screen this run cannot show rendered: see
   // unconfirmedByScreen.
-  const floorGaps = [...staleFloorGaps(input.floor), ...rowKeyFloorGaps(input.floor, input.drafts)];
+  const floorGaps = [
+    ...staleFloorGaps(input.floor),
+    ...rowKeyFloorGaps(input.floor, input.drafts),
+    ...truncatedWalkFloorGaps(input.floor),
+  ];
   const floorUnconfirmed = unconfirmedByScreen(unconfirmed);
 
   // The gate weighs and reports its own gaps. Handing the caller a gap it did not count would let
@@ -192,6 +196,38 @@ function rowKeyFloorGaps(floor: EvidenceFloor, drafts: Draft[]): CoverageGap[] {
       'in one row and a new one in another row leave that count unchanged, so this run cannot prove no new ' +
       'accessibility barrier is hiding behind an ' +
       'accepted one. Run "usabl baseline" to regenerate the floor at version 3, then review and merge the diff.',
+  }];
+}
+
+/**
+ * The rule id of a keyboard walk that was cut short. The walk now reports that as a coverage gap
+ * on its screen, so no run makes such a draft. A floor written before then can still hold an entry
+ * for one, and a library caller can still hand the gate such a draft.
+ */
+export const TRUNCATED_WALK_RULE = 'keyboard-walk-truncated';
+
+/**
+ * The disclosure owed when the floor holds an entry for a keyboard walk that was cut short.
+ *
+ * Such an entry accepted a walk that never reached the controls past the cut, so every later run
+ * carried it and could read verified while those controls were never walked. A cut short walk is
+ * not debt the floor can accept. The gate never matches a draft to such an entry, so it is never
+ * carried and never claimed fixed, and it reads the entry as a not-covered gap until `usabl
+ * baseline` rewrites the floor without it. Screen ids come from the floor, whose reader checks
+ * them against the id grammar.
+ */
+function truncatedWalkFloorGaps(floor: EvidenceFloor): CoverageGap[] {
+  const screens = [...new Set(floor.entries.filter((entry) => entry.rule === TRUNCATED_WALK_RULE).map((entry) => entry.screenId))].sort(compareCodeUnits);
+  if (screens.length === 0) return [];
+  return [{
+    ref: EVIDENCE_FLOOR_PATH,
+    state: 'not-covered',
+    reason:
+      `${EVIDENCE_FLOOR_PATH} accepts a keyboard walk that was cut short on screen${screens.length === 1 ? '' : 's'} ` +
+      `${screens.join(', ')}. That walk never reached the controls past the cut, so it is not debt the floor can ` +
+      'accept, and a run is not covered while the floor holds it. Run "usabl baseline" to rewrite the floor without ' +
+      'it, then review and merge the diff. While a walk is still cut short, baseline reports that screen as not ' +
+      'covered: make its walk complete first, or run "usabl baseline --partial".',
   }];
 }
 
@@ -496,7 +532,8 @@ function differential(input: GateInput): Differential {
   for (const [key, group] of groups) byIdentity.set(key, collapse(group));
 
   const floorByKey = new Map<string, FloorEntry>();
-  for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
+  // An entry for a cut short walk is read as a gap, never as debt. See truncatedWalkFloorGaps.
+  for (const e of input.floor.entries) if (e.rule !== TRUNCATED_WALK_RULE) floorByKey.set(identityKey(e), e);
 
   // Version 1 floors wrote a literal 1 for name and structural entries, so those counts are
   // not observations. Comparing them would report untouched surfaces as regressions. The gate

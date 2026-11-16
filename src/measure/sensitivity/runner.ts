@@ -26,6 +26,7 @@ import type { CatalogEntry, ReportedOn } from './catalog.js';
 import type { MutatingBrowser } from './browser.js';
 import type { AppliedEdit, ElementPlace } from './edits.js';
 import { ruleMatches } from './rules.js';
+import { isCutShortWalkGap } from '../../providers/keyboard-walk/index.js';
 
 export type SensitivityOutcome =
   | 'caught'
@@ -227,7 +228,11 @@ export async function measureEntry(
   const armed = deps.browser.arm(entry.mutation);
   try {
     const mutated = seen(await deps.checkRunner.scan(target));
-    if (mutated.gaps.length > 0) {
+    // A defect such as a keyboard trap cuts the walk short, and the walk says so as a gap on the
+    // screen. That gap is about the walk's later stops only, so it leaves a catch standing. It never
+    // makes a miss: the gap holds the gate at not covered, so with no new finding the outcome below
+    // is unreadable.
+    if (mutated.gaps.some((gap) => !isCutShortWalkGap(gap, target))) {
       return result(entry, screen, 'unreadable', [], `the mutated scan had a coverage gap, so it proves nothing: ${gapReasons(mutated)}`);
     }
     const record = armed.record();

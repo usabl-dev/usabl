@@ -512,6 +512,9 @@ describe('runProviders', () => {
     );
 
     expect(result.drafts.map((d) => d.rule)).toContain('keyboard-walk-unnamed-interactive');
-    expect(result.gaps).toEqual([]);
+    // No gap says the walk was skipped on a changed page. The page gives every Tab the same path,
+    // so the walk reads a cycle and gives the screen its own gap for a walk that was cut short.
+    expect(result.gaps.filter((gap) => gap.state === 'skipped')).toEqual([]);
+    expect(result.gaps.map((gap) => gap.reason)).toEqual([expect.stringContaining('the keyboard walk was cut short')]);
   });
 });

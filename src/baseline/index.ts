@@ -10,7 +10,7 @@
  * and rule, never by element key, because a key can carry page text.
  */
 import type { CoverageGap, Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
-import { buildFindings } from '../gate/index.js';
+import { buildFindings, TRUNCATED_WALK_RULE } from '../gate/index.js';
 import { coverageIncomplete, notEvaluatedCounts } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { computeIdentity, FLOOR_VERSION, identityKey, identitySchemeFor } from '../primitives/identity.js';
@@ -104,6 +104,9 @@ function observedEntries(result: Result): Map<string, FloorEntry> {
   const counts = countDeterministicDrafts(result);
   const entries = new Map<string, FloorEntry>();
   for (const finding of currentFindings(result)) {
+    // A cut short walk is a coverage gap, never debt, so no floor records one, even when a
+    // provider written outside this repository still reports it as a draft.
+    if (finding.rule === TRUNCATED_WALK_RULE) continue;
     entries.set(identityKey(finding), toFloorEntry(finding, counts));
   }
   return entries;
@@ -225,8 +228,11 @@ function unconfirmedCarry(previous: PreviousFloor, scans: readonly Result[]): Fl
   const scheme = identitySchemeFor(previous.floor);
   const seen = scans.map((scan) => observeFloor(scan.screens, scheme));
   // Either scan is enough: a scan that could not show the part of the page rendered did not see
-  // the barrier go away, whatever the other scan saw.
-  return previous.floor.entries.filter((entry) => seen.some((observation) => isUnconfirmedAbsence(entry, observation)));
+  // the barrier go away, whatever the other scan saw. An entry for a cut short walk is never
+  // carried: the gate reads it as a gap, and this command is the one that removes it.
+  return previous.floor.entries.filter(
+    (entry) => entry.rule !== TRUNCATED_WALK_RULE && seen.some((observation) => isUnconfirmedAbsence(entry, observation)),
+  );
 }
 
 /**
