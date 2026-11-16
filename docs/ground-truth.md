@@ -5099,11 +5099,12 @@ exactly to another name is never one, so one control never stands for two names.
 stop at all fails as never reached, and when no choice of stops gives the design's order, the order
 fails. A name on more than one stop is the same: each of its stops is a possible position, so a
 name that is on two stops never hides another name that focus never reaches. The result is needs
-review only when every other part of the check passes. The reason then names every open question:
-the first name on more than one stop, and each design name that only a near stop matches, in design
-order, with the stops that could be it. It lists at most 15 such names and 3 stops for each, and
-says how many it left out. The evidence keeps the counts: `sameButForWhiteSpace` is the number of
-near stops, and `nearDesignNames` the number of design names they stand for.
+review only when every other part of the check passes. The reason then names every open question,
+in design order: each design name on more than one stop, with how many stops it is on, and each
+design name that only a near stop matches, with the stops that could be it. Each list holds at most
+15 names, with at most 3 near stops for each name, and says how many it left out. The evidence keeps
+the counts: `sameButForWhiteSpace` is the number of distinct near stops (a stop near two design
+names counts once), and `nearDesignNames` the number of design names they stand for.
 
 The focus order check presses Tab from the top of the page and uses the keyboard walk's end rule,
 from the same code (`src/providers/keyboard-walk/walk-end.ts`). When focus reaches the body, it

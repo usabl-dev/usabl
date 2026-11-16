@@ -676,15 +676,20 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   // person who approves the result has seen every guess it rests on.
   const why: string[] = [];
   const fixes: string[] = [];
-  const repeatedAt = positions.findIndex((at) => at.length > 1);
-  if (repeatedAt !== -1) {
-    why.push(
-      `"${sequence[repeatedAt] ?? ''}" is on ${positions[repeatedAt]?.length ?? 0} focus stops, so usabl cannot tell which one the design means, and it does not guess.`,
-    );
+  // Every design name on more than one stop, once each, in design order.
+  const repeated: Array<{ wanted: string; stops: number }> = [];
+  sequence.forEach((wanted, index) => {
+    const stops = positions[index]?.length ?? 0;
+    if (stops > 1 && !repeated.some((entry) => entry.wanted === wanted)) repeated.push({ wanted, stops });
+  });
+  if (repeated.length > 0) {
+    why.push(repeatedFocusNamesWhy(repeated));
     fixes.push('Give each control in the design a name no other focus stop has, or check this order by hand.');
   }
   const nearNames = sequence.flatMap((wanted, index) =>
-    (positions[index] ?? []).length === 0 ? [{ wanted, near: (candidates[index] ?? []).map((stop) => names[stop] ?? '') }] : [],
+    (positions[index] ?? []).length === 0
+      ? [{ wanted, stops: candidates[index] ?? [], near: (candidates[index] ?? []).map((stop) => names[stop] ?? '') }]
+      : [],
   );
   const [onlyNear] = nearNames;
   if (onlyNear !== undefined) {
@@ -703,10 +708,28 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
     ...(onlyNear === undefined
       ? {}
       : {
-          sameButForWhiteSpace: nearNames.reduce((total, entry) => total + entry.near.length, 0),
+          // A stop can be near more than one design name, so the count is of distinct stops.
+          sameButForWhiteSpace: new Set(nearNames.flatMap((entry) => entry.stops)).size,
           nearDesignNames: nearNames.length,
         }),
   });
+}
+
+// The reason for a focus order where design names are each on more than one stop. One name keeps
+// the short wording. More names are each named, in design order, with how many stops each is on,
+// bounded as the list of stops a fail names is. The names are the design's own text.
+function repeatedFocusNamesWhy(entries: ReadonlyArray<{ wanted: string; stops: number }>): string {
+  const [only] = entries;
+  if (entries.length === 1 && only !== undefined) {
+    return `"${only.wanted}" is on ${only.stops} focus stops, so usabl cannot tell which one the design means, and it does not guess.`;
+  }
+  const shown = entries.slice(0, FOCUS_STOPS_SHOWN).map(({ wanted, stops }) => `"${wanted}" on ${stops}`);
+  const left = entries.length - shown.length;
+  const more = left > 0 ? `, and ${left} more ${left === 1 ? 'name' : 'names'}` : '';
+  return (
+    `${entries.length} names in the design are each on more than one focus stop: ${shown.join(', ')}${more}. ` +
+    'usabl cannot tell which stop the design means for each, and it does not guess.'
+  );
 }
 
 // How many near stops the reason spells for one design name. The evidence keeps every stop.

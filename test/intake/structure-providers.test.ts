@@ -863,6 +863,39 @@ describe('hidden white space in every check that looks a name up', () => {
     expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 1, nearDesignNames: 1 });
   });
 
+  it('names every design name that is on more than one focus stop, in design order', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Delete'] }), tabbingPage(['Save', 'Save', 'Delete', 'Delete']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      '2 names in the design are each on more than one focus stop: "Save" on 2, "Delete" on 2. ' +
+        'usabl cannot tell which stop the design means for each, and it does not guess.',
+    );
+  });
+
+  it('keeps the one-name wording when only one design name is on more than one focus stop', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Delete'] }), tabbingPage(['Save', 'Save', 'Delete']));
+    expect(drafts[0]?.why).toBe('"Save" is on 2 focus stops, so usabl cannot tell which one the design means, and it does not guess.');
+  });
+
+  it('bounds the list of design names on more than one focus stop, and says how many were left out', async () => {
+    const design = Array.from({ length: 17 }, (_, index) => `Name ${index + 1}`);
+    const drafts = await run(req({ type: 'focus-order', sequence: design }), tabbingPage(design.flatMap((name) => [name, name])));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    const why = drafts[0]?.why ?? '';
+    expect(why).toContain('17 names in the design are each on more than one focus stop: "Name 1" on 2,');
+    expect(why).toContain('"Name 15" on 2, and 2 more names. usabl cannot tell');
+    expect(why).not.toContain('"Name 16"');
+  });
+
+  // Two design names that each differ from a stop only in hidden white space can both be near the
+  // same stops. The count is of stops, so a stop near two names counts once.
+  it('counts a near stop once when it is near two design names', async () => {
+    const THIN = ' ';
+    const drafts = await run(req({ type: 'focus-order', sequence: [`A${NBSP}B`, `A${THIN}B`] }), tabbingPage(['A B', 'A B']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 2, nearDesignNames: 2 });
+  });
+
   it('still fails a heading whose name differs only in white space when its level differs', async () => {
     const page = pageWith({ '#h': { name: `Users${NBSP}`, role: 'heading', states: { level: 3 } } });
     const drafts = await run(req({ type: 'heading', name: 'Users', level: 1 }), page);
