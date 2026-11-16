@@ -341,13 +341,16 @@
 - The CLI reads a screen's address again after the checks. It read the address once, at load, so
   a page that moved during the walk, such as a focus handler that navigates or an auth timer that
   sends it to a sign-in page with no refused identity request, was checked on the other page. The
-  address after the checks is now compared with the address at load by path and fragment, the rule
-  `checkPage` uses, on a screen with no `reachedWhen` selector. Gate effect: such a screen read
-  `verified` when the other page was clean, or carried that page's accessibility barriers; it is
-  now `not_covered`, with one gap that names both addresses and no findings. An address that
-  cannot be read is the same gap. A walk that changes only the fragment, such as tab panels that
-  set the hash, is now a gap too; point the screen's `url` at the address the walk leaves, or give
-  it a `reachedWhen` selector.
+  address after the checks is now compared with the address at load, on every screen, with or
+  without a `reachedWhen` selector. A change of path is leaving the screen. A fragment counts only
+  as a route: one that starts with `#/` or `#!`, or any fragment when the screen's configured `url`
+  has one. A plain fragment such as `#tab-2`, which a tab panel sets, is not a move. Gate effect:
+  such a screen read `verified` when the other page was clean, or carried that page's
+  accessibility barriers; it is now `not_covered`, with one gap that names both addresses and no
+  findings. An address that cannot be read is the same gap. Limit: a screen configured without a
+  fragment, in an app that routes with plain fragments (`/app` to `/app#login`), is not caught by
+  this read; configure its `url` with the fragment, or give it a `reachedWhen` selector that the
+  sign-in page lacks.
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
