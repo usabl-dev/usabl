@@ -483,6 +483,86 @@ describe('focus order requirement', () => {
     expect(drafts[0]?.why).toContain('"Submit" is on 2 focus stops');
   });
 
+  // A name on two stops is an open question only when the rest of the check passes. A name that
+  // focus never reaches fails, as it does everywhere else in this check.
+  it('fails when a name is missing, even when another name is on two focus stops', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Export'] }), tabbingPage(['Save', 'Save']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Focus never reached "Export". The design puts it after "Save". Focus went: Save, Save.',
+    );
+  });
+
+  it('fails when the order is wrong on every reading, even when a name is on two focus stops', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Export'] }), tabbingPage(['Export', 'Save', 'Save']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['fail']);
+    expect(drafts[0]?.whatUserExperiences).toContain('Focus reached "Export" before "Save".');
+  });
+
+  // Every design of up to three distinct names from a small alphabet, against every Tab walk of up
+  // to four stops, compared with a brute-force reading of the rule. Each name takes one of its exact
+  // stops, or, with none, a stop whose name differs from it only in hidden white space and that is
+  // no name's exact stop. The check fails when no strictly increasing choice exists. It passes when
+  // one exists and every name has exactly one exact stop. Otherwise it is needs review.
+  it('matches a brute-force reading of the rule on every small case, so a missing name always fails', async () => {
+    const NBSP = ' ';
+    const ZWSP = '​';
+    // "B" with a zero width space is a design name only, so plain "B" in a walk is its near stop.
+    const designAlphabet = ['A', `A${NBSP}`, `B${ZWSP}`];
+    const walkAlphabet = ['A', `A${NBSP}`, 'B', `B${ZWSP}`];
+    const loose = (name: string): string => name.replace(/[ ​]/g, '');
+    const sequences = (alphabet: readonly string[], max: number, distinct: boolean): string[][] => {
+      const out: string[][] = [[]];
+      let layer: string[][] = [[]];
+      for (let length = 1; length <= max; length += 1) {
+        layer = layer.flatMap((prefix) =>
+          alphabet.filter((name) => !distinct || !prefix.includes(name)).map((name) => [...prefix, name]),
+        );
+        out.push(...layer);
+      }
+      return out;
+    };
+    const expected = (design: readonly string[], walk: readonly string[]): Draft['confidence'] | 'pass' => {
+      const exact = design.map((wanted) => walk.flatMap((name, stop) => (name === wanted ? [stop] : [])));
+      const taken = new Set(exact.flat());
+      const choices = design.map((wanted, index) =>
+        (exact[index] ?? []).length > 0
+          ? (exact[index] ?? [])
+          : walk.flatMap((name, stop) => (!taken.has(stop) && loose(name) === loose(wanted) ? [stop] : [])),
+      );
+      const feasible = (index: number, previous: number): boolean =>
+        index === design.length || (choices[index] ?? []).some((stop) => stop > previous && feasible(index + 1, stop));
+      if (!feasible(0, -1)) return 'fail';
+      return exact.every((at) => at.length === 1) ? 'pass' : 'unverified';
+    };
+    const designs = sequences(designAlphabet, 3, true).filter((design) => design.length > 0);
+    const walks = sequences(walkAlphabet, 4, false);
+    const started = Date.now();
+    let cases = 0;
+    const wrong: string[] = [];
+    const config = testConfig();
+    for (const design of designs) {
+      const provider = designCheckProvider(req({ type: 'focus-order', sequence: design }));
+      if (provider === null) throw new Error('no provider');
+      for (const walk of walks) {
+        cases += 1;
+        const output = await provider.run({ page: tabbingPage(walk), screen: SCREEN, config });
+        if (gapsOf(output).length > 0) wrong.push(`${JSON.stringify(design)} with ${JSON.stringify(walk)}: a gap`);
+        const drafts = draftsOf(output);
+        const got = drafts.length === 0 ? 'pass' : (drafts[0]?.confidence ?? 'none');
+        const want = expected(design, walk);
+        const missing = design.some((wanted) => !walk.some((name) => loose(name) === loose(wanted)));
+        if (got !== want || (missing && got !== 'fail') || drafts.length > 1) {
+          wrong.push(`${JSON.stringify(design)} with ${JSON.stringify(walk)}: got ${got}, want ${want}`);
+        }
+      }
+    }
+    expect(cases).toBe(designs.length * walks.length);
+    expect(cases).toBe(15 * 341);
+    expect({ wrong: wrong.length, first: wrong.slice(0, 5) }).toEqual({ wrong: 0, first: [] });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it('is unconfirmed, never a pass or a fail, when focus cycles without reaching the end of the page', async () => {
     // A focus trap, or a part of the page that rendered again: the walk never reached the end, so
     // the rest of the order is unknown.
@@ -731,6 +811,89 @@ describe('hidden white space in every check that looks a name up', () => {
     const drafts = await run(r, tabbingPage([`Refresh${NBSP}`, 'Name', `Refresh${ZWSP}`, 'Submit']));
     expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
     expect(drafts[0]?.why).toContain('2 focus stops have names that differ from "Refresh" only in white space that cannot be seen');
+  });
+
+  // A person who approves the result must see every guess it rests on, not only the first.
+  it('names every design name that rests on a near stop, in design order, with the true count', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage([`Save${NBSP}`, `Delete${NBSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      'Focus stops have names that differ from 2 names in the design only in white space that cannot be seen: ' +
+        '"Save" by a stop named "Save" followed by a no-break space; "Delete" by a stop named "Delete" followed by a no-break space. ' +
+        'usabl cannot tell whether these are the controls the design means, and it does not guess.',
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 2, nearDesignNames: 2 });
+  });
+
+  it('names each near stop of one design name, and says how many were left out', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage([`Save${NBSP}`, `Delete${NBSP}`, `Delete${ZWSP}`, `Delete${NBSP}${NBSP}`, `Delete${ZWSP}${ZWSP}`, `Delete${NBSP}${ZWSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain(
+      '"Delete" by stops named "Delete" followed by a no-break space or "Delete" followed by a zero width space or ' +
+        '"Delete", a no-break space, then a no-break space, or 2 more. usabl cannot tell',
+    );
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 6, nearDesignNames: 2 });
+  });
+
+  it('bounds the list of near design names, and says how many were left out', async () => {
+    const design = Array.from({ length: 17 }, (_, index) => `Name ${index + 1}`);
+    const drafts = await run(req({ type: 'focus-order', sequence: design }), tabbingPage(design.map((name) => `${name}${NBSP}`)));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    const why = drafts[0]?.why ?? '';
+    expect(why).toContain('differ from 17 names in the design');
+    expect(why).toContain('"Name 15" by a stop named "Name 15" followed by a no-break space; and 2 more names. usabl cannot tell');
+    expect(why).not.toContain('"Name 16"');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 17, nearDesignNames: 17 });
+  });
+
+  it('names the near stops too when a name is also on two focus stops', async () => {
+    const drafts = await run(
+      req({ type: 'focus-order', sequence: ['Save', 'Delete'] }),
+      tabbingPage(['Save', 'Save', `Delete${NBSP}`]),
+    );
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toContain('"Save" is on 2 focus stops');
+    expect(drafts[0]?.why).toContain('A focus stop is named "Delete" followed by a no-break space, and the design names it "Delete".');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 1, nearDesignNames: 1 });
+  });
+
+  it('names every design name that is on more than one focus stop, in design order', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Delete'] }), tabbingPage(['Save', 'Save', 'Delete', 'Delete']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.why).toBe(
+      '2 names in the design are each on more than one focus stop: "Save" on 2, "Delete" on 2. ' +
+        'usabl cannot tell which stop the design means for each, and it does not guess.',
+    );
+  });
+
+  it('keeps the one-name wording when only one design name is on more than one focus stop', async () => {
+    const drafts = await run(req({ type: 'focus-order', sequence: ['Save', 'Delete'] }), tabbingPage(['Save', 'Save', 'Delete']));
+    expect(drafts[0]?.why).toBe('"Save" is on 2 focus stops, so usabl cannot tell which one the design means, and it does not guess.');
+  });
+
+  it('bounds the list of design names on more than one focus stop, and says how many were left out', async () => {
+    const design = Array.from({ length: 17 }, (_, index) => `Name ${index + 1}`);
+    const drafts = await run(req({ type: 'focus-order', sequence: design }), tabbingPage(design.flatMap((name) => [name, name])));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    const why = drafts[0]?.why ?? '';
+    expect(why).toContain('17 names in the design are each on more than one focus stop: "Name 1" on 2,');
+    expect(why).toContain('"Name 15" on 2, and 2 more names. usabl cannot tell');
+    expect(why).not.toContain('"Name 16"');
+  });
+
+  // Two design names that each differ from a stop only in hidden white space can both be near the
+  // same stops. The count is of stops, so a stop near two names counts once.
+  it('counts a near stop once when it is near two design names', async () => {
+    const THIN = ' ';
+    const drafts = await run(req({ type: 'focus-order', sequence: [`A${NBSP}B`, `A${THIN}B`] }), tabbingPage(['A B', 'A B']));
+    expect(drafts.map((d) => d.confidence)).toEqual(['unverified']);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ sameButForWhiteSpace: 2, nearDesignNames: 2 });
   });
 
   it('still fails a heading whose name differs only in white space when its level differs', async () => {

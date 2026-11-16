@@ -156,6 +156,49 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
     }
   });
 
+  // A titled page whose only content is a frame the content read cannot see into. The sandbox gives
+  // each frame an opaque origin. A frame like this is no evidence that the page rendered: it may
+  // hold a blank app, an error page, or a third-party widget.
+  const framedPage = (frame: string): string =>
+    `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Partner</title></head><body>${frame}</body></html>`;
+
+  // With tabindex="-1" on the frame, Tab never moves into it, so every stop stays on the body and
+  // checkPage reads what the page shows. The read cannot see into the frame, so the page is
+  // reported blank, with the same gap as a page with nothing in it.
+  for (const [name, frame] of [
+    ['an empty frame that may run scripts', '<iframe title="Partner" tabindex="-1" sandbox="allow-scripts" srcdoc=""></iframe>'],
+    ['a frame of text', '<iframe title="Partner" tabindex="-1" sandbox srcdoc="<p>Partner content</p>"></iframe>'],
+  ] as const) {
+    it(`is not_covered, with the CLI gap for a blank page, when its only content is ${name} it cannot see into`, async () => {
+      const { context, page } = await openPage(framedPage(frame));
+      try {
+        expect(await page.evaluate(() => document.querySelector('iframe')?.contentDocument ?? null)).toBeNull();
+        const result = await checkPage(page, { tabCap: 10 });
+
+        expect(result.verdict).toBe('not_covered');
+        expect(result.gaps.map((gap) => gap.ref)).toContain('readiness:page');
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
+  // Without tabindex="-1", Tab moves focus into the frame, so the walk leaves the body and the
+  // blank-page read does not run. The page is checked like any other: its own document has no main
+  // landmark and no level one heading, so it never reads as verified.
+  it('checks a page whose only content is an empty frame focus can move into, and never verifies it', async () => {
+    const { context, page } = await openPage(framedPage('<iframe title="Partner" sandbox="allow-scripts" srcdoc=""></iframe>'));
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.gaps.map((gap) => gap.ref)).not.toContain('readiness:page');
+      expect(result.verdict).toBe('regression');
+      expect(result.failures.map((f) => f.rule)).toEqual(expect.arrayContaining(['landmark-one-main', 'page-has-heading-one']));
+    } finally {
+      await context.close();
+    }
+  });
+
   it('checks a page of text with nothing to Tab to and no readiness signal, as on main', async () => {
     const { context, page } = await openPage(TEXT_ONLY_HTML);
     try {

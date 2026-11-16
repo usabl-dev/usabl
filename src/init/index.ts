@@ -6,7 +6,7 @@
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
-import { operatorPath, operatorText } from '../intake/config-error.js';
+import { shownText } from './shown-text.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import { isRouterSource, readRouterSource, screenIdFromUrl } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
@@ -197,10 +197,9 @@ export interface InferInitOptions {
 
 // A path as init prints it. Folder names come from the file system, through a link target or a
 // folder init found, so they can hold a terminal control sequence. Each control character is
-// labelled, so nothing raw reaches the terminal and two folders never read as one name.
-function shownPath(path: string): string {
-  return operatorText(operatorPath(path));
-}
+// labelled, so nothing raw reaches the terminal and two folders never read as one name. Route
+// paths and package names are printed the same way, because they come from repository files too.
+const shownPath = shownText;
 
 /**
  * The app folder from `--app`, as a clean repository-relative path with no trailing slash.
@@ -373,7 +372,7 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     const name = packageJson(await fs.readFile(manifest))?.['name'];
     if (typeof name !== 'string' || !depends.has(name)) continue;
     notes.push(
-      `Review: ${shownPath(appDir)} depends on ${operatorText(name)} in ${shownPath(dir)}, and its files are not in uiFileGlobs, so a ` +
+      `Review: ${shownPath(appDir)} depends on ${shownText(name)} in ${shownPath(dir)}, and its files are not in uiFileGlobs, so a ` +
         'change there is a coverage gap, because usabl cannot tell which screens render it. If the app renders ' +
         `components from it, add their files to uiFileGlobs, such as ${shownPath(`${dir}/src/**/*.tsx`)}, and to the files of the surfaces that render them.`,
     );
@@ -433,7 +432,7 @@ function readinessRecommendation(reason: string, surfaces: readonly SurfaceConfi
       'or magic-link page, is scored as the screen.',
     ...surfaces.map(
       (surface) =>
-        `Review: surface "${operatorText(surface.id)}" has no reachedWhen readiness signal yet.`,
+        `Review: surface "${shownText(surface.id)}" has no reachedWhen readiness signal yet.`,
     ),
   ];
 }
@@ -558,7 +557,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       const where = `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`;
       if (!isProvenRoutePath(route.path)) {
         notes.push(
-          `Review: ${shownPath(where)}: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
+          `Review: ${shownPath(where)}: skipped unproven route path "${shownText(route.path)}". Nested or relative paths are not attributed.`,
         );
         continue;
       }
@@ -603,11 +602,11 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         attributed += 1;
       } else if (entryCandidates.length > 0) {
         notes.push(
-          `Review: ${shownPath(where)}: ${route.path} has no proven entry file. Its import matches more than one file: ` +
+          `Review: ${shownPath(where)}: ${shownText(route.path)} has no proven entry file. Its import matches more than one file: ` +
             `${entryCandidates.map((file) => shownPath(file)).join(', ')}. Set entryFile in usabl.routes.json to the file the route renders.`,
         );
       } else {
-        notes.push(`Review: ${shownPath(where)}: ${route.path} has no proven entry file.`);
+        notes.push(`Review: ${shownPath(where)}: ${shownText(route.path)} has no proven entry file.`);
       }
       routes.push({
         screenId,
@@ -686,7 +685,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
   for (const route of routes) {
     const url = surfaceUrl(appBaseUrl, route.url);
     if (url === null) {
-      notes.push(`Review: skipped surface URL for ${operatorText(route.url)}; it leaves ${origin}.`);
+      notes.push(`Review: skipped surface URL for ${shownText(route.url)}; it leaves ${origin}.`);
       continue;
     }
     // Every route here already passed the id grammar when its id was derived above, so a surface
@@ -724,7 +723,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         ? `usabl session saved a session at ${SESSION_STATE_PATH}, so scans run signed in`
         : signInRoute === null
           ? null
-          : `the router has a sign-in route, ${operatorText(signInRoute)}`;
+          : `the router has a sign-in route, ${shownText(signInRoute)}`;
   if (loginReason !== null) {
     notes.push(...readinessRecommendation(loginReason, surfaces));
   }

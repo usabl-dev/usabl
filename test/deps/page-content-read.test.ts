@@ -54,6 +54,8 @@ interface ElementSpec {
   role?: string;
   shadowRoot?: FakeNode;
   contentDocument?: { body: FakeNode } | null;
+  // Reading the frame's document throws, as some browsers do for a frame from another origin.
+  contentDocumentThrows?: boolean;
   noCheckVisibility?: boolean;
 }
 
@@ -67,6 +69,13 @@ function el(localName: string, children: FakeNode[] = [], spec: ElementSpec = {}
   node['shadowRoot'] = spec.shadowRoot ?? null;
   if (spec.contentDocument !== undefined) {
     node['contentDocument'] = spec.contentDocument;
+  }
+  if (spec.contentDocumentThrows === true) {
+    Object.defineProperty(node, 'contentDocument', {
+      get: () => {
+        throw new Error('Blocked a frame from accessing a cross-origin frame.');
+      },
+    });
   }
   if (spec.shadowRoot !== undefined) {
     spec.shadowRoot['host'] = node;
@@ -134,7 +143,58 @@ describe('the read of whether a page shows content', () => {
   });
 
   it('reads a frame whose document it can reach, and not one it cannot', () => {
-    expect(showsContent(el('body', [el('iframe', [], { contentDocument: { body: el('body', [el('p', [text('Framed')])]) } })]))).toBe(true);
     expect(showsContent(el('body', [el('iframe', [], { contentDocument: null })]))).toBe(false);
+    expect(showsContent(el('body', [el('iframe', [], { contentDocument: { body: el('body', [el('p', [text('Framed')])]) } })]))).toBe(true);
+  });
+
+  // The read cannot see into a frame from another origin. A frame it cannot see into is no evidence
+  // that the page rendered, since the frame may hold a blank app, an error page, or a third-party
+  // widget. So it is not counted, and a page whose only content is such a frame reads as blank.
+  for (const tag of ['iframe', 'frame']) {
+    it(`does not count a visible ${tag} with a box whose document it cannot reach`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null })]))).toBe(false);
+    });
+
+    it(`does not count a visible ${tag} with a box whose document throws when read`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocumentThrows: true })]))).toBe(false);
+    });
+
+    it(`does not count what a hidden ${tag} shows`, () => {
+      const framed = (): { body: FakeNode } => ({ body: el('body', [el('p', [text('Framed')])]) });
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: framed() })]))).toBe(true);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: framed(), visible: false })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: framed(), noCheckVisibility: true })]))).toBe(false);
+    });
+
+    // A frame whose document the read can reach counts only through what that document shows. An
+    // empty frame, such as about:blank or a widget that has not loaded yet, is not content.
+    it(`does not count a visible ${tag} with a box whose document it can read and finds empty`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: { body: el('body') } })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: { body: el('body', [el('div', [], { box: { width: 300, height: 150 } })]) } })]))).toBe(false);
+    });
+
+    it(`does not count a ${tag} with no box`, () => {
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, box: NO_BOX })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: null, box: { width: 300, height: 0 } })]))).toBe(false);
+      expect(showsContent(el('body', [el(tag, [], { contentDocument: { body: el('body') }, box: NO_BOX })]))).toBe(false);
+    });
+  }
+
+  // Frames nested inside readable frames. The read follows eight levels of frames. A frame past that
+  // is not counted, so a page it cannot finish reading is reported blank rather than passed. A frame
+  // the read cannot see into is not counted at any depth.
+  function nestedFrames(levels: number, innermost: FakeNode): FakeNode {
+    let body = el('body', [innermost]);
+    for (let level = 0; level < levels; level += 1) {
+      body = el('body', [el('iframe', [], { contentDocument: { body } })]);
+    }
+    return body;
+  }
+
+  it('counts what nested frames show up to the depth limit, and not past it or through a frame it cannot read', () => {
+    expect(showsContent(nestedFrames(1, el('iframe', [], { contentDocument: null })))).toBe(false);
+    expect(showsContent(nestedFrames(7, el('iframe', [], { contentDocument: null })))).toBe(false);
+    expect(showsContent(nestedFrames(8, el('p', [text('Deep text')])))).toBe(true);
+    expect(showsContent(nestedFrames(9, el('p', [text('Deep text')])))).toBe(false);
   });
 });

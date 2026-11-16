@@ -37,7 +37,23 @@ re-baseline to green.
   `<ref>:<path>` as a path when a working tree file had that exact name, so a file a pull request
   commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
   same reason. A path that is a folder at the ref is read with `git show <ref>:<path> --`, which
-  also reads the argument as an object name only. The git reader, the history reader, and the ledger reader accept none of these
+  also reads the argument as an object name only. A path that is a submodule at the ref is read as
+  the commit id its tree entry records, from `git ls-tree --end-of-options <ref> -- <path>`, after a
+  fixed prefix that starts with a lone surrogate (U+D800). No file read can return that character,
+  so in every check that compares the reads as text a submodule never compares equal to a file.
+  The CI policy check and the guard compare text, so they are not affected by what follows. The
+  Stop hook's session pins hash the read as UTF-8, where the lone surrogate becomes the bytes of
+  U+FFFD. So a file that holds U+FFFD (or a byte that is not UTF-8, such as `0xFF`) and then the
+  same `submodule commit <id>` line pins the same as the submodule at that commit, and swapping one
+  for the other in a session does not show as drift in the Stop hook's pins. The CI policy check
+  still sees the change. The repair is a change to the guarded pin code that keeps the surrogate in
+  the hash, and it waits on the owner. The read does not need the submodule's commit, which is
+  usually not in the repository, and does not depend on the working tree. In the CI policy check,
+  which compares two refs, a guarded path that is a submodule compares as changed exactly when its
+  recorded commit changed. The local guard, which compares the working tree with a ref and which
+  the Stop hook runs, reads the working tree side of the path as a file. A submodule there is a
+  folder or absent, so the local guard reports a guarded submodule as changed on every run, whether
+  or not it moved. That fails safe. The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
   character. White space includes non-ASCII spaces that git itself allows in a ref name, and

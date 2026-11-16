@@ -518,31 +518,68 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     expect(text).not.toContain('decoy');
   });
 
-  it('still throws for a submodule path whose commit is not in the repository', async () => {
-    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
+  // A submodule path is a commit entry, which git cat-file blob refuses. The reader reads it as the
+  // commit id the tree records for it, after a fixed prefix whose first character no file read can
+  // hold. A submodule's commit is usually not in the repository, and the id is read all the same.
+  const submoduleText = (id: string): string => `\ud800submodule commit ${id}\n`;
+
+  it('reads a submodule path whose commit is not in the repository as its recorded id', async () => {
+    const absent = 'deadbeef'.repeat(5);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${absent},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
-    await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub')).rejects.toThrow();
+    await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub')).resolves.toBe(submoduleText(absent));
   });
 
-  // A submodule path is a commit entry, which git cat-file blob refuses. When that commit is in
-  // the repository, git show prints it, and the guard compared that text as before, so a moved
-  // submodule reads as changed.
-  it('reads a submodule path whose commit is in the repository as git show prints it', async () => {
+  it('reads a submodule path whose commit is in the repository as its recorded id, not the patch', async () => {
     const pinned = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
     await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${pinned},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
-    const { stdout: expected } = await execFileAsync('git', ['show', 'HEAD:sub'], { cwd: repoPath, encoding: 'utf8' });
-    expect(expected).toContain(`commit ${pinned}`);
     const git = makeGitReader({ cwd: repoPath });
-    await expect(git.show('HEAD', 'sub')).resolves.toBe(expected);
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(submoduleText(pinned));
     // The submodule moves to another commit, so the two reads differ.
     const moved = await runGit(repoPath, ['rev-parse', 'HEAD~1']);
+    expect(moved).not.toBe(pinned);
     await runGit(repoPath, ['update-index', '--cacheinfo', `160000,${moved},sub`]);
     await runGit(repoPath, ['commit', '-m', 'the submodule moves']);
-    const before = await git.show('HEAD~1', 'sub');
-    const after = await git.show('HEAD', 'sub');
-    expect(after).toContain(`commit ${moved}`);
-    expect(after).not.toBe(before);
+    await expect(git.show('HEAD~1', 'sub')).resolves.toBe(submoduleText(pinned));
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(submoduleText(moved));
+    // The working tree's attributes change how git show prints a patch. They never change the read.
+    await writeFile(join(repoPath, '.gitattributes'), '* -diff\n', 'utf8');
+    await expect(git.show('HEAD~1', 'sub')).resolves.toBe(submoduleText(pinned));
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(submoduleText(moved));
+  });
+
+  it('never reads a file as a submodule, even when it holds the text of a submodule read', async () => {
+    const absent = 'deadbeef'.repeat(5);
+    await writeFile(join(repoPath, 'lookalike'), Buffer.from(submoduleText(absent), 'utf8'));
+    await writeFile(join(repoPath, 'idline'), `submodule commit ${absent}\n`, 'utf8');
+    await runGit(repoPath, ['add', 'lookalike', 'idline']);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${absent},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'files that look like a submodule read']);
+    const git = makeGitReader({ cwd: repoPath });
+    const sub = await git.show('HEAD', 'sub');
+    expect(await git.show('HEAD', 'lookalike')).not.toBe(sub);
+    expect(await git.show('HEAD', 'idline')).not.toBe(sub);
+  });
+
+  // A path is read from the root of the tree, as `<ref>:<path>` reads it, whatever folder the
+  // reader runs in. Run from apps/web, ls-tree without --full-tree read sub as apps/web/sub.
+  it('reads a submodule path from the root of the tree when run from a subfolder', async () => {
+    const atRoot = 'a'.repeat(40);
+    const inSubfolder = 'b'.repeat(40);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${atRoot},sub`]);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${inSubfolder},apps/web/sub`]);
+    await runGit(repoPath, ['commit', '-m', 'two submodule entries with the same name']);
+    await mkdir(join(repoPath, 'apps/web'), { recursive: true });
+    const git = makeGitReader({ cwd: join(repoPath, 'apps/web') });
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(submoduleText(atRoot));
+    await expect(git.show('HEAD', 'apps/web/sub')).resolves.toBe(submoduleText(inSubfolder));
+  });
+
+  it('reads a path inside a submodule as absent', async () => {
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
+    await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub/file.txt')).resolves.toBeNull();
   });
 
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {
