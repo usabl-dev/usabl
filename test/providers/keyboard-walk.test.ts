@@ -11,7 +11,7 @@ import type {
   UnreadRegionName,
   WalkRecord,
 } from '../../src/contracts/index.js';
-import { makeFakeDeps } from '../../src/deps/fakes.js';
+import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { isWalkReachGap, makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { draftsOf, gapsOf, testConfig } from '../helpers.js';
@@ -959,6 +959,154 @@ describe('regions the team lists for a screen', () => {
     const output = await walkWith({ kind: 'shadow-host', tag: 'x-widget token=SECRETPOISON' }, null);
 
     expect(unreadRegions(output)[0]).not.toContain('SECRETPOISON');
+  });
+});
+
+// Every control inside a closed shadow root or a frame the walk cannot read has the path of the
+// host or the frame. So landing in a walked region on the Tab after the body proves nothing by
+// itself: a control in the region that blurred itself drops focus to the body mid-page, and the
+// next Tab goes to the next control in the same region. The end is confirmed through a region only
+// when the region is the first stop, and Tab out of it lands on the second stop, or on the body
+// when the region was the only stop.
+describe('the end of a walk that met a region it cannot read', () => {
+  interface State {
+    path: string;
+    unreadable?: FocusUnreadable;
+    body?: true;
+    // The accessible name, or null for an unnamed button. Left out, the button has a name.
+    name?: string | null;
+  }
+
+  // Focus visits the states in order, one per Tab, and stays on the last one.
+  function linearPage(states: State[], region: UnreadRegionName | null): Page {
+    let cursor = -1;
+    const at = (): State => states[Math.max(0, Math.min(cursor, states.length - 1))] ?? { path: BODY_PATH, body: true };
+    return makeFakePage({
+      currentUrl: async () => SCREEN.url,
+      focusBody: async () => {
+        cursor = -1;
+      },
+      tab: async () => {
+        cursor += 1;
+      },
+      activePath: async () => at().path,
+      activeElementIs: async (selector: string) => selector === 'body' && at().body === true,
+      activeFocusUnreadable: async () => at().unreadable ?? null,
+      activeUnreadRegion: async () => (at().unreadable === undefined ? null : region),
+      activeNode: async (): Promise<AxNode | null> => {
+        const state = at();
+        if (state.body === true || state.unreadable !== undefined) return null;
+        return { name: state.name === undefined ? 'Named' : state.name, role: 'button', states: {} };
+      },
+    });
+  }
+
+  const HOST = { kind: 'shadow-host', tag: 'chat-widget' } as const;
+  const LISTED = { ...testConfig(), keyboardWalk: { perSurface: { [SCREEN.id]: { unreadableRegions: [{ shadowHost: 'chat-widget' }] } } } };
+
+  // #first, a closed shadow root, a control inside it blurs and drops focus to the body, the Tab
+  // after the body lands on the next control inside the same root, then #after, an unnamed button.
+  const BLUR_IN_REGION: State[] = [
+    { path: '#first' },
+    { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+    { path: BODY_PATH, body: true },
+    { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+    { path: '#after', name: null },
+    { path: BODY_PATH, body: true },
+  ];
+
+  async function walkStates(states: State[], config: ProviderContext['config']): Promise<ProviderOutput> {
+    const page = linearPage(states, HOST);
+    const output = await makeKeyboardWalkProvider({ tabCap: 20 }).run({ page, screen: SCREEN, config });
+    return Array.isArray(output) ? { drafts: output } : output;
+  }
+
+  it('is cut short when a control inside a listed region blurs, so the controls after it are not read as walked', async () => {
+    const output = await walkStates(BLUR_IN_REGION, LISTED);
+
+    expect(output.walk?.complete).toBe(false);
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('one more Tab did not go back to a control the keyboard walk had already reached');
+    // The listed region is still a disclosed limit, and the screen is not covered by the cut.
+    expect(output.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
+  });
+
+  it('is cut short, beside its region gap, when the same region is not listed', async () => {
+    const output = await walkStates(BLUR_IN_REGION, testConfig());
+
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toHaveLength(1);
+    expect(unreadRegions(output)).toHaveLength(1);
+  });
+
+  it('completes when the region is the first stop and Tab out of it lands on the second stop', async () => {
+    const output = await walkStates(
+      [
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#after' },
+        { path: BODY_PATH, body: true },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#after' },
+      ],
+      LISTED,
+    );
+
+    expect(output.walk?.complete).toBe(true);
+    expect(gapsOf(output)).toEqual([]);
+  });
+
+  it('completes when the region is the only stop and Tab out of it lands on the body', async () => {
+    const output = await walkStates(
+      [
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: BODY_PATH, body: true },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: BODY_PATH, body: true },
+      ],
+      LISTED,
+    );
+
+    expect(output.walk?.complete).toBe(true);
+    expect(gapsOf(output)).toEqual([]);
+  });
+
+  it('is cut short when the region is the first stop and Tab out of it lands on a control the walk never reached', async () => {
+    // A control in the first region blurs, the Tab after the body lands on the next control in the
+    // same region, and Tab out of it lands on #after, which the walk never reached.
+    const output = await walkStates(
+      [
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: BODY_PATH, body: true },
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#after', name: null },
+        { path: BODY_PATH, body: true },
+      ],
+      LISTED,
+    );
+
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toHaveLength(1);
+  });
+
+  it('is cut short when the region is the first stop and focus does not leave it within its bound', async () => {
+    const output = await walkStates(
+      [
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+        { path: '#after' },
+        { path: BODY_PATH, body: true },
+        // Every Tab after this stays in the region.
+        { path: 'chat-widget', unreadable: 'closed-shadow-root' },
+      ],
+      LISTED,
+    );
+
+    expect(output.walk?.complete).toBe(false);
+    expect(cutShort(output)).toHaveLength(1);
   });
 });
 

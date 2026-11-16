@@ -21,7 +21,7 @@ import { STALE_REGION_LISTING_NOTE_REF, UNREAD_REGION_NOTE_REF } from '../../out
 import { scrubString } from '../../surfaces/scrub.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
-import { readWalkEnd, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
+import { readWalkEnd, REGION_TAB_BOUND, type WalkEnd, type WalkStopIdentity } from './walk-end.js';
 import { walkScreenConfig } from '../../intake/keyboard-walk-config.js';
 
 // The most Tab stops a walk takes when neither the screen's settings nor the caller name a cap.
@@ -179,11 +179,6 @@ type StopReason =
   | 'end-unconfirmed'
   | 'body-focused'
   | 'region-unbounded';
-
-// The most presses of Tab the walk spends inside one region it cannot read before it stops. A
-// region whose own controls trap focus would otherwise hold the walk until the stop cap, and the
-// walk cannot see a cycle in there, because every control has the path of the host or the frame.
-const REGION_TAB_BOUND = 100;
 
 // A region the walk cannot read into: a closed shadow root, a frame it cannot read, or focus under
 // more shadow roots and frames than it follows. Every control inside has the path of the host or

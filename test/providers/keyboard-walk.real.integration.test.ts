@@ -121,6 +121,16 @@ function pages(crossOrigin: string): Record<string, string> {
       '<button type="button">First</button><x-closed></x-closed><button type="button" id="trailing"></button>' +
         closedElement('x-closed', '<button type="button">Alpha</button><button type="button">Beta</button>'),
     ),
+    // A closed shadow root whose second button blurs itself when it gets focus. Focus falls to the
+    // body in the middle of the page, and the next Tab goes to the third button, which has the
+    // host's path like every control in the root. The unnamed button after the host is never walked.
+    '/closed-shadow-blur': page(
+      '<button type="button">First</button><x-blur></x-blur><button type="button" id="trailing"></button>' +
+        `<script>customElements.define('x-blur', class extends HTMLElement { constructor() { super();` +
+        ` const root = this.attachShadow({ mode: 'closed' });` +
+        ` root.innerHTML = '<button type="button">Alpha</button><button type="button">Beta</button><button type="button">Gamma</button>';` +
+        ` root.querySelectorAll('button')[1].addEventListener('focus', (event) => event.target.blur()); } });</script>`,
+    ),
     // A focusable host with a closed shadow root that holds nothing focusable. Focus sits on the
     // host itself, which the walk can name, so it walks on.
     '/closed-shadow-host': page(
@@ -668,6 +678,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       const listed = await walkListed(opened, [{ shadowHost: 'x-closed' }]);
       expect(gapsOf(listed)).toEqual([]);
       expect(listed.notes?.[0]?.reason).toContain('a closed shadow root in a x-closed element');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // The Tab after the body lands in the same region again, at the host's path. Read as the end of
+  // the page, the walk read as complete, the listed region left no gap, and the unnamed button
+  // after the host was never walked: a screen read verified with a control nobody checked.
+  it('is cut short when a control inside a listed closed shadow root blurs itself', async () => {
+    const opened = await open('/closed-shadow-blur');
+    try {
+      const listed = await walkListed(opened, [{ shadowHost: 'x-blur' }]);
+      expect(listed.walk?.complete).toBe(false);
+      const gaps = gapsOf(listed);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0]?.reason).toContain('the keyboard walk was cut short');
+      expect(gaps[0]?.reason).toContain('one more Tab did not go back to a control the keyboard walk had already reached');
+      expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
     } finally {
       await opened.close();
     }

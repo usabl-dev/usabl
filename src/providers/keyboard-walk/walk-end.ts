@@ -15,6 +15,12 @@ export interface WalkStopIdentity {
   unreadable?: true;
 }
 
+// The most presses of Tab a walk spends inside one region it cannot read before it stops. A region
+// whose own controls trap focus would otherwise hold the walk until the stop cap, and the walk
+// cannot see a cycle in there, because every control has the path of the host or the frame. The
+// end rule uses the same bound when it presses Tab out of a first region.
+export const REGION_TAB_BOUND = 100;
+
 // How a walk that reached the body ended. 'confirmed': the focus order ended there. 'unconfirmed':
 // one more Tab did not go back to a stop the walk reached, so a script dropped focus mid-page.
 // 'body-focused': a script put focus on the body itself, or the page could not say whether it did,
@@ -67,12 +73,11 @@ async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[
   if (walked.length === 0) {
     return page.activeElementIs('body');
   }
-  // A region the walk cannot read gives every control inside it the path of its host or frame. When
-  // the first stop of the page is such a region, the Tab after the end lands inside it again, and
-  // the region's own path is all the walk can match. Only a stop walked as a region matches it.
+  // A region the walk cannot read gives every control inside it the path of its host or frame, so
+  // landing in a walked region proves nothing by itself: a control inside it that blurs itself
+  // drops focus to the body mid-page, and the next Tab goes to the next control of the same region.
   if ((await page.activeFocusUnreadable()) !== null) {
-    const regionPath = await page.activePath();
-    return walked.some((stop) => stop.unreadable === true && stop.path === regionPath);
+    return backAtFirstRegion(page, walked);
   }
   if (await page.activeElementIs('body')) {
     return false;
@@ -90,4 +95,39 @@ async function landedOnWalkedStop(page: Page, walked: readonly WalkStopIdentity[
     const bothKnown = key !== null && stop.key !== null;
     return stop.path === path && (!bothKnown || index === 0);
   });
+}
+
+/**
+ * Focus is in a region the walk cannot read, on the Tab after the body. That is the start of the
+ * focus order again only when the first stop walked is this region, and Tab out of it, pressed at
+ * most REGION_TAB_BOUND times, lands on the second stop walked, or on the body when the region was
+ * the only stop. Anything else leaves the end unconfirmed.
+ */
+async function backAtFirstRegion(page: Page, walked: readonly WalkStopIdentity[]): Promise<boolean> {
+  const regionPath = await page.activePath();
+  const [first, second] = walked;
+  if (first?.unreadable !== true || first.path !== regionPath) {
+    return false;
+  }
+  for (let presses = 0; presses < REGION_TAB_BOUND; presses += 1) {
+    await page.tab();
+    const unreadable = (await page.activeFocusUnreadable()) !== null;
+    const path = await page.activePath();
+    if (unreadable && path === regionPath) {
+      continue;
+    }
+    if (second === undefined) {
+      return !unreadable && (await page.activeElementIs('body'));
+    }
+    if (unreadable || second.unreadable === true) {
+      // A second region is matched by its path, the only thing the walk can read of it.
+      return unreadable && second.unreadable === true && second.path === path;
+    }
+    if (await page.activeElementIs('body')) {
+      return false;
+    }
+    const key = await page.activeElementKey();
+    return key !== null && second.key !== null ? second.key === key : second.path === path;
+  }
+  return false;
 }
