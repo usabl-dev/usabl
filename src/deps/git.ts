@@ -303,7 +303,9 @@ async function objectType(cwd: string, object: string): Promise<string | null> {
 
 // How the reader reads a submodule path: this prefix, then the commit id the tree records for it.
 // It starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
-// can return this text, and a submodule never compares equal to a file, whatever the file holds.
+// can return this text, and compared as text a submodule never equals a file, whatever the file
+// holds. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone surrogate into
+// U+FFFD, which a file can hold, so a check that hashes the read must not rely on the prefix.
 const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
 
 // The commit id the tree at the ref records for a submodule at the path, or null when the path is
