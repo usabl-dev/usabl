@@ -121,13 +121,30 @@ function walkRecordOf(walk: unknown): WalkRecord | null {
 
 export interface RunProvidersOptions {
   /**
-   * Called once, after every other provider has run and right before the first provider that may
-   * move the page on purpose (navigatesOnPurpose, a flow or a voice contract) runs. Not called when
-   * no such provider runs. The check runner reads the page address here, so a move the walk, a
-   * read-only provider, or the PatternFly probes saw is told apart from a move a flow makes on
-   * purpose. It decides nothing and returns nothing.
+   * Called right before each provider that may move the page on purpose (navigatesOnPurpose, a
+   * flow or a voice contract) runs, after every other provider. Called only for one that passed the
+   * capability and pristine checks and that applies to this screen, so a flow written for another
+   * screen moves nothing. The check runner reads the page address here: the first call tells a move
+   * the walk, a read-only provider, or the PatternFly probes saw from a move a flow makes on purpose,
+   * and each later call tells whether an earlier flow left the route. A gap it returns skips that
+   * provider and is kept with the other gaps. It decides no verdict.
    */
-  beforeIntendedNavigation?: () => Promise<void>;
+  beforeIntendedNavigation?: (provider: Provider) => Promise<CoverageGap | null>;
+}
+
+/**
+ * Whether a provider applies to the screen being scanned, by its own plan. A provider with no plan,
+ * or a plan that throws, is read as applying, so it is never run without the read before it.
+ */
+function appliesToScreen(provider: Provider, ctx: ProviderContext): boolean {
+  if (provider.appliesBeforeScan === undefined) {
+    return true;
+  }
+  try {
+    return provider.appliesBeforeScan({ id: ctx.screen.id, profile: ctx.profile ?? 'app' }).applies;
+  } catch {
+    return true;
+  }
 }
 
 export async function runProviders(
@@ -146,7 +163,6 @@ export async function runProviders(
   let walk: WalkRecord | null = null;
 
   let mutatedBy: string | null = null;
-  let navigationAnnounced = false;
 
   for (const provider of orderByPageEffect(providers)) {
     const denied = deniedCapabilities(provider, allowed);
@@ -162,9 +178,12 @@ export async function runProviders(
       continue;
     }
 
-    if (provider.navigatesOnPurpose === true && !navigationAnnounced) {
-      navigationAnnounced = true;
-      await options.beforeIntendedNavigation?.();
+    if (provider.navigatesOnPurpose === true && options.beforeIntendedNavigation !== undefined && appliesToScreen(provider, ctx)) {
+      const skipped = await options.beforeIntendedNavigation(provider);
+      if (skipped !== null) {
+        gaps.push(skipped);
+        continue;
+      }
     }
 
     // Recorded before the run because a provider that throws mid-probe has already clicked.

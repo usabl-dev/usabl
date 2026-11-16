@@ -742,7 +742,8 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
  *
  * `loadedUrl` is the address the page reported at load, so a redirect the application ran on load
  * to its own canonical address is not read as a move. `checkedUrl` is the address read before the
- * first flow or voice contract, or after every provider when none runs; see check-runner.ts.
+ * first flow or voice contract that applies to the screen, named by `readBefore`, or at the end of
+ * the scan when none runs there, with `readBefore` null; see check-runner.ts.
  * They are compared with stayedOnScreen: the origin, the path, and the query and fragment only when
  * they name a route. See there.
  *
@@ -752,9 +753,15 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
  */
 export function leftScreenGap(
   screenId: string,
-  addresses: { requestedUrl: string; loadedUrl: string | null; checkedUrl: string | null },
+  addresses: { requestedUrl: string; loadedUrl: string | null; checkedUrl: string | null; readBefore?: string | null },
 ): CoverageGap | null {
   const { requestedUrl, loadedUrl, checkedUrl } = addresses;
+  // Where the second address was read: right before a named flow or voice contract, whose id comes
+  // from the requirement file, or at the end of the scan when none ran on this screen.
+  const readPoint =
+    addresses.readBefore === undefined || addresses.readBefore === null
+      ? 'at the end of the scan'
+      : `after the walk and the checks, right before ${addresses.readBefore} ran`;
   const stayed = loadedUrl !== null && checkedUrl !== null ? stayedOnScreen(requestedUrl, loadedUrl, checkedUrl) : null;
   if (stayed === true) {
     return null;
@@ -790,8 +797,8 @@ export function leftScreenGap(
   }
   return gapFor(
     requestedUrl,
-    `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}. When it loaded, ${atLoad}; after the walk and the ` +
-      `checks, before any flow or voice contract, ${afterChecks}. ${outcome} The origin and the path are compared. The ` +
+    `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}. When it loaded, ${atLoad}; ${readPoint}, ` +
+      `${afterChecks}. ${outcome} The origin and the path are compared. The ` +
       'query counts only when the configured url of the screen has one, and the fragment only when it names a ' +
       'route: one that starts with #/ or #!, or any fragment when the configured url has one. Any other change ' +
       'to the query or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If a ' +

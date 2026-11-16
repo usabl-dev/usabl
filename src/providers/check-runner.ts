@@ -41,6 +41,7 @@ import {
   readPageAddress,
   readRefusedRequests,
   redirectedAwayGap,
+  stayedOnScreen,
 } from './redirected.js';
 import { isBrowserSandboxRefusal } from '../deps/sandbox.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
@@ -127,6 +128,24 @@ async function readBlockedOrigins(page: Page): Promise<string | null> {
     'If the app needs an origin, add it to judge.allowOrigins in the trusted usabl.config.json. ' +
     'An allowed hostname must be answered by a public address; list a local service by its IP address and port.'
   );
+}
+
+/**
+ * A flow or voice contract that did not run, because an earlier one moved the page to another
+ * route. Both are named by provider id, which comes from the requirement id in the requirement
+ * file, never from the page. The route the page moved to is not printed: the gap on the earlier
+ * flow, if any, is where that move is judged.
+ */
+function flowSkippedGap(screenId: string, providerId: string, movedBy: string): CoverageGap {
+  return {
+    ref: `provider:${providerId}`,
+    state: 'not-covered',
+    reason:
+      `${providerId} did not run on screen ${screenId}, because ${movedBy} ran before it and left the page on ` +
+      'another route. Run here, it would have checked a page that is not this screen, so its requirement is ' +
+      `not checked on this run. End ${movedBy} on the route it started on, or check the later requirement on ` +
+      'its own screen.',
+  };
 }
 
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
@@ -317,21 +336,54 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // that leaves the element in the DOM for a few hundred milliseconds. Content the scanner
           // itself caused is not the page, so the providers wait for it to go.
           await waitForScannerArtifactsToClear(page);
-          // The address for the read after the checks, taken right before the first provider that
-          // may move the page on purpose: a flow or a voice contract. They run after every other
-          // provider, the PatternFly probes included, so a move during the walk, a read-only
-          // provider, or the probes, such as a sign-in timer, is still leaving the screen. A flow
-          // may move the route on purpose, and its own rules judge that, so a move after this point
-          // does not drop what was measured on the screen before it. Undefined when no flow or
-          // voice contract ran; the address is then read after everything below.
-          let addressBeforeNavigation: { url: string | null } | undefined;
+          // The read point: right before the first flow or voice contract that applies to this
+          // screen and runs. They run after every other provider, the PatternFly probes included, so
+          // a move during the walk, a read-only provider, or the probes, such as a sign-in timer, is
+          // still leaving the screen. The address and the readiness selector are both read there. A
+          // flow may move the route on purpose, and its own rules judge that, so a move after this
+          // point does not drop what was measured on the screen before it. Null when no flow or
+          // voice contract ran here; both are then read after everything below.
+          //
+          // Before each later flow or voice contract the address is read again. Once one shows the
+          // page left the route seen at the read point, every remaining one is skipped with a gap
+          // that names the flow that ran before the move. A later flow would otherwise prove its
+          // requirement on another page and count it for this screen.
+          const navigation: {
+            readPoint: { providerId: string; url: string | null; selectorPresent: boolean | null } | null;
+            lastRan: string | null;
+            movedBy: string | null;
+          } = { readPoint: null, lastRan: null, movedBy: null };
           const providerResult = await runProviders(
             deps.providers,
             { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
             deps.allowedCapabilities,
             {
-              beforeIntendedNavigation: async () => {
-                addressBeforeNavigation = { url: await readPageAddress(page) };
+              beforeIntendedNavigation: async (provider) => {
+                if (navigation.readPoint === null) {
+                  const selector = signal === null ? null : signal.selector;
+                  navigation.readPoint = {
+                    providerId: provider.id,
+                    url: await readPageAddress(page),
+                    selectorPresent:
+                      selector === null
+                        ? null
+                        : (await measureReadiness(page, { selector, response: null }, deps.config.appBaseUrl)).selectorPresent,
+                  };
+                  navigation.lastRan = provider.id;
+                  return null;
+                }
+                const seen = navigation.readPoint.url;
+                if (navigation.movedBy === null && seen !== null) {
+                  const now = await readPageAddress(page);
+                  if (now === null || stayedOnScreen(screen.url, seen, now) !== true) {
+                    navigation.movedBy = navigation.lastRan;
+                  }
+                }
+                if (navigation.movedBy !== null) {
+                  return flowSkippedGap(screen.id, provider.id, navigation.movedBy);
+                }
+                navigation.lastRan = provider.id;
+                return null;
               },
             },
           );
@@ -349,11 +401,14 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // page is still open. This is the only place the live page exists; markUnseenScreens runs
           // later over collected scans and cannot query it. The response part counts only requests
           // sent before the walk began, so one a key press or a provider caused does not count. The
-          // selector part sees the page as the checks left it, so a walk that navigated away fails.
+          // selector part is the one taken at the read point when a flow or voice contract ran, so
+          // a flow that moves the route on purpose does not make the whole screen unseen, and
+          // otherwise it sees the page as the checks left it, so a walk that navigated away fails.
           // A part holds only when it held both here and before the walk; see heldThroughout.
+          const measuredAtEnd = await measureReadiness(page, signal, deps.config.appBaseUrl);
           const readiness = heldThroughout(
             { selectorPresent: landing.reachedSelectorPresent, responseSeen: landing.reachedResponseSeen ?? null },
-            await measureReadiness(page, signal, deps.config.appBaseUrl),
+            navigation.readPoint === null ? measuredAtEnd : { ...measuredAtEnd, selectorPresent: navigation.readPoint.selectorPresent },
           );
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
@@ -390,17 +445,19 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // then confirms the checks ran on this screen, and a gap is the safe direction. The real
           // browser always reports an open page's address, so this only fires on a broken page.
           //
-          // Which address: the one read before the first flow or voice contract, when one ran. There
-          // is no second read at the end then. It could not tell an intended flow move from a timer,
-          // and any gap it raised would make the whole screen not covered, so a flow that moves the
-          // route on purpose would lose the screen. A move after that point is left to the flow's
-          // own navigated gap and silent change rule. When no flow or voice contract ran, the
+          // Which address: the one taken at the read point, before the first flow or voice contract,
+          // when one ran. There is no whole-screen read at the end then. It could not tell an
+          // intended flow move from a timer, and any gap it raised would make the whole screen not
+          // covered, so a flow that moves the route on purpose would lose the screen. A move after
+          // that point skips the later flows, as above, and the last flow's own move is left to its
+          // navigated gap and the silent change rule. When no flow or voice contract ran, the
           // address is read here, the last read of the page, so it also covers the row and source
           // reads, the image read, and the readiness measure above.
           const leftScreen = leftScreenGap(screen.id, {
             requestedUrl: screen.url,
             loadedUrl: landing.landedUrl,
-            checkedUrl: addressBeforeNavigation === undefined ? await readPageAddress(page) : addressBeforeNavigation.url,
+            checkedUrl: navigation.readPoint === null ? await readPageAddress(page) : navigation.readPoint.url,
+            readBefore: navigation.readPoint === null ? null : navigation.readPoint.providerId,
           });
           if (lateRefusal !== null) {
             result = notReachedScan(screen, lateRefusal, signal);

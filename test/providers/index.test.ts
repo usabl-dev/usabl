@@ -517,7 +517,7 @@ describe('runProviders', () => {
     expect(Math.min(...flowAndVoice.map((id) => ids.indexOf(id)))).toBeGreaterThan(ids.indexOf('pf-rulepack'));
   });
 
-  it('calls beforeIntendedNavigation once, after every other provider and before the first that may move the page', async () => {
+  it('calls beforeIntendedNavigation before every provider that may move the page, after every other provider', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();
 
@@ -531,33 +531,58 @@ describe('runProviders', () => {
       ctx,
       ['live'],
       {
-        beforeIntendedNavigation: async () => {
-          calls.push('read address');
+        beforeIntendedNavigation: async (provider) => {
+          calls.push(`read address before ${provider.id}`);
+          return null;
         },
       },
     );
 
-    expect(calls).toEqual(['plain-a', 'prober', 'read address', 'flow-a', 'flow-b']);
+    expect(calls).toEqual(['plain-a', 'prober', 'read address before flow-a', 'flow-a', 'read address before flow-b', 'flow-b']);
     expect(result.gaps).toEqual([]);
   });
 
-  it('does not call beforeIntendedNavigation for a provider that only acts on the page, or one that does not run', async () => {
+  it('skips a provider that may move the page when beforeIntendedNavigation returns a gap for it, and keeps that gap', async () => {
     const calls: string[] = [];
     const ctx = await makeContext();
-    const hook = vi.fn(async () => {});
+    const gap = { ref: 'provider:flow-b', state: 'not-covered' as const, reason: 'flow-b did not run' };
+
+    const result = await runProviders(
+      [
+        recorder(calls, 'flow-a', { mutatesPageState: true, navigatesOnPurpose: true }),
+        recorder(calls, 'flow-b', { mutatesPageState: true, navigatesOnPurpose: true }),
+      ],
+      ctx,
+      ['live'],
+      { beforeIntendedNavigation: async (provider) => (provider.id === 'flow-b' ? gap : null) },
+    );
+
+    expect(calls).toEqual(['flow-a']);
+    expect(result.gaps).toEqual([gap]);
+  });
+
+  it('does not call beforeIntendedNavigation for a provider that only acts on the page, one that does not run, or one for another screen', async () => {
+    const calls: string[] = [];
+    const ctx = await makeContext();
+    const hook = vi.fn(async () => null);
     const denied: Provider = {
       ...recorder(calls, 'needs-net', { mutatesPageState: true, navigatesOnPurpose: true }),
       capabilities: ['network'],
     };
+    // A flow written for another screen still runs here and reports nothing, so it moves nothing.
+    const elsewhere: Provider = {
+      ...recorder(calls, 'flow-for-settings', { mutatesPageState: true, navigatesOnPurpose: true }),
+      appliesBeforeScan: () => ({ applies: false, why: 'the requirement names another screen' }),
+    };
 
     await runProviders(
-      [recorder(calls, 'plain-a'), recorder(calls, 'prober', { mutatesPageState: true }), denied],
+      [recorder(calls, 'plain-a'), recorder(calls, 'prober', { mutatesPageState: true }), denied, elsewhere],
       ctx,
       ['live'],
       { beforeIntendedNavigation: hook },
     );
 
-    expect(calls).toEqual(['plain-a', 'prober']);
+    expect(calls).toEqual(['plain-a', 'prober', 'flow-for-settings']);
     expect(hook).not.toHaveBeenCalled();
   });
 

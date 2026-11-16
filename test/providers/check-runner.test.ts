@@ -1245,16 +1245,135 @@ describe('makeCheckRunner and where the address is read when a provider acts on 
     },
   });
 
-  async function scanWith(page: Page, providers: Provider[]) {
+  async function scanWith(page: Page, providers: Provider[], surfaces?: SurfaceConfig[]) {
     const scan = await makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },
       providers,
-      config: testConfig(),
+      config: testConfig(surfaces === undefined ? {} : { surfaces }),
       allowedCapabilities: ['live'],
       stepRunner: makeStepRunner(),
     }).scan(HASH_SCREEN);
     return markUnseenScreens([scan]).screens[0]!;
   }
+
+  // A flow or voice contract that reports a marker draft only when the page is at `route`, so a test
+  // can see on which route it ran. A requirement checked on the wrong page would count for this one.
+  const passesOnlyAt = (id: string, layer: string, page: Page, route: string): Provider => ({
+    id,
+    layer,
+    capabilities: ['live'],
+    mutatesPageState: true,
+    navigatesOnPurpose: true,
+    run: async (): Promise<Draft[]> => ((await page.currentUrl()) === route ? [makeDraft(`${id}-passed`)] : []),
+  });
+
+  it('skips a later flow when an earlier flow moved the route, and names the flow that moved it', async () => {
+    const { page, go } = await hashPage();
+    const later = passesOnlyAt('intake:flow-save', 'intake-flow', page, 'http://127.0.0.1:5173/#/settings');
+
+    const scan = await scanWith(page, [readOnly, prober(), routingFlow(go), later]);
+
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:flow-save', state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('intake-flow');
+    expect(scan.gaps[0]?.reason).toContain('intake:flow-save');
+  });
+
+  it('skips a later voice contract the same way', async () => {
+    const { page, go } = await hashPage();
+    const contract = passesOnlyAt('intake:voice-save', 'voicing', page, 'http://127.0.0.1:5173/#/settings');
+
+    const scan = await scanWith(page, [readOnly, routingFlow(go), contract]);
+
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:voice-save', state: 'not-covered' });
+  });
+
+  it('runs a later flow when the earlier flow left the route where it was', async () => {
+    const { page } = await hashPage();
+    const stays: Provider = { ...routingFlow(() => {}), id: 'intake:flow-open' };
+    const later = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, stays, later]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'intake:flow-save-passed']);
+  });
+
+  it('keeps the findings on a screen whose own selector a flow removes when it moves the route on purpose', async () => {
+    // The selector is read where the address is, before the flow, so the flow's intended move does
+    // not make the whole screen a gap.
+    const { page, go } = await hashPage();
+    let flowRan = false;
+    Object.assign(page, { queryAll: async () => (flowRan ? [] : [{ selector: 'table#clusters' }]) });
+    const flow = routingFlow((url) => {
+      flowRan = true;
+      go(url);
+    });
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+  });
+
+  it('still fails the selector when it is gone before the flows run', async () => {
+    const { page, go } = await hashPage();
+    let probed = false;
+    Object.assign(page, { queryAll: async () => (probed ? [] : [{ selector: 'table#clusters' }]) });
+
+    const scan = await scanWith(
+      page,
+      [readOnly, prober(() => (probed = true)), routingFlow(go)],
+      [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }],
+    );
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+  });
+
+  it('reads at the end of the scan when the only flow is written for another screen', async () => {
+    // The flow for screen settings runs here and reports nothing. It must not move the read point,
+    // so a move during the row read after the providers is still seen.
+    const { page, go } = await hashPage();
+    const elsewhere: Provider = {
+      ...routingFlow(() => {}),
+      id: 'intake:flow-settings',
+      appliesBeforeScan: () => ({ applies: false, why: 'the requirement names another screen' }),
+    };
+    Object.assign(page, {
+      rowContext: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, elsewhere]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('at the end of the scan');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('names the flow the address was read before', async () => {
+    const { page, go } = await hashPage();
+    const tab = page.tab.bind(page);
+    Object.assign(page, {
+      tab: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        await tab();
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, routingFlow(go)]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('before intake-flow ran');
+  });
 
   it('keeps the axe and rulepack findings taken before a hash-routed flow that moves the route on purpose', async () => {
     const { page, go } = await hashPage();

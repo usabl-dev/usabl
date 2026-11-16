@@ -2404,17 +2404,34 @@ because a selector that a shared header or shell matches is on the other page to
 application ran on load to its own canonical address is not a move, because the comparison is with
 the address at load, not the configured one.
 
-**When it is read.** After the keyboard walk and every other provider, right before the first
-provider that may move the page on purpose: a flow or a voice contract, the providers marked
-`navigatesOnPurpose`. Those run after every other provider, the PatternFly probes included. The
-probes click and press Escape but never mean to leave the page, so a move while they run, such as
-a sign-in timer that fires then, is leaving the screen. A flow may move the route on purpose, and
-its own rules judge that: a flow step that changes the path is already a `navigated` gap, and the
-silent change rule reads each step. So a move after that point does not drop what was measured on
-the screen before it. When no flow or voice contract runs, the address is read at the very end
-instead, next to the second Rule A read, after the row and source reads and the readiness measure.
-There is no second read at the end when a flow or voice contract ran: it could not tell an intended
-move from a timer, and any gap it raised would make the whole screen not covered.
+**When it is read.** At the read point: after the keyboard walk and every other provider, right
+before the first provider that may move the page on purpose and that applies to this screen. Those
+are the flows and voice contracts, the providers marked `navigatesOnPurpose`. They run after every
+other provider, the PatternFly probes included. The probes click and press Escape but never mean
+to leave the page, so a move while they run, such as a sign-in timer that fires then, is leaving
+the screen. A flow or contract written for another screen still runs and reports nothing, so it
+does not move the read point. A flow may move the route on purpose, and its own rules judge that:
+a flow step that changes the path is already a `navigated` gap, and the silent change rule reads
+each step. So a move after the read point does not drop what was measured on the screen before it.
+When no flow or voice contract runs on this screen, the read point is the very end of the scan,
+next to the second Rule A read, after the row and source reads and the readiness measure. There is
+no whole-screen read at the end when a flow or voice contract ran: it could not tell an intended
+move from a timer, and any gap it raised would make the whole screen not covered. The gap names the
+read point it used: right before a named flow or contract, or at the end of the scan.
+
+**The readiness selector at the same point.** A `reachedWhen` selector is measured at the read
+point too, so a flow that moves the route on purpose and leaves the screen's own content behind
+does not make the whole screen unseen. The selector has to hold before the walk and at the read
+point. The response part keeps its rule: it counts only requests sent before the walk, read at the
+end.
+
+**Later flows.** Before each later flow or voice contract that applies to this screen, the address
+is read again and compared with the address at the read point, by the same rule. Once a read shows
+the page left that route, every remaining flow and contract is skipped, each with a `not-covered`
+gap that names it and the flow or contract that ran before the move, both by their requirement id.
+A later flow would otherwise check its requirement on the route an earlier flow moved to and count
+it for this screen. The findings and gaps taken before the move stay. To check both, end the first
+flow on the route it started on, or give the later requirement its own screen.
 
 **What it does.** When the two addresses name different screens, or an address cannot be read, the
 screen is a `not-covered` gap. The gap names both addresses: origin, path, and the route of a hash
@@ -2460,15 +2477,17 @@ What this read does not catch:
   `/admin.php?page=clusters` to `/admin.php?page=login`;
 - a page that leaves its screen and comes back to the same address before the read;
 - a page that changes its content without changing its address;
-- a move while the flows and voice contracts run, such as a timer that fires then. The flow's own
-  rules see a flow step's path change; nothing here sees the rest.
+- a move made by the last flow or voice contract that runs on the screen, or by a timer that fires
+  while it runs. Nothing runs after it to be skipped. The flow's own rules see a flow step's path
+  change; nothing here sees the rest.
 
-For the first two, configure the screen's `url` with its query or fragment. For any of them, a
-`reachedWhen` selector that the other page lacks is measured again after the checks, and one that
+For the first two, configure the screen's `url` with its query or fragment. For the first four, a
+`reachedWhen` selector that the other page lacks is measured again at the read point, and one that
 did not hold at both moments makes the screen a gap in `coverage/unseen.ts`.
-- `checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
-  fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a
-  gap. That is the safe direction, and it is not changed here.
+
+`checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
+fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a gap.
+That is the safe direction, and it is not changed here.
 
 The two session rules require a configured storage state because only that is an assertion that the
 run is signed in. Without it a 401 and a login form are ordinary things for a signed-out visitor to
