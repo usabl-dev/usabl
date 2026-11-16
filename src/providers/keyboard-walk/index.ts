@@ -261,8 +261,11 @@ interface WalkBudget {
 const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number, budget: WalkBudget) => string> = {
   'wall-clock': (stops, budget) =>
     `The keyboard walk ran out of its time budget of ${budget.wallClockMs ?? 0} ms after ${stops} tab stop(s), before focus reached the end of the page.`,
+  // The cap counts presses of Tab. A press inside a region the walk cannot read is not a new stop,
+  // so the text names both numbers and says why they differ when they do.
   'tab-cap': (stops, budget) =>
-    `The keyboard walk reached its limit of ${budget.tabCap} tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
+    `The keyboard walk reached its limit of ${budget.tabCap} presses of Tab after ${stops} tab stop(s), before focus reached the end of the page.` +
+    (stops < budget.tabCap ? ' Presses of Tab inside a region it cannot read count toward the limit, but they are not new stops.' : ''),
   'region-unbounded': (stops) =>
     `After ${stops} tab stop(s), the keyboard walk pressed Tab ${REGION_TAB_BOUND} times inside a region it cannot read, and focus did not come back out. A keyboard user may be trapped there, and the controls after it were never walked.`,
   'region-reentered': (stops) =>

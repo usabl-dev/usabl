@@ -830,9 +830,25 @@ describe('the keyboard walk budget of one screen', () => {
 
     const reasons = cutShort(output);
     expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain('reached its limit of 200 presses of Tab, at 200 tab stop(s)');
+    expect(reasons[0]).toContain('reached its limit of 200 presses of Tab after 200 tab stop(s)');
     expect(reasons[0]).toContain(`keyboardWalk.perSurface.${SCREEN.id}.tabCap in usabl.config.json`);
     expect(reasons[0]).toContain('the tabCap option of checkPage');
+  });
+
+  it('says both numbers when presses of Tab inside a region used up the cap with fewer stops', async () => {
+    // #first, then a region that holds focus for 15 presses, then more controls than the cap leaves.
+    const paths = ['#first', ...Array.from({ length: 15 }, () => '#widget'), ...Array.from({ length: 30 }, (_, i) => `#row-${i}`)];
+    const page = await makeScriptedPage({
+      ...namedButtonPage(paths),
+      unreadable: [null, ...Array.from({ length: 15 }, () => 'closed-shadow-root' as const), ...Array.from({ length: 30 }, () => null)],
+    });
+
+    const output = await makeKeyboardWalkProvider({ tabCap: 20 }).run(makeContext(page));
+
+    const reasons = cutShort(output);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('reached its limit of 20 presses of Tab after 6 tab stop(s), before focus reached the end of the page.');
+    expect(reasons[0]).toContain('Presses of Tab inside a region it cannot read count toward the limit, but they are not new stops.');
   });
 
   it('completes the walk of that page with a stop cap raised for the screen', async () => {
