@@ -312,10 +312,12 @@ const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
 // not a submodule there. ls-tree reads the tree entry only, so the answer is the same whether or not
 // the submodule's commit is in the repository, which it usually is not, and it does not depend on
 // the working tree. ls-tree matches each path given after -- by its exact name, never as a pattern.
+// --full-tree reads the path from the root of the tree, as <ref>:<path> does. Without it, ls-tree
+// run from a subfolder reads the path under that subfolder.
 async function submoduleCommit(cwd: string, ref: string, path: string): Promise<string | null> {
   let output: string;
   try {
-    output = await runGit(cwd, ['ls-tree', '-z', '--end-of-options', ref, '--', path]);
+    output = await runGit(cwd, ['ls-tree', '-z', '--full-tree', '--end-of-options', ref, '--', path]);
   } catch {
     return null;
   }

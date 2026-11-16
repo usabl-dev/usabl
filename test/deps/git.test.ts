@@ -562,6 +562,20 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     expect(await git.show('HEAD', 'idline')).not.toBe(sub);
   });
 
+  // A path is read from the root of the tree, as `<ref>:<path>` reads it, whatever folder the
+  // reader runs in. Run from apps/web, ls-tree without --full-tree read sub as apps/web/sub.
+  it('reads a submodule path from the root of the tree when run from a subfolder', async () => {
+    const atRoot = 'a'.repeat(40);
+    const inSubfolder = 'b'.repeat(40);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${atRoot},sub`]);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${inSubfolder},apps/web/sub`]);
+    await runGit(repoPath, ['commit', '-m', 'two submodule entries with the same name']);
+    await mkdir(join(repoPath, 'apps/web'), { recursive: true });
+    const git = makeGitReader({ cwd: join(repoPath, 'apps/web') });
+    await expect(git.show('HEAD', 'sub')).resolves.toBe(submoduleText(atRoot));
+    await expect(git.show('HEAD', 'apps/web/sub')).resolves.toBe(submoduleText(inSubfolder));
+  });
+
   it('reads a path inside a submodule as absent', async () => {
     await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
