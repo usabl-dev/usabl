@@ -36,6 +36,7 @@ import { knownSurfaceIds, unknownSurfaceRequirementGaps } from '../intake/requir
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
 import { isWalkReachGap } from '../providers/keyboard-walk/index.js';
+import { UNREAD_REGION_NOTE_REF } from '../output/notes.js';
 import {
   heldThroughout,
   measureReachability,
@@ -82,6 +83,10 @@ export interface PageCheckResult {
   // gap, such as design-system markup a rulepack did not read. Disclosure only: it never changes
   // the verdict.
   notes?: ProviderNote[];
+  // Set by checkPage, and only when true: a region the keyboard walk could not read was listed as a
+  // known limit of this screen, so it was not checked. The summary then says "with known limits",
+  // the words the verdict line of a run uses.
+  knownLimits?: true;
   // Set by checkPage: where it looked for usabl.config.json and whether it found one. A missing
   // config at the default root adds no gap, because a project that does not use usabl config has
   // none, so this field is how a caller can tell "no requirements" from "read the wrong folder".
@@ -123,6 +128,22 @@ export function summarizePageCheck(drafts: Draft[], gaps: CoverageGap[]): PageCh
   }
   const summary = `${counts}\nadvisory: ${advisory.length} preview finding(s), shown for review and never counted in the verdict`;
   return { verdict, failures, needsReview, gaps, drafts, summary, advisory };
+}
+
+/**
+ * Marks a page check whose notes hold a region the team listed as a known limit. The verdict does
+ * not change. The summary says "with known limits" after the verdict, as the verdict line of a run
+ * does, so a test that prints the summary never reads a plain verified.
+ */
+function withKnownLimits(result: PageCheckResult, notes: readonly ProviderNote[]): PageCheckResult {
+  if (!notes.some((note) => note.ref === UNREAD_REGION_NOTE_REF)) {
+    return result;
+  }
+  const lead = `${result.verdict}:`;
+  const summary = result.summary.startsWith(lead)
+    ? `${result.verdict}, with known limits:${result.summary.slice(lead.length)}`
+    : result.summary;
+  return { ...result, summary, knownLimits: true };
 }
 
 export interface CheckPageOptions {
@@ -393,7 +414,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // token.
     const finish = (drafts: Draft[], gaps: CoverageGap[], notes: ProviderNote[] = []): PageCheckResult =>
       scrubOutboundData({
-        ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+        ...withKnownLimits(summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]), notes),
         notes,
         project: intake.project,
       });

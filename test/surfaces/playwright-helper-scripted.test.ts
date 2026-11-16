@@ -369,6 +369,34 @@ describe('checkPage and the keyboard walk budget', () => {
     expect(listed.notes?.map((note) => note.ref)).toEqual(['provider:keyboard-walk/unread-region']);
   });
 
+  it('says with known limits in the summary when a listed region was not checked, as the verdict line does', async () => {
+    const page = scriptedPage(['#save', '#chat', '#cancel']);
+    const inChat = async (): Promise<boolean> => (await page.activePath()) === '#chat';
+    page.activeFocusUnreadable = async () => ((await inChat()) ? 'frame-unreadable' : null);
+    page.activeUnreadRegion = async () => ((await inChat()) ? { kind: 'frame', origin: 'https://chat.example.com' } : null);
+    const named = page.activeNode;
+    page.activeNode = async () => ((await inChat()) ? null : named());
+    adopted.page = page;
+
+    const listed = await checkPage(pwPage(), {
+      screenId: 'clusters',
+      projectRoot: await projectWithWalk({ perSurface: { clusters: { unreadableRegions: [{ frameOrigin: 'https://chat.example.com' }] } } }),
+    });
+
+    expect(listed.verdict).toBe('verified');
+    expect(listed.knownLimits).toBe(true);
+    expect(listed.summary).toBe('verified, with known limits: 0 blocking, 0 needs review, 0 gap(s)');
+  });
+
+  it('says nothing of known limits in the summary of a page with no listed region', async () => {
+    adopted.page = scriptedPage(['#save']);
+
+    const result = await checkPage(pwPage(), { projectRoot: await project(), tabCap: 10 });
+
+    expect(result.knownLimits).toBeUndefined();
+    expect(result.summary).toBe('verified: 0 blocking, 0 needs review, 0 gap(s)');
+  });
+
   // A page with a frame from another origin at the second stop and more controls than a cap of 10
   // walks, so its walk gives both of its gaps: the unread region and the cut short walk. The
   // first Tab starts the walk, so `onTab` runs as the checks begin.
