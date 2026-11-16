@@ -38,22 +38,42 @@ re-baseline to green.
   commits could stand in for a trusted read. The diff listing ends its revisions with `--` for the
   same reason. A path that is a folder at the ref is read with `git show <ref>:<path> --`, which
   also reads the argument as an object name only. A path that is a submodule at the ref is read as
-  the commit id its tree entry records, from `git ls-tree --end-of-options <ref> -- <path>`, after a
-  fixed prefix that starts with a lone surrogate (U+D800). No file read can return that character,
-  so in every check that compares the reads as text a submodule never compares equal to a file.
-  The CI policy check and the guard compare text, so they are not affected by what follows. The
-  Stop hook's session pins hash the read as UTF-8, where the lone surrogate becomes the bytes of
-  U+FFFD. So a file that holds U+FFFD (or a byte that is not UTF-8, such as `0xFF`) and then the
-  same `submodule commit <id>` line pins the same as the submodule at that commit, and swapping one
-  for the other in a session does not show as drift in the Stop hook's pins. The CI policy check
-  still sees the change. The repair is a change to the guarded pin code that keeps the surrogate in
-  the hash, and it waits on the owner. The read does not need the submodule's commit, which is
-  usually not in the repository, and does not depend on the working tree. In the CI policy check,
-  which compares two refs, a guarded path that is a submodule compares as changed exactly when its
-  recorded commit changed. The local guard, which compares the working tree with a ref and which
-  the Stop hook runs, reads the working tree side of the path as a file. A submodule there is a
-  folder or absent, so the local guard reports a guarded submodule as changed on every run, whether
-  or not it moved. That fails safe. The git reader, the history reader, and the ledger reader accept none of these
+  the commit id its tree entry records, from `git ls-tree --end-of-options <ref> -- <path>`. The read
+  does not need the submodule's commit, which is usually not in the repository, and does not depend
+  on the working tree.
+- The guard compares every guarded path as stored bytes, never as decoded text. The local guard,
+  the CI policy check, and the Stop hook's session pins all use one byte read, which gives one of
+  four kinds of entry: nothing at the path, a file with its bytes, a submodule with the commit its
+  tree entry records, or a folder with its tree id. Two paths are equal only when they are the same
+  kind with the same bytes, commit, or tree id. Before, the guard compared decoded text, so a file
+  whose byte `0xFE` became `0xFF` read as unchanged, since both decode to U+FFFD. That matters for
+  a guarded folder that holds a binary, such as a wasm file. A submodule was read as text after a
+  prefix that starts with a lone surrogate (U+D800). That kept it apart from any file in a text
+  compare, but the session pins hashed the text as UTF-8, where the surrogate becomes U+FFFD. So a
+  file that held `0xFF` or U+FFFD and then `submodule commit <id>` pinned the same as the submodule
+  at that commit. Now a submodule is its own kind of entry, so no file compares or pins equal to
+  one, whatever the file holds. The config is decoded for parsing from the same byte read the
+  compare used.
+- The session pins hash a form that cannot collide across kinds: a fixed label, the kind, the
+  length of what follows, then the bytes, the commit id, or the tree id. Each pin is stored as `v2:`
+  and the hash. A pin file written by an earlier release holds bare hashes with no version, and a
+  pin of another format never equals a `v2:` pin, so the next stop reads every guarded path in it as
+  changed, reports drift, and asks for review. The hook keeps stored pins when it finds drift, so
+  this holds for each stop until the session ends; a new session records new pins. That is the
+  safe direction: an old pin never vouches that nothing changed. A missing ledger and an empty one
+  now pin differently too.
+- In the CI policy check, which compares two refs, a guarded path that is a submodule compares as
+  changed exactly when its recorded commit changed. The local guard, which compares the working
+  tree with a ref and which the Stop hook runs, reads the working tree side through the file
+  reader, which has no git. A submodule there is a folder or absent, so the local guard reports a
+  guarded submodule as changed on every run, whether or not it moved. That fails safe, and it stays
+  so on purpose: the commit checked out in a submodule can only be read by running git inside it,
+  and a wrong "unchanged" would let a stop take the receipt fast path past a moved submodule.
+- `usabl enforce policy` hands the guard the git reader's byte read. The policy check's own reader
+  type, in `src/surfaces/policy-enforce.ts`, still names only the text read and the listing, so the
+  guard takes the byte read as optional there. A reader without it, such as one a test builds, is
+  compared as text, as before.
+- The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control
   character. White space includes non-ASCII spaces that git itself allows in a ref name, and

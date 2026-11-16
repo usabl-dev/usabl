@@ -3415,6 +3415,31 @@ each ref. If that listing passes the read limit, the run stops with no verdict a
 the entry with a folder name. For a clean tree in a repository whose names are plain ASCII, the
 policy hash in a receipt is the same as before this matcher.
 
+### Guarded file comparison
+
+The local guard, `usabl enforce policy`, and the session pins compare each guarded path as it is
+stored, never as decoded text. The git reader's `showBytes` and the file reader's `readBytes` read
+a path as one of four kinds of entry:
+
+- nothing: the path is absent, a folder on disk, or below a file.
+- a file: its bytes as git stores them (`git cat-file blob`) or as they are on disk.
+- a submodule: the commit id its tree entry records at the ref.
+- a folder: its tree id at the ref.
+
+Two reads are equal only when they are the same kind with the same bytes, commit, or tree id. So
+a guarded file whose byte `0xFE` became `0xFF` is a change, though both decode to U+FFFD, and no
+file is ever equal to a submodule, whatever the file holds. The guard decodes the config for
+parsing from the same read it compared, as a UTF-8 read of the file would.
+
+The file reader has no git, so on the working tree a guarded submodule is a folder or nothing.
+The local guard reports it as changed on every run, whether or not it moved. That fails safe. In
+`usabl enforce policy`, which compares two refs, a guarded submodule is changed exactly when its
+recorded commit changed.
+
+The command line hands `usabl enforce policy` the git reader's byte read. A reader without one,
+such as a test's own, is compared as text on both sides, as before the byte read existed. The
+same holds for a file reader without `readBytes` in the local guard.
+
 ### Config-guards-itself
 
 Check the config file's own integrity against the anchor before trusting its contents
@@ -3431,6 +3456,16 @@ repository, stored outside the repo in the OS temp dir. The repository key is de
 from the resolved working directory the hook runs in, so pins recorded in one repository
 are never compared against another. The stop hook checks pins mid-session to catch a
 committed tamper that git-status-clean cannot see.
+
+Each pin is `v2:` and a sha256 over the path's entry at HEAD, read as described under
+"Guarded file comparison": a fixed label, the kind, the length of what follows, then the
+bytes, the commit id, or the tree id. So no two entries of different kinds pin the same, and a
+missing guarded file pins differently from an empty one. A pin file from an earlier release
+holds bare hashes with no version. A pin of another format never equals a `v2:` pin, so the
+next stop reads each of those paths as changed and blocks with the drift message. The hook
+keeps stored pins when it finds drift, so each later stop in that session does the same. That
+is the safe direction: an old pin never vouches that nothing changed. A new session records
+`v2:` pins from its first stop.
 
 The temp dir is shared by every local user, so pins are kept private to the user:
 
