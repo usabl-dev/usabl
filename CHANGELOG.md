@@ -376,6 +376,11 @@
   its own `not-covered` gap on the screen, which names the region and the tab stop. A screen that
   read `not_covered` because the walk stopped at the region can now also show findings on the
   controls after it. If 100 Tabs leave focus in the region, the walk is cut short.
+- `checkPage` reports only the `landing:<screenId>` gap when the page left its screen while the
+  checks ran, or when an identity request was refused during them. The gap for a cut short walk
+  and the gap for each region the walk could not read go with the findings, because they
+  describe the other page. Gate effect: none. The result stays `not_covered`, and the one gap
+  left names the cause.
 - `checkPage` sees a blank page. A page with nothing rendered, such as `<body id="app">` with
   nothing in it, handed to `checkPage` with no readiness signal read as `verified`. The keyboard
   walk now returns the stops it reached, as measurement that mints nothing, and `checkPage` reads
