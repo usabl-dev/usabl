@@ -393,7 +393,7 @@
   that shows no content is now `not_covered`, with a `readiness:<screenId>` gap worded as the CLI
   words it, whether or not its readiness signal held. A page of text or images with nothing to Tab
   to is checked as before. The CLI result is unchanged. A walk that was cut short is already not
-  covered by its own draft, and with `keyboardWalk: false` there are no stops, so `checkPage`
+  covered by its own gap, and with `keyboardWalk: false` there are no stops, so `checkPage`
   makes no blank-page claim.
 - A script that puts focus on the body in the middle of the page no longer makes the keyboard
   walk read as complete. A focus handler that called `focus()` on a body with a `tabindex` left
