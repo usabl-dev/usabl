@@ -43,9 +43,22 @@ re-baseline to green.
   on the working tree.
 - The guard compares every guarded path as stored bytes, never as decoded text. The local guard,
   the CI policy check, and the Stop hook's session pins all use one byte read, which gives one of
-  four kinds of entry: nothing at the path, a file with its bytes, a submodule with the commit its
-  tree entry records, or a folder with its tree id. Two paths are equal only when they are the same
-  kind with the same bytes, commit, or tree id. Before, the guard compared decoded text, so a file
+  five kinds of entry: nothing at the path, a file with its mode (100644 or 100755) and its bytes,
+  a symbolic link with its link text, a submodule with the commit its tree entry records, or a
+  folder with its tree id. Two paths are equal only when they are the same kind with the same mode
+  and content. At a ref the mode comes from `git ls-tree --full-tree`, and the blob is read by the
+  id that listing gives. On the working tree the file reader uses `lstat` and `readlink`, so it
+  reads what git would store: a link by its text, never by what it points at, a path below a
+  linked folder as nothing, and the owner's executable bit as 100755 or 100644, as git maps it.
+  Before, a guarded file swapped for a symbolic link whose link text equals the old content, or a
+  file whose executable bit changed, compared equal in CI, in the pins, and in the receipt policy
+  hash, and the local guard followed a link while CI read its text. With `core.fileMode` false,
+  git ignores the executable bit on disk, and the local guard does the same: two regular files
+  compare by their bytes only, so a file system with no executable bit does not read every
+  guarded file as changed. A link is still its own entry there. `core.symlinks` false is not
+  followed: a link git checked out as a plain file reads as a file against a link at the ref, so
+  the local guard reports it as changed on every run, which fails safe. Before, the guard compared
+  decoded text, so a file
   whose byte `0xFE` became `0xFF` read as unchanged, since both decode to U+FFFD. That matters for
   a guarded folder that holds a binary, such as a wasm file. A submodule was read as text after a
   prefix that starts with a lone surrogate (U+D800). That kept it apart from any file in a text
@@ -55,13 +68,17 @@ re-baseline to green.
   one, whatever the file holds. The config is decoded for parsing from the same byte read the
   compare used.
 - The session pins hash a form that cannot collide across kinds: a fixed label, the kind, the
-  length of what follows, then the bytes, the commit id, or the tree id. Each pin is stored as `v2:`
-  and the hash. A pin file written by an earlier release holds bare hashes with no version, and a
-  pin of another format never equals a `v2:` pin, so the next stop reads every guarded path in it as
-  changed, reports drift, and asks for review. The hook keeps stored pins when it finds drift, so
+  mode, the length of what follows, then the bytes, the link text, the commit id, or the tree id.
+  Each pin is stored as `v3:` and the hash. A pin file written by an earlier release holds bare
+  hashes with no version, or `v2:` pins that left out the mode, and a pin of another format never
+  equals a `v3:` pin, so the next stop reads every guarded path in it as changed, reports drift,
+  and asks for review. The hook keeps stored pins when it finds drift, so
   this holds for each stop until the session ends; a new session records new pins. That is the
   safe direction: an old pin never vouches that nothing changed. A missing ledger and an empty one
   now pin differently too.
+- The receipt policy hash is built from each guarded path's mode and blob id at HEAD, so a mode
+  change alone changes it. A receipt minted before this holds a hash of the ids alone, so it stops
+  matching once and the screens are checked again. That is the safe direction too.
 - In the CI policy check, which compares two refs, a guarded path that is a submodule compares as
   changed exactly when its recorded commit changed. The local guard, which compares the working
   tree with a ref and which the Stop hook runs, reads the working tree side through the file
@@ -238,7 +255,7 @@ passing bundle from another run.
 
 - A minted receipt binds six values re-checked on verify: `sourceTree` (the working-tree
   `git write-tree`), `baseRevision` (the commit the changed list was taken from, or null for
-  uncommitted changes only), `policyHash` (HEAD blob shas over the guarded set),
+  uncommitted changes only), `policyHash` (HEAD modes and blob shas over the guarded set),
   `runnerVersion`, `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the
   debt history commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among
   the waivers the run applied, or null when it applied none. It records `mintedAt`. A receipt
