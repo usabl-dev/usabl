@@ -384,12 +384,17 @@
   now `not_covered`, with one gap that names both addresses and the read point, and no findings. An
   address that cannot be read is the same gap. A flow that moves the route on purpose keeps the
   findings taken before it, with or without a selector. Before each later flow or voice contract
-  the address is read again; once an earlier one left the route, the rest are skipped, each with a
-  `not-covered` gap that names it and the flow that moved the page, so no requirement is checked on
-  the route another flow moved to. Limits: the read does not catch a move and a move back, content
-  that changes without the address, a plain fragment or query router on a screen configured
-  without that part, or a move made by the last flow or voice contract that runs, or by a timer
-  while it runs. Configure the screen's `url` with its query or fragment, or give it a
+  the address and the selector are read again; once an earlier one left the route, or the selector
+  matches nothing, the rest are skipped, each with a `not-covered` gap that names it and the flow
+  that ran before the change, so no requirement is checked on a page another flow moved to. When a
+  flow ran, the selector is measured again at the end of the scan; when it is gone, the last flow
+  that ran gets a `not-covered` gap and its own drafts are dropped, and every draft taken before it
+  stays. Gate effect of that end check: on a screen with a selector only it has, a last flow that
+  moves the route on purpose and leaves that content behind cannot verify. Limits: the read does
+  not catch a move and a move back, before the read or within one flow, content that changes
+  without the address, a plain fragment or query router on a screen configured without that part,
+  or a move made by the last flow or voice contract that runs, or by a timer while it runs, on a
+  screen with no selector. Configure the screen's `url` with its query or fragment, or give it a
   `reachedWhen` selector that the sign-in page lacks.
 - A keyboard walk that was cut short is a `not-covered` coverage gap on its screen. Before, it was
   a `keyboard-walk-truncated` draft with confidence `unverified`, and a baseline taken while the
