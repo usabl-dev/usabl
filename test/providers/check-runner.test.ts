@@ -956,23 +956,23 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     run: async (): Promise<Draft[]> => ((await page.currentUrl()) === SIGN_IN ? [makeDraft('sign-in-rule')] : []),
   });
 
-  async function scanOf(page: Page, providers: Provider[], surfaces?: SurfaceConfig[]) {
+  async function scanOf(page: Page, providers: Provider[], surfaces?: SurfaceConfig[], screen = SCREEN) {
     const scan = await makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },
       providers,
       config: testConfig(surfaces === undefined ? {} : { surfaces }),
       allowedCapabilities: ['live'],
       stepRunner: makeStepRunner(),
-    }).scan(SCREEN);
+    }).scan(screen);
     // The unseen pass runs over collected scans after the page is closed. It must not add or
     // remove anything here, so the scan is read as the gate would read it.
     return markUnseenScreens([scan]).screens[0]!;
   }
 
-  function expectLeftScreen(scan: Awaited<ReturnType<typeof scanOf>>) {
+  function expectLeftScreen(scan: Awaited<ReturnType<typeof scanOf>>, ref = SCREEN.url) {
     // Checked first, so a scan with no gap fails on the line that says it would read verified.
     expect(scan.gaps).toHaveLength(1);
-    expect(scan.gaps[0]?.ref).toBe(SCREEN.url);
+    expect(scan.gaps[0]?.ref).toBe(ref);
     expect(scan.gaps[0]?.state).toBe('not-covered');
     expect(scan.drafts).toEqual([]);
     expect(scan.stops).toEqual([]);
@@ -992,6 +992,9 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(reason).toContain('http://127.0.0.1:5173/elsewhere');
     expect(reason).toContain('sign in again');
     expect(reason).toContain('on focus or on a timer');
+    // A tab panel's fragment no longer leaves the screen, so the advice is about fragment routes.
+    expect(reason).toContain('url with its fragment');
+    expect(reason).not.toContain('tab panels');
   });
 
   it('reports no finding from the page it moved to when that page carries an accessibility barrier', async () => {
@@ -1038,12 +1041,58 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(scan.gaps).toEqual([]);
   });
 
-  it('gives a gap when the walk changes only the fragment', async () => {
-    const page = await movingPage(`${SCREEN.url}#details`, async () => `${SCREEN.url}#history`);
+  it('still verifies a page whose tab panel sets the hash during the walk', async () => {
+    // A plain fragment is a place on the page, not a route, when the screen's url has none. A tab
+    // panel that sets #tab-2, gains a fragment, changes one, or drops one stays on the screen.
+    for (const [before, after] of [
+      [SCREEN.url, `${SCREEN.url}#tab-2`],
+      [`${SCREEN.url}#tab-1`, `${SCREEN.url}#tab-2`],
+      [`${SCREEN.url}#section`, SCREEN.url],
+    ] as const) {
+      const page = await movingPage(before, async () => after);
 
-    const scan = await scanOf(page, []);
+      const scan = await scanOf(page, []);
 
-    expectLeftScreen(scan);
+      expect(scan.gaps).toEqual([]);
+      expect(scan.stops.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not verify a page whose hash route changes during the walk', async () => {
+    // A fragment that starts with #/ or #! is a hash route: the whole screen lives there.
+    for (const [before, after] of [
+      [`${SCREEN.url}#/clusters`, `${SCREEN.url}#/login`],
+      [`${SCREEN.url}#!/a`, `${SCREEN.url}#!/b`],
+      [SCREEN.url, `${SCREEN.url}#/login`],
+    ] as const) {
+      const page = await movingPage(before, async () => after);
+
+      const scan = await scanOf(page, []);
+
+      expectLeftScreen(scan);
+    }
+  });
+
+  it('reads every fragment as a route for a screen whose url has a plain fragment', async () => {
+    // An app that routes with plain fragments is configured that way, as /app#clusters. On such a
+    // screen a fragment change is leaving it.
+    const screen = { id: 'app-clusters', url: 'http://127.0.0.1:5173/app#clusters' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/app#login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+  });
+
+  it('does not catch a plain fragment route on a screen configured without a fragment', async () => {
+    // The limit, held here so a change to it is a decision. /app gaining #login reads as a tab
+    // panel would. A reachedWhen selector that the sign-in page lacks is what catches it.
+    const screen = { id: 'app', url: 'http://127.0.0.1:5173/app' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/app#login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expect(scan.gaps).toEqual([]);
   });
 
   it('does not verify a screen whose address cannot be read after the checks', async () => {
@@ -1066,16 +1115,26 @@ describe('makeCheckRunner and a page that leaves its screen during the checks', 
     expect(scan.gaps[0]?.reason).toContain('could not report its address');
   });
 
-  it('leaves a screen with a reachedWhen selector to the selector, which is read again after the checks', async () => {
-    // A fragment change the walk causes on purpose, such as tab panels that set the hash, keeps the
-    // screen's own content on the page. The selector held before and after, so the screen counts.
-    const page = await movingPage(`${SCREEN.url}#details`, async () => `${SCREEN.url}#history`);
-    Object.assign(page, { queryAll: async () => [{ selector: 'table#clusters' }] });
+  it('still verifies a tab panel that sets the hash on a screen with a reachedWhen selector', async () => {
+    const page = await movingPage(SCREEN.url, async () => `${SCREEN.url}#tab-2`);
+    Object.assign(page, { queryAll: async () => [{ selector: 'header nav' }] });
 
-    const scan = await scanOf(page, [], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+    const scan = await scanOf(page, [], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'header nav' }]);
 
     expect(scan.gaps).toEqual([]);
     expect(scan.reachedSelectorPresent).toBe(true);
+  });
+
+  it('does not verify a move to another path even when a selector both pages match held', async () => {
+    // A selector that a shared header matches is on the sign-in page too, so it held before and
+    // after the walk. The address is read whatever the selector, so the move is still a gap.
+    const page = await movingPage(SCREEN.url, async () => 'http://127.0.0.1:5173/login');
+    Object.assign(page, { queryAll: async () => [{ selector: 'header nav' }] });
+
+    const scan = await scanOf(page, [signInBarrier(page)], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'header nav' }]);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain('http://127.0.0.1:5173/login');
   });
 
   it('reports the late refusal, not the move, when both happened', async () => {

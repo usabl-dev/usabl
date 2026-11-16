@@ -2279,33 +2279,44 @@ after load: a focus handler navigates, or an auth timer sends it to a sign-in pa
 identity request. The checks then measure the other page. Its accessibility barriers would be
 reported against the screen, or a clean other page would read verified though the screen was
 never checked. So once the checks are done, next to the second Rule A read, the CLI reads the
-address again and compares it with the address the page reported at load. The rule is the one
-`checkPage` uses: the path, up to one trailing slash, and the fragment; host, port, and query are
-ignored. A redirect the application ran on load to its own canonical address is not a move,
-because the comparison is with the address at load, not the configured one. When the two differ,
-or the address cannot be read after the checks, the screen is a `not-covered` gap that names both
-addresses, without their credentials, query, or fragment, and says what to do: sign in again if a
-session expired, or find the script that navigates on focus or on a timer. The drafts, the
-keyboard stops, the applicability, the notes, and every gap from the checks go, as they do for a
-late refusal. A refusal found at the same read is reported instead, because it names an endpoint.
+address again and compares it with the address the page reported at load. This read runs on
+every screen, with or without a `reachedWhen` selector, because a selector that a shared header or
+shell matches is on the other page too. A redirect the application ran on load to its own
+canonical address is not a move, because the comparison is with the address at load, not the
+configured one. When the two differ, or the address cannot be read after the checks, the screen is
+a `not-covered` gap that names both addresses, without their credentials, query, or fragment, and
+says what to do: sign in again if a session expired, find the script that navigates on focus or on
+a timer, or, for an app that routes with a plain fragment, configure the screen's `url` with its
+fragment. The drafts, the keyboard stops, the applicability, the notes, and every gap from the
+checks go, as they do for a late refusal. A refusal found at the same read is reported instead,
+because it names an endpoint.
 
+The comparison is its own rule, used for this read only. `checkPage` and the landing rules keep
+`sameScreenPath`.
+
+- The path, with one trailing slash removed, always counts. A change of path is leaving the
+  screen. Host, port, and query never count.
+- A fragment counts only when it names a route. A fragment that starts with `#/` or `#!` is a hash
+  route and is read like a path: the part before its first `?`, with one trailing slash removed. A
+  change to it is leaving the screen, and so is gaining or losing one. A plain fragment, such as
+  `#tab-2` or `#section`, is a place on the page that a tab panel or an anchor sets. Gaining,
+  losing, or changing one is not leaving.
+- The exception: when the screen's configured `url` has a plain fragment, such as `/app#clusters`,
+  that app routes with plain fragments, so on that screen any change to the fragment is leaving.
 - When the address could not be read at load either, nothing confirms the checks ran on the
   screen, so the screen is the same gap. That is the safe direction. The real browser reports the
   committed address of every open page, so a real scan never meets it; only a broken page does.
-- A walk that changes only the fragment, such as tab panels that set the address hash on focus,
-  now makes the screen a gap. That is the safe direction too, because usabl cannot tell a hash
-  route that moved to another screen from a tab panel that stayed on this one. To check such a
-  screen, point its `url` at the address the walk leaves it on, or give it a `reachedWhen`
-  selector. There is no switch to turn the read off.
-- A screen that declares a `reachedWhen` selector is left to that selector. It is measured again
-  after the checks, and a selector that did not hold at both moments makes the screen a gap in
-  `coverage/unseen.ts`, so a page that moved to another page without the screen's own content is
-  already caught there. A selector that a shell, header, or navigation also matches lets a move to
-  another page of the same application through; see the paragraph on `reachedWhen` below. A
-  readiness signal with only a `response` does not count here, because it reads only requests sent
-  before the walk, so such a screen still has its address read.
-- What this cannot see: a page that leaves its screen and comes back to the same address before
-  the checks end, and a page that changes its content without changing its address.
+- The limit: a screen configured without a fragment, in an app that routes with plain fragments,
+  is not caught when it moves from `/app` to `/app#login`. The read sees a plain fragment and
+  counts it as a place on the page. Configure the screen's `url` with its fragment, or give the
+  screen a `reachedWhen` selector that the sign-in page lacks; that selector is measured again
+  after the checks, and one that did not hold at both moments makes the screen a gap in
+  `coverage/unseen.ts`.
+- What this cannot see either: a page that leaves its screen and comes back to the same address
+  before the checks end, and a page that changes its content without changing its address.
+- `checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
+  fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a
+  gap. That is the safe direction, and it is not changed here.
 
 The two session rules require a configured storage state because only that is an assertion that the
 run is signed in. Without it a 401 and a login form are ordinary things for a signed-out visitor to
@@ -4590,8 +4601,8 @@ does, and then reads the address. A page that does not settle is a `landing:<scr
 keeps only the first line of the browser's error, neutralized, because its later lines can be a
 call log that quotes the page's markup. It reads the address again after the checks, and a page that
 left its screen while they ran is the same gap, with its findings dropped. The CLI reads the address
-again after the checks with the same comparison, against the address read at load, for a screen
-with no `reachedWhen` selector. A page at another path or fragment is a `not-covered` gap with ref
+again after the checks too, against the address read at load, with a comparison of its own that
+counts a fragment only when it names a route. A page at another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C

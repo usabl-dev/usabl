@@ -368,21 +368,19 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // other page, so its findings would be reported against this screen, or a clean other
           // page would read verified. Either way everything collected goes, as for a late refusal.
           //
-          // A screen with a reachedWhen selector is left to that selector, which was measured again
-          // above and makes an unseen screen a gap in coverage/unseen.ts. That is also the way out
-          // for a walk that changes the fragment on purpose, such as tab panels that set the hash.
+          // This runs whether or not the screen declares a reachedWhen selector. A selector that a
+          // shared header or shell matches is on the other page too, so it cannot rule out a move.
+          // The fragment counts only when it names a route, so a tab panel that sets #tab-2 stays
+          // on the screen; see stayedOnScreen in redirected.ts.
           //
           // An address that cannot be read now, or could not be read at load, is a gap too: nothing
           // then confirms the checks ran on this screen, and a gap is the safe direction. The real
           // browser always reports an open page's address, so this only fires on a broken page.
-          const leftScreen =
-            signal !== null && signal.selector !== null
-              ? null
-              : leftScreenGap(screen.id, {
-                  requestedUrl: screen.url,
-                  loadedUrl: landing.landedUrl,
-                  checkedUrl: await readPageAddress(page),
-                });
+          const leftScreen = leftScreenGap(screen.id, {
+            requestedUrl: screen.url,
+            loadedUrl: landing.landedUrl,
+            checkedUrl: await readPageAddress(page),
+          });
           if (lateRefusal !== null) {
             result = notReachedScan(screen, lateRefusal, signal);
           } else if (leftScreen !== null) {

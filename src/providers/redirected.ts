@@ -445,6 +445,56 @@ export function sameScreenPath(expectedUrl: string, landedUrl: string): boolean 
   }
 }
 
+/** Whether a fragment is a hash route: one that starts with `#/` or `#!`. */
+function isHashRoute(hash: string): boolean {
+  return hash.startsWith('#/') || hash.startsWith('#!');
+}
+
+/**
+ * Whether the page was still on its screen after the checks, by the address read at load and the
+ * address read after the checks. Used for that read only; sameScreenPath and the landing rules are
+ * unchanged.
+ *
+ * The path, with one trailing slash removed, always counts. A change of path is leaving the screen.
+ * The query never counts, for the reason given at the top of this file.
+ *
+ * The fragment counts only when it names a route. A hash route, `#/` or `#!`, is read like a path:
+ * the part before its first `?`, with one trailing slash removed. A plain fragment, such as `#tab-2`
+ * or `#section`, is a place on the page: a tab panel or an anchor sets it, so gaining, losing, or
+ * changing one is not leaving. The exception is a screen whose configured url has a plain fragment,
+ * such as `/app#clusters`. That app routes with plain fragments, so on that screen any fragment
+ * change is leaving.
+ *
+ * The limit: on a screen configured without a fragment, an app that routes with plain fragments,
+ * `/app` to `/app#login`, is not caught here. A reachedWhen selector that the other page lacks is.
+ *
+ * Null when any of the three addresses does not parse, so the caller makes it a gap.
+ */
+export function stayedOnScreen(configuredUrl: string, loadedUrl: string, checkedUrl: string): boolean | null {
+  let configured: URL;
+  let loaded: URL;
+  let checked: URL;
+  try {
+    configured = new URL(configuredUrl);
+    loaded = new URL(loadedUrl);
+    checked = new URL(checkedUrl);
+  } catch {
+    return null;
+  }
+  const plainFragmentsAreRoutes = configured.hash.length > 0 && !isHashRoute(configured.hash);
+  const routeOf = (parsed: URL): string => {
+    const path = withoutTrailingSlash(parsed.pathname);
+    let fragment = '';
+    if (isHashRoute(parsed.hash)) {
+      fragment = `#${withoutTrailingSlash(parsed.hash.slice(1).split('?')[0] ?? '')}`;
+    } else if (plainFragmentsAreRoutes) {
+      fragment = parsed.hash;
+    }
+    return `${path.length === 0 ? '/' : path}${fragment}`;
+  };
+  return routeOf(loaded) === routeOf(checked);
+}
+
 /**
  * An address as it is safe to print: scheme, host, port, and path, and nothing else.
  *
@@ -650,8 +700,7 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
  *
  * `loadedUrl` is the address the page reported at load, so a redirect the application ran on load
  * to its own canonical address is not read as a move. `checkedUrl` is the address after the checks.
- * They are compared with sameScreenPath, the rule checkPage uses: path and fragment, host and port
- * ignored, query ignored.
+ * They are compared with stayedOnScreen: the path and a fragment that names a route. See there.
  *
  * Returns null only when both addresses were read and name the same screen. An address that could
  * not be read at either moment is a gap, because then nothing confirms the checks ran on the screen.
@@ -662,7 +711,7 @@ export function leftScreenGap(
   addresses: { requestedUrl: string; loadedUrl: string | null; checkedUrl: string | null },
 ): CoverageGap | null {
   const { requestedUrl, loadedUrl, checkedUrl } = addresses;
-  if (loadedUrl !== null && checkedUrl !== null && sameScreenPath(loadedUrl, checkedUrl) === true) {
+  if (loadedUrl !== null && checkedUrl !== null && stayedOnScreen(requestedUrl, loadedUrl, checkedUrl) === true) {
     return null;
   }
   const atLoad =
@@ -678,14 +727,14 @@ export function leftScreenGap(
   return gapFor(
     requestedUrl,
     `usabl asked for ${sanitizeUrlForDisplay(requestedUrl)}: ${atLoad}, and ${afterChecks}. ${outcome}, and ` +
-      `${notMeasured(screenId)} Only the path and the fragment are compared, so a change to the query alone ` +
-      'still counts as the same screen. If a session expired during the checks, sign in again: mint a new ' +
-      `session, point ${STORAGE_STATE_ENV_VAR} at it, and run usabl again. If a script on the page navigates ` +
-      'on focus or on a timer, find it and stop it from moving the page while it is checked. If the keyboard ' +
-      'walk changes the fragment on purpose, such as tab panels that set the address hash, point the screen ' +
-      'at the address the walk leaves it on, or give the screen a reachedWhen selector that names content only ' +
-      'this screen has. Addresses are shown without their sign-in credentials, query string, or fragment, ' +
-      'because any of them can carry a token, so two addresses that differ only in the fragment look the ' +
-      'same here.',
+      `${notMeasured(screenId)} The path is compared, and the fragment only when it names a route: one that ` +
+      'starts with #/ or #!, or any fragment when the configured url of the screen has one. A change to the ' +
+      'query, or to an in-page fragment such as #tab-2, still counts as the same screen. If a session expired ' +
+      `during the checks, sign in again: mint a new session, point ${STORAGE_STATE_ENV_VAR} at it, and run ` +
+      'usabl again. If a script on the page navigates on focus or on a timer, find it and stop it from moving ' +
+      'the page while it is checked. If the app routes with a plain fragment, such as /app#clusters, configure ' +
+      'the screen url with its fragment, so a change to it counts as leaving the screen. Addresses are shown ' +
+      'without their sign-in credentials, query string, or fragment, because any of them can carry a token, ' +
+      'so two addresses that differ only in the fragment look the same here.',
   );
 }

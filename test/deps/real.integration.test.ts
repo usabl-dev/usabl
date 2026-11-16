@@ -134,6 +134,14 @@ const CONTENT_PAGES: Record<string, string> = {
       "<script>document.getElementById('open').addEventListener('focus', () => { location.href = '/moved-clean.html'; });</script>",
   ),
   '/moved-clean.html': contentPage('Elsewhere', '<main><h1>Elsewhere</h1><p><a href="/">Home</a></p></main>'),
+  // Two panel buttons. Focusing one sets the address hash to its panel, the way a tab panel does,
+  // so the walk leaves the page at #panel-2 on the same path.
+  '/hash-on-focus.html': contentPage(
+    'Panels',
+    '<main><h1>Panels</h1><button id="show-1" type="button">First panel</button> ' +
+      '<button id="show-2" type="button">Second panel</button><p id="panel-1">First</p><p id="panel-2">Second</p></main>' +
+      '<script>for (const n of [1, 2]) { document.getElementById(`show-${n}`).addEventListener(\'focus\', () => { location.hash = `panel-${n}`; }); }</script>',
+  ),
   '/background-only.html': contentPage('Banner', `<div id="banner" style="width: 200px; height: 100px; background-image: url(${GIF})"></div>`),
 };
 
@@ -1187,6 +1195,43 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
     expect(scan?.drafts).toEqual([]);
     expect(scan?.stops).toEqual([]);
+  }, 30_000);
+
+  it('still covers a screen with no reachedWhen whose tab panel sets the hash when focused', async () => {
+    // A plain fragment is a place on the page, not a route, so the read after the checks lets it
+    // stay. The wrapper records each address the page reports, to show the hash really changed.
+    const url = `${fixture.url}hash-on-focus.html`;
+    const addresses: string[] = [];
+    const recording: BrowserDriver = {
+      open: async (target: string): Promise<UsablPage> => {
+        const page = await driver.open(target);
+        return {
+          ...page,
+          currentUrl: async () => {
+            const address = await page.currentUrl();
+            addresses.push(address);
+            return address;
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+    const runner = makeCheckRunner({
+      browser: recording,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'panels', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'panels', url })]).screens[0];
+
+    expect(addresses.at(-1)).toMatch(/#panel-\d$/);
+    expect(scan?.gaps).toEqual([]);
+    expect(scan?.drafts).toEqual([]);
+    expect(scan?.stops.length).toBeGreaterThan(0);
   }, 30_000);
 
   it('catches a 401 that only arrives after readiness, during the walk', async () => {

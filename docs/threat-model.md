@@ -422,10 +422,13 @@ the tool errored, not because the page is accessible.
 
 - A scan that reached the wrong page, such as a sign-in page served in place of a screen with
   a dead session, is a coverage gap, never a measurement of that screen. Three heuristics catch
-  a refused data request, a password field, and a redirect to a page with a password field. On a
-  screen with no `reachedWhen` selector, the address is read again after the checks, and a page
-  whose path or fragment moved from the address it loaded at, or that cannot report its address,
-  is the same gap, so a focus handler or an auth timer that navigates cannot pass another page. A
+  a refused data request, a password field, and a redirect to a page with a password field. The CLI
+  reads the address again after the checks, on every screen, and a page whose path or route
+  fragment (`#/` or `#!`, or any fragment when the configured url has one) moved from the address
+  it loaded at, or that cannot report its address, is the same gap, so a focus handler or an auth
+  timer that navigates cannot pass another page. A plain fragment such as `#tab-2` is not a move,
+  so a screen configured without a fragment, in an app that routes with plain fragments, is not
+  caught by this read; a `reachedWhen` selector the sign-in page lacks catches it. A
   per-surface readiness signal (`reachedWhen`: a selector, a data response path, or both) is the
   positive check for what they miss, such as a passkey page, a magic-link page, or an
   authentication wall that answers 200 but does not request the screen's data path or answers it

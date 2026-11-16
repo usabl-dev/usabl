@@ -28,6 +28,7 @@ import {
   sameScreenPath,
   sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
+  stayedOnScreen,
   type LandingObservation,
 } from '../../src/providers/redirected.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -985,5 +986,44 @@ describe('sameScreenPath', () => {
 
   it('makes no claim when an address does not parse', () => {
     expect(sameScreenPath('not a url', 'http://127.0.0.1:5173/clusters')).toBeNull();
+  });
+});
+
+describe('stayedOnScreen', () => {
+  const BASE = 'http://127.0.0.1:5173';
+
+  it('counts the path always, and never the host, the port, or the query', () => {
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'http://localhost:4000/clusters/?page=2')).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/login`)).toBe(false);
+  });
+
+  it('reads a plain fragment as a place on the page when the configured url has none', () => {
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/clusters#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters#tab-1`, `${BASE}/clusters#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters#section`, `${BASE}/clusters`)).toBe(true);
+  });
+
+  it('reads #/ and #! as hash routes, like a path', () => {
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters`, `${BASE}/#/login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#!/a`, `${BASE}/#!/b`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/`, `${BASE}/#/login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters`, `${BASE}/#/clusters/?page=2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#!/a`, `${BASE}/#!/a?x=1`)).toBe(true);
+  });
+
+  it('reads every fragment as a route when the configured url has a plain fragment', () => {
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app#login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app#clusters`)).toBe(true);
+  });
+
+  it('does not catch a plain fragment route on a screen configured without a fragment', () => {
+    // The documented limit: a reachedWhen selector the other page lacks catches this one.
+    expect(stayedOnScreen(`${BASE}/app`, `${BASE}/app`, `${BASE}/app#login`)).toBe(true);
+  });
+
+  it('makes no claim when an address does not parse', () => {
+    expect(stayedOnScreen('not a url', `${BASE}/clusters`, `${BASE}/clusters`)).toBeNull();
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'not a url')).toBeNull();
   });
 });
