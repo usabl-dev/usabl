@@ -373,19 +373,24 @@
   sends it to a sign-in page with no refused identity request, was checked on the other page. The
   address is now read again on every screen, with or without a `reachedWhen` selector, after the
   walk and every other provider, the PatternFly probes included, and before the first flow or
-  voice contract. Flows and voice contracts are marked as providers that may move the page on
-  purpose, and they run after every other provider. The new read is compared with the address at
-  load. A change of origin or path is leaving the screen. The query counts only when the screen's configured `url`
-  has one. A fragment counts only as a route: one that starts with `#/` or `#!`, or any fragment
-  when the configured `url` has one. A plain fragment such as `#tab-2`, which a tab panel sets, is
-  not a move. Gate effect: such a screen read `verified` when the other page was clean, or carried
-  that page's accessibility barriers; it is now `not_covered`, with one gap that names both
-  addresses and no findings. An address that cannot be read is the same gap. A flow that moves the
-  route on purpose keeps the findings taken before it. Limits: the read does not catch a move and a
-  move back, content that changes without the address, a plain fragment or query router on a
-  screen configured without that part, or a move while the flows and voice contracts run.
-  Configure the screen's `url` with its query or fragment, or give it a `reachedWhen` selector that
-  the sign-in page lacks.
+  voice contract that applies to the screen, or at the end of the scan when none does. Flows and
+  voice contracts are marked as providers that may move the page on purpose, and they run after
+  every other provider. The new read is compared with the address at load. A change of origin or
+  path is leaving the screen. The query counts only when the screen's configured `url` has one. A
+  fragment counts only as a route: one that starts with `#/` or `#!`, or any fragment when the
+  configured `url` has one. A plain fragment such as `#tab-2`, which a tab panel sets, is not a
+  move. The `reachedWhen` selector is measured at the same point. Gate effect: such a screen read
+  `verified` when the other page was clean, or carried that page's accessibility barriers; it is
+  now `not_covered`, with one gap that names both addresses and the read point, and no findings. An
+  address that cannot be read is the same gap. A flow that moves the route on purpose keeps the
+  findings taken before it, with or without a selector. Before each later flow or voice contract
+  the address is read again; once an earlier one left the route, the rest are skipped, each with a
+  `not-covered` gap that names it and the flow that moved the page, so no requirement is checked on
+  the route another flow moved to. Limits: the read does not catch a move and a move back, content
+  that changes without the address, a plain fragment or query router on a screen configured
+  without that part, or a move made by the last flow or voice contract that runs, or by a timer
+  while it runs. Configure the screen's `url` with its query or fragment, or give it a
+  `reachedWhen` selector that the sign-in page lacks.
 - A keyboard walk that was cut short is a `not-covered` coverage gap on its screen. Before, it was
   a `keyboard-walk-truncated` draft with confidence `unverified`, and a baseline taken while the
   walk was cut short accepted it onto the evidence floor. Every later run then carried it and
