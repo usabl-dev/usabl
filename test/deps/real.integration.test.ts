@@ -130,6 +130,10 @@ const CONTENT_PAGES: Record<string, string> = {
     'Frame',
     `<iframe id="frame" title="Inner" style="width: 0; height: 0; border: 0" src="data:text/html;charset=utf-8,${encodeURIComponent('<p>Text inside a frame with no box</p>')}"></iframe>`,
   ),
+  // Visible frames with a box whose documents the read can see into and finds empty, as an app
+  // that never rendered into its frame leaves them.
+  '/empty-srcdoc-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" srcdoc=""></iframe>'),
+  '/about-blank-frame.html': contentPage('Frame', '<iframe id="frame" title="Inner" src="about:blank"></iframe>'),
   '/hidden-content.html': contentPage(
     'Hidden',
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
@@ -932,6 +936,9 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     ['/cross-origin-frame-text.html', true],
     ['/hidden-cross-origin-frame.html', false],
     ['/boxless-cross-origin-frame.html', false],
+    // The read can see into these frames, so they count only through what they show.
+    ['/empty-srcdoc-frame.html', false],
+    ['/about-blank-frame.html', false],
     ['/hidden-content.html', false],
     ['/background-only.html', false],
   ] as const) {

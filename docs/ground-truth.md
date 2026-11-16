@@ -1094,13 +1094,19 @@ when it has either of these:
   laid out in a box with a width and a height;
 - an `img`, `svg`, `canvas`, `video`, `picture`, `object`, or `embed` element, or an element whose
   role is `img`, that passes the same visibility test and whose box has a width and a height;
-- an `iframe` or `frame` element that passes the same visibility test and whose box has a width
-  and a height, whatever its origin and whether or not the read can see inside it.
+- what a visible `iframe` or `frame` shows, when the read can see into its document, by these same
+  rules;
+- a visible `iframe` or `frame` element whose box has a width and a height, when the read cannot
+  see into its document (the document is null or reading it throws, as for a frame from another
+  origin). The frame shows on the page even though the read cannot see what it holds.
 
 What does not count: a CSS background image (the element that shows it is empty), content hidden
 with CSS as above, content in a closed shadow root or inside a frame from another origin (the read
-cannot see it, though the visible frame element itself counts, as above), a hidden frame or one
-with no box, `script`, `style`, and `template` content, and the document title. Text that is
+cannot see it, though the visible frame element itself counts, as above), a frame the read can see
+into whose document shows nothing (such as `about:blank`, an empty `srcdoc`, or a widget still
+loading), a hidden frame or one with no box, a frame nested more than eight frames deep (the read
+does not follow it, so it gets no benefit of the doubt), `script`, `style`, and `template` content,
+and the document title. Text that is
 visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
 browser that cannot say whether an element is visible gets no benefit of the doubt: the element
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
