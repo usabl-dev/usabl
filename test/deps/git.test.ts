@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -78,7 +78,7 @@ describe('makeGitReader', () => {
     expect(workingTreeFiles.split('\n')).toContain('src/gate/local-only.ts');
     expect(indexAfter).toBe(indexBefore);
     expect(head).toMatch(/^[0-9a-f]{40}$/);
-    expect(blobs['screen.tsx']).toMatch(/^[0-9a-f]{40}$/);
+    expect(blobs['screen.tsx']).toMatch(/^100644 [0-9a-f]{40}$/);
     expect(blobs).not.toHaveProperty('missing.tsx');
   });
 
@@ -90,7 +90,7 @@ describe('makeGitReader', () => {
     await runGit(repoPath, ['commit', '-m', 'add a file named __proto__']);
     const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', ['__proto__', 'screen.tsx']);
     expect(Object.keys(blobs).sort()).toEqual(['__proto__', 'screen.tsx']);
-    expect(Object.entries(blobs).find(([name]) => name === '__proto__')?.[1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(Object.entries(blobs).find(([name]) => name === '__proto__')?.[1]).toMatch(/^100644 [0-9a-f]{40}$/);
   });
 
   it('lists committed files by prefix and ignores working-tree-only files', async () => {
@@ -185,8 +185,8 @@ describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }
     await commitAwkwardNames();
     const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', [UMLAUT, TRAILING_SPACE, NEWLINE]);
     expect(Object.keys(blobs).sort()).toEqual([NEWLINE, TRAILING_SPACE, UMLAUT].sort());
-    for (const sha of Object.values(blobs)) {
-      expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    for (const entry of Object.values(blobs)) {
+      expect(entry).toMatch(/^100644 [0-9a-f]{40}$/);
     }
   });
 });
@@ -630,6 +630,35 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     await runGit(repoPath, ['add', 'main:src/gate']);
     await runGit(repoPath, ['commit', '-m', 'a file named like the folder read']);
     await expect(makeGitReader({ cwd: repoPath }).showBytes('main', 'src/gate')).resolves.toEqual({ kind: 'folder', tree });
+  });
+
+  it('showBytes reads the mode of a file, and a symbolic link as its link text', async () => {
+    await writeFile(join(repoPath, 'run.sh'), 'data', { mode: 0o755 });
+    await symlink('data', join(repoPath, 'link'));
+    await runGit(repoPath, ['add', 'run.sh', 'link']);
+    await runGit(repoPath, ['commit', '-m', 'an executable file and a link']);
+    const git = makeGitReader({ cwd: repoPath });
+    const run = await git.showBytes('HEAD', 'run.sh');
+    expect(run?.kind === 'file' ? run.mode : run).toBe('100755');
+    const screen = await git.showBytes('HEAD', 'screen.tsx');
+    expect(screen?.kind === 'file' ? screen.mode : screen).toBe('100644');
+    const link = await git.showBytes('HEAD', 'link');
+    expect(link?.kind).toBe('symlink');
+    expect(link?.kind === 'symlink' ? Buffer.from(link.target).toString('utf8') : null).toBe('data');
+    // The receipt listing keeps the mode next to the id.
+    const listed = await git.lsTree('HEAD', ['run.sh', 'link']);
+    expect(listed['run.sh']).toMatch(/^100755 [0-9a-f]{40}$/);
+    expect(listed['link']).toMatch(/^120000 [0-9a-f]{40}$/);
+  });
+
+  it('tracksFileMode follows core.fileMode, and reads true when it is not set', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await runGit(repoPath, ['config', '--unset-all', 'core.fileMode']).catch(() => undefined);
+    await expect(git.tracksFileMode()).resolves.toBe(true);
+    await runGit(repoPath, ['config', 'core.fileMode', 'false']);
+    await expect(git.tracksFileMode()).resolves.toBe(false);
+    await runGit(repoPath, ['config', 'core.fileMode', 'true']);
+    await expect(git.tracksFileMode()).resolves.toBe(true);
   });
 
   it('showBytes throws the missing ref error, as show does', async () => {
