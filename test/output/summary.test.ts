@@ -217,7 +217,7 @@ describe('formatSummary', () => {
       }),
     );
     const lines = out.split('\n');
-    const barriers = lines.indexOf('  accessibility barriers that block this run: 1 finding(s)');
+    const barriers = lines.indexOf('  blocking this run: 1 accessibility barrier found');
     expect(barriers).toBeGreaterThan(1);
     expect(lines[barriers + 1]).toBe('    [new] clusters · axe/button-name (serious): A button with no accessible name');
     expect(lines[barriers + 2]).toBe('        fix: Add aria-label');
@@ -241,7 +241,7 @@ describe('formatSummary', () => {
    * block; and the work is never below the debt.
    */
   describe('barriers and recorded debt are listed apart', () => {
-    const BLOCKING_HEADING = '  accessibility barriers that block this run:';
+    const BLOCKING_HEADING = '  blocking this run:';
     const RECORDED_HEADING = '  recorded, not blocking:';
     const RECORDED_NOTE = '    usabl already recorded these. They do not block this run.';
 
@@ -346,7 +346,7 @@ describe('formatSummary', () => {
 
     it('puts new barriers above carried debt on a regression, and marks the debt as not blocking', () => {
       const lines = formatSummary(regressionWithBoth).split('\n');
-      const blocking = lines.indexOf(`${BLOCKING_HEADING} 1 finding(s)`);
+      const blocking = lines.indexOf(`${BLOCKING_HEADING} 1 accessibility barrier found`);
       const recorded = lines.indexOf(`${RECORDED_HEADING} 1 finding(s)`);
 
       expect(blocking).toBeGreaterThan(1);
@@ -392,6 +392,7 @@ describe('formatSummary', () => {
 
     it('calls a new finding usabl could not verify a barrier', () => {
       // The gate cannot call a run verified while a new finding is unverified, so this one is work.
+      // It is listed as a check a person needs to review, not as an accessibility barrier found.
       const out = formatSummary(
         baseResult({
           verdict: 'not_covered',
@@ -401,7 +402,7 @@ describe('formatSummary', () => {
         }),
       );
 
-      expect(out).toContain(`${BLOCKING_HEADING} 1 finding(s)`);
+      expect(out).toContain(`${BLOCKING_HEADING} 1 check undecided, needs a person to review`);
       expect(out).not.toContain(RECORDED_HEADING);
     });
 

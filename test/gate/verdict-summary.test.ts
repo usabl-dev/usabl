@@ -91,7 +91,7 @@ describe('verdict summary names unseen coverage', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     expect(out.accessibilityExitCode).toBe(1);
-    expect(out.summary).toBe('regression: 1 blocking finding(s), 1 gap(s)');
+    expect(out.summary).toBe('regression: 1 accessibility barrier found, 1 gap(s)');
   });
 
   it('says nothing about coverage on a clean run that reached everything', () => {
@@ -135,7 +135,7 @@ describe('verdict summary names unseen coverage', () => {
     });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.summary).toBe('not_covered: 1 blocking finding(s)');
+    expect(out.summary).toBe('not_covered: 1 check undecided, needs a person to review');
     expect(out.summary).not.toContain('gap');
   });
 
@@ -234,7 +234,7 @@ describe('verdict summary counts only what blocks', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     // One barrier caused this verdict, so the line says one. It used to say 30.
-    expect(out.summary).toBe('regression: 1 blocking finding(s), 29 recorded');
+    expect(out.summary).toBe('regression: 1 accessibility barrier found, 29 recorded');
   });
 
   it('counts a waived finding as recorded, the way every surface groups it', () => {
@@ -281,7 +281,9 @@ describe('verdict summary counts only what blocks', () => {
         expect(out.summary).toContain('nothing blocking');
       } else {
         sawBlocked = true;
-        expect(out.summary).toMatch(/\d+ blocking finding\(s\)|\d+ gap\(s\)|\d+ unmapped file\(s\)/);
+        expect(out.summary).toMatch(
+          /\d+ accessibility barriers? found|\d+ checks? undecided, needs a person to review|\d+ gap\(s\)|\d+ unmapped file\(s\)/,
+        );
       }
     }
 

@@ -3748,8 +3748,8 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     ).toBe(true);
 
     // Work above debt, never the other way round.
-    expect(await groupHeadings(page)).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
-    expect(await rowTitlesUnder(page, 'Accessibility barriers that block this run')).toEqual(['New focus barrier.']);
+    expect(await groupHeadings(page)).toEqual(['Findings that block this run', 'Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Findings that block this run')).toEqual(['New focus barrier.']);
     expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual([
       'Carried contrast debt.',
       'Waived link name.',
@@ -3935,7 +3935,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       };
     });
 
-    expect(readable.headings).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
+    expect(readable.headings).toEqual(['Findings that block this run', 'Recorded, not blocking']);
     expect(readable.severities).toEqual(['Serious', 'Serious']);
     expect(readable.note).toContain('do not block this run');
     // The coloured dot beside each severity word is hidden from assistive technology, so the word
