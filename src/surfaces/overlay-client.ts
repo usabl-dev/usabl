@@ -54,6 +54,22 @@ export const overlayClientSource = `(() => {
   // accessibility barrier found, and a finding usabl could not decide is a check that needs a
   // person to review. It closes over nothing.
   const formatBlockingSplit = ${formatBlockingSplit.toString()};
+  // True when the run left something unexamined: a coverage gap or a changed file it could not map.
+  // A payload without the lists counts as failed, so a missing field never reads as checked.
+  function coverageFailed(payload) {
+    const coverage = payload && payload.coverage;
+    if (!coverage || !Array.isArray(coverage.gaps) || !Array.isArray(coverage.unresolvedFiles)) {
+      return true;
+    }
+    return coverage.gaps.length > 0 || coverage.unresolvedFiles.length > 0;
+  }
+
+  // How many blocking findings, on any screen, usabl could not decide.
+  function undecidedBlockingCount(payload) {
+    const findings = payload && Array.isArray(payload.findings) ? payload.findings : [];
+    return findings.filter((finding) => isBlockingBarrier(finding) && finding.confidence === 'unverified').length;
+  }
+
   function blockingSplitOf(findings) {
     let found = 0;
     let undecided = 0;
@@ -734,7 +750,19 @@ export const overlayClientSource = `(() => {
     }
     const verdict = verdictFor(payload, error, scanning);
     if (verdict.key === 'not-covered') {
-      return 'usabl could not check the affected screens, so nothing here is proven.';
+      // not_covered has two causes. When coverage failed, part of the change was not checked, and
+      // the sentence says so. When the only cause is a check usabl could not decide, the screens
+      // were checked, so the panel goes on to name the checks on this screen, as it does for a
+      // blocked run. A run that shows neither cause keeps the coverage sentence.
+      const undecided = undecidedBlockingCount(payload);
+      if (coverageFailed(payload)) {
+        return undecided > 0
+          ? 'usabl could not check all of the affected screens, and some checks could not decide, so nothing here is proven.'
+          : 'usabl could not check the affected screens, so nothing here is proven.';
+      }
+      if (undecided === 0) {
+        return 'usabl could not check the affected screens, so nothing here is proven.';
+      }
     }
     if (verdict.key === 'approval') {
       return approvalLines(payload, split);
@@ -1461,6 +1489,13 @@ export const overlayClientSource = `(() => {
       .finding-title-wrap {
         flex: 1 1 auto;
         min-width: 0;
+      }
+
+      .finding-confidence {
+        display: block;
+        color: var(--graphite);
+        font-size: 0.75rem;
+        font-weight: 650;
       }
 
       /* Collapsed rows clamp the title to one line. The full string stays in the DOM, so the
@@ -2605,6 +2640,11 @@ export const overlayClientSource = `(() => {
     // The clamped title sits inside a wrapper rather than being a flex child itself, because a flex
     // item is blockified and the line clamp would never take effect.
     const titleWrap = make('span', 'finding-title-wrap');
+    // A blocking finding usabl could not decide names its state on the row, so a reader can tell
+    // it from an accessibility barrier found without opening it. Text, never colour alone.
+    if (entry.blocking && finding.confidence === 'unverified') {
+      titleWrap.appendChild(make('span', 'finding-confidence', 'Check undecided, needs a person to review'));
+    }
     titleWrap.appendChild(
       make('span', 'finding-title', boundedText(finding.whatUserExperiences, MAX_TITLE_CHARS)),
     );
@@ -2747,7 +2787,7 @@ export const overlayClientSource = `(() => {
         make(
           'p',
           'empty',
-          verdict.key === 'not-covered'
+          verdict.key === 'not-covered' && (coverageFailed(payload) || undecidedBlockingCount(payload) === 0)
             ? 'usabl could not check the affected screens, so there is nothing to list.'
             : unaffectedBodyLine(),
         ),

@@ -3845,6 +3845,67 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     await page.context().close();
   });
 
+  // A not_covered run held back only by an undecided check checked every screen. The panel used to
+  // say it could not check the affected screens, which told a developer the run never looked.
+  it('says a not_covered run was checked when the only cause is an undecided check', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'not_covered',
+          exitCode: 3,
+          summary: 'not_covered: 1 check undecided, needs a person to review',
+          findings: [finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('On this screen: 1 check undecided, needs a person to review. Review it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('could not check', { exact: false }).count()).toBe(0);
+    expect(await rowTitlesUnder(page, 'Findings that block this run')).toEqual(['Undecided contrast.']);
+    // The row names its own state, so the reader knows which item needs a person.
+    expect(
+      await panel.locator('.current-screen .finding-confidence').allTextContents(),
+    ).toEqual(['Check undecided, needs a person to review']);
+
+    await page.context().close();
+  });
+
+  it('says both causes when coverage failed and a check could not decide', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'not_covered',
+          exitCode: 3,
+          summary: 'not_covered: 1 check undecided, needs a person to review, 1 gap(s)',
+          findings: [finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' })],
+          coverage: {
+            ...result({}).coverage,
+            gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: 'never opened' }],
+          },
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'usabl could not check all of the affected screens, and some checks could not decide, so nothing here is proven.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+
   it('keeps the plain sentence and names the count when every blocking finding fails', async () => {
     const page = await mount(
       projectOverlay(result({ summary: 'regression: 1 accessibility barrier found', findings: [finding()] })),
@@ -3858,6 +3919,8 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
         .isVisible(),
     ).toBe(true);
     expect(await blockingCountText(page)).toBe('1 accessibility barrier found');
+    // A failing row needs no state label; only an undecided check carries one.
+    expect(await panel.locator('.current-screen .finding-confidence').count()).toBe(0);
 
     await page.context().close();
   });
