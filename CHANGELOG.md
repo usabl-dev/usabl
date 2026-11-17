@@ -374,8 +374,12 @@
   two groups. The `not_covered` verdict line says "Checked, but some checks could not decide. A
   person must review them to pass." when an undecided check is the only cause, and names both
   causes when coverage also failed. The overlay says it could not check the affected screens
-  only when coverage failed, and marks each undecided row. Gate effect: none. No guarded file
-  changed.
+  only when coverage failed, and marks each undecided row. The Stop hook's next step sends
+  undecided checks to a person: it tells the model to tell the user, and not to change code to
+  make an undecided check pass or mark one reviewed itself. A `not_covered` run held only by
+  such checks no longer points at the empty Not evaluated list, a regression asks for the
+  accessibility barriers to be fixed and the checks to be reviewed, and a run held by both gaps
+  and undecided checks names both. Gate effect: none. No guarded file changed.
 - This repository's own gate is now the workflow `usabl install --ci` writes, byte for byte, with
   the engine pinned to `usabl-dev/usabl` commit `b18fdb25e47dbb09aa12e315ea02a2401bcac08c` on main.
   Before, it was a hand-written three-job gate that built and ran the pull request's own engine in
