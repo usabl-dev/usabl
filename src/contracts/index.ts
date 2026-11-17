@@ -357,6 +357,11 @@ export interface Receipt {
   // must not stand for a run after it. See src/history/.
   historyHead: string | null;
   policyHash: string;
+  // The hash of the files the app reads that git does not see: the `.env*` files of the app
+  // folders, the paths in config `localFiles`, and usabl.config.json. Each entry is a path, a kind,
+  // and a content hash, never the content. "unreadable" when one could not be read as a file, which
+  // never matches. A receipt minted before this binding has no such field and never verifies.
+  localFilesHash?: string;
   runnerVersion: string;
   scannerVersions: ScannerVersions;
   surfaces: string[];
@@ -1168,8 +1173,19 @@ export interface FsGlob {
   // planning and never reach the guard. The local guard given a reader without it compares both
   // sides as text, as it did before.
   readBytes?(path: string): Promise<StoredEntry | null>;
+  // What is at a path the receipt binds, for a file git may not see. It never follows a link and
+  // never throws. The real reader and the fakes have it. A reader without it binds nothing the
+  // receipt can match, so a receipt minted or checked with it never verifies.
+  readLocalFile?(path: string): Promise<LocalFileRead>;
   glob(patterns: string[]): Promise<string[]>;
 }
+
+/**
+ * What is at one path the receipt binds. A regular file carries the sha256 hash of its bytes and
+ * never the bytes. `other` is anything usabl does not read as a file of the repository: a folder,
+ * a symbolic link, a path below a link, a pipe, or a file it may not open.
+ */
+export type LocalFileRead = { kind: 'missing' } | { kind: 'file'; sha256: string } | { kind: 'other' };
 export interface CheckRunner {
   // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
   scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;
@@ -1289,6 +1305,11 @@ export interface UsablConfig {
   // How the keyboard walk treats each screen. Part of the guarded config, so under a trusted ref
   // the walk reads it from the trusted ref only. Absent means the engine defaults on every screen.
   keyboardWalk?: KeyboardWalkConfig;
+  // Files the app reads that git does not see, such as a git-ignored generated file. Exact paths
+  // from the repository root, no globs. The receipt binds the hash of each, so an edit to one makes
+  // a stored receipt stop matching. The `.env*` files of the app folders are bound without being
+  // listed. Absent means none beyond those.
+  localFiles?: string[];
 }
 
 // The keyboard walk settings of one screen. Each one left out means the engine default. A walk

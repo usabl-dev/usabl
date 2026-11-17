@@ -235,6 +235,13 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       async readBytes(path) {
         return storedEntryOf(await this.readFile(path));
       },
+      // Every fake file is a regular file. A test that needs another kind replaces this read.
+      async readLocalFile(path) {
+        const text = await this.readFile(path);
+        return text === null
+          ? { kind: 'missing' }
+          : { kind: 'file', sha256: createHash('sha256').update(text, 'utf8').digest('hex') };
+      },
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
     requirements: spec.requirements ?? { version: 1, requirements: [] },

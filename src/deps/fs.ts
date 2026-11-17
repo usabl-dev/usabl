@@ -3,6 +3,7 @@
  * This unit reports filesystem state only and must never infer coverage outcomes.
  * Missing files return null so callers can disclose not-covered work without guessing.
  */
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { glob, lstat, open, readFile, readlink } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
@@ -105,6 +106,51 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
           return null;
         }
         throw err;
+      }
+    },
+    async readLocalFile(path) {
+      try {
+        // A file above the path holds nothing, so nothing is there. A link above, or anything else
+        // that is not a folder, could lead out of the repository, so usabl does not read through it.
+        const segments = path.split('/').filter((segment) => segment.length > 0);
+        for (let i = 1; i < segments.length; i += 1) {
+          const above = await lstat(resolve(cwd, segments.slice(0, i).join('/')));
+          if (above.isDirectory()) {
+            continue;
+          }
+          return above.isFile() ? { kind: 'missing' } : { kind: 'other' };
+        }
+        const full = resolve(cwd, path);
+        // A link is never followed, wherever it points: it is not read as a file of the repository.
+        if (!(await lstat(full)).isFile()) {
+          return { kind: 'other' };
+        }
+        // Opened without following a link, so a link put in place after the check is refused.
+        // O_NONBLOCK keeps a pipe put there from holding the read open. The bytes go only into the
+        // hash, in fixed-size pieces, so a large file is never held in memory whole.
+        const handle = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          if (!(await handle.stat()).isFile()) {
+            return { kind: 'other' };
+          }
+          const hash = createHash('sha256');
+          const piece = Buffer.alloc(64 * 1024);
+          for (;;) {
+            const { bytesRead } = await handle.read(piece, 0, piece.length, null);
+            if (bytesRead === 0) {
+              break;
+            }
+            hash.update(piece.subarray(0, bytesRead));
+          }
+          return { kind: 'file', sha256: hash.digest('hex') };
+        } finally {
+          await handle.close();
+        }
+      } catch (err) {
+        const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
+        // Any other failure, such as no permission or a link swapped in, is something usabl could
+        // not read, never nothing there.
+        return code === 'ENOENT' || code === 'ENOTDIR' ? { kind: 'missing' } : { kind: 'other' };
       }
     },
     async glob(patterns) {

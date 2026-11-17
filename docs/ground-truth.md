@@ -476,6 +476,7 @@ export interface Receipt {
   baseRevision: string | null;    // the commit the changed list was taken from, or null
   historyHead: string | null;     // the debt history commit the run read
   policyHash: string;
+  localFilesHash?: string;        // the .env*, localFiles, and config bytes; absent on older receipts
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string; engines?: Record<string, string> };
   surfaces: string[];
@@ -3880,10 +3881,29 @@ Six bindings are compared on re-verification, plus the waiver end below:
   binds no time, or binds a value that is not an ISO-8601 UTC time, does not verify. A receipt
   minted before this field existed has none; it verifies only when it counted no waived finding.
   The schema version stays 2, because that absent value is read safely.
+- `localFilesHash`: a hash over the files the app reads that git does not see. `sourceTree` comes
+  from git, which skips ignored files, so before this an edit to `.env.local` (Vite loads it, and
+  the Vite templates ignore it) changed neither the tree nor the status, and a stored receipt kept
+  answering the stop. The hash covers, sorted by path: every `.env*` file in the root and in each
+  app folder (each folder that holds one of the app's `package.json` files, from the folder of
+  the router file, of each `uiFileGlobs` pattern, and of each surface file, up to the root, as
+  section 8 finds them for dependency changes), every path in config `localFiles` (section 22),
+  and the bytes of `usabl.config.json` at the root, the file the Stop hook reads. The root is the
+  folder usabl runs from: the repository root for the Stop hook, and the current folder for
+  `usabl check`. Each entry is the path, its kind (missing, file, or other), and the sha256 of
+  its bytes, never the bytes, and the receipt holds only the hash over the entries, never a path
+  or a value. A listed path that is missing is an entry too, so a file that appears or
+  disappears changes the hash. A path usabl cannot read as a file of the repository (a symbolic
+  link, wherever it points, a folder, a path below a link, or a file it may not open) makes the
+  whole value `unreadable`, and `unreadable` never matches, on either side: such a stop checks
+  again every time, and the reason it prints says so. A config byte change that parses to the
+  same policy, such as white space, changes the hash too. A receipt minted before this binding
+  has no `localFilesHash` and does not verify, so every stored receipt costs one full check
+  once. The schema version stays 2, because the absent value never verifies.
 
 A source-tree change or committed policy change invalidates the receipt, and so does a
-different starting commit, an engine or scanner change, a move of the history branch, or the
-end of a waiver it applied.
+different starting commit, an engine or scanner change, a move of the history branch, the
+end of a waiver it applied, or a change to a local file it binds.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
@@ -6210,6 +6230,22 @@ bounds, and an option wins over the config for that call. These settings are in 
 config, so a pull request that changes them needs approval, and in CI they are read from the
 trusted ref. With a trusted ref that has no readable config they are left out, and the judge
 leaves them out of the head copy it plans from.
+
+`localFiles` is optional. It lists files the app reads that git does not see, such as a
+git-ignored generated file or a `.env` file outside the app folders, so the receipt binds them
+(section 10, Receipt binding):
+
+```json
+"localFiles": ["public/generated-theme.js", "config/.env.shared"]
+```
+
+Each entry is an exact path from the repository root to one file, at most 512 characters, and the
+list holds at most 64 entries. A glob, an empty entry, white space at either end, a leading `/`, a
+drive letter, a backslash, a control character, a `.` or `..` segment, and an empty segment (a
+doubled or trailing slash) are refused when the config is read, and the message names the field.
+The `.env*` files of the app folders are bound without being listed. Listing a tracked file does
+no harm: it is bound twice, once by the tree and once by its hash. `localFiles` can only make a
+stored receipt stop matching, never make one match, so it is not a trusted-only field.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.

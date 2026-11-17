@@ -20,6 +20,7 @@ import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
 import { isPatternSegment, MAX_BRACE_EXPANSIONS } from '../trust/guard.js';
+import { localFileProblem, MAX_LOCAL_FILES } from './local-files.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -468,6 +469,25 @@ function parseEvincedEngine(raw: unknown): EvincedEngineConfig {
   };
 }
 
+// localFiles names files the receipt binds by hash. Each entry is an exact path inside the
+// repository, so the receipt never reads outside it, and the list is bounded.
+function parseLocalFiles(raw: unknown): string[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const entries = expectStringArray(raw, 'localFiles');
+  if (entries.length > MAX_LOCAL_FILES) {
+    throw configError`localFiles lists ${entries.length} paths, and usabl binds at most ${MAX_LOCAL_FILES}. List only the git-ignored files the app reads.`;
+  }
+  for (const entry of entries) {
+    const problem = localFileProblem(entry);
+    if (problem !== null) {
+      throw configError`localFiles entry "${entry}" ${problem}`;
+    }
+  }
+  return entries;
+}
+
 function parseEngines(raw: unknown): EnginesConfig | undefined {
   if (raw === undefined) {
     return undefined;
@@ -535,6 +555,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const judge = judgeRaw === undefined ? undefined : parseJudge(judgeRaw);
   const engines = parseEngines(Reflect.get(root, 'engines'));
   const keyboardWalk = parseKeyboardWalkConfig(Reflect.get(root, 'keyboardWalk'));
+  const localFiles = parseLocalFiles(Reflect.get(root, 'localFiles'));
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
@@ -557,5 +578,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(judge === undefined ? {} : { judge }),
     ...(engines === undefined ? {} : { engines }),
     ...(keyboardWalk === undefined ? {} : { keyboardWalk }),
+    ...(localFiles === undefined ? {} : { localFiles }),
   };
 }

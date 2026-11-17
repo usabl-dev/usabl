@@ -9,6 +9,8 @@
  * blobs at HEAD), runnerVersion, scannerVersions (axe-core, Playwright, Chromium, and the
  * version of each optional commercial engine the config turned on), and
  * historyHead (the debt history commit, which can lower the debt a run accepts).
+ * It also binds localFilesHash: the files the app reads that git does not see, such as `.env.local`,
+ * and the config bytes (see local-files.ts).
  * Lists are sorted so the same inputs hash the same way.
  */
 import type {
@@ -27,6 +29,7 @@ import { assertIso8601Utc } from "../primitives/iso8601.js";
 import { waiverMatchesFinding } from "../gate/index.js";
 import { expandConfigGuardedSet } from "../trust/guard.js";
 import { assertIdField, InputRefusedError } from "../intake/input-refusal.js";
+import { computeLocalFilesHash, localFilesMatch } from "./local-files.js";
 
 /**
  * The receipt schema version mint writes and verify accepts. Raise it only when a receipt minted
@@ -339,9 +342,10 @@ export async function mintReceipt(
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
   const expandedGuardedPaths = await expandConfigGuardedSet(deps, config);
-  const [sourceTree, policy] = await Promise.all([
+  const [sourceTree, policy, localFilesHash] = await Promise.all([
     args.sourceTree ?? deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
+    computeLocalFilesHash(deps, config),
   ]);
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
@@ -349,6 +353,7 @@ export async function mintReceipt(
     baseRevision: args.baseRevision ?? null,
     historyHead: args.historyHead ?? null,
     policyHash: policy,
+    localFilesHash,
     runnerVersion: deps.runnerVersion,
     scannerVersions: deps.scannerVersions,
     surfaces: sortBy([...args.surfaces], (s) => s),
@@ -454,6 +459,8 @@ const FIELD_REASONS: Record<string, string> = {
   schemaVersion: "the receipt was written in a format this usabl does not verify",
   sourceTree: "the files changed since the receipt was minted",
   policyHash: "the committed policy changed since the receipt was minted",
+  localFiles:
+    "a file the app reads that git does not see (a .env file, a path in localFiles, or usabl.config.json) changed or appeared since the receipt was minted, could not be read as a file, or the receipt was minted before usabl bound these files",
   runnerVersion: "a different usabl engine minted the receipt",
   historyHead: "the debt history moved since the receipt was minted",
   baseRevision:
@@ -510,6 +517,11 @@ export async function verifyReceipt(
   }
   if (receipt.policyHash !== policyHash) {
     failedFields.push("policyHash");
+  }
+  // git does not see ignored files, so the tree id above misses an edit to `.env.local`. The local
+  // files hash binds them. A receipt minted before it existed has none, and never matches.
+  if (!localFilesMatch(receipt.localFilesHash, await computeLocalFilesHash(deps, config))) {
+    failedFields.push("localFiles");
   }
   if (receipt.runnerVersion !== deps.runnerVersion) {
     failedFields.push("runnerVersion");
