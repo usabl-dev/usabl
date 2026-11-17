@@ -2,16 +2,16 @@
   "axeCore": "4.13.0",
   "playwright": "1.62.1",
   "fixtures": {
-    "pages": 75,
+    "pages": 82,
     "withoutInternals": {
-      "pages": 55,
-      "pagesWithDifferences": 0,
-      "unstablePages": 0,
+      "pages": 62,
+      "pagesWithDifferences": 1,
+      "unstablePages": 1,
       "comparedEntries": {
-        "violation": 144,
-        "incomplete": 20,
-        "pass": 3249,
-        "inapplicable": 3650
+        "violation": 140,
+        "incomplete": 24,
+        "pass": 3669,
+        "inapplicable": 4089
       }
     },
     "withInternals": {
@@ -77,12 +77,12 @@
         "fixture": "frame: frameset",
         "internals": false,
         "counts": {
-          "violation": 8,
-          "incomplete": 0,
-          "pass": 45,
-          "inapplicable": 63
+          "violation": 2,
+          "incomplete": 1,
+          "pass": 23,
+          "inapplicable": 70
         },
-        "differences": 0,
+        "differences": 40,
         "uncheckedFrames": []
       },
       {
@@ -621,7 +621,7 @@
         "counts": {
           "violation": 0,
           "incomplete": 0,
-          "pass": 422,
+          "pass": 436,
           "inapplicable": 74
         },
         "differences": 0,
@@ -664,6 +664,30 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "live: roles.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 136,
+          "inapplicable": 53
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: self-gate-screen.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 61,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "live: shadow-sign-in.html",
         "internals": false,
         "counts": {
@@ -682,6 +706,18 @@
           "violation": 0,
           "incomplete": 0,
           "pass": 39,
+          "inapplicable": 67
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: silent-change.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 28,
           "inapplicable": 67
         },
         "differences": 0,
@@ -719,6 +755,54 @@
           "incomplete": 0,
           "pass": 24,
           "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen-broken.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 1,
+          "pass": 47,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen-small-target.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 1,
+          "pass": 54,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 1,
+          "pass": 54,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: voice-delete-row.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 48,
+          "inapplicable": 60
         },
         "differences": 0,
         "uncheckedFrames": []
@@ -929,6 +1013,452 @@
       }
     ],
     "differences": [
+      {
+        "fixture": "frame: frameset",
+        "internals": false,
+        "differences": [
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "avoid-inline-spacing",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "form-field-multiple-labels",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "image-alt",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "image-redundant-alt",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "label",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "label-title-only",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "link-name",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "incomplete",
+              "rule": "frame-tested",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\"]",
+              "impact": "critical",
+              "elementKey": "compare|frame-tested|struct:unknown:frame[src$=\"frame-inner\"]"
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "avoid-inline-spacing",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"div\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "bypass",
+              "target": "[\"frame[src$=\\\"cell-broken\\\"]\",\"html\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "bypass",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"html\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "color-contrast",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"h1\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "color-contrast",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"input\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "empty-heading",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"h1\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "form-field-multiple-labels",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"input\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "frame-tested",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "heading-order",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"h1\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "html-lang-valid",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"html\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "image-redundant-alt",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"img\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "label-title-only",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"input\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "landmark-main-is-top-level",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"main\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "landmark-no-duplicate-main",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"main\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "landmark-one-main",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"html\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "landmark-unique",
+              "target": "[\"frame[src$=\\\"cell-broken\\\"]\",\"main\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "nested-interactive",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"button\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "nested-interactive",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"img\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "page-has-heading-one",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"html\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"a\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"button\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"div\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"h1\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"img\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"input\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "region",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"main\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "button-name",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"button\"]",
+              "impact": "critical",
+              "elementKey": "(missing)"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "color-contrast",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"div\"]",
+              "impact": "serious",
+              "elementKey": "compare|color-contrast|struct:unknown:frame[src$=\"frame-inner\"]div"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "image-alt",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"img\"]",
+              "impact": "critical",
+              "elementKey": "compare|image-alt|struct:unknown:frame[src$=\"frame-inner\"]img"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "label",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"input\"]",
+              "impact": "critical",
+              "elementKey": "compare|label|struct:unknown:frame[src$=\"frame-inner\"]input"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "landmark-unique",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"main\"]",
+              "impact": "moderate",
+              "elementKey": "compare|landmark-unique|struct:unknown:frame[src$=\"frame-inner\"]main"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "link-name",
+              "target": "[\"frame[src$=\\\"frame-inner\\\"]\",\"a\"]",
+              "impact": "serious",
+              "elementKey": "compare|link-name|struct:unknown:frame[src$=\"frame-inner\"]a"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          }
+        ]
+      },
       {
         "fixture": "internals: heading states",
         "internals": true,
