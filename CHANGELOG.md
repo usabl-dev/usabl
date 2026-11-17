@@ -443,14 +443,20 @@
   text equals the old content, compared equal in CI, in the pins, and in the receipt policy hash.
   With `core.fileMode` false the local guard ignores the executable bit, as git does. A guarded
   file of any size is now compared, and a text read of a policy file over 10 MiB stops with a
-  refusal that names the file, never a raw buffer error. The guard reads each ref once: on one
-  machine, with 500 guarded files, a local guard check took about 1 second and the session pins
+  refusal that names the file, never a raw buffer error. At a ref, a link's text and the config's
+  text are read by the id the listing gave, never by the path again, so the text and the id come
+  from one tree even when HEAD moves while usabl reads it. The guard reads each ref once: on one
+  machine, with 500 guarded files, a local guard check took under 1 second and the session pins
   about 0.1 seconds, where each took about 4 seconds before.
+- `usabl enforce policy` requires the tree entry read. `PolicyGit` in
+  `src/surfaces/policy-enforce.ts` gains `listEntries: GitReader['listEntries']` as a required
+  member, the one change in that file, and the guard's reader type for two refs requires it too.
+  The text compare the check fell back to for a reader without it is gone, and a reader built past
+  the type without it is refused, never compared as text.
 - Every git command the git reader runs reads a path by its exact name
-  (`GIT_LITERAL_PATHSPECS=1`). A guarded file named such as `:(top)x.json` or `:(literal)x.json`
-  was read as pathspec magic, so an edit to it, or a new one, read as absent at both refs and the
-  CI policy check passed with no code owner approval. The receipt policy hash read such a name as
-  another file.
+  (`GIT_LITERAL_PATHSPECS=1`), never as pathspec magic such as `:(top)x.json` or
+  `:(literal)x.json`. The receipt policy hash read such a name as another file, and a
+  `guardedPaths` entry written with pathspec magic listed other files than the ones it names.
 - A guarded symbolic link is compared by its link text and by what it resolves to inside the
   repository, through each folder and link on the way, at most 8 links in all. A pull request that
   edited only the unguarded target of a guarded link read as unchanged, though every reader of the
@@ -458,18 +464,21 @@
   path, into a loop, past 8 links, or to nothing compares as changed every time.
 - Session pins are stored as `v4:` and a hash over the mode and id at HEAD, and for a link the
   path it resolves to and the mode and id there. A missing file pins differently from an empty one.
-  A pin file written by an earlier release holds pins with no version. The Stop hook now says those
-  pins are from an older usabl and that drift was not checked, runs the full check instead of
-  trusting a stored receipt, and says how to get new pins: start a new session, or delete the pin
-  file. It does not say that policy files changed.
-- Gate effect of the three entries above: a change to a guarded file's bytes that decode to the
-  same text, its executable bit, a swap for a symbolic link, a guarded file whose name starts with
-  pathspec magic, and an edit to a guarded link's target now need code owner approval in CI, and
-  the local guard and the Stop hook report them. A guarded link that does not resolve inside the
-  repository, and locally a guarded link to a folder, now read as changed on every run. Every
-  receipt minted before this stops matching once, so the screens are checked again on the next
-  run, and a session that spans the upgrade checks each stop in full. All of these are the safe
-  direction. A guarded submodule still reads as changed on every local run, and so does a link git
+  A pin file written by an earlier release holds pins with no version, so usabl cannot tell
+  whether policy was weakened and committed earlier in the session. The Stop hook blocks that stop
+  through the drift path, keeps the pins, and runs no check and no receipt fast path. The message
+  says the pins were written by an older usabl, so usabl cannot tell whether guarded policy files
+  changed, and tells the user to review the policy files changed since the session started, then
+  delete the pin file it names to go on. It never says that policy files changed.
+- Gate effect of the entries above: a change to a guarded file's bytes that decode to the same
+  text, its executable bit, a swap for a symbolic link, and an edit to a guarded link's target now
+  need code owner approval in CI, and the local guard and the Stop hook report them. A guarded file
+  whose name starts with pathspec magic now changes the receipt policy hash when it is edited. A
+  guarded link that does not resolve inside the repository, and locally a guarded link to a
+  folder, now read as changed on every run. Every receipt minted before this stops matching once,
+  so the screens are checked again on the next run. In a session that spans the upgrade, each stop
+  blocks until the user reviews the policy changes and deletes the pin file, or starts a new
+  session. All of these are the safe direction. A guarded submodule still reads as changed on every local run, and so does a link git
   checked out as a plain file with `core.symlinks` false. A guarded file name that is not valid
   UTF-8 is still decoded: the CI policy check and the pins see a change to it through the entry git
   lists, two such names that decode alike can hide one another, and the local guard reports such a
