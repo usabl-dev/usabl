@@ -2864,8 +2864,9 @@ their own.
 7. **Summary line.** The summary opens with the verdict word and then the blocking count,
    split by confidence. A new failing finding is counted as `N accessibility barrier(s)
    found`. A new finding usabl could not decide, such as an axe incomplete result, is counted
-   as `N check(s) undecided, needs a person to review`. Each part is printed only when its
-   count is above zero, failures first, with the plural written out (`1 check`, `2 checks`).
+   as `1 check undecided, needs a person to review`, or `N checks undecided, need a person to
+   review` for more than one. Each part is printed only when its count is above zero,
+   failures first, with the plural written out (`1 check`, `2 checks`).
    When neither has a finding the clause is `nothing blocking`. So a run held back only by a
    check axe could not decide reads `not_covered: 1 check undecided, needs a person to
    review`, not as one accessibility barrier found. The split changes words only: the verdict
@@ -4327,12 +4328,16 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - The next step names the work that is there. A new check usabl could not decide is a
   person's call: the step says "Each check undecided below needs a person to review it, so tell
   the user. Do not change code to make an undecided check pass, and do not mark one as reviewed
-  yourself." (during an active continuation, "Tell the user that each check usabl could not
-  decide needs a person to review it." and the same two prohibitions). On a regression with such
-  checks the barrier step reads "fix each accessibility barrier below" and the review sentence
-  follows. On `not_covered` held only by such checks the step reads "Next: usabl checked this
-  change, but some checks could not decide." and the review sentence, and never points at Not
-  evaluated, which is empty then. When coverage gaps also hold the run, the coverage step comes
+  yourself, for example by adding a waiver or recording it in the evidence floor." (during an
+  active continuation, "Tell the user that each check usabl could not decide needs a person to
+  review it." and the same prohibitions). On a regression with such checks the barrier step
+  reads "fix each accessibility barrier below" and the review sentence follows. On
+  `not_covered` held only by such checks the verdict line already says the change was checked,
+  so the step is the action alone: "Next: tell the user that each check undecided below needs a
+  person to review it." and the prohibitions. It never points at Not evaluated, which is empty
+  then. In the collapsed pull request view, a blocking group of such checks is headed
+  "check undecided, needs a person to review:", so it reads apart from a failing group on the
+  same rule. When coverage gaps also hold the run, the coverage step comes
   first and the review sentence follows. The same rule holds for the accessibility half of
   `approval_required`. A run with no undecided check keeps the steps as before.
 - A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
@@ -4382,7 +4387,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   nowhere in the message. Coverage gap lines go only after every barrier is gone. The note
   says how many lines and how many barriers were left out, in the form "[shortened to fit
   the message budget, N line(s) omitted (K accessibility barrier(s) left out); run usabl check --json for
-  the full list]", and the show-all hint counts only the barriers still shown.
+  the full list]", and the show-all hint counts only the barriers still shown. Left-out groups of
+  checks usabl could not decide are counted as `undecided check(s)`, never as barriers, and when
+  both kinds go the note reads `(K accessibility barrier(s) and M undecided check(s) left out)`.
 - A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."
 
