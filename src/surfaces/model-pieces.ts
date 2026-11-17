@@ -199,6 +199,12 @@ export interface BarrierLines {
  * `Accessibility barrier: [new serious]` with unnumbered pieces. Several are numbered, so a headline and its
  * pieces match by number and no label is built from a value the Result carried.
  *
+ * A group of findings usabl could not decide is labelled `Check undecided, needs a person to
+ * review` and its rule piece `check undecided`, because it blocks the run but is not an
+ * accessibility barrier found. The noise budget ranks failing groups first, so the barriers are
+ * listed before the checks. The list heading names what the list holds: accessibility barriers,
+ * undecided checks, or both as findings that block this run.
+ *
  * Each group is handed to the message assembler whole, so a shortened message drops a barrier's
  * headline and its pieces together and never keeps a headline whose rule is nowhere in the
  * message. The footer is built from how many groups survive, so its count is the count shown.
@@ -217,12 +223,13 @@ export function barrierLines(
 
   if (view.groups.length === 1 && !view.collapsed) {
     const group = boundGroup(view.groups[0]!);
+    const undecided = isUndecided(group);
     return {
       groups: [
         {
-          headline: `Accessibility barrier: ${formatCollapsedGroupStatus(group)}`,
+          headline: `${undecided ? 'Check undecided, needs a person to review' : 'Accessibility barrier'}: ${formatCollapsedGroupStatus(group)}`,
           pieces: [
-            `accessibility barrier: ${group.layer}/${group.rule}`,
+            `${undecided ? 'check undecided' : 'accessibility barrier'}: ${group.layer}/${group.rule}`,
             `screen: ${group.screenId}`,
             ...extraPieces(group.representative, ''),
             `experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -238,10 +245,13 @@ export function barrierLines(
   const groups = view.groups.map((raw, index): BoundedGroup => {
     const group = boundGroup(raw);
     const n = index + 1;
+    const undecided = isUndecided(group);
     return {
-      headline: `- accessibility barrier ${n}: ${formatCollapsedGroupStatus(group)}`,
+      headline: undecided
+        ? `- check undecided ${n}, needs a person to review: ${formatCollapsedGroupStatus(group)}`
+        : `- accessibility barrier ${n}: ${formatCollapsedGroupStatus(group)}`,
       pieces: [
-        `accessibility barrier ${n}: ${group.layer}/${group.rule}`,
+        `${undecided ? 'check undecided' : 'accessibility barrier'} ${n}: ${group.layer}/${group.rule}`,
         `screen (${n}): ${group.screenId}`,
         ...extraPieces(group.representative, ` (${n})`),
         `experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -249,7 +259,24 @@ export function barrierLines(
       ],
     };
   });
-  return { groupHeading: 'Accessibility barriers:', groups, groupFooter };
+  const undecidedGroups = view.groups.filter(isUndecided).length;
+  const groupHeading =
+    undecidedGroups === 0
+      ? 'Accessibility barriers:'
+      : undecidedGroups === view.groups.length
+        ? 'Checks undecided, need a person to review:'
+        : 'Findings that block this run:';
+  return { groupHeading, groups, groupFooter };
+}
+
+/**
+ * True when a group holds findings usabl could not decide. The noise budget never puts a failing
+ * finding and an undecided one in one group, so the representative speaks for the whole group.
+ * Such a group blocks the run, but it is not an accessibility barrier found, so it is labelled as
+ * a check that needs a person to review.
+ */
+function isUndecided(group: CollapsedFindingGroup): boolean {
+  return group.representative.confidence === 'unverified';
 }
 
 /** The verdicts the contract names. Anything else a Result carries is unrecognized. */

@@ -1041,3 +1041,87 @@ describe('evaluateStopDecision on a verdict it does not recognize', () => {
     expect(decision.message.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
   });
 });
+
+/**
+ * A check usabl could not decide blocks a stop, but it is not an accessibility barrier found.
+ *
+ * Every blocking item was labelled "Accessibility barrier", so a model was told to fix a barrier
+ * that may not exist. An undecided item is now labelled as a check that needs a person to review,
+ * and failures are listed first.
+ */
+describe('evaluateStopDecision names undecided checks apart from accessibility barriers', () => {
+  const item = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
+    rule: 'color-contrast',
+    layer: 'axe',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: 'clusters',
+    elementPath: 'button',
+    elementName: 'Save',
+    role: 'button',
+    whatUserExperiences: 'Text may be hard to read.',
+    why: '',
+    fix: 'Check the contrast by hand.',
+    evidence: {},
+    confidence: 'unverified',
+    elementKey: 'clusters|color-contrast|name:save',
+    identityBasis: 'name',
+    status: 'new',
+    ...over,
+  });
+  const lines = (findings: Result['findings'], verdict: 'regression' | 'not_covered'): string[] =>
+    evaluateStopDecision(
+      baseResult({ verdict, exitCode: verdict === 'regression' ? 1 : 3, summary: `${verdict}: test`, findings }),
+      { stopHookActive: false },
+    ).message.split('\n');
+
+  it('labels a lone undecided check as one, never as an accessibility barrier', () => {
+    const message = lines([item({})], 'not_covered');
+
+    expect(message).toContain('Check undecided, needs a person to review: [new serious]');
+    expect(message).toContain('check undecided: axe/color-contrast');
+    expect(message.join('\n')).not.toMatch(/accessibility barrier/i);
+  });
+
+  it('lists failures first and labels each item by what it is', () => {
+    const message = lines(
+      [
+        item({ elementKey: 'clusters|color-contrast|name:a' }),
+        item({ rule: 'button-name', confidence: 'fail', severity: 'minor', elementKey: 'clusters|button-name|name:b' }),
+      ],
+      'regression',
+    );
+    const heading = message.indexOf('Findings that block this run:');
+    const barrier = message.indexOf('- accessibility barrier 1: [new minor]');
+    const check = message.indexOf('- check undecided 2, needs a person to review: [new serious]');
+
+    expect(heading).toBeGreaterThan(-1);
+    expect(barrier).toBeGreaterThan(heading);
+    expect(check).toBeGreaterThan(barrier);
+    expect(message).toContain('accessibility barrier 1: axe/button-name');
+    expect(message).toContain('check undecided 2: axe/color-contrast');
+  });
+
+  it('heads a list of undecided checks only with their own heading', () => {
+    const message = lines(
+      [item({ elementKey: 'clusters|color-contrast|name:a' }), item({ rule: 'link-name', elementKey: 'clusters|link-name|name:b' })],
+      'not_covered',
+    );
+
+    expect(message).toContain('Checks undecided, need a person to review:');
+    expect(message.join('\n')).not.toMatch(/accessibility barrier/i);
+  });
+
+  it('keeps the barrier heading when every item fails', () => {
+    const message = lines(
+      [
+        item({ confidence: 'fail', elementKey: 'clusters|color-contrast|name:a' }),
+        item({ rule: 'link-name', confidence: 'fail', elementKey: 'clusters|link-name|name:b' }),
+      ],
+      'regression',
+    );
+
+    expect(message).toContain('Accessibility barriers:');
+    expect(message.join('\n')).not.toContain('undecided');
+  });
+});

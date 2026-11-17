@@ -57,6 +57,13 @@ const SEVERITY_RANK: Record<Finding['severity'], number> = {
   minor: 3,
 };
 
+// A failing finding ranks before one usabl could not decide, so an accessibility barrier found is
+// listed before a check that needs a person to review, as the terminal lists them.
+const CONFIDENCE_RANK: Record<Finding['confidence'], number> = {
+  fail: 0,
+  unverified: 1,
+};
+
 // Gating (deterministic) findings rank before advisory ones, so a collapsed view never shows an
 // advisory finding ahead of a real gating barrier or lets advisory noise push a barrier out of the
 // budget. Only deterministic evidence gates the verdict.
@@ -71,7 +78,9 @@ const EVIDENCE_RANK: Record<Finding['evidenceClass'], number> = {
 // two distinct groups into one (the same delimiter trap the identity key avoids). evidenceClass is
 // part of the key so a deterministic finding and an advisory finding of the same rule never merge.
 // status is part of it because a group prints one status: a new and a waived finding on one rule
-// would otherwise read as two new barriers.
+// would otherwise read as two new barriers. confidence is part of it for the same reason: a group
+// is labelled from its representative, so a failing finding and a check usabl could not decide on
+// one rule would both read as whichever one happened to represent the group.
 //
 // A contrast result axe could not measure because of a gradient background gets a group of its
 // own, so it never merges with, or stands for, a contrast result axe did measure.
@@ -82,6 +91,7 @@ function groupKey(finding: Finding): string {
     finding.rule,
     finding.evidenceClass,
     finding.status,
+    finding.confidence,
     isGradientContrastReview(finding),
   ]);
 }
@@ -90,6 +100,7 @@ function groupRank(group: CollapsedFindingGroup): string {
   return [
     String(EVIDENCE_RANK[group.evidenceClass]),
     String(STATUS_RANK[group.status]),
+    String(CONFIDENCE_RANK[group.representative.confidence] ?? 2),
     String(SEVERITY_RANK[group.severity]),
     group.screenId,
     group.layer,
