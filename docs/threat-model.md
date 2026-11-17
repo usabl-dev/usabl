@@ -127,7 +127,8 @@ re-baseline to green.
 - The local guard still compares text for a file reader without the byte read. Every file reader
   usabl builds for the guard has it. The file reader type keeps it optional because the run also
   builds a file reader of that type, with only the text read and the glob, for coverage planning,
-  and that reader never reaches the guard.
+  and that reader never reaches the guard. `run` is a public export, so a library caller that
+  passes its own file reader without the byte read gets the text compare, as before this change.
 - The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control

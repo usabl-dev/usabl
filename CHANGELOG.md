@@ -478,8 +478,8 @@
   folder, now read as changed on every run. Every receipt minted before this stops matching once,
   so the screens are checked again on the next run. In a session that spans the upgrade, each stop
   blocks until the user reviews the policy changes and deletes the pin file, or starts a new
-  session. All of these are the safe direction. A guarded submodule still reads as changed on every local run, and so does a link git
-  checked out as a plain file with `core.symlinks` false. A guarded file name that is not valid
+  session. All of these are the safe direction. A guarded submodule still reads as changed on
+  every local run, and so does a link git checked out as a plain file with `core.symlinks` false. A guarded file name that is not valid
   UTF-8 is still decoded: the CI policy check and the pins see a change to it through the entry git
   lists, two such names that decode alike can hide one another, and the local guard reports such a
   name as changed on every run.
