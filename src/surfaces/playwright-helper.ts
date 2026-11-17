@@ -500,8 +500,14 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // The address again, after the checks. A page that left its screen while they ran, such as a
     // router that moved to a sign-in page, was not that screen for every check, so its findings go.
     // It is read the way the CLI reads it, with stayedOnScreen against the address read at load,
-    // so a move to another origin is leaving and a tab panel's #tab-2 is not.
-    const moved = expected === null ? null : await leftScreenAfterChecks(page, screenId, labeledScreenId !== null, expected, loadedUrl);
+    // so a move to another origin is leaving. A plain fragment change, such as a tab panel's #tab-2,
+    // is left to the reachedWhen selector only when one is measured again below; see
+    // leftScreenAfterChecks.
+    const selectorMeasuredAfter = before !== null && signal !== null && signal.selector !== null && config !== null;
+    const moved =
+      expected === null
+        ? null
+        : await leftScreenAfterChecks(page, screenId, labeledScreenId !== null, expected, loadedUrl, selectorMeasuredAfter);
     if (moved !== null) {
       return otherPage(moved);
     }
@@ -745,8 +751,15 @@ async function addressGap(
  * the load check. The origin and the path always count. A test runs on one origin from load to the
  * end of the checks, so a change of host or port there is a move, such as to an SSO portal. The
  * query counts only when the expected address has one. The fragment counts only when it names a
- * route (`#/` or `#!`), or always when the expected address has a plain fragment. So a tab panel
- * that sets `#tab-2` stays on the screen.
+ * route (`#/` or `#!`), or always when the expected address has a plain fragment.
+ *
+ * That rule leaves a plain fragment change, such as `/app` to `/app#login`, to a reachedWhen
+ * selector, as the CLI does. So it is the whole rule only when `selectorMeasuredAfter` says the
+ * screen's selector is measured again after the checks. Without one, nothing else would catch an
+ * app that routes with plain fragments, so the read also keeps the rule checkPage used before:
+ * the path and the whole fragment against the expected address, by sameScreenPath. Any fragment
+ * change that rule sees is then a move too, a tab panel's `#tab-2` included. checkPage is never
+ * weaker than that rule.
  *
  * Returns null when the page stayed. An address that cannot be read or does not parse is a gap,
  * because then nothing confirms the checks ran on the screen.
@@ -757,9 +770,12 @@ async function leftScreenAfterChecks(
   labeled: boolean,
   expected: string,
   loadedUrl: string | null,
+  selectorMeasuredAfter: boolean,
 ): Promise<CoverageGap | null> {
   const checkedUrl = await readReportedAddress(page);
-  const stayed = checkedUrl === null || loadedUrl === null ? null : stayedOnScreen(expected, loadedUrl, checkedUrl);
+  const onScreen = checkedUrl === null || loadedUrl === null ? null : stayedOnScreen(expected, loadedUrl, checkedUrl);
+  const stayed =
+    onScreen === true && !selectorMeasuredAfter && checkedUrl !== null ? sameScreenPath(expected, checkedUrl) : onScreen;
   if (stayed === true) {
     return null;
   }
@@ -786,13 +802,21 @@ async function leftScreenAfterChecks(
     stayed === false
       ? `The page left that screen while it was checked, so usabl reports no findings for it.${hidden}`
       : 'So usabl cannot tell whether the page stayed on that screen while it was checked, and it reports no findings for it.';
+  const rule = selectorMeasuredAfter
+    ? 'The origin and the path are compared. The query counts only when the expected address has one, and the ' +
+      'fragment only when it names a route: one that starts with #/ or #!, or any fragment when the expected ' +
+      'address has one. Any other change to the query or the fragment, such as a tab panel that sets #tab-2, ' +
+      "counts as the same screen, and the screen's reachedWhen selector, measured again after the checks, is " +
+      'what tells a plain fragment route apart.'
+    : 'The origin and the path are compared, and so is the whole fragment, because this screen has no ' +
+      'reachedWhen selector that is measured again after the checks, and only the fragment can show that an app ' +
+      'that routes with plain fragments moved. So a tab panel that sets #tab-2 counts as leaving too. To let a ' +
+      "fragment that is not a route change, declare a reachedWhen selector for the screen in usabl.config.json and " +
+      'pass its screenId. The query counts only when the expected address has one.';
   return landingGap(
     screenId,
     `checkPage was told ${claimOf(screenId, labeled, expected)}. When the checks began, ${atLoad}; ` +
-      `after the checks, ${where}. ${outcome} The origin and the path are compared. ` +
-      'The query counts only when the expected address has one, and the fragment only when it names a route: one ' +
-      'that starts with #/ or #!, or any fragment when the expected address has one. Any other change to the query ' +
-      'or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If the session expired ' +
+      `after the checks, ${where}. ${outcome} ${rule} If the session expired ` +
       'during the checks, sign in again before the check. If a script on the page navigates on focus or on a ' +
       'timer, find it and stop it from moving the page while it is checked. If the app routes with the query or ' +
       'with a plain fragment, put that part in the url in usabl.config.json or in expectedUrl. If the fragment in ' +

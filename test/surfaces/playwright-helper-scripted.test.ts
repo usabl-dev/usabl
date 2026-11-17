@@ -613,3 +613,83 @@ describe('checkPage reads the address after the checks the way the CLI does', ()
     expect(result.gaps[0]?.reason).toContain('could not report its address');
   });
 });
+
+// checkPage is never weaker than its old read after the checks, which compared the path and the
+// whole fragment with the expected address. With no reachedWhen selector measured again after the
+// checks, nothing else would catch an app that routes with plain fragments, so any fragment change
+// that rule saw is still a move. With a selector, the read is the CLI's rule alone, and the
+// selector is what catches a plain fragment router, as in the CLI.
+describe('checkPage after the checks, with and without a reachedWhen selector', () => {
+  const SELECTOR = '#orders';
+
+  // A page with one control whose address changes when the walk presses Tab. `selectorAfter` says
+  // whether the readiness selector still matches once it has moved.
+  function movesOnTab(from: string, to: string, selectorAfter = true): Page {
+    let tabbed = false;
+    const page = scriptedPage(['#save'], {
+      currentUrl: async () => (tabbed ? to : from),
+      queryAll: async (selector) => (selector === SELECTOR && (!tabbed || selectorAfter) ? [{ selector }] : []),
+    });
+    const tab = page.tab;
+    page.tab = async () => {
+      tabbed = true;
+      await tab();
+    };
+    return page;
+  }
+
+  async function checkMove(from: string, to: string, options: { expectedUrl: string; selector: boolean; selectorAfter?: boolean }) {
+    adopted.page = movesOnTab(from, to, options.selectorAfter);
+    return checkPage(pwPage(), {
+      screenId: 'clusters',
+      projectRoot: await project(options.selector ? SELECTOR : undefined),
+      tabCap: 10,
+      expectedUrl: options.expectedUrl,
+    });
+  }
+
+  const cases: Array<[string, string, string]> = [
+    ['a plain fragment router moves to another fragment', 'http://127.0.0.1:5173/app', 'http://127.0.0.1:5173/app#login'],
+    ['a tab panel sets a plain fragment', PAGE_URL, `${PAGE_URL}#tab-2`],
+    ['an anchor is set inside a hash route', 'http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/clusters#tab-2'],
+    ['the query inside a #! route changes', 'http://127.0.0.1:5173/#!/a?x=1', 'http://127.0.0.1:5173/#!/a?x=2'],
+  ];
+
+  for (const [name, from, to] of cases) {
+    it(`is not covered with no selector when ${name}, as before this rule`, async () => {
+      const result = await checkMove(from, to, { expectedUrl: from, selector: false });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+      expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+      expect(result.gaps[0]?.reason).toContain('reachedWhen');
+    });
+
+    it(`stays covered with a selector that still holds when ${name}`, async () => {
+      const result = await checkMove(from, to, { expectedUrl: from, selector: true });
+
+      expect(result.gaps).toEqual([]);
+      expect(result.verdict).toBe('verified');
+    });
+  }
+
+  it('leaves a plain fragment router move to the selector when the screen has one: gone after the move, the page is not covered', async () => {
+    const result = await checkMove('http://127.0.0.1:5173/app', 'http://127.0.0.1:5173/app#login', {
+      expectedUrl: 'http://127.0.0.1:5173/app',
+      selector: true,
+      selectorAfter: false,
+    });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['readiness:clusters']);
+  });
+
+  it('still catches a move to another origin with a selector that holds', async () => {
+    const result = await checkMove(PAGE_URL, 'https://sso.example.com/clusters', { expectedUrl: PAGE_URL, selector: true });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+  });
+});
