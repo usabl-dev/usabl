@@ -1,0 +1,157 @@
+/**
+ * The Stop hook's own time limit.
+ *
+ * An assistant ends a hook that runs past its time limit, and a hook it ends is not a block: the
+ * stop goes on. So a slow stop would let an agent stop without the accessibility work. The runner
+ * therefore keeps a deadline of its own, shorter than the host's limit. When the deadline comes
+ * first, the runner stops the check, saves no receipt, and blocks once with the message below.
+ *
+ * The host's limit reaches the runner through the USABL_STOP_HOOK_TIMEOUT environment variable,
+ * which the generated Claude Code hook command sets to the same number as the hook's `timeout`.
+ * When the variable is unset or unusable, the runner plans to the host's own default: the timeout
+ * usabl install --cursor writes for Cursor, and Claude Code's default for a command hook for
+ * Claude. This module only computes numbers and fixed text. It decides no verdict.
+ */
+
+/** The environment variable that carries the host's limit, in whole seconds. */
+export const STOP_HOOK_TIMEOUT_ENV = 'USABL_STOP_HOOK_TIMEOUT';
+
+/** The `timeout` usabl install --claude writes for the Stop hook, in seconds. */
+export const CLAUDE_STOP_TIMEOUT_SECONDS = 600;
+
+/** The `timeout` usabl install --cursor writes in .cursor/hooks.json, in seconds. */
+export const CURSOR_STOP_TIMEOUT_SECONDS = 300;
+
+/**
+ * Claude Code's documented default for a command hook with no `timeout` field, in seconds. A hook
+ * command an older usabl wrote sets no limit, so the runner plans to this, the shortest default.
+ */
+export const CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS = 60;
+
+/**
+ * The time left between the runner's deadline and the host's limit, in seconds. It covers npm
+ * starting the hook before the runner's clock starts, closing the browser, writing the answer, and
+ * the process exit.
+ */
+export const ANSWER_MARGIN_SECONDS = 30;
+
+/**
+ * The smallest host limit that leaves the full margin and at least as much time to check. Below
+ * it the runner keeps half the limit for itself, and usabl doctor reports the hook.
+ */
+export const MIN_HOST_TIMEOUT_SECONDS = 60;
+
+/** How long the runner waits for the browser to close after the deadline, in milliseconds. */
+export const BROWSER_CLOSE_WAIT_MS = 10_000;
+
+// Whole seconds, at most six digits. A larger number is no limit usabl can plan to.
+const SECONDS_PATTERN = /^[1-9][0-9]{0,5}$/;
+
+/** Where the host limit came from. Each source has its own words in the message. */
+export type HostLimitSource = 'hook' | 'claude-default' | 'cursor-install';
+
+export interface HostLimit {
+  seconds: number;
+  source: HostLimitSource;
+}
+
+/** The value as whole seconds, or null when it is not one usabl can plan to. */
+export function parseTimeoutSeconds(value: string | undefined): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return SECONDS_PATTERN.test(trimmed) ? Number(trimmed) : null;
+}
+
+/** The host's limit for this stop. */
+export function hostLimit(setting: string | undefined, cursorMode: boolean): HostLimit {
+  const seconds = parseTimeoutSeconds(setting);
+  if (seconds !== null) {
+    return { seconds, source: 'hook' };
+  }
+  return cursorMode
+    ? { seconds: CURSOR_STOP_TIMEOUT_SECONDS, source: 'cursor-install' }
+    : { seconds: CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS, source: 'claude-default' };
+}
+
+/** The runner's own deadline for a host limit, in seconds. */
+export function runnerDeadlineSeconds(hostSeconds: number): number {
+  if (hostSeconds >= MIN_HOST_TIMEOUT_SECONDS) {
+    return hostSeconds - ANSWER_MARGIN_SECONDS;
+  }
+  return Math.max(1, Math.floor(hostSeconds / 2));
+}
+
+/** A timer the runner races its work against. */
+export interface StopTimer {
+  expired: Promise<void>;
+  cancel(): void;
+}
+
+/** What the runner needs to keep its deadline. The real one is in makeStopHookRunnerPorts. */
+export interface StopHookDeadlinePort {
+  // The USABL_STOP_HOOK_TIMEOUT value, or undefined when the hook command sets none.
+  timeoutSetting: string | undefined;
+  // How long the hook process ran before the runner started, in milliseconds.
+  elapsedMs: () => number;
+  // A timer that ends after `ms` milliseconds from now.
+  startTimer: (ms: number) => StopTimer;
+  // Ends the process once the answer is written, so work still running cannot hold it past the
+  // host's limit. The host reads the answer only when the process exits.
+  endProcess: () => Promise<void>;
+}
+
+function limitSource(limit: HostLimit): string {
+  if (limit.source === 'hook') {
+    return `set by ${STOP_HOOK_TIMEOUT_ENV} in the hook command`;
+  }
+  if (limit.source === 'cursor-install') {
+    return 'the timeout usabl install --cursor writes in .cursor/hooks.json';
+  }
+  return `Claude Code's default, because the hook command sets no ${STOP_HOOK_TIMEOUT_ENV}`;
+}
+
+function raiseStep(cursorMode: boolean): string {
+  if (cursorMode) {
+    return (
+      'To raise the limit, set the usabl stop hook\'s "timeout" in .cursor/hooks.json, and set ' +
+      `${STOP_HOOK_TIMEOUT_ENV} to the same number of seconds where Cursor runs the hook.`
+    );
+  }
+  return (
+    'To raise the limit, set the usabl Stop hook\'s "timeout" in .claude/settings.json and ' +
+    `${STOP_HOOK_TIMEOUT_ENV} in its command to the same number of seconds, or run usabl install --claude to write both.`
+  );
+}
+
+export interface DeadlineMessageInput {
+  limit: HostLimit;
+  cursorMode: boolean;
+  continuation: boolean;
+  // The check the advice names: usabl check, or usabl check --branch-scope.
+  checkCommand: string;
+}
+
+/**
+ * The message for a stop that reached the deadline. Every part is usabl's own text, so nothing in
+ * it is framed.
+ */
+export function deadlineMessage(input: DeadlineMessageInput): string {
+  const deadline = runnerDeadlineSeconds(input.limit.seconds);
+  const lines = [
+    `NOT verified - usabl ran out of time: this stop took longer than usabl's own limit of ${deadline} seconds, ` +
+      'so usabl stopped the check before it could check the change. ' +
+      'Nothing is proven about this change, and no receipt was saved.',
+    `usabl's limit is the hook's limit of ${input.limit.seconds} seconds (${limitSource(input.limit)}), ` +
+      `less ${input.limit.seconds - deadline} seconds to answer before the assistant ends the hook.`,
+  ];
+  if (input.continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  lines.push(
+    `Next: narrow the change and stop again, or run ${input.checkCommand} by hand, or raise the limit in the hook settings. ` +
+      raiseStep(input.cursorMode),
+  );
+  return lines.join('\n');
+}
