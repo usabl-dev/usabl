@@ -1104,7 +1104,19 @@ export function projectPrCommentWithin(result: Result, config: UsablConfig | und
     collapsedGating !== null
       ? [collapsedGating, blank, renderFindingGroup('Advisory (non-gating)', advisory, 'advisory')]
       : [
-          renderFindingGroup('New accessibility barriers', deterministicNew, 'recorded'),
+          // A new finding usabl could not decide blocks the run, but it is not an accessibility
+          // barrier found, so it has its own heading. Failures first, as the terminal lists them.
+          renderFindingGroup(
+            'New accessibility barriers',
+            deterministicNew.filter((finding) => finding.confidence === 'fail'),
+            'recorded',
+          ),
+          blank,
+          renderFindingGroup(
+            'New checks that need a person to review',
+            deterministicNew.filter((finding) => finding.confidence !== 'fail'),
+            'recorded',
+          ),
           blank,
           renderFindingGroup('Known (recorded debt)', deterministicRecorded, 'recorded', true),
           blank,

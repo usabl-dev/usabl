@@ -1220,3 +1220,66 @@ describe('pr comment collapse never mixes statuses', () => {
     expect(markdown).not.toContain('`axe/rule-0` (×3)');
   });
 });
+
+/**
+ * A new finding usabl could not decide is listed under its own heading.
+ *
+ * Both kinds of new finding were listed under "New accessibility barriers", so a reviewer read an
+ * undecided check as an accessibility barrier found. They now go under their own heading, which
+ * is printed on every real verdict like the others, "none" included.
+ */
+describe('pull request comment lists undecided checks apart', () => {
+  const NEW_BARRIERS = '### New accessibility barriers';
+  const NEW_CHECKS = '### New checks that need a person to review';
+  const noGaps = { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false };
+  const items = (markdown: string, heading: string): string[] => {
+    const lines = markdown.split('\n');
+    const start = lines.indexOf(heading);
+    if (start === -1) {
+      return ['(heading missing)'];
+    }
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => line.startsWith('### '));
+    return rest.slice(0, end === -1 ? rest.length : end).filter((line) => line.startsWith('- '));
+  };
+
+  it('lists an undecided check under its own heading, not as an accessibility barrier', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'not_covered',
+        exitCode: 3,
+        findings: [baseFinding({ confidence: 'unverified' })],
+        coverage: noGaps,
+      }),
+    );
+
+    expect(items(markdown, NEW_BARRIERS)).toEqual(['- none']);
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/color-contrast`']);
+  });
+
+  it('lists each new finding under the heading for what it is, failures first', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        findings: [
+          baseFinding({ rule: 'walk-a', elementKey: 'k-a', confidence: 'unverified' }),
+          baseFinding({ rule: 'button-name', elementKey: 'k-b', confidence: 'fail' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+    const lines = markdown.split('\n');
+
+    expect(items(markdown, NEW_BARRIERS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/button-name`']);
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/walk-a`']);
+    expect(lines.indexOf(NEW_CHECKS)).toBeGreaterThan(lines.indexOf(NEW_BARRIERS));
+    expect(lines.indexOf('### Known (recorded debt)')).toBeGreaterThan(lines.indexOf(NEW_CHECKS));
+  });
+
+  it('prints the heading with none on a real verdict that has no undecided check', () => {
+    const markdown = projectPrComment(baseResult({ verdict: 'verified', findings: [], coverage: noGaps }));
+
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- none']);
+  });
+});
