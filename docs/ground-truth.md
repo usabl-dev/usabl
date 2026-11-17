@@ -2504,9 +2504,10 @@ same selector gaps the last flow, as above.
 
 `checkPage` reads its address after the checks with the same `stayedOnScreen` rule, against the
 address the page reported when it passed the check before the checks, with the expected address in
-the place of the configured `url`. So on `checkPage` too, a move to another origin at the same
-path is leaving, a tab panel that sets `#tab-2` is not, a hash route move is leaving, and a query
-change is leaving only when the expected address has a query. `checkPage` output drops every
+the place of the configured `url`. When the screen has no `reachedWhen` selector that is measured
+again after the checks, it also keeps its earlier rule, `sameScreenPath` against the expected
+address, which compares the whole fragment, so it is never weaker than before. See "The page's
+address" under `checkPage` (section 11) for what each case gives. `checkPage` output drops every
 fragment and query from the addresses it prints, so a move in a hash route or a query prints two
 equal addresses, and the gap says they differ in a part that is not shown.
 
@@ -4887,9 +4888,29 @@ rule for its own read after the checks (`stayedOnScreen`; see "After the checks,
 in section 8), against the address the page reported before the checks: the origin and the path always
 count, so a move to the same path on another host or port is leaving; the query counts only when
 the expected address has one; the fragment counts only when it names a route (`#/` or `#!`), or
-any fragment when the expected address has a plain one. So a tab panel that sets `#tab-2` during
-the checks stays covered. An address that cannot be read after the checks is the same gap. The keyboard walk's gaps
-from that run go with them: the gap for a walk that was cut short and the gap for each region it
+any fragment when the expected address has a plain one. That rule leaves a plain fragment change
+to a `reachedWhen` selector, as the CLI does, so it is the whole rule only on a labeled screen
+whose config declares a selector, which `checkPage` measures again after the checks. On any other
+page, including one checked with only `expectedUrl`, the read also keeps the rule `checkPage` used
+before: the path and the whole fragment against the expected address (`sameScreenPath`, with a
+hash route `#/` cut at its own `?`). So `checkPage` catches every move it caught before, and also
+a move to another host or port and, when the expected address has a query, a query change. What
+each case gives:
+
+- With no selector measured after the checks: a plain fragment route move, such as `/app` to
+  `/app#login`, is a gap. So is a tab panel that sets `#tab-2`, an anchor set inside a hash route
+  (`#/clusters` to `#/clusters#tab-2`), and a change of the query inside a `#!` route
+  (`#!/a?x=1` to `#!/a?x=2`), because the read cannot tell any of them from a route move. That is
+  the cost of being never weaker. To let a fragment that is not a route change, declare a
+  `reachedWhen` selector for the screen in `usabl.config.json` and pass its `screenId`.
+- With a selector measured after the checks: those four stay covered while the selector holds.
+  The selector is then what catches a plain fragment route move: a page that moved to a view
+  without the selector's content is a `readiness:<screenId>` gap. A move to a view that still
+  matches the selector is not caught, as in the CLI, so point the selector at content only this
+  screen has.
+
+An address that cannot be read after the checks is the same gap. When the page left, the keyboard
+walk's gaps from that run go with its findings: the gap for a walk that was cut short and the gap for each region it
 could not read describe the other page, so the landing gap alone names the cause. The same holds
 when Rule A, read again after the checks, finds a refused request. Other gaps the checks made are
 kept. Before the checks, a page at another path or fragment is a `not-covered` gap with ref
