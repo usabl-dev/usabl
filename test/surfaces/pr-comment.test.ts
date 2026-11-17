@@ -153,16 +153,22 @@ describe('projectPrComment', () => {
 
     // The number really is the number of items rendered, counted out of the markdown rather than
     // asserted from the fixture, so the headline and the list cannot drift apart again.
+    // The new findings are listed under two headings, the failing one under the barriers and the
+    // two unconfirmed ones under the checks a person needs to review, and the count is both.
     const lines = markdown.split('\n');
-    const start = lines.indexOf('### New accessibility barriers');
-    expect(start).toBeGreaterThan(-1);
-    const rest = lines.slice(start + 1);
-    const end = rest.findIndex((line) => line.startsWith('### '));
-    const listed = rest.slice(0, end === -1 ? rest.length : end)
-      .filter((line) => line.startsWith('- ') && line !== '- none').length;
+    const listedUnder = (heading: string): number => {
+      const start = lines.indexOf(heading);
+      expect(start).toBeGreaterThan(-1);
+      const rest = lines.slice(start + 1);
+      const end = rest.findIndex((line) => line.startsWith('### '));
+      return rest.slice(0, end === -1 ? rest.length : end)
+        .filter((line) => line.startsWith('- ') && line !== '- none').length;
+    };
+    const barriers = listedUnder('### New accessibility barriers');
+    const checks = listedUnder('### New checks that need a person to review');
     const printed = Number(/- deterministic: new (\d+)/.exec(markdown)?.[1]);
-    expect(listed).toBe(3);
-    expect(printed).toBe(listed);
+    expect([barriers, checks]).toEqual([1, 2]);
+    expect(printed).toBe(barriers + checks);
   });
 
   it('says a run held at not_covered by unconfirmed findings is blocked', () => {
