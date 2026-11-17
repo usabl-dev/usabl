@@ -4324,6 +4324,17 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
+- The next step names the work that is there. A new check usabl could not decide is a
+  person's call: the step says "Each check undecided below needs a person to review it, so tell
+  the user. Do not change code to make an undecided check pass, and do not mark one as reviewed
+  yourself." (during an active continuation, "Tell the user that each check usabl could not
+  decide needs a person to review it." and the same two prohibitions). On a regression with such
+  checks the barrier step reads "fix each accessibility barrier below" and the review sentence
+  follows. On `not_covered` held only by such checks the step reads "Next: usabl checked this
+  change, but some checks could not decide." and the review sentence, and never points at Not
+  evaluated, which is empty then. When coverage gaps also hold the run, the coverage step comes
+  first and the review sentence follows. The same rule holds for the accessibility half of
+  `approval_required`. A run with no undecided check keeps the steps as before.
 - A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
   null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
