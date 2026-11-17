@@ -1,9 +1,14 @@
 {
   "appBaseUrl": "http://127.0.0.1:5173",
-  "uiFileGlobs": ["fixtures/live/users-screen.html"],
+  "uiFileGlobs": ["fixtures/live/self-gate-screen.html"],
   "discovery": { "routerFile": "", "wideBlastGlobs": [] },
   "surfaces": [
-    { "id": "users", "url": "http://127.0.0.1:5173/users-screen.html", "files": ["fixtures/live/users-screen.html"] }
+    {
+      "id": "self-gate",
+      "url": "http://127.0.0.1:5173/self-gate-screen.html",
+      "files": ["fixtures/live/self-gate-screen.html"],
+      "reachedWhen": "#self-gate-screen"
+    }
   ],
   "guardedPaths": [
     "src/gate/",
