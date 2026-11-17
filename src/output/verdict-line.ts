@@ -76,10 +76,14 @@ const NOT_COVERED_UNDECIDED_MEANING = 'Checked, but some checks could not decide
 const NOT_COVERED_BOTH_MEANING = 'usabl could not check all of this change, and some checks could not decide.';
 
 /**
- * The not_covered sentence for the causes this Result shows. It reads the coverage lists and the
- * findings the gate wrote and decides no verdict.
+ * The two causes that can hold a run back besides a failing finding, as this Result shows them.
+ * `coverageFailed` is a gap or an unmapped file, and a coverage list that is not a list counts as
+ * failed, so a broken Result is never described as checked. `undecided` is a blocking finding
+ * usabl could not decide. It reads the coverage lists and the findings the gate wrote and decides
+ * no verdict. The verdict line and the Stop hook's next step both read it, so they name the same
+ * causes.
  */
-function notCoveredMeaning(result: Result): string | undefined {
+export function blockingCauses(result: Result): { coverageFailed: boolean; undecided: boolean } {
   const coverage = result.coverage as { gaps?: unknown; unresolvedFiles?: unknown } | undefined;
   const coverageFailed =
     !Array.isArray(coverage?.gaps) ||
@@ -93,6 +97,12 @@ function notCoveredMeaning(result: Result): string | undefined {
       (finding: Finding) =>
         typeof finding === 'object' && finding !== null && isBlockingBarrier(finding) && finding.confidence === 'unverified',
     );
+  return { coverageFailed, undecided };
+}
+
+/** The not_covered sentence for the causes this Result shows. */
+function notCoveredMeaning(result: Result): string | undefined {
+  const { coverageFailed, undecided } = blockingCauses(result);
   if (!undecided) {
     return undefined;
   }

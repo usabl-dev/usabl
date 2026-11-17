@@ -7,7 +7,7 @@ import type { Result, UsablConfig } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
-import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
+import { blockingCauses, describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
   barrierLines,
   excludedFilePieces,
@@ -58,6 +58,11 @@ export interface StopDecision {
  *
  * Guarded policy files are the one thing the model must not touch to clear a block, so that step
  * says so.
+ *
+ * A check usabl could not decide is not work the model can finish. A person has to review it, so
+ * its step tells the model to raise it, and not to change code to make it pass or mark it
+ * reviewed itself. When such checks are the only cause, the step says the change was checked and
+ * does not send the model to the Not evaluated list, which is empty then.
  */
 interface NextSteps {
   regression: string;
@@ -65,10 +70,26 @@ interface NextSteps {
   approvalOnly: string;
   approvalWithRegression: string;
   approvalWithGaps: string;
+  // The steps for a run that also holds checks usabl could not decide. The barrier step names
+  // accessibility barriers only, because the undecided checks get the review sentence after it.
+  regressionWithChecks: string;
+  approvalWithRegressionAndChecks: string;
+  // What an undecided check needs. It is a person's call, so the model raises it and must not
+  // change code to make it pass or mark it reviewed itself.
+  review: string;
 }
+
+// Said when undecided checks are the only cause, so the model is not sent to an empty list.
+const CHECKED_UNDECIDED = 'usabl checked this change, but some checks could not decide.';
 
 const BLOCK_STEPS: NextSteps = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
+  regressionWithChecks:
+    'Next: fix each accessibility barrier below, then stop again so usabl can re-check the change.',
+  approvalWithRegressionAndChecks:
+    'Next: fix each accessibility barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  review:
+    'Each check undecided below needs a person to review it, so tell the user. Do not change code to make an undecided check pass, and do not mark one as reviewed yourself.',
   notCovered:
     'Next: resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>). Then stop again.',
   approvalOnly:
@@ -99,6 +120,11 @@ const unrecognizedContinuationStep = (check: CheckCommand): string =>
  */
 const continuationSteps = (check: CheckCommand): NextSteps => ({
   regression: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  regressionWithChecks: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  approvalWithRegressionAndChecks:
+    'Next: fix each accessibility barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
+  review:
+    'Tell the user that each check usabl could not decide needs a person to review it. Do not change code to make an undecided check pass, and do not mark one as reviewed yourself.',
   notCovered: `Next: resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
   approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
@@ -117,20 +143,33 @@ const continuationSteps = (check: CheckCommand): NextSteps => ({
  * caller routes through here so no path can answer this on its own.
  */
 function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
+  // An undecided check adds the review sentence to whatever else the run needs. When it is the
+  // only thing holding the accessibility half, the coverage step is left out, because the list it
+  // points at is empty. The causes are read from the Result and choose no verdict.
+  const { coverageFailed, undecided } = blockingCauses(result);
+  const withReview = (step: string): string => `${step} ${steps.review}`;
   if (result.verdict === 'approval_required') {
     if (result.accessibilityVerdict === 'regression') {
-      return steps.approvalWithRegression;
+      return undecided ? withReview(steps.approvalWithRegressionAndChecks) : steps.approvalWithRegression;
     }
     if (result.accessibilityVerdict === 'not_covered') {
-      return steps.approvalWithGaps;
+      if (!undecided) {
+        return steps.approvalWithGaps;
+      }
+      return coverageFailed
+        ? withReview(steps.approvalWithGaps)
+        : withReview(`${steps.approvalOnly} ${CHECKED_UNDECIDED}`);
     }
     return steps.approvalOnly;
   }
   if (result.verdict === 'regression') {
-    return steps.regression;
+    return undecided ? withReview(steps.regressionWithChecks) : steps.regression;
   }
   if (result.verdict === 'not_covered') {
-    return steps.notCovered;
+    if (!undecided) {
+      return steps.notCovered;
+    }
+    return coverageFailed ? withReview(steps.notCovered) : withReview(`Next: ${CHECKED_UNDECIDED}`);
   }
   return undefined;
 }
