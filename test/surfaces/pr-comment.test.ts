@@ -1283,6 +1283,30 @@ describe('pull request comment lists undecided checks apart', () => {
     expect(lines.indexOf('### Known (recorded debt)')).toBeGreaterThan(lines.indexOf(NEW_CHECKS));
   });
 
+  it('marks an undecided group in the collapsed view, so it reads apart from a failing group on the same rule', () => {
+    // Failing and undecided findings on one rule form two groups. Both printed the same headline,
+    // so nothing told them apart and the undecided one was never marked as needing review.
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        findings: [
+          baseFinding({ elementKey: 'k-1' }),
+          baseFinding({ elementKey: 'k-2' }),
+          baseFinding({ elementKey: 'k-3', confidence: 'unverified' }),
+          baseFinding({ elementKey: 'k-4', confidence: 'unverified' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+    const collapsed = items(markdown, '### Findings (collapsed by rule)');
+
+    expect(collapsed).toEqual([
+      '- &#91;`new serious`&#93; `clusters`/`axe/color-contrast` (×2)',
+      '- check undecided, needs a person to review: &#91;`new serious`&#93; `clusters`/`axe/color-contrast` (×2)',
+    ]);
+  });
+
   it('prints the heading with none on a real verdict that has no undecided check', () => {
     const markdown = projectPrComment(baseResult({ verdict: 'verified', findings: [], coverage: noGaps }));
 
