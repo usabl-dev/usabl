@@ -980,10 +980,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     ['/cross-origin-frame-text.html', false],
     ['/hidden-cross-origin-frame.html', false],
     ['/boxless-cross-origin-frame.html', false],
+    // A frame sandboxed without allow-same-origin has an opaque origin, so the read cannot see
+    // into it either. It is not counted, as a frame from another origin is not.
+    ['/sandboxed-empty-frame.html', false],
     // The read can see into these frames, so they count only through what they show.
     ['/empty-srcdoc-frame.html', false],
     ['/about-blank-frame.html', false],
-    ['/sandboxed-empty-frame.html', false],
+    // Not frames: content hidden with CSS, and a CSS background image, show nothing the read counts.
     ['/hidden-content.html', false],
     ['/background-only.html', false],
   ] as const) {
