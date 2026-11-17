@@ -2457,8 +2457,8 @@ that is not a route from the `url`. The drafts, the keyboard stops, the applicab
 and every gap from the checks go, as they do for a late refusal. A refusal found at the late Rule A
 read is reported instead, because it names an endpoint.
 
-The comparison is its own rule, used for this read only. `checkPage` and the landing rules keep
-`sameScreenPath`.
+The comparison is its own rule, used for this read and for `checkPage`'s read after the checks.
+The landing rules, and `checkPage`'s read before the checks, keep `sameScreenPath`.
 
 - The origin (scheme, host, and port) always counts. Both addresses come from the same browser in
   the same scan, so the origin changes only when the page moved, for example to an SSO portal at
@@ -2500,9 +2500,13 @@ For the first two, configure the screen's `url` with its query or fragment. For 
 did not hold at both moments makes the screen a gap in `coverage/unseen.ts`. For the fifth, the
 same selector gaps the last flow, as above.
 
-`checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
-fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a gap.
-That is the safe direction, and it is not changed here.
+`checkPage` reads its address after the checks with the same `stayedOnScreen` rule, against the
+address the page reported when it passed the check before the checks, with the expected address in
+the place of the configured `url`. So on `checkPage` too, a move to another origin at the same
+path is leaving, a tab panel that sets `#tab-2` is not, a hash route move is leaving, and a query
+change is leaving only when the expected address has a query. `checkPage` output drops every
+fragment and query from the addresses it prints, so a move in a hash route or a query prints two
+equal addresses, and the gap says they differ in a part that is not shown.
 
 The two session rules require a configured storage state because only that is an assertion that the
 run is signed in. Without it a 401 and a login form are ordinary things for a signed-out visitor to
@@ -4863,8 +4867,8 @@ when it is not.
 handed to `checkPage` is then not the screen it is labeled with. So when `options.screenId`
 names a surface that `usabl.config.json` lists, `checkPage` holds the page to that surface's
 `url`. The caller can pass `options.expectedUrl` instead, as a full address or a path such as
-`/clusters` read against the page's own address. Only the path, with one trailing slash removed,
-and the fragment are compared. The origin and the port are set aside, because a test often runs
+`/clusters` read against the page's own address. Before the checks, only the path, with one
+trailing slash removed, and the fragment are compared. The origin and the port are set aside, because a test often runs
 on its own base URL, on another port, or on `localhost` where the config says `127.0.0.1`. The
 query is set aside too, as in the CLI's Rule C. The fragment is compared because a hash router
 keeps the whole route there. A hash route, a fragment that starts with `#/`, is read the way a
@@ -4876,13 +4880,17 @@ screen declares no readiness signal, `checkPage` first waits for the page to set
 does, and then reads the address. A page that does not settle is a `landing:<screenId>` gap that
 keeps only the first line of the browser's error, neutralized, because its later lines can be a
 call log that quotes the page's markup. It reads the address again after the checks, and a page that
-left its screen while they ran is the same gap, with its findings dropped. The keyboard walk's gaps
+left its screen while they ran is the same gap, with its findings dropped. That read uses the CLI's
+rule for its own read after the checks (`stayedOnScreen`; see "After the checks, the address again"
+in section 8), against the address the page reported before the checks: the origin and the path always
+count, so a move to the same path on another host or port is leaving; the query counts only when
+the expected address has one; the fragment counts only when it names a route (`#/` or `#!`), or
+any fragment when the expected address has a plain one. So a tab panel that sets `#tab-2` during
+the checks stays covered. An address that cannot be read after the checks is the same gap. The keyboard walk's gaps
 from that run go with them: the gap for a walk that was cut short and the gap for each region it
 could not read describe the other page, so the landing gap alone names the cause. The same holds
 when Rule A, read again after the checks, finds a refused request. Other gaps the checks made are
-kept. The CLI reads the address again too, against the address read at load, with a comparison of
-its own that counts the origin, and the query and fragment only when they name a route. A page at
-another path or fragment is a `not-covered` gap with ref
+kept. Before the checks, a page at another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C

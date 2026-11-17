@@ -433,9 +433,9 @@ function normalizeUrl(raw: string): string | null {
 
 /**
  * Whether two addresses name the same screen when their origins are set aside: the same path, up to
- * one trailing slash, and the same fragment. The Playwright helper reads it, because a test often
- * runs on its own base URL, on another port, or on localhost where the config says 127.0.0.1. Null
- * when either address does not parse, so no claim is made either way.
+ * one trailing slash, and the same fragment. The Playwright helper reads it before the checks,
+ * because a test often runs on its own base URL, on another port, or on localhost where the config
+ * says 127.0.0.1. Null when either address does not parse, so no claim is made either way.
  */
 export function sameScreenPath(expectedUrl: string, landedUrl: string): boolean | null {
   try {
@@ -464,7 +464,8 @@ function hashRouteOf(hash: string): string {
 
 /**
  * Whether the page was still on its screen after the checks, by the address read at load and the
- * address read after the checks. Used for that read only; sameScreenPath and the landing rules are
+ * address read after the checks. The Playwright helper's checkPage reads its own address after the
+ * checks with it too. sameScreenPath, the landing rules, and checkPage's read before the checks are
  * unchanged.
  *
  * The origin (scheme, host, and port) always counts. Both addresses come from the same browser in

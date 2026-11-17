@@ -504,3 +504,112 @@ describe('checkPage and the keyboard walk budget', () => {
     );
   });
 });
+
+describe('checkPage reads the address after the checks the way the CLI does', () => {
+  // A page with one control that reports one address until the walk presses Tab, and another
+  // address after it, as a page whose focus handler moves it does.
+  function movesOnTab(from: string, to: string): Page {
+    let tabbed = false;
+    const page = scriptedPage(['#save'], { currentUrl: async () => (tabbed ? to : from) });
+    const tab = page.tab;
+    page.tab = async () => {
+      tabbed = true;
+      await tab();
+    };
+    return page;
+  }
+
+  async function checkMove(from: string, to: string, expectedUrl?: string) {
+    adopted.page = movesOnTab(from, to);
+    return checkPage(pwPage(), {
+      screenId: 'clusters',
+      projectRoot: await project(),
+      tabCap: 10,
+      ...(expectedUrl === undefined ? {} : { expectedUrl }),
+    });
+  }
+
+  const moves: Array<[string, string, string, string | undefined]> = [
+    ['to another host at the same path', PAGE_URL, 'https://sso.example.com/clusters', undefined],
+    ['to another port at the same path', PAGE_URL, 'http://127.0.0.1:5174/clusters', undefined],
+    ['to another hash route', 'http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/login', 'http://127.0.0.1:5173/#/clusters'],
+    [
+      'to another query on a screen configured with a query',
+      'http://127.0.0.1:5173/admin.php?page=clusters',
+      'http://127.0.0.1:5173/admin.php?page=login',
+      'http://127.0.0.1:5173/admin.php?page=clusters',
+    ],
+    ['to another plain fragment on a screen configured with one', 'http://127.0.0.1:5173/app#clusters', 'http://127.0.0.1:5173/app#login', 'http://127.0.0.1:5173/app#clusters'],
+  ];
+  for (const [name, from, to, expectedUrl] of moves) {
+    it(`is not covered when the page moved ${name} while the checks ran`, async () => {
+      const result = await checkMove(from, to, expectedUrl);
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+      expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+    });
+  }
+
+  it('says a hash route move differs in a part it does not show, because checkPage output drops every fragment', async () => {
+    const result = await checkMove('http://127.0.0.1:5173/#/clusters', 'http://127.0.0.1:5173/#/login', 'http://127.0.0.1:5173/#/clusters');
+
+    expect(result.gaps[0]?.reason).toContain('differ only in a part that is not shown');
+    expect(result.gaps[0]?.reason).not.toContain('#/login');
+  });
+
+  it('names the other origin the page moved to', async () => {
+    const result = await checkMove(PAGE_URL, 'https://sso.example.com/clusters');
+
+    expect(result.gaps[0]?.reason).toContain('http://127.0.0.1:5173/clusters');
+    expect(result.gaps[0]?.reason).toContain('https://sso.example.com/clusters');
+    expect(result.gaps[0]?.reason).not.toContain('differ only in a part that is not shown');
+  });
+
+  it('never prints the query the page moved to', async () => {
+    const result = await checkMove(
+      'http://127.0.0.1:5173/admin.php?page=clusters',
+      'http://127.0.0.1:5173/admin.php?page=login&token=SECRETPOISON',
+      'http://127.0.0.1:5173/admin.php?page=clusters',
+    );
+
+    expect(result.gaps[0]?.reason).not.toContain('page=login');
+    expect(result.gaps[0]?.reason).not.toContain('SECRETPOISON');
+    expect(result.gaps[0]?.reason).toContain('differ only in a part that is not shown');
+  });
+
+  const stays: Array<[string, string, string, string | undefined]> = [
+    ['a tab panel sets a plain fragment', PAGE_URL, `${PAGE_URL}#tab-2`, undefined],
+    ['a filter adds a query on a screen configured without one', PAGE_URL, `${PAGE_URL}?sort=name`, undefined],
+    [
+      'a hash route gains its own query and an anchor',
+      'http://127.0.0.1:5173/#/clusters',
+      'http://127.0.0.1:5173/#/clusters?page=2',
+      'http://127.0.0.1:5173/#/clusters',
+    ],
+  ];
+  for (const [name, from, to, expectedUrl] of stays) {
+    it(`stays covered when ${name} while the checks ran`, async () => {
+      const result = await checkMove(from, to, expectedUrl);
+
+      expect(result.gaps).toEqual([]);
+      expect(result.verdict).toBe('verified');
+    });
+  }
+
+  it('keeps the load rule: a test on another host and port is still the screen when it stays there', async () => {
+    const result = await checkMove('http://localhost:9999/clusters', 'http://localhost:9999/clusters');
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('is not covered when the page cannot report its address after the checks', async () => {
+    const result = await checkMove(PAGE_URL, '');
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+    expect(result.gaps[0]?.reason).toContain('could not report its address');
+  });
+});

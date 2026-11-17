@@ -56,6 +56,7 @@ import {
   redirectedAwayGap,
   sameScreenPath,
   sanitizeUrlForDisplay,
+  stayedOnScreen,
   type LandingObservation,
 } from '../providers/redirected.js';
 import { attachRowScopeToDrafts } from '../providers/row-scope.js';
@@ -455,6 +456,9 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // so no provider runs on it.
     const expected = expectedAddress(options, labeledScreenId, config, pwPage.url());
     let landing: LandingObservation | null = null;
+    // The address the page reported when it passed the load check. The read after the checks is
+    // compared with it.
+    let loadedUrl: string | null = null;
     if (expected !== null && !isWebAddress(expected)) {
       return finish([], [refusedAddressGap(screenId, expected)]);
     }
@@ -473,6 +477,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
         return finish([], [landed.gap]);
       }
       landing = landed.observation;
+      loadedUrl = landed.loadedUrl;
     }
 
     if (before !== null) {
@@ -494,7 +499,12 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     }
     // The address again, after the checks. A page that left its screen while they ran, such as a
     // router that moved to a sign-in page, was not that screen for every check, so its findings go.
-    const moved = expected === null ? null : (await addressGap(page, screenId, labeledScreenId !== null, expected, 'after the checks')).gap;
+    // It is read the way the CLI reads it, with stayedOnScreen against the address read at load,
+    // so a move to another origin is leaving and a tab panel's #tab-2 is not.
+    const moved =
+      expected === null || loadedUrl === null
+        ? null
+        : await leftScreenAfterChecks(page, screenId, labeledScreenId !== null, expected, loadedUrl);
     if (moved !== null) {
       return otherPage(moved);
     }
@@ -649,8 +659,8 @@ async function landingBeforeChecks(
   config: UsablConfig | null,
   reachedWhen: SurfaceConfig['reachedWhen'],
   signedIn: boolean | undefined,
-): Promise<{ observation: LandingObservation } | { gap: CoverageGap }> {
-  const address = await addressGap(page, screenId, labeled, expected, null);
+): Promise<{ observation: LandingObservation; loadedUrl: string } | { gap: CoverageGap }> {
+  const address = await addressGap(page, screenId, labeled, expected);
   if (address.gap !== null) {
     return { gap: address.gap };
   }
@@ -664,7 +674,7 @@ async function landingBeforeChecks(
     reachedWhen,
   });
   const ruled = redirectedAwayGap(screenId, observation);
-  return ruled === null ? { observation } : { gap: landingGap(screenId, ruled.reason) };
+  return ruled === null ? { observation, loadedUrl: landedUrl } : { gap: landingGap(screenId, ruled.reason) };
 }
 
 /**
@@ -687,47 +697,105 @@ async function settleBeforeAddressRead(page: Page, screenId: string): Promise<Co
   }
 }
 
+/** The address the page reports, or null when it cannot report one. */
+async function readReportedAddress(page: Page): Promise<string | null> {
+  try {
+    const reported = await page.currentUrl();
+    return reported.trim().length > 0 ? reported : null;
+  } catch {
+    return null;
+  }
+}
+
+function claimOf(screenId: string, labeled: boolean, expected: string): string {
+  return labeled ? `this page is screen ${screenId}, at ${sanitizeUrlForDisplay(expected)}` : `this page is at ${sanitizeUrlForDisplay(expected)}`;
+}
+
 /**
- * Whether the page is at the address it claims, by path and fragment only. Returns the address the
- * page reported when it is, or a landing gap that names both addresses when it is not. `when` says
- * when the address was read, for a read after the checks.
+ * Whether the page is at the address it claims, by path and fragment only, before the checks run.
+ * Returns the address the page reported when it is, or a landing gap that names both addresses
+ * when it is not.
  */
 async function addressGap(
   page: Page,
   screenId: string,
   labeled: boolean,
   expected: string,
-  when: string | null,
 ): Promise<{ landedUrl: string; gap: null } | { landedUrl: null; gap: CoverageGap }> {
-  let landedUrl: string | null;
-  try {
-    const reported = await page.currentUrl();
-    landedUrl = reported.trim().length > 0 ? reported : null;
-  } catch {
-    landedUrl = null;
-  }
+  const landedUrl = await readReportedAddress(page);
   if (landedUrl !== null && sameScreenPath(expected, landedUrl) === true) {
     return { landedUrl, gap: null };
   }
-  const claim = labeled ? `this page is screen ${screenId}, at ${sanitizeUrlForDisplay(expected)}` : `this page is at ${sanitizeUrlForDisplay(expected)}`;
   const where = landedUrl === null ? 'the page could not report its address' : `the page is at ${sanitizeUrlForDisplay(landedUrl)}`;
-  const read = when === null ? where : `${when}, ${where}`;
-  const outcome =
-    when === null
-      ? 'The page is not that screen, so usabl did not check it and reports no findings for it.'
-      : 'The page left that screen while it was checked, so usabl reports no findings for it.';
   return {
     landedUrl: null,
     gap: landingGap(
       screenId,
-      `checkPage was told ${claim}, and ${read}. Only the path and the fragment are compared, so a test ` +
-        `on another host or port still matches. ${outcome} If the session expired, sign in again before the check. ` +
+      `checkPage was told ${claimOf(screenId, labeled, expected)}, and ${where}. Only the path and the fragment are compared, so a test ` +
+        'on another host or port still matches. The page is not that screen, so usabl did not check it and reports no findings for it. ' +
+        'If the session expired, sign in again before the check. ' +
         'If the screen moved, correct ' +
         'its url in usabl.config.json or pass expectedUrl. Addresses are shown without their sign-in credentials, ' +
         'query string, or fragment, because any of them can carry a token, so two addresses that differ only in ' +
         'the fragment look the same here.',
     ),
   };
+}
+
+/**
+ * Whether the page was still on its screen after the checks, read the way the CLI reads it: with
+ * stayedOnScreen in providers/redirected.ts, against the address the page reported when it passed
+ * the load check. The origin and the path always count. A test runs on one origin from load to the
+ * end of the checks, so a change of host or port there is a move, such as to an SSO portal. The
+ * query counts only when the expected address has one. The fragment counts only when it names a
+ * route (`#/` or `#!`), or always when the expected address has a plain fragment. So a tab panel
+ * that sets `#tab-2` stays on the screen.
+ *
+ * Returns null when the page stayed. An address that cannot be read or does not parse is a gap,
+ * because then nothing confirms the checks ran on the screen.
+ */
+async function leftScreenAfterChecks(
+  page: Page,
+  screenId: string,
+  labeled: boolean,
+  expected: string,
+  loadedUrl: string,
+): Promise<CoverageGap | null> {
+  const checkedUrl = await readReportedAddress(page);
+  const stayed = checkedUrl === null ? null : stayedOnScreen(expected, loadedUrl, checkedUrl);
+  if (stayed === true) {
+    return null;
+  }
+  const where =
+    checkedUrl === null
+      ? 'the page could not report its address'
+      : stayed === null
+        ? 'usabl could not read the address the page reported'
+        : `the page was at ${sanitizeUrlForDisplay(checkedUrl)}`;
+  // checkPage output drops the query and the whole fragment of every address it prints, a hash route
+  // included (scrubOutboundData). So a move in the query or the fragment prints two equal
+  // addresses, and the reason says so.
+  const hidden =
+    stayed === false && checkedUrl !== null && sanitizeUrlForDisplay(loadedUrl) === sanitizeUrlForDisplay(checkedUrl)
+      ? ' The two addresses differ only in a part that is not shown.'
+      : '';
+  const outcome =
+    stayed === false
+      ? `The page left that screen while it was checked, so usabl reports no findings for it.${hidden}`
+      : 'So usabl cannot tell whether the page stayed on that screen while it was checked, and it reports no findings for it.';
+  return landingGap(
+    screenId,
+    `checkPage was told ${claimOf(screenId, labeled, expected)}. When the checks began, the page was at ` +
+      `${sanitizeUrlForDisplay(loadedUrl)}; after the checks, ${where}. ${outcome} The origin and the path are compared. ` +
+      'The query counts only when the expected address has one, and the fragment only when it names a route: one ' +
+      'that starts with #/ or #!, or any fragment when the expected address has one. Any other change to the query ' +
+      'or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If the session expired ' +
+      'during the checks, sign in again before the check. If a script on the page navigates on focus or on a ' +
+      'timer, find it and stop it from moving the page while it is checked. If the app routes with the query or ' +
+      'with a plain fragment, put that part in the url in usabl.config.json or in expectedUrl. If the fragment in ' +
+      'that address is only an anchor, not a route, remove it. Addresses are shown without their sign-in ' +
+      'credentials, query string, or fragment, because any of them can carry a token.',
+  );
 }
 
 /** Rule A on the refused-request record as it stands after the checks, as the CLI reads it. */

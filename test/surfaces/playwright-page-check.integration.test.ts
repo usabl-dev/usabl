@@ -291,6 +291,17 @@ const MOVING_PAGES: Record<string, string> = {
     '</body>',
     `<script>document.querySelector('button').addEventListener('focus', () => { ${MOVE_TO_SIGN_IN} }, { once: true });</script></body>`,
   ),
+  // A tab panel that sets a plain fragment when its control gets focus. The page stays on its screen.
+  '/sets-tab-hash-on-focus': headingPage('Clusters').replace(
+    '</body>',
+    `<script>document.querySelector('button').addEventListener('focus', () => { location.hash = 'tab-2'; }, { once: true });</script></body>`,
+  ),
+  // A page that moves to the same path on another host when its control gets focus, as a move to an
+  // SSO portal or a www home page at the same path does. On the other host it stays put.
+  '/moves-host-on-focus': headingPage('Clusters').replace(
+    '</body>',
+    `<script>if (location.hostname === '127.0.0.1') { document.querySelector('button').addEventListener('focus', () => { location.href = 'http://localhost:' + location.port + location.pathname; }, { once: true }); }</script></body>`,
+  ),
 };
 
 function headingPage(heading: string): string {
@@ -1023,6 +1034,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     expect(result.drafts).toEqual([]);
     expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:moving']);
     expect(result.gaps[0]?.reason).toContain('/login');
+  });
+
+  it('keeps a page covered when a tab panel sets a plain fragment while the checks run', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/sets-tab-hash-on-focus`, { screenId: 'moving', expectedUrl: '/sets-tab-hash-on-focus' });
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('is not_covered when the page moved to the same path on another host while the checks ran', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/moves-host-on-focus`, { screenId: 'moving', expectedUrl: '/moves-host-on-focus' });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps.map((gap) => gap.ref)).toContain('landing:moving');
+    expect(result.gaps.find((gap) => gap.ref === 'landing:moving')?.reason).toContain(`http://localhost:${port}/moves-host-on-focus`);
   });
 
   it('is not_covered, and does not throw, when the expected address is not http or https', async () => {
