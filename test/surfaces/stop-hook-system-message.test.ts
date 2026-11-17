@@ -164,6 +164,49 @@ describe('Claude Stop hook allows that carry a notice write a systemMessage the 
     expect(message).toContain('continuation already active');
   });
 
+  // Pins an older usabl wrote take the drift path: a stop blocks, and a stop while continuation is
+  // already active is let through once, with the same notice, and runs no check.
+  it('an older pins continuation that is let through', async () => {
+    const olderPins = (): { pins: ReturnType<typeof memoryPinStore>; stored: string } => {
+      const pins = memoryPinStore();
+      // An earlier release stored a bare digest with no format version.
+      const stored = JSON.stringify({ 'usabl.config.json': 'a'.repeat(64) });
+      pins.files.set(sessionPinFileName(SESSION, ROOT), stored);
+      return { pins, stored };
+    };
+
+    const blocked = olderPins();
+    const blockedRun = harness({ pins: blocked.pins });
+    expect(await runStopHookFromStdin(input(false), blockedRun.ports)).toBe(0);
+    const block = JSON.parse(blockedRun.stdout().trim()) as { decision: string; reason: string };
+    expect(block.decision).toBe('block');
+
+    const continued = olderPins();
+    const h = harness({ pins: continued.pins });
+    let engineRan = false;
+    h.ports.runEngine = async () => {
+      engineRan = true;
+      return result();
+    };
+    const message = await stop(h, input(true));
+
+    expect(message).toContain('written by an older usabl');
+    expect(message).toContain('cannot tell whether');
+    expect(message).toContain('continuation already active');
+    // The stop cannot tell whether policy changed, so it never says that it did.
+    expect(message).not.toContain('guarded policy drift');
+    // The same notice as the block: its first line, and its untrusted text with the pin fix.
+    const head = block.reason.split('\n')[0] ?? '';
+    expect(head.length).toBeGreaterThan(0);
+    expect(message.startsWith(head.split(' Next:')[0] ?? head)).toBe(true);
+    const frame = block.reason.slice(block.reason.indexOf('[BEGIN UNTRUSTED TEXT'));
+    expect(message.endsWith(frame)).toBe(true);
+    // No check ran, and the stored pins are kept, so a retry cannot take the current state as the
+    // baseline.
+    expect(engineRan).toBe(false);
+    expect(continued.pins.files.get(sessionPinFileName(SESSION, ROOT))).toBe(continued.stored);
+  });
+
   it('a stop hook error, with the error inside the frame', async () => {
     const h = harness({ bytes: { working: { status: 'found', text: CONFIG }, head: { status: 'unreadable', reason: 'git exploded' } } });
     const message = await stop(h, input(false));
