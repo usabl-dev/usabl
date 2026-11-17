@@ -2872,7 +2872,17 @@ their own.
    is still decided from the whole blocking set. The recorded, floor and coverage clauses
    follow as before. The terminal report and the overlay print the blocking count with the
    same words, and the terminal lists each blocking finding under the part it belongs to,
-   under a `blocking this run:` heading for each part.
+   under a `blocking this run:` heading for each part. The overlay marks each undecided row
+   "Check undecided, needs a person to review".
+
+   The verdict line says which cause held a `not_covered` run. When coverage failed (a gap or
+   an unmapped file) it keeps "usabl could not check all of this change, so it is blocked as
+   unproven." When the only cause is a new undecided check it says "Checked, but some checks
+   could not decide. A person must review them to pass." When both hold it says "usabl could
+   not check all of this change, and some checks could not decide." The overlay follows the
+   same rule: it says it could not check the affected screens only when coverage failed, and
+   otherwise names the undecided checks on the screen. A Result that shows neither cause keeps
+   the coverage sentence. Neither surface chooses the verdict.
 
 ### Identity
 
@@ -4342,7 +4352,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   `accessibility barrier 1: axe/color-contrast`, `screen (1): ...`, `experience (1): ...`,
   `fix (1): ...`. One reads `Accessibility barrier: [new serious] (×3)` with
   `accessibility barrier: <layer>/<rule>` and `screen: <id>` inside, then its experience and
-  fix. When guarded files changed,
+  fix. A group of new findings usabl could not decide is not an accessibility barrier found:
+  its headline reads `- check undecided 2, needs a person to review: [new serious]` (or
+  `Check undecided, needs a person to review: [new serious]` alone), and its rule piece
+  `check undecided 2: axe/color-contrast`. A group never mixes a failing finding with an
+  undecided one, and failing groups are listed first. The heading names what the list holds:
+  `Accessibility barriers:`, `Checks undecided, need a person to review:`, or
+  `Findings that block this run:` when it holds both. When guarded files changed,
   the scaffold line gives their count, for example `Guarded files changed: 2, named under
   "guarded files" in the untrusted text below`, and the piece `guarded files: <paths>`
   follows the gate's summary and is never dropped when the message is shortened. A field
@@ -4434,15 +4450,16 @@ receipt (`_No receipt: run was not verified._` when none), then `### Conformance
 then `### Accessibility debt` when the floor holds debt or the change fixed some, for example
 "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1 is
 intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
-then the finding sections `### New accessibility barriers`, `### Known (recorded debt)`, and
-`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
+then the finding sections `### New accessibility barriers` (new failing findings),
+`### New checks that need a person to review` (new findings usabl could not decide),
+`### Known (recorded debt)`, and `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps`, then
 `### Disclosed, does not block` when any screen carries a provider note, and
 `### Announcements (current run)`. The notes section is disclosure only and never changes
 the verdict. The terminal summary, the self-check, and the Stop hook print the same notes
 after the gaps under `disclosed, does not block`. The known section lists carried and waived deterministic
 findings, each with its status, the same recorded debt the terminal and the overlay list. A
-collapsed group holds findings of one status, and names its screen id and rule once, in its
+collapsed group holds findings of one status and one confidence, failing groups first, and names its screen id and rule once, in its
 headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. The sticky comment
 step updates only a comment that GitHub Actions wrote (`github-actions[bot]`) and that starts with
 `<!-- usabl-report -->`, which the renderer always writes as the first line. The token can edit
