@@ -51,7 +51,10 @@ re-baseline to green.
   100644, as git maps it, a link's text, and a path below a linked folder as nothing. The local
   guard computes the blob id of those bytes, as `git hash-object` does, and compares it with the
   trusted id. The config is decoded for parsing from the same working tree read the compare
-  used.
+  used. At a ref, the only text the guard reads is a link's text and the config's text, and it
+  reads each by the id the listing gave (`git cat-file blob <id>`), never by asking for the path
+  at the ref again. So the text and the id come from one tree, even when a ref such as HEAD moves
+  while usabl reads it.
 - What that closes. A guarded file whose byte `0xFE` became `0xFF` read as unchanged, since both
   decode to U+FFFD. A guarded file swapped for a symbolic link whose link text equals the old
   content, or a file whose executable bit changed, compared equal in CI, in the pins, and in the
@@ -61,9 +64,10 @@ re-baseline to green.
   now a change.
 - Every git command the reader runs reads a path by its exact name. It runs with
   `GIT_LITERAL_PATHSPECS=1`, set in the one place the reader builds git's environment. Without it,
-  git reads a path that starts with pathspec magic, such as `:(top)x.json` or `:(literal)x.json`,
-  as an instruction, and lists `x.json` instead. An edit to such a guarded file, or a new one,
-  then read as absent at both refs, and the CI policy check passed with no code owner approval.
+  git would read a path that starts with pathspec magic, such as `:(top)x.json` or
+  `:(literal)x.json`, as an instruction and list `x.json` instead, so a listing of guarded paths
+  would miss such a file. Before, the receipt policy hash read such a name as another file, and a
+  `guardedPaths` entry written with pathspec magic listed other files than the ones it names.
 - A guarded symbolic link is compared by its link text and by what it resolves to inside the
   repository. Every reader of a guarded file reads through the link, so a pull request that edits
   only an unguarded target would otherwise steer a guarded path, such as a manifest the run reads,
@@ -92,12 +96,17 @@ re-baseline to green.
 - The session pins hash a fixed label and what HEAD stores at each guarded path, as JSON of short
   strings: nothing, or the mode and the id, and for a link also the path it resolves to and the
   mode and id there. Two different entries never give the same input. Each pin is stored as `v4:`
-  and the hash. A pin file written by an earlier release holds bare hashes with no version. Those
-  say nothing this usabl can compare, so the Stop hook does not read them as drift and does not
-  take what is committed now as the baseline either. It says the pins are from an older usabl,
-  that drift was not checked, and how to get new pins (start a new session, or delete the pin
-  file), and it runs the full check instead of trusting a stored receipt. A missing ledger and an
-  empty one pin differently.
+  and the hash. A missing ledger and an empty one pin differently.
+- A pin file written by an earlier release holds bare hashes with no version. Those say nothing
+  this usabl can compare, so usabl cannot tell whether policy was weakened and committed earlier
+  in the session. A full check would then run under that weaker policy and could pass, and
+  recording new pins would take it as the baseline. So the Stop hook blocks that stop through the
+  same path as drift: it keeps the stored pins, runs no check, and never takes the receipt fast
+  path. Its message says the pins were written by an older usabl, so usabl cannot tell whether
+  guarded policy files changed in this session, and tells the user to review the policy files
+  changed since the session started, then delete the pin file it names to go on. It never says
+  that policy files changed. On an active continuation it lets that one stop through with the same
+  message, as it does for drift.
 - The receipt policy hash is built from each guarded path's mode and blob id at HEAD, so a mode
   change alone changes it. A receipt minted before this holds a hash of the ids alone, so it stops
   matching once and the screens are checked again. That is the safe direction. The receipt policy
@@ -109,12 +118,16 @@ re-baseline to green.
   guarded submodule as changed on every run, whether or not it moved. That fails safe, and it stays
   so on purpose: the commit checked out in a submodule can only be read by running git inside it,
   and a wrong "unchanged" would let a stop take the receipt fast path past a moved submodule.
-- `usabl enforce policy` hands the guard the git reader's tree entry read. The policy check's own
-  reader type, in `src/surfaces/policy-enforce.ts`, still names only the text read and the
-  listing, so the guard takes the tree entry read as optional there. A reader without it, such as
-  one a test builds, is compared as text, as before. Tests of `usabl enforce policy` through the
-  command line cover a byte change, a link swap, and a mode change, so a reader that loses the
-  tree entry read fails them.
+- The CI policy check requires the tree entry read. The policy check's reader type, `PolicyGit` in
+  `src/surfaces/policy-enforce.ts`, names `listEntries` as a required member, and the guard's
+  reader type for two refs does too, so a reader without it does not compile. The check has no
+  text compare to fall back to, and a reader built past the type without it is refused at run
+  time, so it never compares text. Tests of `usabl enforce policy` through the command line cover
+  a byte change, a link swap, and a mode change.
+- The local guard still compares text for a file reader without the byte read. Every file reader
+  usabl builds for the guard has it. The file reader type keeps it optional because the run also
+  builds a file reader of that type, with only the text read and the glob, for coverage planning,
+  and that reader never reaches the guard.
 - The git reader, the history reader, and the ledger reader accept none of these
   values as a ref, and refuse them before any git call: an empty value, a value that starts with
   `-` or `^`, and a value that holds `..`, `:`, `*`, `?`, `[`, `\`, white space, or a control

@@ -3539,7 +3539,9 @@ section.
 At a ref, each guarded path is its tree entry from one `git ls-tree -r --full-tree -z` listing per
 ref: the mode and the object id. The mode is 100644 or 100755 for a file, 120000 for a symbolic
 link, and 160000 for a submodule. Two refs store the same thing at a path when the mode and the id
-are equal, so no file content is read at a ref.
+are equal, so no file content is read at a ref. The only text read at a ref is a link's text and
+the config's text, and each is read by the id the listing gave (`git cat-file blob <id>`), never
+by the path at the ref again, so the text and the id always come from one tree.
 
 On the working tree, the file reader's `readBytes` uses `lstat` and `readlink` and reads what git
 would store: a regular file's bytes, with mode 100755 when its owner may run it and 100644
@@ -3586,9 +3588,10 @@ The local guard reports it as changed on every run, whether or not it moved. Tha
 `usabl enforce policy`, which compares two refs, a guarded submodule is changed exactly when its
 recorded commit changed.
 
-The command line hands `usabl enforce policy` the git reader's tree entry read. A reader without
-one, such as a test's own, is compared as text on both sides, as before. The same holds for a
-file reader without `readBytes` in the local guard.
+`usabl enforce policy` requires the tree entry read: `PolicyGit` names `listEntries` as a required
+member, and a reader built without it is refused, never compared as text. The local guard still
+compares text on both sides for a file reader without `readBytes`, such as a test's own. Every
+file reader usabl builds for the guard has it.
 
 ### Config-guards-itself
 
@@ -3615,13 +3618,15 @@ A link that does not resolve pins the same on every stop; the local guard report
 on each stop instead.
 
 A pin file from an earlier release holds bare hashes with no version. Those say nothing this
-usabl can compare. The stop does not read them as drift, which would say policy files changed
-when nothing did, and does not replace them, which would take whatever is committed now as the
-baseline. The stop runs the full check and does not take the stored receipt's fast path. Its
-decision line says session drift was not checked, and stderr ends with `NOT verified - usabl did
-not use session pins for this stop because the session pins were recorded by an older usabl, in a
-format this usabl does not compare, so this stop checks the change in full. ...`, with the fix:
-start a new session, or delete the pin file.
+usabl can compare, so usabl cannot tell whether policy was weakened and committed earlier in the
+session. A full check would run under that policy and could pass, and replacing the pins would
+take it as the baseline. So the stop blocks through the drift path: it keeps the stored pins,
+runs no check, and takes no receipt fast path. The block reason starts `NOT verified - the session
+pins were written by an older usabl, so usabl cannot tell whether guarded policy files changed
+during this session.` It tells the user to review the guarded policy files changed since the
+session started, then delete the pin file named under "pin fix" to go on. It never says that
+policy files changed. On an active continuation the stop is let through once with the same
+message, as for drift.
 
 The temp dir is shared by every local user, so pins are kept private to the user:
 
