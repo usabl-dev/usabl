@@ -357,7 +357,8 @@
 
 - The verdict summary splits the blocking count by confidence. A new failing finding reads
   `N accessibility barrier(s) found` and a new finding usabl could not decide reads
-  `N check(s) undecided, needs a person to review`, each printed only when its count is above
+  `1 check undecided, needs a person to review`, or in the plural
+  `N checks undecided, need a person to review`, each printed only when its count is above
   zero, failures first. Before, both read `N blocking finding(s)`, so a run held back only by a
   check axe could not decide read `not_covered: 1 blocking finding(s)` and was taken for an
   accessibility barrier found. The terminal report lists each blocking finding under a
@@ -376,10 +377,15 @@
   causes when coverage also failed. The overlay says it could not check the affected screens
   only when coverage failed, and marks each undecided row. The Stop hook's next step sends
   undecided checks to a person: it tells the model to tell the user, and not to change code to
-  make an undecided check pass or mark one reviewed itself. A `not_covered` run held only by
-  such checks no longer points at the empty Not evaluated list, a regression asks for the
-  accessibility barriers to be fixed and the checks to be reviewed, and a run held by both gaps
-  and undecided checks names both. Gate effect: none. No guarded file changed.
+  make an undecided check pass or mark one reviewed itself, for example with a waiver or a floor
+  entry. A `not_covered` run held only by such checks gets that action alone and no longer
+  points at the empty Not evaluated list, a regression asks for the accessibility barriers to be
+  fixed and the checks to be reviewed, and a run held by both gaps and undecided checks names
+  both. When the Stop hook or the self-check shortens its message, the note counts left-out
+  undecided checks as `undecided check(s)`, never as barriers. In the collapsed pull request view
+  a blocking undecided group is headed `check undecided, needs a person to review:`. Gate effect:
+  none. No guarded file changed by this entry; the plural wording in the summary above changed
+  `src/gate/index.ts` lines 757 to 760 and 804, inside the ranges already named.
 - This repository's own gate is now the workflow `usabl install --ci` writes, byte for byte, with
   the engine pinned to `usabl-dev/usabl` commit `b18fdb25e47dbb09aa12e315ea02a2401bcac08c` on main.
   Before, it was a hand-written three-job gate that built and ran the pull request's own engine in
