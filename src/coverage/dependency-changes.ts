@@ -56,8 +56,9 @@ function patternFolder(glob: string): string {
 // folder from it up to the repository root that has a package.json in the tree or at the trusted
 // ref. Not only the nearest one: a pull request can add a package.json below the real manifest,
 // and the nearest one would then move the app folder off it, so a bump of the real manifest would
-// not count. A repository with one package at its root has the root as its app folder.
-async function appDirs(fs: FsGlob, config: UsablConfig, trusted: TrustedRead | undefined): Promise<Set<string>> {
+// not count. A repository with one package at its root has the root as its app folder. The receipt
+// binds the `.env*` files of these folders too (src/evidence/local-files.ts).
+export async function appDirs(fs: FsGlob, config: UsablConfig, trusted: TrustedRead | undefined): Promise<Set<string>> {
   const anchors = [
     path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
     ...config.uiFileGlobs.map((glob) => patternFolder(glob.replace(/^\/+/u, ''))),

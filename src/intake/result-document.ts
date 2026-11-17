@@ -444,6 +444,9 @@ function receipt(value: unknown, field: string): Receipt {
     baseRevision: textOrNull(source['baseRevision'], at(field, 'baseRevision')),
     historyHead: textOrNull(source['historyHead'], at(field, 'historyHead')),
     policyHash: text(source['policyHash'], at(field, 'policyHash')),
+    // Absent in a receipt minted before local files were bound. Such a receipt never verifies, so
+    // it is left absent.
+    ...(has(source, 'localFilesHash') ? { localFilesHash: text(source['localFilesHash'], at(field, 'localFilesHash')) } : {}),
     runnerVersion: text(source['runnerVersion'], at(field, 'runnerVersion')),
     scannerVersions: {
       axeCore: text(scanners['axeCore'], at(scannersField, 'axeCore')),

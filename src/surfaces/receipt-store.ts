@@ -77,6 +77,8 @@ function isReceipt(value: unknown): value is Receipt {
     (value['baseRevision'] === null || typeof value['baseRevision'] === 'string') &&
     (value['historyHead'] === null || typeof value['historyHead'] === 'string') &&
     typeof value['policyHash'] === 'string' &&
+    // Absent in a receipt minted before local files were bound. It loads, and verify fails it.
+    (value['localFilesHash'] === undefined || typeof value['localFilesHash'] === 'string') &&
     typeof value['runnerVersion'] === 'string' &&
     isRecord(scannerVersions) &&
     typeof scannerVersions['axeCore'] === 'string' &&

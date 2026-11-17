@@ -428,6 +428,27 @@
 
 ### Fixed
 
+- The receipt binds the files the app reads that git does not see. git skips ignored files, so an
+  edit only to `.env.local`, which Vite loads, changed neither the tree nor the status, and a
+  stored receipt kept answering the Stop hook with
+  `VERIFIED (exit 0, stored receipt, not re-scanned)`. The receipt now records `localFilesHash`, a
+  hash over the path, the kind, and the content hash of every `.env*` file in the repository root
+  and in each app folder, of every path in the new optional config field `localFiles`, and of
+  `usabl.config.json`. It never records a
+  byte, a key, or a value of those files, or their paths. An edit, a file that appears or
+  disappears, or a config byte change that parses the same (such as white space) makes the
+  receipt stop matching, and the next stop checks again. A path usabl cannot read as a file of the
+  repository (a link, a folder, a file it may not open) never matches. `localFiles` takes exact
+  paths from the repository root, at most 64, and the loader refuses a glob, a `..` segment, a
+  leading `/`, and the other forms that could leave the repository. Effect: every receipt written
+  before this stops matching once, so the first stop after the upgrade runs a full check. Other
+  git-ignored files the app reads stay invisible to the run and the receipt until they are listed
+  in `localFiles`, and so does a `.env` file outside the root and the app folders. A `.env` file is
+  found whatever the case of its name, such as `.ENV.local`. Each bound file has a size cap, read
+  before any byte: 1 MiB for a `.env` file and 16 MiB for a listed file or the config, with at most
+  64 MiB read in all. A file over its cap, or one that grows while it is read, never matches, so a
+  sparse file of any size cannot make a stop run past its timeout. A `usabl check --ci` run binds
+  no local files, so a CI Result carries no hash of a secret in `.env`.
 - A Stop hook stop with a starting commit, and `usabl check --branch-scope`, read policy at that
   commit, as CI reads it at the base of the pull request. The stop runs the guard against HEAD and
   against the starting commit, before the receipt fast path, and both pass the starting commit to

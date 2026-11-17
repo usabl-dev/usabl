@@ -76,6 +76,7 @@ import {
 } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
+import { withoutLocalFileBinding } from './evidence/local-files.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
@@ -928,12 +929,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge === null || opts.trustedRef === null
       ? await loadConfig(opts.configPath)
       : (judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath)));
-  const deps = await buildDeps(config, {
+  const built = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],
     ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
     ...(judge === null ? {} : { isolation: judge.isolation }),
   });
+  // A CI run binds no local files into its receipt: CI has none to bind, and its Result is an
+  // artifact others read, where a hash of a short secret in .env could be guessed offline.
+  const deps = opts.ci ? withoutLocalFileBinding(built) : built;
   try {
     let changedFiles: string[] | undefined;
     let baseRevision: string | null = null;

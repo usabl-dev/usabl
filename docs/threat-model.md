@@ -243,13 +243,16 @@ re-baseline to green.
   a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
   as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section
   11.2).
+- On a Stop hook stop, the requirement providers and the commercial engines are still built from
+  the working-tree `usabl.config.json`, and a change there is a guarded change, so the stop blocks
+  for approval.
 - A waiver ends by the clock. A receipt minted while a waiver was live used to keep verifying
   after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
   would now block. The receipt binds the earliest end among the waivers the run applied
   (`waiverExpiresAt`), and stops verifying at that moment (Threat 4).
 - Limit, stated plainly: a user with a shell on the same machine can write a local receipt
-  that verifies. Every binding the receipt carries (tree, starting commit, policy hash, engine
-  and scanner versions, history head) can be computed again by that user, and `mintReceipt()` is
+  that verifies. Every binding the receipt carries (tree, starting commit, policy hash, local
+  files hash, engine and scanner versions, history head) can be computed again by that user, and `mintReceipt()` is
   exported.
   Receipt signing is not built. So the Stop hook's fast path says on its first line that the
   result comes from a stored receipt and was not re-scanned. CI never reads a local receipt;
@@ -309,8 +312,52 @@ passing bundle from another run.
   uncommitted changes only), `policyHash` (HEAD modes and blob shas over the guarded set),
   `runnerVersion`, `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the
   debt history commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among
-  the waivers the run applied, or null when it applied none. It records `mintedAt`. A receipt
-  exists only for a `verified` run.
+  the waivers the run applied, or null when it applied none. It also binds `localFilesHash`, the
+  files the app reads that git does not see (below). It records `mintedAt`. A receipt exists
+  only for a `verified` run.
+- git does not see ignored files. `sourceTree` comes from `git write-tree`, and the changed list
+  from git status, so an edit only to a git-ignored file the app reads, such as `.env.local`
+  (Vite loads it, and the Vite templates ignore it), moved neither. A stored receipt kept
+  answering the stop with "VERIFIED (exit 0, stored receipt, not re-scanned)". This hit honest
+  work and needed no forgery. The receipt now binds `localFilesHash`: for every file in the
+  repository root and in each app folder whose name, in lower case, starts with `.env` (so a
+  rename to `.ENV.local` is still bound), every path config `localFiles` lists, and
+  `usabl.config.json` at the root, the path, its kind (missing, file, or other), and the sha256
+  of its bytes, sorted by path. It never holds a byte, a line, a key, or a value of any of them,
+  and no path either, only the hash over the entries. An edit, a file that appears, or a file
+  that disappears changes the hash, and the next stop checks again. A path usabl cannot read as a
+  file of the repository (a symbolic link, a folder, a path below a link, or a file it may not
+  open) makes the value `unreadable`, which never matches, so that stop checks every time. A
+  receipt minted before this binding has none and does not verify, which costs one full check
+  once. Ground truth, section 10, Receipt binding, has the exact rule.
+- Limit, stated plainly: other git-ignored files the app reads are still invisible to the run
+  and the receipt when the config does not list them, for example a generated asset, a patched
+  file under `node_modules`, or a new source file hidden through `.git/info/exclude`. An edit to
+  one changes neither the tree, the status, nor the receipt, so a stored receipt keeps answering
+  the stop. To bind such a file, list its path from the repository root in `localFiles` in
+  `usabl.config.json` (ground truth, section 22). A folder or a glob cannot be listed, so list
+  each file. CI is not affected, because ignored files are not in the pull request.
+- Limits of the local files binding. It makes a stored receipt stop matching, and it does not
+  widen what the stop checks: the stop checks the screens its changed list reaches, so an edit
+  only to an ignored file on a branch with no other change is still nothing to check. The run
+  reads the bound files when it mints the receipt, after the scan, so an edit to one during the
+  scan is bound as if the scan had seen it; the tree is read before and after the scan, but
+  these files are not. Closing that needs a second read in `src/run.ts`, a guarded file, and is
+  not built. A `.env` file outside the root and the app folders, such as one in a folder Vite's
+  `envDir` names, is bound only when it is listed in `localFiles`.
+- Each stop reads every bound file whole, on the fast path too, and a sparse file of any size
+  costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
+  every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
+  on. So each bound file has a size cap, read from the file's size before any byte: 1 MiB for a
+  `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
+  one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
+  the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
+  cost of a large bound file is its hash time on every stop: about a tenth of a second at the
+  16 MiB cap.
+- A `usabl check --ci` run binds no local files, and its receipt has no `localFilesHash`. CI has
+  no ignored files to bind, and a hash with no key of a short secret in `.env`, in a Result
+  artifact that others read, could be guessed offline. A local stop never matches such a
+  receipt.
 - `sourceTree` is the tree the run read before it planned. The run reads the tree again after
   the scan and every policy read, before the gate. If the two reads differ, a file changed
   while the check ran, so the scan may have seen code that is neither the planned tree nor the
@@ -354,8 +401,9 @@ passing bundle from another run.
   exported. The bindings stop a receipt lifted from another run, not one written on purpose on
   this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
   re-scanned)" and says usabl did not scan the change again on that stop.
-- A receipt does not bind the config file a run used. It binds the committed policy files, and
-  the Stop hook reads `usabl.config.json` at the root. So a plain `usabl check --config <other
+- A receipt does not bind the config file a `usabl check --config <other file>` run used. It binds the committed policy files and
+  the bytes of `usabl.config.json` at the root, the file the Stop hook reads, never the file
+  `--config` names. So a plain `usabl check --config <other
   file>`, which plans from that other file (for example one with narrower `uiFileGlobs`), saves a
   receipt the hook checks against the root config. As built, that receipt records no starting
   commit, because a plain check passes no changed list. It answers only a stop that has no
@@ -363,7 +411,7 @@ passing bundle from another run.
   checks the uncommitted changes and says that committed work was not checked. On a stop with a
   starting commit it does not verify, and the stop runs the full check. `usabl check
   --branch-scope` refuses `--config` naming any file other than the root `usabl.config.json`.
-  Binding the config bytes into the receipt is not built.
+  Binding the bytes of the file `--config` names is not built.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
