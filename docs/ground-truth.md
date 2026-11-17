@@ -1215,8 +1215,10 @@ blank app, an error page, or a third-party widget), a hidden frame, a frame nest
 frames deep (the read does not follow it), `script`, `style`, and `template` content, and the
 document title. When every stop stayed on the body and the only content is a frame the read cannot
 see into, the page is reported not covered; the team can check it by serving the frame from the
-same origin, or by hand. Focus usually moves into a frame, though, so the walk leaves the body, the
-read does not run, and the page is checked like any other. Text that is
+same origin, or by hand. Focus usually moves into a frame, though, so the walk leaves the body and
+this read does not run. A frame the walk cannot read into stops the walk there, and that walk is
+not covered, so a page whose only content is such a frame cannot read as verified on the strength
+of it. A frame from the same origin is walked inside, like the rest of the page. Text that is
 visually hidden but laid out, such as text clipped to one pixel for screen readers, counts. A
 browser that cannot say whether an element is visible gets no benefit of the doubt: the element
 counts as hidden. A read that fails, or that passes 200,000 nodes without finding content, reads
