@@ -115,8 +115,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ ! -f scripts/check-engine-pin.ts ] || [ ! -f scripts/engine-pin.ts ] || [ ! -f scripts/engine-pin-draft.ts ]; then
-            echo "The trusted commit has no engine pin check scripts yet, so there is no trusted check to run. This holds only until the change that adds them merges."
+            for script in check-engine-pin.ts engine-pin.ts engine-pin-draft.ts; do
+              if git cat-file -e "origin/main:scripts/${script}" 2>/dev/null; then
+                echo "The base commit of this pull request has no engine pin check scripts, but main has them. Update this branch from main, then run the checks again."
+                exit 1
+              fi
+            done
+            echo "The trusted commit has no engine pin check scripts yet, and neither has main, so there is no trusted check to run. This holds only until the change that adds them merges."
             exit 0
           fi
           if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
@@ -126,7 +133,6 @@ jobs:
           # A fresh npm cache under the runner temp directory, never one a pull request could seed.
           export npm_config_cache="${RUNNER_TEMP}/usabl-npm-cache"
           npm ci --ignore-scripts
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "${EVENT_NAME}" = "pull_request" ]; then
             if ! [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
               echo "The base commit id is not a full lowercase commit id; failing closed."

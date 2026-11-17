@@ -4379,7 +4379,8 @@ screen, `users`. The pin moves only forward, to a commit on main, by the rule in
 `docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
 from the base commit to hold it there, and reads the head's gate only as data. The required
 status check named in branch protection is `usabl-required` (the workflow *file* is named
-`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
+`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this
+repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape

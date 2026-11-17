@@ -1660,7 +1660,10 @@ the `engine-pin` job below. What this repository's gate checks, and what it does
   branch rule requires the `engine-pin` check by name. The three scripts are in `guardedPaths`, so
   removing or weakening them on main needs an approved guarded change. One window is open until
   the change that adds the scripts merges: its base has no scripts, so the job says so in plain
-  words and passes. From the next pull request on, the base holds the scripts.
+  words and passes. The job passes that way only when a freshly fetched main also has no scripts.
+  A pull request whose base predates the scripts while main has them fails, with a message to
+  update the branch from main, so an older pull request cannot carry a green check from the
+  window. A rerun of an old run reads main again, so it fails the same way.
 - **No history workflow.** `usabl-history.yml` is left out of this repository. It would start the
   app with `npm run dev`, which this package does not have, and the repository has no debt floor
   to track.
