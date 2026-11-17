@@ -268,19 +268,18 @@ describe('a trusted configuration git cannot read at all', () => {
         { code: 'M', path: 'fixtures/app/src/Profile.tsx' },
       ],
     });
-    // The guard reads the trusted configuration three times through the fake: its tree entry to
-    // compare it (the fake's tree entry reads the text to compute the id), its text to decide
-    // scope, and its tree entry again in the listing. The next read of it is the scan
-    // configuration resolver. Failing from the fourth read onward exercises that resolver's own
-    // handler without touching the guard. If the guard ever reads the document a fourth time, this
-    // test fails as a crash, which is the signal to move the threshold, not a regression in the
-    // resolver.
+    // The guard reads the trusted configuration twice through the fake, which builds each tree
+    // entry from the text: once to compare it, with the text it parses the scope from, and once in
+    // the listing of every guarded path. The next read of it is the scan configuration resolver.
+    // Failing from the third read onward exercises that resolver's own handler without touching
+    // the guard. If the guard ever reads the document a third time, this test fails as a crash,
+    // which is the signal to move the threshold, not a regression in the resolver.
     const readable = deps.git.show;
     let trustedConfigReads = 0;
     deps.git.show = async (ref, path) => {
       if (ref === TRUSTED_REF && path === CONFIG_PATH) {
         trustedConfigReads += 1;
-        if (trustedConfigReads >= 4) throw eacces();
+        if (trustedConfigReads >= 3) throw eacces();
       }
       return readable(ref, path);
     };
@@ -289,7 +288,7 @@ describe('a trusted configuration git cannot read at all', () => {
     const result = await run(deps, config, { trustedRef: TRUSTED_REF });
     const enforced = enforceAccessibility(result);
 
-    expect(trustedConfigReads).toBeGreaterThanOrEqual(4);
+    expect(trustedConfigReads).toBeGreaterThanOrEqual(3);
     expect(result.verdict).toBe('approval_required');
     expect(result.coverage.nothingToCheck).toBe(false);
     expect(result.accessibilityVerdict).toBe('not_covered');
