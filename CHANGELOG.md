@@ -366,6 +366,16 @@
   verdict is still decided from the whole blocking set; only the words change. Guarded file:
   `src/gate/index.ts`, the summary text only (lines 124 to 125, 755 to 764, 791 to 792, and 799
   to 808).
+- An undecided check is never called an accessibility barrier, and a checked change is never
+  called unchecked. The Stop hook and the self-check label such an item
+  `Check undecided, needs a person to review` and list failures first. The pull request comment
+  lists new undecided findings under `### New checks that need a person to review`. A collapsed
+  group never mixes a failing finding with an undecided one, so a rule with both now shows as
+  two groups. The `not_covered` verdict line says "Checked, but some checks could not decide. A
+  person must review them to pass." when an undecided check is the only cause, and names both
+  causes when coverage also failed. The overlay says it could not check the affected screens
+  only when coverage failed, and marks each undecided row. Gate effect: none. No guarded file
+  changed.
 - This repository's own gate is now the workflow `usabl install --ci` writes, byte for byte, with
   the engine pinned to `usabl-dev/usabl` commit `b18fdb25e47dbb09aa12e315ea02a2401bcac08c` on main.
   Before, it was a hand-written three-job gate that built and ran the pull request's own engine in
