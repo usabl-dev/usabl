@@ -3772,6 +3772,96 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     await page.context().close();
   });
 
+  // A finding usabl could not decide blocks the run, but it is not an accessibility barrier
+  // found. The panel used to count it and name it as one. The header and the group count now
+  // split the blocking findings in the gate's words.
+  async function blockingCountText(page: Page): Promise<string> {
+    return page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      const group = Array.from(root?.querySelectorAll('.current-screen .finding-group') ?? []).find(
+        (candidate) => (candidate.querySelector('h4')?.textContent ?? '') === 'Findings that block this run',
+      );
+      return group?.querySelector('.section-count')?.textContent ?? '';
+    });
+  }
+
+  it('names an undecided check on its own as one, not as an accessibility barrier', async () => {
+    // The run is a regression because of a failure on another screen. This screen holds only a
+    // check usabl could not decide, so its header and its count must not call it a barrier found.
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 accessibility barrier found, 1 check undecided, needs a person to review',
+          findings: [
+            finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' }),
+            finding({ screenId: 'jobs', whatUserExperiences: 'Jobs failure.', elementKey: 'jobs|pf-focus-into-dialog|name:view-cluster-details' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('On this screen: 1 check undecided, needs a person to review. Review it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await groupHeadings(page)).toEqual(['Findings that block this run']);
+    expect(await blockingCountText(page)).toBe('1 check undecided, needs a person to review');
+    expect(await panel.locator('.current-screen').getByText('accessibility barrier found', { exact: false }).count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('names a failing finding and an undecided check apart when a screen has both', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 accessibility barrier found, 2 checks undecided, needs a person to review',
+          findings: [
+            finding({ whatUserExperiences: 'Failing focus.' }),
+            finding({ rule: 'color-contrast', layer: 'axe', confidence: 'unverified', whatUserExperiences: 'Undecided one.', elementKey: 'clusters|color-contrast|a' }),
+            finding({ rule: 'link-name', layer: 'axe', confidence: 'unverified', whatUserExperiences: 'Undecided two.', elementKey: 'clusters|link-name|b' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'On this screen: 1 accessibility barrier found, 2 checks undecided, needs a person to review. Fix the accessibility barrier and review the checks first.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(await blockingCountText(page)).toBe(
+      '1 accessibility barrier found, 2 checks undecided, needs a person to review',
+    );
+
+    await page.context().close();
+  });
+
+  it('keeps the plain sentence and names the count when every blocking finding fails', async () => {
+    const page = await mount(
+      projectOverlay(result({ summary: 'regression: 1 accessibility barrier found', findings: [finding()] })),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('usabl found 1 accessibility barrier on this screen. Fix it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await blockingCountText(page)).toBe('1 accessibility barrier found');
+
+    await page.context().close();
+  });
+
   it('does not send a developer to another screen on a verified run', async () => {
     // Debt on this screen and debt on another. Nothing blocks, so the guide to other screens says
     // what is there and stops. "Start with the worst screen" would be work usabl is not asking for.

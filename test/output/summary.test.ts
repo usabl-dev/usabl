@@ -753,3 +753,92 @@ describe('formatSummary long file lists', () => {
     expect(text).toContain('--json');
   });
 });
+
+/**
+ * The terminal prints the blocking count with the gate's split, so it agrees with the summary.
+ *
+ * It used to print every blocking finding under "accessibility barriers that block this run",
+ * so a check axe could not decide was counted and named as an accessibility barrier. Nothing had
+ * failed. Each part now has its own heading with the gate's words, and each finding is listed
+ * under the part it belongs to.
+ */
+describe('formatSummary splits the blocking count by confidence', () => {
+  const finding = (
+    confidence: 'fail' | 'unverified',
+    rule: string,
+  ): Result['findings'][number] => ({
+    rule,
+    layer: 'axe',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: 'clusters',
+    elementPath: 'button',
+    elementName: 'Save',
+    role: 'button',
+    whatUserExperiences: 'Something to look at',
+    why: '',
+    fix: 'Look at it',
+    evidence: {},
+    confidence,
+    elementKey: rule,
+    identityBasis: 'name',
+    status: 'new',
+  });
+  const BLOCKING = '  blocking this run: ';
+  const linesFor = (findings: Result['findings']): string[] =>
+    formatSummary(baseResult({ verdict: 'not_covered', exitCode: 3, findings })).split('\n');
+  const item = (rule: string): string => `    [new] clusters · axe/${rule} (serious): Something to look at`;
+
+  it('names an undecided check alone as one, not as an accessibility barrier', () => {
+    const lines = linesFor([finding('unverified', 'color-contrast')]);
+    const heading = lines.indexOf(`${BLOCKING}1 check undecided, needs a person to review`);
+
+    expect(heading).toBeGreaterThan(1);
+    expect(lines[heading + 1]).toBe(item('color-contrast'));
+    expect(lines.join('\n')).not.toContain('accessibility barrier');
+  });
+
+  it('names a failing finding alone as an accessibility barrier found', () => {
+    const lines = linesFor([finding('fail', 'button-name')]);
+    const heading = lines.indexOf(`${BLOCKING}1 accessibility barrier found`);
+
+    expect(heading).toBeGreaterThan(1);
+    expect(lines[heading + 1]).toBe(item('button-name'));
+    expect(lines.join('\n')).not.toContain('undecided');
+  });
+
+  it('prints both parts, failures first, each finding under its own part', () => {
+    const lines = linesFor([
+      finding('unverified', 'color-contrast'),
+      finding('fail', 'button-name'),
+      finding('fail', 'link-name'),
+      finding('unverified', 'aria-allowed-attr'),
+    ]);
+    const found = lines.indexOf(`${BLOCKING}2 accessibility barriers found`);
+    const undecided = lines.indexOf(`${BLOCKING}2 checks undecided, needs a person to review`);
+
+    expect(found).toBeGreaterThan(1);
+    expect(undecided).toBeGreaterThan(found);
+    const under = (start: number, end: number): string[] =>
+      lines.slice(start + 1, end).filter((line) => line.startsWith('    ['));
+    expect(under(found, undecided)).toEqual([item('button-name'), item('link-name')]);
+    expect(under(undecided, lines.length)).toEqual([item('color-contrast'), item('aria-allowed-attr')]);
+  });
+
+  it('prints no blocking heading when nothing blocks', () => {
+    expect(linesFor([]).some((line) => line.startsWith(BLOCKING))).toBe(false);
+  });
+
+  it('keeps both headings inside 80 columns with large counts', () => {
+    const many = Array.from({ length: 120 }, (_, n) => finding(n % 2 === 0 ? 'fail' : 'unverified', `rule-${n}`));
+    const headings = linesFor(many).filter((line) => line.startsWith(BLOCKING));
+
+    expect(headings).toEqual([
+      `${BLOCKING}60 accessibility barriers found`,
+      `${BLOCKING}60 checks undecided, needs a person to review`,
+    ]);
+    for (const line of headings) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+});
