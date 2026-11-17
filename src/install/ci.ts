@@ -114,56 +114,6 @@ if (blockers.length > 0) {
 }
 console.log('usabl required gate: verified. Accessibility and policy both pass for this head.');`;
 
-// The rule the engine's own checked-in gate still runs. That workflow keeps the earlier three-job
-// shape, because the engine repository has no app to build: its config targets a fixture
-// directory that does not exist, so there is nothing for a judge to serve. These bytes are kept
-// here so the tests can hold that workflow to the exact rule it embeds.
-export const ENGINE_SELF_GATE_SCRIPT = `const event = process.env.EVENT_NAME || '';
-const scan = process.env.SCAN_RESULT || '';
-const policy = process.env.POLICY_RESULT || '';
-const accessibility = process.env.ACCESSIBILITY_VERDICT || '';
-const blockers = [];
-
-// The scan job runs PR head code, so it is fenced to the pull_request event and cannot run
-// on a review. Its result is an event-shape check here, never a verdict. Requiring success
-// on a review event would break every approval re-run; accepting "not failure" would pass
-// on cancelled and on a scan that never ran. Both are wrong, so neither is written here.
-if (event === 'pull_request') {
-  if (scan !== 'success') {
-    blockers.push('the accessibility scan job did not succeed on this pull_request event (result: ' + (scan || 'none') + ')');
-  }
-} else if (event === 'pull_request_review') {
-  if (scan !== 'skipped') {
-    blockers.push('the accessibility scan job was not skipped on this pull_request_review event (result: ' + (scan || 'none') + '), so the head-code fence did not hold');
-  }
-} else {
-  blockers.push('unexpected event ' + (event || 'none') + '; this gate reasons about pull_request and pull_request_review only');
-}
-
-// usabl-policy resolves the Result artifact for this head on both events, so it is the job
-// that carries both verdicts out. Its outputs mean something only if it finished cleanly:
-// failure, cancelled, and skipped all block.
-if (policy !== 'success') {
-  blockers.push('the policy job did not succeed (result: ' + (policy || 'none') + ')');
-}
-
-// The accessibility verdict is data read from the Result artifact, never inferred from a job
-// status. On a review re-run it is the only accessibility authority that exists, because the
-// scan job is skipped. Only the exact string "pass" passes, so a missing, empty, or
-// unreadable verdict blocks.
-if (accessibility !== 'pass') {
-  blockers.push('the accessibility verdict from the Result artifact is not a pass (verdict: ' + (accessibility || 'none') + ')');
-}
-
-if (blockers.length > 0) {
-  console.error('usabl required gate: NOT verified');
-  for (const blocker of blockers) {
-    console.error('  - ' + blocker);
-  }
-  process.exit(1);
-}
-console.log('usabl required gate: verified. Accessibility and policy both pass for this head.');`;
-
 // Indent a script for embedding in a YAML block scalar. Blank lines stay blank so the
 // trailing-whitespace hook has nothing to strip and the embedded bytes stay stable.
 export function indentScript(script: string, indent: string): string {

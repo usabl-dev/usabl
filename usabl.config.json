@@ -1,12 +1,9 @@
 {
   "appBaseUrl": "http://127.0.0.1:5173",
-  "uiFileGlobs": ["fixtures/app/src/**"],
-  "discovery": {
-    "routerFile": "fixtures/app/src/App.tsx",
-    "wideBlastGlobs": ["fixtures/app/src/main.tsx", "fixtures/app/src/App.tsx", "fixtures/app/index.html"]
-  },
+  "uiFileGlobs": ["fixtures/live/users-screen.html"],
+  "discovery": { "routerFile": "", "wideBlastGlobs": [] },
   "surfaces": [
-    { "id": "clusters", "url": "http://127.0.0.1:5173/clusters", "files": ["fixtures/app/src/ClustersPage.tsx"] }
+    { "id": "users", "url": "http://127.0.0.1:5173/users-screen.html", "files": ["fixtures/live/users-screen.html"] }
   ],
   "guardedPaths": [
     "src/gate/",
@@ -15,7 +12,10 @@
     "src/coverage/completeness.ts",
     "src/surfaces/policy-enforce.ts",
     ".github/workflows/",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "scripts/engine-pin.ts",
+    "scripts/check-engine-pin.ts",
+    "scripts/engine-pin-draft.ts"
   ],
   "promotedObligations": []
 }

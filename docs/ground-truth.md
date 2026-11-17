@@ -4564,13 +4564,17 @@ rule for any such file a pull request could add, names valid owners (`@user`, `@
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
 reads as unknown. Only an organization-required workflow takes the
 workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
-and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier
-three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it has no app to
-build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
-`usabl doctor` reads the engine's own gate as `drifted`. That is the expected reading for the
-one repository that is its own engine. The required status check named in branch protection is
-`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is the
-one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
+and "CI trust boundary") for what each job holds. The engine's own repo checks in the generated
+gate, byte for byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor`
+built at the pin reads it as `wired`; a build whose gate template changed after the pin reads it
+as `drifted` until the pin moves. Its judge serves `fixtures/live` (repository variables
+`USABL_APP_BUILD_COMMAND=true` and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one
+screen, `users`. The pin moves only forward, to a commit on main, by the rule in
+`docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
+from the base commit to hold it there, and reads the head's gate only as data. The required
+status check named in branch protection is `usabl-required` (the workflow *file* is named
+`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this
+repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape
@@ -4579,8 +4583,7 @@ check: on `pull_request` all five must be `success`; on `pull_request_review` `b
 which only the judge's own steps can set, so code that replaces artifacts in the run cannot
 change it. Anything else, an unknown event, a cancelled job, or any verdict that is not exactly
 `pass`, blocks. The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded
-verbatim in both generated workflows; the engine's own gate embeds `ENGINE_SELF_GATE_SCRIPT`, its
-three-job rule.
+verbatim in both generated workflows and in the engine's own gate.
 
 **The judge's browser.** `check --isolated-browser` reads the origins the browser may reach from
 the trusted ref: the `appBaseUrl` origin, the `docsBaseUrl` origin when `usabl.docs.json` exists,

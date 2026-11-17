@@ -1702,12 +1702,67 @@ Residual risks that remain:
   prefetch are not routed either.
   The default allows only the app origin, which `serve-build` serves without redirects.
 
-The engine's own checked-in `.github/workflows/usabl-gate.yml` keeps the earlier three-job
-shape, unchanged. It still runs `npm ci` and the build on the head inside `gate-comment`, where
-it also writes the Result. Its config targets a fixture directory that does not exist in this
-repository, so there is no app for a judge to serve here, and every scan reaches no screen. Its
-policy job builds the base commit and decides policy from it. The tests hold it to its own rule,
-`ENGINE_SELF_GATE_SCRIPT`.
+The engine's own checked-in `.github/workflows/usabl-gate.yml` is the draft `usabl install --ci`
+writes, byte for byte, with the engine pinned to one full commit SHA of `usabl-dev/usabl`. So this
+repository runs the same six jobs as any other, and no job runs the pull request's engine code.
+The file is held to the draft that the pinned commit's own installer writes, never to the draft in
+the pull request's tree: by `test/install/engine-gate-topology.test.ts` in the `check` job, and by
+the `engine-pin` job below. What this repository's gate checks, and what it does not:
+
+- **What it serves.** The repository variables `USABL_APP_BUILD_COMMAND` (`true`, nothing to
+  build) and `USABL_APP_BUILD_DIR` (`fixtures/live`) make `build-app` pack the static fixture
+  pages, and the judge serves them on the `appBaseUrl` origin. `usabl.config.json` names one
+  screen, `users` at `/users-screen.html`, and one UI file, `fixtures/live/users-screen.html`. A
+  pull request that changes that file or a dependency is scanned. A change under `src/`, or to any
+  other fixture, reads "nothing to check" for this gate, because no other file is a UI file. The
+  engine itself is tested by the `check` job in `usabl.yml`, so a green `usabl-required` on an
+  engine change does not mean the engine change was checked by usabl.
+- **The variables sit outside CODEOWNERS.** The two repository variables live in GitHub settings,
+  not in the tree, so no pull request and no code-owner review covers them. Anyone with
+  repository admin can change what the gate builds and serves without a pull request.
+- **The pin lags main.** The gate judges every pull request with the pinned engine, so a fix that
+  merges to main reaches this gate only when the pin moves. A pull request that does not edit the
+  workflows cannot change the engine that judges it, which is the point. The trade is freshness:
+  until the pin moves, the self gate runs an older engine than main holds.
+- **The rule for moving the pin.** The pin moves only in a pull request that changes nothing else
+  in `.github/workflows/`. That pull request replaces `usabl-gate.yml` with the file
+  `usabl install --ci` writes from a clean build of the new commit, made in a fresh checkout of
+  main. The new commit must be a commit on main, and it must be the old pin or a commit after it:
+  the pin never moves back. A pull request that changes the gate template in `src/install/ci.ts`
+  merges first with the gate untouched, because the gate is compared with the draft at the pin.
+  A later pin move pull request then regenerates the gate and brings the new template in. Move the
+  pin after a merge that changes the gate template, the guard, `src/surfaces/policy-enforce.ts`,
+  coverage, intake, or a check, and before a change to `usabl.config.json` that the pinned engine
+  cannot read: the judge reads the config at the base commit with the pinned engine, and the
+  loader refuses a key it does not know in some sections, such as `judge`, `engines`, and a
+  surface's `reachedWhen`. The rule is written here and not as a comment in the workflow, because
+  a comment would make the file differ from the draft.
+- **The `engine-pin` job checks the rule with trusted code.** It checks out the base commit of the
+  pull request (on a push to main, the pushed commit), runs `npm ci --ignore-scripts` from that
+  tree with no cache, and runs that tree's `scripts/check-engine-pin.ts`. It fetches the head
+  commit as git objects and reads the head's `usabl-gate.yml` with `git show`, as data. So a
+  pull request cannot fool the check with a file it adds or changes, such as a `vite.config.ts`
+  or a `prepare` script. The check fails unless the pin is an ancestor of `origin/main`, the pin
+  is the base pin or a descendant of it, and the gate is byte for byte the draft that the pinned
+  commit's own `src/install/ci.ts` writes. Any answer git cannot give fails. It holds
+  `contents: read` only, no secret, and no credentials in the checkout. What it does not prove: a
+  pull request that edits `.github/workflows/` can change this job too, and that edit runs on its
+  own pull request. So every pin move is a guarded change the owner reviews, and the check is
+  evidence for that review, not a replacement for it. It blocks a merge only when the main
+  branch rule requires the `engine-pin` check by name. The three scripts are in `guardedPaths`, so
+  removing or weakening them on main needs an approved guarded change. One window is open until
+  the change that adds the scripts merges: its base has no scripts, so the job says so in plain
+  words and passes. The job passes that way only when a freshly fetched main also has no scripts.
+  A pull request whose base predates the scripts while main has them fails, with a message to
+  update the branch from main, so an older pull request cannot carry a green check from the
+  window. A rerun of an old run reads main again, so it fails the same way.
+- **No history workflow.** `usabl-history.yml` is left out of this repository. It would start the
+  app with `npm run dev`, which this package does not have, and the repository has no debt floor
+  to track.
+
+On the pull request that changes the gate or the config, the workflow runs as that pull request
+wrote it and the judge reads the config at the base commit, so its result is not evidence for
+either change. The owner's review is.
 
 `usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
 the same `usabl-engine` job, and both later jobs fetch the archive with usabl's own fetcher,

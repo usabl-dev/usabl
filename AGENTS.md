@@ -61,8 +61,8 @@ npm run docs:badges       # when you touch the README or the version
 Report the real output, including counts. If a test times out, run it again and report
 both runs.
 
-`npm run test:sensitivity` runs the sensitivity catalog in real Chromium. CI does not run it
-yet, so run it by hand until the workflow gains a job for it.
+`npm run test:sensitivity` runs the sensitivity catalog in real Chromium. CI runs it in the
+`sensitivity-chromium` job of `.github/workflows/usabl.yml`.
 
 ## Hard rules
 
@@ -111,7 +111,10 @@ in the pull request and change it in a separate commit.
 These paths are listed in `.github/CODEOWNERS`: `src/gate/`, `src/trust/`, `src/run.ts`,
 `src/coverage/completeness.ts`, `src/surfaces/policy-enforce.ts`, `.github/workflows/`,
 `.github/CODEOWNERS`, `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`,
-`.usabl-evidence.json`, and `.usabl-waivers.json`.
+`.usabl-evidence.json`, and `.usabl-waivers.json`. The engine pin check scripts,
+`scripts/engine-pin.ts`, `scripts/check-engine-pin.ts`, and `scripts/engine-pin-draft.ts`, are
+guarded too: they are in `guardedPaths` in `usabl.config.json`, and CODEOWNERS covers them through
+its default rule.
 
 Never edit a guarded path without saying so in the pull request summary, with the reason
 and why the change is safe.

@@ -97,7 +97,9 @@ the pull request and fix it on its own.
 | `npm run docs:a11y` | Runs axe on every HTML page under `docs/` in a real Chromium. |
 | `npm run docs:badges` | Checks that the README version badge matches `package.json`. |
 
-CI runs all of these, plus gitleaks, pre-commit, and Semgrep.
+CI runs all of these, plus gitleaks, pre-commit, and Semgrep. Its jobs are `check`,
+`engine-pin` (the self gate's engine pin is a commit on main, checked with trusted code),
+`integration-chromium`, and `sensitivity-chromium`.
 
 ## 5. Trust-critical paths
 
@@ -113,6 +115,9 @@ gate, so it gets extra care:
 - `.github/workflows/` and `.github/CODEOWNERS`: CI and the list of approvers.
 - `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`, `.usabl-evidence.json`,
   and `.usabl-waivers.json`: policy and accepted debt.
+- `scripts/engine-pin.ts`, `scripts/check-engine-pin.ts`, and `scripts/engine-pin-draft.ts`:
+  the check of the self gate's engine pin. They are in `guardedPaths`, and CODEOWNERS covers them
+  through its default rule.
 
 If you change one of these paths:
 

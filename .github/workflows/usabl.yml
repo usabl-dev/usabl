@@ -83,6 +83,67 @@ jobs:
       - name: Docs badge check
         run: npm run docs:badges
 
+  # The self gate judges every pull request with the engine commit pinned in usabl-gate.yml. This
+  # job checks that pin with trusted code only: it checks out the base commit of the pull request
+  # (on a push, the pushed commit), installs from that tree without install scripts, and runs that
+  # tree's check scripts. The head's gate is fetched as git objects and read with git show, so no
+  # file the pull request adds or changes is run or loaded. A pull request that edits this
+  # workflow can still change the job, so every pin move is a guarded change the owner reviews.
+  engine-pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the trusted commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          # A cache can be written by pull request code, so this trusted job uses none.
+          package-manager-cache: false
+
+      - name: Engine pin is a commit on main
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ ! -f scripts/check-engine-pin.ts ] || [ ! -f scripts/engine-pin.ts ] || [ ! -f scripts/engine-pin-draft.ts ]; then
+            for script in check-engine-pin.ts engine-pin.ts engine-pin-draft.ts; do
+              if git cat-file -e "origin/main:scripts/${script}" 2>/dev/null; then
+                echo "The base commit of this pull request has no engine pin check scripts, but main has them. Update this branch from main, then run the checks again."
+                exit 1
+              fi
+            done
+            echo "The trusted commit has no engine pin check scripts yet, and neither has main, so there is no trusted check to run. This holds only until the change that adds them merges."
+            exit 0
+          fi
+          if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+            echo "The head commit id is not a full lowercase commit id; failing closed."
+            exit 1
+          fi
+          # A fresh npm cache under the runner temp directory, never one a pull request could seed.
+          export npm_config_cache="${RUNNER_TEMP}/usabl-npm-cache"
+          npm ci --ignore-scripts
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            if ! [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+              echo "The base commit id is not a full lowercase commit id; failing closed."
+              exit 1
+            fi
+            git fetch --no-tags origin "${HEAD_SHA}"
+            ./node_modules/.bin/vite-node scripts/check-engine-pin.ts --main origin/main --head "${HEAD_SHA}" --base "${BASE_SHA}"
+          else
+            ./node_modules/.bin/vite-node scripts/check-engine-pin.ts --main origin/main --head "${HEAD_SHA}"
+          fi
+
   # Real Chromium suites gated by USABL_INTEGRATION. Default `npm run check` skips them, so a
   # merge could stay green while the live driver path drifted. This job runs only the in-repo
   # fixture suites (fixtures/live and local HTTP pages). The hero-bug / fixture-clean suites need
@@ -113,3 +174,32 @@ jobs:
 
       - name: Real Chromium integration
         run: npm run test:integration
+
+  # The sensitivity catalog in real Chromium. Its pages are served on loopback by the tests
+  # themselves, so it needs no demo app.
+  sensitivity-chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Ubuntu 24.04 runners stop unprivileged user namespaces through AppArmor, and Chromium's
+      # sandbox needs them. Without this the sensitivity tests scan with the sandbox off.
+      - name: Let Chromium start its sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Real Chromium sensitivity
+        run: npm run test:sensitivity
