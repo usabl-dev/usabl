@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
 import { buildGuardedSet } from '../../src/trust/guard.js';
+import { listTextEntries } from '../../src/deps/fakes.js';
 import {
   collectReviews,
   enforceAccessibility,
@@ -129,6 +130,9 @@ describe('enforcePolicy', () => {
     };
     const table = (ref: string): Record<string, string | null> => (ref === 'origin/main' ? trusted : head);
     return {
+      listEntries(ref, paths, options) {
+        return listTextEntries(this, ref, paths, options);
+      },
       show: async (ref, path) => table(ref)[path] ?? null,
       lsFilesUnder: async (ref, prefixes) => {
         const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));
@@ -460,6 +464,7 @@ describe('enforcePolicy', () => {
             return git.show(ref, path);
           },
           lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
+          listEntries: (ref, paths, options) => git.listEntries(ref, paths, options),
         },
       }),
     );
@@ -794,6 +799,9 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       trustedRef: 'origin/main',
       pr: { authorLogin: over.author ?? 'eparenti', headSha: head },
       git: {
+        listEntries(ref, paths, options) {
+          return listTextEntries(this, ref, paths, options);
+        },
         show: async (ref, path) => table(ref)[path] ?? null,
         lsFilesUnder: async (ref, prefixes) => {
           const bases = prefixes.map((prefix) => (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix));

@@ -459,10 +459,60 @@
   guarded path that is a submodule now compares as changed exactly when its recorded commit
   changed, where it stopped the guard with an error when that commit was absent. The local guard
   reads the working tree side of the path as a file, so it reports a guarded submodule as changed
-  on every run, which fails safe. The prefix keeps a submodule apart from a file in every check
-  that compares the reads as text, but the Stop hook's session pins hash the read as UTF-8, where
-  a file that holds U+FFFD and the same id line pins the same as the submodule. The CI policy check
-  still sees that change. The repair is a guarded change that waits on the owner.
+  on every run, which fails safe. The guard no longer compares this text: see the entry on
+  comparing guarded paths as git stores them below.
+- The guard compares guarded paths as git stores them, never as decoded content, in the local
+  guard, `usabl enforce policy`, and the Stop hook's session pins. At a ref, one `git ls-tree`
+  listing per ref gives each guarded path's mode and object id, and two refs are equal at a path
+  when both are equal, so no file content is read. On the working tree, the local guard reads a
+  file's bytes and executable bit, or a link's text, with `lstat` and `readlink`, as git does, and
+  compares the blob id of those bytes with the trusted id. A guarded file whose byte `0xFE` became
+  `0xFF` read as unchanged, since both decode to U+FFFD. In the session pins a file that held
+  `0xFF` or U+FFFD and then `submodule commit <id>` pinned the same as the submodule at that
+  commit. A file whose executable bit changed, or a file swapped for a symbolic link whose link
+  text equals the old content, compared equal in CI, in the pins, and in the receipt policy hash.
+  With `core.fileMode` false the local guard ignores the executable bit, as git does. A guarded
+  file of any size is now compared, and a text read of a policy file over 10 MiB stops with a
+  refusal that names the file, never a raw buffer error. At a ref, a link's text and the config's
+  text are read by the id the listing gave, never by the path again, so the text and the id come
+  from one tree even when HEAD moves while usabl reads it. The guard reads each ref once: on one
+  machine, with 500 guarded files, a local guard check took under 1 second and the session pins
+  about 0.1 seconds, where each took about 4 seconds before.
+- `usabl enforce policy` requires the tree entry read. `PolicyGit` in
+  `src/surfaces/policy-enforce.ts` gains `listEntries: GitReader['listEntries']` as a required
+  member, the one change in that file, and the guard's reader type for two refs requires it too.
+  The text compare the check fell back to for a reader without it is gone, and a reader built past
+  the type without it is refused, never compared as text.
+- Every git command the git reader runs reads a path by its exact name
+  (`GIT_LITERAL_PATHSPECS=1`), never as pathspec magic such as `:(top)x.json` or
+  `:(literal)x.json`. The receipt policy hash read such a name as another file, and a
+  `guardedPaths` entry written with pathspec magic listed other files than the ones it names.
+- A guarded symbolic link is compared by its link text and by what it resolves to inside the
+  repository, through each folder and link on the way, at most 8 links in all. A pull request that
+  edited only the unguarded target of a guarded link read as unchanged, though every reader of the
+  guarded path reads the new target. A link that resolves outside the repository, to an absolute
+  path, into a loop, past 8 links, or to nothing compares as changed every time.
+- Session pins are stored as `v4:` and a hash over the mode and id at HEAD, and for a link the
+  path it resolves to and the mode and id there. A missing file pins differently from an empty one.
+  A pin file written by an earlier release holds pins with no version, so usabl cannot tell
+  whether policy was weakened and committed earlier in the session. The Stop hook blocks that stop
+  through the drift path, keeps the pins, and runs no check and no receipt fast path. The message
+  says the pins were written by an older usabl, so usabl cannot tell whether guarded policy files
+  changed, and tells the user to review the policy files changed since the session started, then
+  delete the pin file it names to go on. It never says that policy files changed.
+- Gate effect of the entries above: a change to a guarded file's bytes that decode to the same
+  text, its executable bit, a swap for a symbolic link, and an edit to a guarded link's target now
+  need code owner approval in CI, and the local guard and the Stop hook report them. A guarded file
+  whose name starts with pathspec magic now changes the receipt policy hash when it is edited. A
+  guarded link that does not resolve inside the repository, and locally a guarded link to a
+  folder, now read as changed on every run. Every receipt minted before this stops matching once,
+  so the screens are checked again on the next run. In a session that spans the upgrade, each stop
+  blocks until the user reviews the policy changes and deletes the pin file, or starts a new
+  session. All of these are the safe direction. A guarded submodule still reads as changed on
+  every local run, and so does a link git checked out as a plain file with `core.symlinks` false. A guarded file name that is not valid
+  UTF-8 is still decoded: the CI policy check and the pins see a change to it through the entry git
+  lists, two such names that decode alike can hide one another, and the local guard reports such a
+  name as changed on every run.
 - `usabl init` and `usabl init --docs` print every string that comes from a file in the
   repository with each control character shown as a label such as `<U+001B>`: route paths,
   include targets, file and folder names, package names, and topic names. A route path such as
@@ -584,9 +634,8 @@
   argument read as an object name only, so a file that becomes a folder still needs approval. A
   submodule path reads as the commit id its tree entry records, after a fixed prefix that no file
   read can return, so a moved submodule still needs approval and, compared as text, a submodule
-  never equals a file. The Stop hook's session pins hash the read instead, and there a file that
-  holds U+FFFD and the same id line pins the same as the submodule, as the submodule entry above
-  says.
+  never equals a file. The guard now compares guarded paths by mode and id, where a submodule has
+  its own mode, as the entry on comparing guarded paths as git stores them says.
   It reads the same whether or not that commit is in the repository, and the working tree does not
   change it.
   The git reader, the history reader, and the ledger reader accept none of these values as a ref, and

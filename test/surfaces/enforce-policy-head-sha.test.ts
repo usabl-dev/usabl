@@ -25,6 +25,10 @@ vi.mock('../../src/deps/git.js', async (importOriginal) => {
           gitCalls.push({ method: 'show', ref });
           return null;
         },
+        listEntries: async (ref: string) => {
+          gitCalls.push({ method: 'listEntries', ref });
+          return new Map();
+        },
         lsFilesUnder: async (ref: string) => {
           gitCalls.push({ method: 'lsFilesUnder', ref });
           return [];

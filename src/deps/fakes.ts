@@ -4,7 +4,18 @@
  * hands it back as the page's own address, so a fake page is always where it was sent.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
-import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions } from '../contracts/index.js';
+import { createHash } from 'node:crypto';
+import type {
+  Deps,
+  GitReader,
+  ListedText,
+  RequirementBundle,
+  ScreenScan,
+  Page,
+  ScannerVersions,
+  StoredEntry,
+  TreeEntry,
+} from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
@@ -131,6 +142,48 @@ function normalizePrefix(prefix: string): string {
   return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
 }
 
+/**
+ * The fake byte read: the fake text read, as UTF-8 bytes. The fakes store text only, so the two
+ * reads always agree, and every fake file has the mode 100644. The byte read and the tree entries
+ * call the text reads on the same object at call time, so a test that replaces show, readFile, or
+ * lsFilesUnder changes what the guard reads too. A test that needs bytes that are not UTF-8,
+ * another mode, a symbolic link, or a submodule uses a real repository.
+ */
+export function storedEntryOf(text: string | null): StoredEntry | null {
+  return text === null ? null : { kind: 'file', mode: '100644', bytes: new TextEncoder().encode(text) };
+}
+
+/** The tree entry git would give the fake text: a 100644 blob with git's own SHA-1 id for it. */
+export function treeEntryOf(text: string): TreeEntry {
+  const bytes = new TextEncoder().encode(text);
+  const id = createHash('sha1').update(`blob ${String(bytes.byteLength)}\0`).update(bytes).digest('hex');
+  return { mode: '100644', type: 'blob', id };
+}
+
+/**
+ * The tree entry listing a text-only test reader would give: each path its text read names, as a
+ * 100644 blob with git's id for that text. With recursion the names come from lsFilesUnder. The
+ * reads are called on the reader at call time, so a test that replaces show or lsFilesUnder
+ * changes the listing too. Every entry is a file, so only 'blobs' adds the text, which is the text
+ * the id was computed from.
+ */
+export async function listTextEntries(
+  reader: Pick<GitReader, 'show' | 'lsFilesUnder'>,
+  ref: string,
+  paths: readonly string[],
+  options: { recursive: boolean; text?: ListedText },
+): Promise<Map<string, TreeEntry>> {
+  const names = options.recursive ? await reader.lsFilesUnder(ref, paths) : [...new Set(paths)];
+  const entries = new Map<string, TreeEntry>();
+  for (const name of names) {
+    const text = await reader.show(ref, name);
+    if (text !== null) {
+      entries.set(name, options.text === 'blobs' ? { ...treeEntryOf(text), text } : treeEntryOf(text));
+    }
+  }
+  return entries;
+}
+
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
   const spec: FakeDepsSpec = { ...DEFAULTS, ...overrides };
   return {
@@ -146,6 +199,9 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     git: {
       writeTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
+      async listEntries(ref, paths, options) {
+        return listTextEntries(this, ref, paths, options);
+      },
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],
       lsTree: async (_ref, paths) => {
@@ -172,9 +228,13 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           .sort();
       },
       headRef: async () => spec.headRef,
+      tracksFileMode: async () => true,
     },
     fs: {
       readFile: async (path) => spec.files[path] ?? null,
+      async readBytes(path) {
+        return storedEntryOf(await this.readFile(path));
+      },
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
     requirements: spec.requirements ?? { version: 1, requirements: [] },

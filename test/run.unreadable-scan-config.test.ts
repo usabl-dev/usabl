@@ -268,11 +268,12 @@ describe('a trusted configuration git cannot read at all', () => {
         { code: 'M', path: 'fixtures/app/src/Profile.tsx' },
       ],
     });
-    // The guard reads the trusted configuration twice: once to decide scope and once in its
-    // divergence loop. The next read of it is the scan configuration resolver. Failing from the
-    // third read onward exercises that resolver's own handler without touching the guard. If the
-    // guard ever reads the document a third time, this test fails as a crash, which is the signal
-    // to move the threshold, not a regression in the resolver.
+    // The guard reads the trusted configuration twice through the fake, which builds each tree
+    // entry from the text: once to compare it, with the text it parses the scope from, and once in
+    // the listing of every guarded path. The next read of it is the scan configuration resolver.
+    // Failing from the third read onward exercises that resolver's own handler without touching
+    // the guard. If the guard ever reads the document a third time, this test fails as a crash,
+    // which is the signal to move the threshold, not a regression in the resolver.
     const readable = deps.git.show;
     let trustedConfigReads = 0;
     deps.git.show = async (ref, path) => {

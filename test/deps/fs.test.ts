@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -40,6 +40,46 @@ describe('makeFsGlob', () => {
     const fsGlob = makeFsGlob({ cwd: workspacePath });
 
     await expect(fsGlob.readFile('src/App.tsx/package.json')).resolves.toBeNull();
+  });
+
+  it('readBytes keeps bytes that are not valid UTF-8, and reads null where readFile does', async () => {
+    await writeFile(join(workspacePath, 'fe.bin'), Buffer.from([0xfe, 0x41]));
+    await writeFile(join(workspacePath, 'ff.bin'), Buffer.from([0xff, 0x41]));
+    const fsGlob = makeFsGlob({ cwd: workspacePath });
+    expect(await fsGlob.readFile('fe.bin')).toBe(await fsGlob.readFile('ff.bin'));
+    const fe = await fsGlob.readBytes?.('fe.bin');
+    const ff = await fsGlob.readBytes?.('ff.bin');
+    expect(fe?.kind === 'file' ? [...fe.bytes] : fe).toEqual([0xfe, 0x41]);
+    expect(ff?.kind === 'file' ? [...ff.bytes] : ff).toEqual([0xff, 0x41]);
+    await expect(fsGlob.readBytes?.('src/Missing.tsx')).resolves.toBeNull();
+    await expect(fsGlob.readBytes?.('src')).resolves.toEqual({ kind: 'folder' });
+    await expect(fsGlob.readBytes?.('src/App.tsx/package.json')).resolves.toBeNull();
+  });
+
+  it('readBytes reads the mode from the executable bit, and a link by its text, never by what it points at', async () => {
+    await writeFile(join(workspacePath, 'plain.txt'), 'data');
+    await writeFile(join(workspacePath, 'run.sh'), 'data');
+    await chmod(join(workspacePath, 'run.sh'), 0o755);
+    await symlink('plain.txt', join(workspacePath, 'link'));
+    await symlink('nowhere', join(workspacePath, 'dangling'));
+    await symlink('src', join(workspacePath, 'linked-folder'));
+    const fsGlob = makeFsGlob({ cwd: workspacePath });
+    const plain = await fsGlob.readBytes?.('plain.txt');
+    expect(plain?.kind === 'file' ? plain.mode : plain).toBe('100644');
+    const run = await fsGlob.readBytes?.('run.sh');
+    expect(run?.kind === 'file' ? run.mode : run).toBe('100755');
+    for (const [name, target] of [
+      ['link', 'plain.txt'],
+      ['dangling', 'nowhere'],
+      ['linked-folder', 'src'],
+    ]) {
+      const read = await fsGlob.readBytes?.(name ?? '');
+      expect(read?.kind === 'symlink' ? Buffer.from(read.target).toString('utf8') : read).toBe(target);
+    }
+    // git stores no file below a link, so a path through a linked folder reads as nothing, though
+    // readFile follows the link and finds the file.
+    await expect(fsGlob.readFile('linked-folder/App.tsx')).resolves.toContain('export const App');
+    await expect(fsGlob.readBytes?.('linked-folder/App.tsx')).resolves.toBeNull();
   });
 
   it('matches nothing for a glob under a file', async () => {

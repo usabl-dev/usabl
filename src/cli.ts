@@ -144,14 +144,10 @@ async function runEnforce(opts: CliOptions): Promise<number> {
       );
       return 2;
     }
-    const git = makeGitReader();
     const outcome = await enforcePolicy(result, {
       trustedRef: opts.trustedRef,
       pr,
-      git: {
-        show: (ref, path) => git.show(ref, path),
-        lsFilesUnder: (ref, prefixes) => git.lsFilesUnder(ref, prefixes),
-      },
+      git: makeGitReader(),
       listReviews: () => listPullReviews(pr.number),
       readPermission: (login) => readRepositoryPermission(login),
     });

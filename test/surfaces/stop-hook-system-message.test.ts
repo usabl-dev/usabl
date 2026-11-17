@@ -20,6 +20,7 @@ import {
 import type { SessionPinStore } from '../../src/surfaces/session-pin-store.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
+import { SESSION_PIN_FORMAT } from '../../src/trust/guard.js';
 
 const CONFIG = JSON.stringify({
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -152,7 +153,11 @@ describe('Claude Stop hook allows that carry a notice write a systemMessage the 
 
   it('a drift continuation that is let through', async () => {
     const pins = memoryPinStore();
-    pins.files.set(sessionPinFileName(SESSION, ROOT), JSON.stringify({ 'usabl.config.json': 'an older digest' }));
+    pins.files.set(
+      sessionPinFileName(SESSION, ROOT),
+      // The current format, so the stop reads it as a real change, not as pins from an older usabl.
+      JSON.stringify({ 'usabl.config.json': `${SESSION_PIN_FORMAT}:an older digest` }),
+    );
     const h = harness({ pins });
     const message = await stop(h, input(true));
     expect(message).toContain('guarded policy drift during this session');

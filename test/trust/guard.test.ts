@@ -185,14 +185,27 @@ describe('trust guard', () => {
     });
 
     const previous = await computeSessionPins(deps, configFixture);
+    const pinsOf = async (headContents: Record<string, string>) =>
+      computeSessionPins(makeFakeDeps({ files: { 'usabl.config.json': '{"guardedPaths":["src/gate"]}' }, headContents }), configFixture);
+    const committed = await pinsOf({ 'usabl.config.json': '{"guardedPaths":["src/gate"]}', 'src/gate/index.ts': 'committed' });
+    const changed = await pinsOf({
+      'usabl.config.json': '{"guardedPaths":["src/gate"]}',
+      'src/gate/index.ts': 'changed',
+      'src/gate/new-module.ts': 'new',
+    });
+    const emptyLedger = await pinsOf({ 'usabl.config.json': '{"guardedPaths":["src/gate"]}', '.usabl-evidence.json': '' });
+
+    // Pins come from committed bytes, never the working copy, in the versioned format.
+    expect(previous['src/gate/index.ts']).toBe(committed['src/gate/index.ts']);
+    expect(previous['src/gate/index.ts']).toMatch(/^v4:[0-9a-f]{64}$/);
+    expect(previous['src/gate/index.ts']).not.toBe(sha256('committed'));
+    // A missing ledger and an empty one are different entries, so they pin differently.
+    expect(previous['.usabl-evidence.json']).not.toBe(emptyLedger['.usabl-evidence.json']);
     const next = {
       ...previous,
-      'src/gate/index.ts': sha256('changed'),
-      'src/gate/new-module.ts': sha256('new'),
+      'src/gate/index.ts': changed['src/gate/index.ts'] ?? '',
+      'src/gate/new-module.ts': changed['src/gate/new-module.ts'] ?? '',
     };
-
-    expect(previous['src/gate/index.ts']).toBe(sha256('committed'));
-    expect(previous['.usabl-evidence.json']).toBe(sha256(''));
     expect(diffSessionPins(previous, next)).toEqual(['src/gate/index.ts', 'src/gate/new-module.ts']);
   });
 });

@@ -22,7 +22,7 @@ import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
-import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
+import { checkGuard, computeSessionPins, diffSessionPins, pinsAreCurrent, type SessionPins } from '../trust/guard.js';
 import { parseConfigText } from '../intake/load-config.js';
 import { emptyUiFileGlobsRefusal, uiFileGlobsRefusal } from '../intake/ui-file-globs.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
@@ -310,6 +310,22 @@ function driftMessage(drift: string[], continuation: boolean): string {
     ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to make a later stop pass.'
     : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
   return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
+}
+
+// Stored pins in a format an older usabl wrote. usabl cannot compare them, so it cannot tell
+// whether policy changed in this session, and it says exactly that, never that policy changed.
+// The pin file path comes from the environment, so it goes inside the frame.
+function olderPinsMessage(pinPath: string, continuation: boolean): string {
+  const head =
+    'NOT verified - the session pins were written by an older usabl, so usabl cannot tell whether ' +
+    'guarded policy files changed during this session.';
+  const steps =
+    'review the guarded policy files changed since the session started, then delete the pin file named ' +
+    'under "pin fix" in the untrusted text below to go on.';
+  const next = continuation
+    ? `usabl let this stop through without blocking again (continuation already active). Next: tell the user to ${steps}`
+    : `Next: tell the user to ${steps} Do not edit those files to clear this block.`;
+  return framedMessage([head, next], [`pin fix: ${deletePinFileFix(pinPath)}`]);
 }
 
 // The config file the hook compares with the last commit before it parses anything.
@@ -980,6 +996,19 @@ export async function runStopHook(
           'see "pin fix" in the untrusted text below.',
           [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
         );
+      } else if (previousPins !== null && !pinsAreCurrent(previousPins)) {
+        // Pins an older usabl wrote say nothing this usabl can compare, so it cannot tell whether
+        // policy was weakened and committed earlier in this session. A full check now would run
+        // under that policy and could pass, and replacing the pins would take it as the baseline.
+        // So the stop takes the drift path: it blocks, or lets one continuation through, keeps the
+        // pins, and never reaches the receipt fast path. The message never says policy changed.
+        const message = olderPinsMessage(ports.pins.locate(pinName), input.stopHookActive);
+        if (input.stopHookActive) {
+          await emitProtocolAllow(ports, { message }, options);
+          return 0;
+        }
+        await emitProtocolBlock(ports, message, options);
+        return 0;
       } else {
         const nextPins = await guarded(() => computeSessionPins(guardDeps, config));
         const serialized = JSON.stringify(nextPins, null, 2);

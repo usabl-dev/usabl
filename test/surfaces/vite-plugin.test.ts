@@ -1661,12 +1661,14 @@ function makeDeps(): Deps {
     git: {
       writeTree: async () => 'tree',
       show: async () => null,
+      listEntries: async () => new Map(),
       statusZ: async () => [],
       diffNameOnly: async () => [],
       lsTree: async () => ({}),
       lsFiles: async () => [],
       lsFilesUnder: async () => [],
       headRef: async () => 'HEAD',
+      tracksFileMode: async () => true,
     },
     fs: {
       readFile: async () => null,

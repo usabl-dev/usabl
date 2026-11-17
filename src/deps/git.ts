@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { GitReader } from '../contracts/index.js';
+import type { GitReader, TreeEntry } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 
 const execFileAsync = promisify(execFile);
@@ -182,9 +182,11 @@ function parseStatus(output: string): Array<{ code: string; path: string }> {
 }
 
 // `git ls-tree -z` prints "MODE TYPE SHA\tNAME\0". The name is everything after the first tab.
-// The names are collected in a Map, and Object.fromEntries defines each one as its own key. An
-// assignment on a plain object would drop a file named __proto__ at the repository root, and that
-// file would fall out of the policy hash.
+// Each name maps to "MODE SHA": the mode is kept next to the id, so an executable bit or a file
+// swapped for a symbolic link with the same text, which keeps the id, still changes the policy
+// hash. The names are collected in a Map, and Object.fromEntries defines each one as its own key.
+// An assignment on a plain object would drop a file named __proto__ at the repository root, and
+// that file would fall out of the policy hash.
 function parseLsTree(output: string): Record<string, string> {
   const blobs = new Map<string, string>();
   for (const entry of splitNul(output)) {
@@ -192,9 +194,9 @@ function parseLsTree(output: string): Record<string, string> {
     if (tab < 0) {
       continue;
     }
-    const sha = entry.slice(0, tab).split(' ')[2];
-    if (sha !== undefined) {
-      blobs.set(entry.slice(tab + 1), sha);
+    const [mode, , sha] = entry.slice(0, tab).split(' ');
+    if (mode !== undefined && sha !== undefined) {
+      blobs.set(entry.slice(tab + 1), `${mode} ${sha}`);
     }
   }
   return Object.fromEntries(blobs);
@@ -214,7 +216,13 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 // into the user's language. LC_ALL=C keeps it in English whatever the locale, so a missing policy
 // file never reads as a crash on one machine and as absent on another. With -z, file names are
 // raw bytes, so the locale does not change how they are listed.
-const ENGLISH_MESSAGES = { LC_ALL: 'C' };
+//
+// GIT_LITERAL_PATHSPECS=1 makes git read every path as its own exact name. Without it, git reads a
+// path that starts with pathspec magic, such as `:(top)x.json` or `:(literal)x.json`, as an
+// instruction, and lists `x.json` instead, so a guarded file with such a name read as absent at
+// every ref. It is set here, the one place every git command in this reader gets its environment.
+// No command here passes a pattern as a path.
+const GIT_ENVIRONMENT = { LC_ALL: 'C', GIT_LITERAL_PATHSPECS: '1' };
 
 async function runGit(
   cwd: string,
@@ -226,9 +234,13 @@ async function runGit(
     cwd,
     encoding: 'utf8',
     maxBuffer,
-    env: { ...process.env, ...env, ...ENGLISH_MESSAGES },
+    env: { ...process.env, ...env, ...GIT_ENVIRONMENT },
   });
   return stdout;
+}
+
+function isMaxBufferError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 }
 
 // The remote names, for a fetch hint only. A failure gives no names, and the hint then gives both
@@ -268,7 +280,7 @@ async function runListing(
   try {
     return await runGit(cwd, args, undefined, maxBuffer);
   } catch (err) {
-    if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    if (isMaxBufferError(err)) {
       throw new Error(
         `git ${args[0] ?? ''} printed more than usabl reads, so usabl could not list the files it needs ` +
           `and checked nothing. ${advice}`,
@@ -276,6 +288,17 @@ async function runListing(
     }
     throw err;
   }
+}
+
+// A file too large to read as text. usabl stops and says so, never with a raw buffer error and
+// never with a cut-off text.
+function tooLargeToReadError(path: string, ref: string, maxBuffer: number): Error {
+  return new Error(
+    `usabl could not read ${operatorText(path)} at ${operatorText(ref)}: it is larger than the ` +
+      `${String(Math.floor(maxBuffer / (1024 * 1024)))} MiB usabl reads as text, so usabl checked nothing. ` +
+      'Keep a policy file that usabl parses under that size, then run usabl again. The guard ' +
+      'compares a large guarded file without reading it as text.',
+  );
 }
 
 // True when the ref names a commit in this repository. With --verify --quiet, git exits 1 and
@@ -301,12 +324,65 @@ async function objectType(cwd: string, object: string): Promise<string | null> {
   }
 }
 
-// How the reader reads a submodule path: this prefix, then the commit id the tree records for it.
-// It starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
-// can return this text, and compared as text a submodule never equals a file, whatever the file
-// holds. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone surrogate into
-// U+FFFD, which a file can hold, so a check that hashes the read must not rely on the prefix.
+// How show reads a submodule path: this prefix, then the commit id the tree records for it. It
+// starts with a lone surrogate (U+D800). Decoding bytes as UTF-8 never gives one, so no file read
+// can return this text. A hash of the UTF-8 bytes does not keep this apart: encoding turns the lone
+// surrogate into U+FFFD, which a file can hold. So no compare or hash of guarded paths uses this
+// text. The guard reads guarded paths with listEntries, where a submodule has its own mode.
 const SUBMODULE_READ_PREFIX = '\ud800submodule commit ';
+
+// What a failed `cat-file blob` read means: nothing at the path, a folder, or a submodule. Any
+// other failure is thrown, so a read usabl could not make never passes as an absent file.
+async function readFailedBlob(
+  cwd: string,
+  ref: string,
+  path: string,
+  err: unknown,
+): Promise<{ kind: 'absent' } | { kind: 'folder' } | { kind: 'submodule'; commit: string }> {
+  const code = readErrorCode(err);
+  const stderr = readErrorStderr(err);
+  if (code !== null && isMissingShow(stderr)) {
+    // For a full commit id git gives the missing-file text even when the commit itself is
+    // not in the repository, as in a shallow clone. The file is absent only when the ref
+    // names a commit here. Otherwise usabl could not read the ref at all.
+    if (await namesCommit(cwd, ref)) {
+      return { kind: 'absent' };
+    }
+    throw await refNotFoundError(ref, () => listRemotes(cwd));
+  }
+  // cat-file blob refuses a folder and a submodule entry. So the guard reads a policy file that
+  // became a folder, or the reverse, as a change an approval can clear.
+  if (code !== null && /bad file/i.test(stderr)) {
+    if ((await objectType(cwd, `${ref}:${path}`)) === 'tree') {
+      return { kind: 'folder' };
+    }
+    const commit = await submoduleCommit(cwd, ref, path);
+    if (commit !== null) {
+      return { kind: 'submodule', commit };
+    }
+  }
+  throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
+}
+
+const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+// `git ls-tree -z` entries as a Map by name, so a name such as __proto__ is kept as its own key.
+// With `only`, just the entries with one of those exact names. With GIT_LITERAL_PATHSPECS each
+// path after -- is its exact name, never a pattern or pathspec magic.
+function parseTreeEntries(output: string, only?: ReadonlySet<string>): Map<string, TreeEntry> {
+  const entries = new Map<string, TreeEntry>();
+  for (const line of splitNul(output)) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const name = line.slice(tab + 1);
+    if (only !== undefined && !only.has(name)) continue;
+    const [mode, type, id] = line.slice(0, tab).split(' ');
+    if (mode !== undefined && type !== undefined && id !== undefined && FULL_OBJECT_ID.test(id)) {
+      entries.set(name, { mode, type, id });
+    }
+  }
+  return entries;
+}
 
 // The commit id the tree at the ref records for a submodule at the path, or null when the path is
 // not a submodule there. ls-tree reads the tree entry only, so the answer is the same whether or not
@@ -325,7 +401,7 @@ async function submoduleCommit(cwd: string, ref: string, path: string): Promise<
     const tab = entry.indexOf('\t');
     if (tab < 0 || entry.slice(tab + 1) !== path) continue;
     const [mode, type, id] = entry.slice(0, tab).split(' ');
-    if (mode === '160000' && type === 'commit' && id !== undefined && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(id)) {
+    if (mode === '160000' && type === 'commit' && id !== undefined && FULL_OBJECT_ID.test(id)) {
       return id;
     }
   }
@@ -363,35 +439,72 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         // object and a working tree file has that exact name, so a file a pull request commits
         // could stand in for a trusted read. --end-of-options keeps a ref that starts with a dash
         // from being read as an option.
-        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`]);
+        const output = await runGit(cwd, ['cat-file', 'blob', '--end-of-options', `${ref}:${path}`], undefined, maxBuffer);
         return output;
       } catch (err) {
-        const code = readErrorCode(err);
-        const stderr = readErrorStderr(err);
-        if (code !== null && isMissingShow(stderr)) {
-          // For a full commit id git gives the missing-file text even when the commit itself is
-          // not in the repository, as in a shallow clone. The file is absent only when the ref
-          // names a commit here. Otherwise usabl could not read the ref at all.
-          if (await namesCommit(cwd, ref)) {
-            return null;
-          }
+        if (isMaxBufferError(err)) {
+          throw tooLargeToReadError(path, ref, maxBuffer);
+        }
+        const failed = await readFailedBlob(cwd, ref, path, err);
+        if (failed.kind === 'absent') {
+          return null;
+        }
+        // git show prints a folder's listing, which is never the bytes of a file. The closing --
+        // makes git read the argument as an object name only, so a working tree file with that
+        // name is never read in its place.
+        if (failed.kind === 'folder') {
+          return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
+        }
+        return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
+      }
+    },
+    async listEntries(ref, paths, { recursive, text = 'none' }) {
+      // One ls-tree for every path, so a ref is read once. The mode and the object id say what the
+      // ref stores, so no file content is read. --full-tree reads each path from the root of the
+      // tree, whatever folder usabl runs in.
+      assertReadableRef(ref);
+      if (paths.length === 0) {
+        return new Map();
+      }
+      const unique = [...new Set(paths)].sort();
+      const args = ['ls-tree', '-z', '--full-tree', ...(recursive ? ['-r'] : []), '--end-of-options', ref];
+      if (!(recursive && unique.includes(''))) {
+        args.push('--', ...unique);
+      }
+      let output: string;
+      try {
+        output = await runListing(cwd, args, maxBuffer, GUARDED_LISTING_ADVICE);
+      } catch (err) {
+        // A ref git cannot read is the same error show gives for it, never an empty listing that
+        // would read as no guarded files.
+        if (/not a valid object name|invalid object name|not a tree object|bad object/i.test(readErrorStderr(err))) {
           throw await refNotFoundError(ref, () => listRemotes(cwd));
         }
-        // cat-file blob refuses a folder and a submodule entry. git show prints a folder's listing,
-        // which is never the bytes of a file. So the guard reads a policy file that became a
-        // folder, or the reverse, as a change an approval can clear. The closing -- makes git read
-        // the argument as an object name only, so a working tree file with that name is never read
-        // in its place.
-        if (code !== null && /bad file/i.test(stderr)) {
-          if ((await objectType(cwd, `${ref}:${path}`)) === 'tree') {
-            return runGit(cwd, ['show', '--end-of-options', `${ref}:${path}`, '--']);
-          }
-          const submodule = await submoduleCommit(cwd, ref, path);
-          if (submodule !== null) {
-            return `${SUBMODULE_READ_PREFIX}${submodule}\n`;
+        throw err;
+      }
+      // Without recursion, ls-tree also lists what is in a folder named with a trailing slash, so
+      // only the exact names asked for are kept.
+      const entries = parseTreeEntries(output, recursive ? undefined : new Set(unique));
+      // Text is read by the id this listing gave, never by <ref>:<path> again, so it comes from the
+      // same tree as the mode and the id even if the ref moves in between.
+      for (const [path, entry] of entries) {
+        if (entry.type === 'blob' && (text === 'blobs' || (text === 'links' && entry.mode === '120000'))) {
+          try {
+            entry.text = await runGit(cwd, ['cat-file', 'blob', entry.id], undefined, maxBuffer);
+          } catch (err) {
+            throw isMaxBufferError(err) ? tooLargeToReadError(path, ref, maxBuffer) : err;
           }
         }
-        throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
+      }
+      return entries;
+    },
+    async tracksFileMode() {
+      // git exits 1 when the setting is not there, and then reads the executable bit. Any other
+      // failure also reads as true, so the guard reports a mode change rather than miss one.
+      try {
+        return (await runGit(cwd, ['config', '--bool', '--get', 'core.fileMode'])).trim() !== 'false';
+      } catch {
+        return true;
       }
     },
     async lsTree(ref, paths) {

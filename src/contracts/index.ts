@@ -1093,21 +1093,81 @@ export interface BrowserDriver {
   open(url: string): Promise<Page>;
   close(): Promise<void>;
 }
+/**
+ * One working tree path as git would store it, its content never decoded, for the guard to
+ * compare. A file carries the mode git would record for it, 100755 when its owner may run it and
+ * 100644 otherwise, and its bytes. A symbolic link carries its link text, never the content of what it
+ * points at. A folder carries nothing: git stores no folder, only what is in it.
+ */
+export type StoredEntry =
+  | { kind: 'file'; mode: string; bytes: Uint8Array }
+  | { kind: 'symlink'; target: Uint8Array }
+  | { kind: 'folder' };
+/**
+ * One entry of a git tree as `git ls-tree` prints it: the mode (such as 100644, 100755, 120000 for
+ * a symbolic link, 160000 for a submodule, or 040000 for a folder), the type (blob, commit, or
+ * tree), and the object id. Two entries with the same mode and id store the same thing, so the
+ * guard compares guarded paths at refs by these alone and reads no file content.
+ *
+ * `text` is the blob's content as text, read by this id, and is there only when the listing was
+ * asked for it. Read by the id, never by the path at the ref again, it always comes from the same
+ * tree as the mode and the id, even when the ref moves while usabl reads it.
+ */
+export interface TreeEntry {
+  mode: string;
+  type: string;
+  id: string;
+  text?: string;
+}
+
+/**
+ * Which blobs a tree entry listing also reads as text: none, the symbolic links only (their link
+ * text), or every blob, link or file.
+ */
+export type ListedText = 'none' | 'links' | 'blobs';
 export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
+  // The tree entries at the ref for the paths, by path. With recursive, every file, symbolic link,
+  // and submodule that is one of the paths or under one, in one listing; an empty path stands for
+  // the whole tree. Without it, the entry each path names itself, a folder included. A path that
+  // names nothing has no key. Paths are read by their exact names, never as patterns. A ref git
+  // cannot read throws the same errors as show. With text, the blobs it names also carry their
+  // text, read by the id the listing gave; a blob too large to read as text throws the same
+  // refusal as show.
+  listEntries(
+    ref: string,
+    paths: readonly string[],
+    options: { recursive: boolean; text?: ListedText },
+  ): Promise<Map<string, TreeEntry>>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
   diffNameOnly(ref: string): Promise<string[]>;
+  // For each path at the ref, its mode and object id as `<mode> <id>`, such as `100644 <id>`. The
+  // receipt policy hash is built from these, so a change of mode alone, such as an executable bit
+  // or a file swapped for a symbolic link with the same text, changes the hash.
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
   // Every file at a ref that is one of the prefixes or under one, in one listing. An empty prefix
   // stands for the whole tree. No prefixes lists nothing.
   lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
   headRef(): Promise<string>;
+  // Whether git reads the executable bit of working tree files: core.fileMode, true when unset.
+  // With false, git keeps the mode it has recorded and ignores the bit on disk, so the local guard
+  // does the same.
+  tracksFileMode(): Promise<boolean>;
 }
 export interface FsGlob {
   readFile(path: string): Promise<string | null>;
+  // The path as git would store it from the working tree, its content never decoded and never
+  // followed: a regular file with its bytes and its mode from the executable bit, a symbolic link
+  // with its link text, or a folder. Null for nothing there, anything else such as a pipe, and a path below
+  // a file or below a symbolic link, since git stores nothing there. The file system has no git,
+  // so it never reads a submodule's commit: a submodule path is a folder or nothing. The real
+  // reader and the fakes have it. It is optional because many readers wrap readFile for coverage
+  // planning and never reach the guard. The local guard given a reader without it compares both
+  // sides as text, as it did before.
+  readBytes?(path: string): Promise<StoredEntry | null>;
   glob(patterns: string[]): Promise<string[]>;
 }
 export interface CheckRunner {

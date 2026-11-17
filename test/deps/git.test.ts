@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -78,7 +78,7 @@ describe('makeGitReader', () => {
     expect(workingTreeFiles.split('\n')).toContain('src/gate/local-only.ts');
     expect(indexAfter).toBe(indexBefore);
     expect(head).toMatch(/^[0-9a-f]{40}$/);
-    expect(blobs['screen.tsx']).toMatch(/^[0-9a-f]{40}$/);
+    expect(blobs['screen.tsx']).toMatch(/^100644 [0-9a-f]{40}$/);
     expect(blobs).not.toHaveProperty('missing.tsx');
   });
 
@@ -90,7 +90,7 @@ describe('makeGitReader', () => {
     await runGit(repoPath, ['commit', '-m', 'add a file named __proto__']);
     const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', ['__proto__', 'screen.tsx']);
     expect(Object.keys(blobs).sort()).toEqual(['__proto__', 'screen.tsx']);
-    expect(Object.entries(blobs).find(([name]) => name === '__proto__')?.[1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(Object.entries(blobs).find(([name]) => name === '__proto__')?.[1]).toMatch(/^100644 [0-9a-f]{40}$/);
   });
 
   it('lists committed files by prefix and ignores working-tree-only files', async () => {
@@ -185,8 +185,8 @@ describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }
     await commitAwkwardNames();
     const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', [UMLAUT, TRAILING_SPACE, NEWLINE]);
     expect(Object.keys(blobs).sort()).toEqual([NEWLINE, TRAILING_SPACE, UMLAUT].sort());
-    for (const sha of Object.values(blobs)) {
-      expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    for (const entry of Object.values(blobs)) {
+      expect(entry).toMatch(/^100644 [0-9a-f]{40}$/);
     }
   });
 });
@@ -580,6 +580,129 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${'deadbeef'.repeat(5)},sub`]);
     await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
     await expect(makeGitReader({ cwd: repoPath }).show('HEAD', 'sub/file.txt')).resolves.toBeNull();
+  });
+
+  // listEntries is the read the guard compares refs with: the mode and the object id from one
+  // listing, so no file content is read and each kind of entry is told apart by its mode.
+  it('listEntries gives bytes that are not valid UTF-8 different ids', async () => {
+    await writeFile(join(repoPath, 'fe.bin'), Buffer.from([0xfe, 0x41]));
+    await writeFile(join(repoPath, 'ff.bin'), Buffer.from([0xff, 0x41]));
+    await runGit(repoPath, ['add', 'fe.bin', 'ff.bin']);
+    await runGit(repoPath, ['commit', '-m', 'two invalid bytes']);
+    const git = makeGitReader({ cwd: repoPath });
+    // The text read decodes both to the same text. The ids keep them apart.
+    expect(await git.show('HEAD', 'fe.bin')).toBe(await git.show('HEAD', 'ff.bin'));
+    const entries = await git.listEntries('HEAD', ['fe.bin', 'ff.bin'], { recursive: false });
+    expect(entries.get('fe.bin')?.id).toBe(await runGit(repoPath, ['rev-parse', 'HEAD:fe.bin']));
+    expect(entries.get('fe.bin')?.id).not.toBe(entries.get('ff.bin')?.id);
+  });
+
+  it('listEntries leaves out an absent path, a path below a file, and a path inside a submodule', async () => {
+    const absent = 'deadbeef'.repeat(5);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${absent},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule entry']);
+    const entries = await makeGitReader({ cwd: repoPath }).listEntries(
+      'HEAD',
+      ['missing.tsx', 'screen.tsx/below', 'sub/file.txt', 'screen.tsx'],
+      { recursive: false },
+    );
+    expect([...entries.keys()]).toEqual(['screen.tsx']);
+  });
+
+  it('listEntries reads a submodule as its recorded commit, never as a file that holds the id line', async () => {
+    const absent = 'deadbeef'.repeat(5);
+    await writeFile(join(repoPath, 'idline'), Buffer.concat([Buffer.from([0xff]), Buffer.from(`submodule commit ${absent}\n`)]));
+    await runGit(repoPath, ['add', 'idline']);
+    await runGit(repoPath, ['update-index', '--add', '--cacheinfo', `160000,${absent},sub`]);
+    await runGit(repoPath, ['commit', '-m', 'a submodule and a lookalike file']);
+    const entries = await makeGitReader({ cwd: repoPath }).listEntries('HEAD', ['sub', 'idline'], { recursive: true });
+    expect(entries.get('sub')).toEqual({ mode: '160000', type: 'commit', id: absent });
+    expect(entries.get('idline')?.mode).toBe('100644');
+  });
+
+  it('listEntries reads a folder by its tree id without recursion, and the files in it with recursion', async () => {
+    const tree = await runGit(repoPath, ['rev-parse', 'main:src/gate']);
+    const git = makeGitReader({ cwd: repoPath });
+    expect((await git.listEntries('main', ['src/gate'], { recursive: false })).get('src/gate')).toEqual({
+      mode: '040000',
+      type: 'tree',
+      id: tree,
+    });
+    expect([...(await git.listEntries('main', ['src/gate'], { recursive: true })).keys()]).toEqual(['src/gate/index.ts']);
+    expect([...(await git.listEntries('main', [''], { recursive: true })).keys()].sort()).toEqual([
+      'screen.tsx',
+      'src/gate/index.ts',
+    ]);
+  });
+
+  it('listEntries reads the mode of a file and of a symbolic link', async () => {
+    await writeFile(join(repoPath, 'run.sh'), 'data', { mode: 0o755 });
+    await symlink('data', join(repoPath, 'link'));
+    await runGit(repoPath, ['add', 'run.sh', 'link']);
+    await runGit(repoPath, ['commit', '-m', 'an executable file and a link']);
+    const git = makeGitReader({ cwd: repoPath });
+    const entries = await git.listEntries('HEAD', ['run.sh', 'screen.tsx', 'link'], { recursive: true });
+    expect(entries.get('run.sh')?.mode).toBe('100755');
+    expect(entries.get('screen.tsx')?.mode).toBe('100644');
+    expect(entries.get('link')?.mode).toBe('120000');
+    // A link's blob is its link text, so show reads that text.
+    await expect(git.show('HEAD', 'link')).resolves.toBe('data');
+    // The receipt listing keeps the mode next to the id.
+    const listed = await git.lsTree('HEAD', ['run.sh', 'link']);
+    expect(listed['run.sh']).toMatch(/^100755 [0-9a-f]{40}$/);
+    expect(listed['link']).toMatch(/^120000 [0-9a-f]{40}$/);
+  });
+
+  it('listEntries reads the text it is asked for by the id it listed', async () => {
+    await symlink('screen.tsx', join(repoPath, 'link'));
+    await runGit(repoPath, ['add', 'link']);
+    await runGit(repoPath, ['commit', '-m', 'a link']);
+    const git = makeGitReader({ cwd: repoPath });
+    const none = await git.listEntries('HEAD', ['link', 'screen.tsx'], { recursive: true });
+    expect([none.get('link')?.text, none.get('screen.tsx')?.text]).toEqual([undefined, undefined]);
+    const links = await git.listEntries('HEAD', ['link', 'screen.tsx'], { recursive: true, text: 'links' });
+    expect([links.get('link')?.text, links.get('screen.tsx')?.text]).toEqual(['screen.tsx', undefined]);
+    const blobs = await git.listEntries('HEAD', ['link', 'screen.tsx', 'src/gate'], { recursive: false, text: 'blobs' });
+    expect([blobs.get('link')?.text, blobs.get('screen.tsx')?.text]).toEqual(['screen.tsx', 'first version\n']);
+    // A folder has no blob, so no text.
+    expect(blobs.get('src/gate')?.text).toBeUndefined();
+  });
+
+  it('listEntries refuses a blob too large to read as text, naming the file', async () => {
+    await writeFile(join(repoPath, 'big.json'), 'x'.repeat(4096));
+    await runGit(repoPath, ['add', 'big.json']);
+    await runGit(repoPath, ['commit', '-m', 'a big file']);
+    const git = makeGitReader({ cwd: repoPath, maxBuffer: 1024 });
+    const refused = git.listEntries('HEAD', ['big.json'], { recursive: false, text: 'blobs' });
+    await expect(refused).rejects.toThrow(/could not read big\.json at HEAD: it is larger than/);
+    await expect(git.listEntries('HEAD', ['big.json'], { recursive: false })).resolves.toHaveProperty('size', 1);
+  });
+
+  it('listEntries reads a path from the root of the tree when run from a subfolder', async () => {
+    await mkdir(join(repoPath, 'apps/web'), { recursive: true });
+    const git = makeGitReader({ cwd: join(repoPath, 'apps/web') });
+    expect([...(await git.listEntries('HEAD', ['screen.tsx'], { recursive: true })).keys()]).toEqual(['screen.tsx']);
+  });
+
+  it('tracksFileMode follows core.fileMode, and reads true when it is not set', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await runGit(repoPath, ['config', '--unset-all', 'core.fileMode']).catch(() => undefined);
+    await expect(git.tracksFileMode()).resolves.toBe(true);
+    await runGit(repoPath, ['config', 'core.fileMode', 'false']);
+    await expect(git.tracksFileMode()).resolves.toBe(false);
+    await runGit(repoPath, ['config', 'core.fileMode', 'true']);
+    await expect(git.tracksFileMode()).resolves.toBe(true);
+  });
+
+  it('listEntries throws the missing ref error, as show does', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    await expect(git.listEntries('origin/nosuch', ['screen.tsx'], { recursive: true })).rejects.toThrow(
+      /git cannot read origin\/nosuch/,
+    );
+    await expect(git.listEntries('-x', ['screen.tsx'], { recursive: false })).rejects.toThrow(/cannot use "-x" as a git ref/);
+    await expect(git.listEntries('deadbeef'.repeat(5), ['screen.tsx'], { recursive: true })).rejects.toThrow(
+      /git cannot read deadbeefdeadbeef/,
+    );
   });
 
   it('still reads a normal file, an absent one, odd bytes, a large file, and a file in a folder', async () => {

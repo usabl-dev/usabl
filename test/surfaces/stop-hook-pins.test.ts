@@ -24,6 +24,7 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeStopHookRunnerPorts, runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
 import { NO_TRUSTED_BRANCH_NOTE, type StartingCommit } from '../../src/surfaces/stop-hook-scope.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
+import { sha256 } from '../../src/primitives/canonical.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -79,7 +80,7 @@ const FOUND: StartingCommit = { kind: 'found', branch: 'origin/main', commit: 'a
 
 async function stop(
   sessionId: string,
-  options: { uid?: number; env?: Record<string, string | undefined>; start?: StartingCommit } = {},
+  options: { uid?: number; env?: Record<string, string | undefined>; start?: StartingCommit; committed?: string } = {},
 ) {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -99,7 +100,7 @@ async function stop(
     },
     readConfigBytes: async () => committedConfigBytes(),
     loadConfig: async () => config,
-    buildDeps: async () => makeFakeDeps({ headContents: { 'usabl.config.json': 'committed config' } }),
+    buildDeps: async () => makeFakeDeps({ headContents: { 'usabl.config.json': options.committed ?? 'committed config' } }),
     runEngine: async () => {
       engineRan = true;
       return verified;
@@ -202,11 +203,60 @@ describe.skipIf(REAL_UID === null)('Stop hook session pins on a shared temp dire
 
     // Rewrite the pins the way this user's own earlier stop would have, with a different digest,
     // keeping the private mode. The next stop sees the committed bytes differ from the pin.
-    await writeFile(path, JSON.stringify({ ...recorded, 'usabl.config.json': 'an older digest' }));
+    // The digest keeps the current format, so it is read as a real change, never as pins from an
+    // older usabl.
+    const format = (recorded['usabl.config.json'] ?? '').split(':')[0] ?? '';
+    await writeFile(path, JSON.stringify({ ...recorded, 'usabl.config.json': `${format}:${'0'.repeat(64)}` }));
 
     const result = await stop('session-drift');
 
     expect(result.stdout).toContain('guarded policy drift');
+  });
+
+  // An earlier release stored the bare sha256 of the decoded text, with no version.
+  async function olderPinsFor(sessionId: string): Promise<{ path: string; unversioned: Record<string, string> }> {
+    const path = await pinPathFor(sessionId);
+    const recorded = JSON.parse(await readFile(path, 'utf8')) as Record<string, string>;
+    const unversioned = Object.fromEntries(
+      Object.keys(recorded).map((key) => [key, sha256(key === 'usabl.config.json' ? 'committed config' : '')]),
+    );
+    await writeFile(path, JSON.stringify(unversioned));
+    return { path, unversioned };
+  }
+
+  function expectOlderPinsBlock(result: Awaited<ReturnType<typeof stop>>, path: string): void {
+    const payload = JSON.parse(result.stdout.trim()) as { decision: string; reason: string };
+    expect(payload.decision).toBe('block');
+    // The stop cannot tell whether policy changed, so it never says that it did.
+    expect(payload.reason).not.toContain('guarded policy drift');
+    expect(payload.reason).toContain('written by an older usabl');
+    expect(payload.reason).toContain('cannot tell whether');
+    expect(payload.reason).toContain('review the guarded policy files changed since the session started');
+    expect(payload.reason).toContain(`pin fix: delete ${path}`);
+    // No check runs and no stored receipt answers the stop.
+    expect(result.engineRan()).toBe(false);
+  }
+
+  it('blocks on pins an earlier release wrote, with no version, and says plainly why', async () => {
+    // Here the digests match exactly what is committed, so only the missing version tells the
+    // pins apart from current ones, and the stop still cannot use them.
+    const { path, unversioned } = await olderPinsFor('session-unversioned');
+
+    const first = await stop('session-unversioned');
+    const second = await stop('session-unversioned');
+
+    expectOlderPinsBlock(first, path);
+    expectOlderPinsBlock(second, path);
+    // The stored pins are kept, so the current state is never taken as the baseline on its own.
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(unversioned);
+  });
+
+  it('blocks on older pins when a policy weakening was committed earlier in the session', async () => {
+    const { path } = await olderPinsFor('session-weakened');
+
+    const result = await stop('session-weakened', { committed: 'weakened config' });
+
+    expectOlderPinsBlock(result, path);
   });
 
   it('never re-pins over a pin file of ours that does not parse, and says how to reset it', async () => {

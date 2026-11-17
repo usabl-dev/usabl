@@ -5,7 +5,7 @@
  * GitHub review lookup is injected. `run()` stays GitHub-free.
  */
 import { compileCodeownersPattern, readCodeownersLine, type CodeownersMatch } from '../primitives/match-codeowners.js';
-import type { Result } from '../contracts/index.js';
+import type { GitReader, Result } from '../contracts/index.js';
 import { guardScopeAtRefs } from '../trust/guard.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 import { parseResultDocument } from '../intake/result-document.js';
@@ -24,6 +24,7 @@ export interface PolicyPr {
 export interface PolicyGit {
   show(ref: string, path: string): Promise<string | null>;
   lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
+  listEntries: GitReader['listEntries'];
 }
 
 export interface PolicyEnforceDeps {
