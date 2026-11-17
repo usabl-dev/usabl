@@ -3726,11 +3726,15 @@ load-bearing: integrity check before reading contents.
 
 ### Session pinning
 
-At session start, record sha256 pins of every guarded path keyed by session id and
-repository, stored outside the repo in the OS temp dir. The repository key is derived
+At the first stop of a session, record sha256 pins of every guarded path keyed by session id
+and repository, stored outside the repo in the OS temp dir. There is no session start hook
+(the installer writes only a Stop hook), so the pins are taken from HEAD as it is at that first
+stop, and a policy change committed before it is already in them. The repository key is derived
 from the resolved working directory the hook runs in, so pins recorded in one repository
-are never compared against another. The stop hook checks pins mid-session to catch a
-committed tamper that git-status-clean cannot see.
+are never compared against another. The stop hook checks pins at each later stop to catch a
+committed tamper that git-status-clean cannot see. A policy change committed before the first
+stop is caught by the starting commit compare instead (section 11.2, "Policy on a stop with a
+starting commit"), when the stop has a starting commit.
 
 Each pin is `v4:` and a sha256 over a fixed label and what HEAD stores at the path, read as
 described under "Guarded file comparison", as JSON of short strings: nothing, or the mode and
@@ -3972,8 +3976,9 @@ lines.
 
 - Local: `usabl check` (the default) on changed files or named surfaces.
 - Local with the Stop hook's scope: `usabl check --branch-scope` checks every change since the
-  branch left the trusted branch, plus uncommitted changes, and binds the same starting commit
-  into its receipt. It is the way to finish a check a stop could not finish; a plain `usabl
+  branch left the trusted branch, plus uncommitted changes, reads policy at the starting commit,
+  and binds that commit into its receipt. It is the way to finish a check a stop could not
+  finish; a plain `usabl
   check` receipt is not used by a stop with a starting commit (section 11.2). It is refused next
   to `--ci`, `--trusted-ref`, `--isolated-browser`, or `--config` naming a file other than the
   root `usabl.config.json`.
@@ -4160,9 +4165,29 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   function `usabl check --trusted-ref` uses in CI, from the starting commit, with `-z`. So an
   agent that commits a UI change and then stops is checked; before, the hook checked only
   uncommitted changes and said there was nothing to check. The hook passes the list and the
-  starting commit to `run()`, and the receipt records the commit (Receipt binding). The hook does
-  not pass a trusted ref to `run()`, so policy is read as on every local run: compared with HEAD
-  by the guard and the session pins.
+  starting commit to `run()`, and the receipt records the commit (Receipt binding).
+- Policy on a stop with a starting commit. CI reads policy at the base of the pull request, so a
+  stop with a starting commit reads it at that commit. The hook runs the guard twice: against
+  HEAD, as before, and against the starting commit. Both run before the receipt fast path, and a
+  guarded file either one reports is a changed guarded file. The hook also passes the starting
+  commit to `run()` as its trusted ref, so the run guards against it, reads the floor and the
+  waivers from it, and plans from the config at it when `usabl.config.json` differs from it. A
+  waiver, a floor entry, a narrower `uiFileGlobs`, or a routes edit committed on the branch
+  before the first stop is then a guarded change, as it is in CI: the stop says NOT verified,
+  APPROVAL REQUIRED, names the files inside the untrusted frame, and blocks once. The message
+  adds "usabl compared guarded policy files with the commit where this branch left the trusted
+  branch, as CI compares them with the base of the pull request. A guarded file committed on
+  this branch still counts as changed, and CI will ask for a code owner approval for it. To clear
+  this without approval, put the file back as it is at that commit." A guarded file changed only
+  in the working tree is still reported, by both compares. The session pins are unchanged: they
+  catch policy that changes between stops of one session. Deps are still built without a trusted
+  ref, so a saved session (`usabl session`) still signs the scan in.
+  - A stop with no starting commit (no trusted branch, or a port with no way to find one) reads
+    policy as before: compared with HEAD by the guard and the session pins, with the floor and
+    the waivers read from the working tree. A policy change committed before the first stop is
+    then taken as policy on that stop, and only CI sees it.
+  - A branch that sets usabl up, so the starting commit holds no `usabl.config.json`, is a
+    guarded change on every stop until the config reaches the trusted branch, as it is in CI.
   - A detached HEAD, a rebased branch, and a branch that changed since an earlier stop all have a
     merge base, so each stop checks every change since that commit. After a rebase that is the
     rebased commits; the changes the branch took in from the trusted branch are not rechecked.
@@ -4198,8 +4223,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - `usabl check --branch-scope` is the way to finish a check a stop could not finish, for example a
   stop that ran out of time. It finds the starting commit and lists the changes with
   `resolveBranchScope`, the function the hook calls, so it checks the same changes and passes the
-  same `changedFiles` and `baseRevision` to `run()`. Everything else is the plain local check:
-  the same policy reads, output, and exit codes. Its receipt verifies on the next stop of the same
+  same `changedFiles` and `baseRevision` to `run()`. With a starting commit it also passes that
+  commit as the trusted ref, so policy is read and guarded at it, as on the stop (above). A
+  guarded file that differs from it, committed or not, exits 2 (approval required), and the next
+  step says the files were compared with the commit where this branch left the trusted branch,
+  that a committed file still counts, that a code owner approves it on the pull request, and that
+  putting the file back as it is at that commit clears it. Without a starting commit the policy
+  reads are the plain local check's. Output and exit codes are the plain local check's. Its
+  receipt verifies on the next stop of the same
   tree with the same starting commit. One more UI edit changes the tree, so the next stop runs the
   full check. A commit that only records changes already checked leaves the tree and the starting
   commit as they were, so the receipt still stands. A merge or a rebase that moves the starting

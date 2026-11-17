@@ -413,6 +413,18 @@
   before this stops matching once, so the first stop after the upgrade runs a full check. Other
   git-ignored files the app reads stay invisible to the run and the receipt until they are listed
   in `localFiles`.
+- A Stop hook stop with a starting commit, and `usabl check --branch-scope`, read policy at that
+  commit, as CI reads it at the base of the pull request. The stop runs the guard against HEAD and
+  against the starting commit, before the receipt fast path, and both pass the starting commit to
+  the run as its trusted ref, so the floor and the waivers are read from it and a changed config is
+  read from it too. Before, a stop compared policy with HEAD only and took its first session pins
+  from HEAD, so a waiver, a floor entry, a narrower `uiFileGlobs`, or a routes edit committed on
+  the branch before the first stop was taken as policy. Gate effect: such a stop read VERIFIED, or
+  nothing to check, and now reads NOT verified, APPROVAL REQUIRED (exit 2), names the files, says
+  that a file committed on the branch still counts and that CI will ask for a code owner approval,
+  and blocks once. `usabl check --branch-scope` exits 2 in the same case and no longer tells the
+  reader to commit the files. A stop with no starting commit reads policy as before. The ground
+  truth now says the session pins are recorded at the first stop, not at session start.
 - `checkPage` reads the page's address after the checks with the CLI's rule as well:
   `stayedOnScreen`, against the address the page reported before the checks. The origin and the
   path always count. The query counts only when the expected address has one. A fragment counts

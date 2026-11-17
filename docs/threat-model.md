@@ -201,11 +201,23 @@ re-baseline to green.
   receipt that counts a waived finding but binds no waiver end, a waiver end that is not an
   ISO-8601 UTC timestamp, and a scanner version that could not be read. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
-- The Stop hook checks what CI will check. It used to check only uncommitted changes, so an
+- The Stop hook checks the files CI will check, and with a starting commit it reads policy as CI
+  reads it. It used to check only uncommitted changes, so an
   agent that committed its work and then stopped was told there was nothing to check, and the
   first gate that looked was the pull request. A stop now checks every file changed since the
   branch left the trusted branch (the merge base with the branch `refs/remotes/origin/HEAD`
-  names), listed with the function CI uses, plus uncommitted changes. The receipt binds that
+  names), listed with the function CI uses, plus uncommitted changes. For policy, the stop runs
+  the guard against HEAD and against that starting commit, and passes the starting commit to the
+  run as its trusted ref, so the floor and the waivers are read from it and a changed config is
+  read from it too. A guarded file that differs from the starting commit, committed on the branch
+  or not, is a changed guarded file: the stop says NOT verified, approval required, names the
+  files, says that CI will ask for a code owner approval, and blocks once. Before this, the stop
+  compared policy with HEAD only and recorded its first session pins from HEAD, so an agent that
+  committed a waiver, a floor entry, a narrower `uiFileGlobs`, or a routes edit before the first
+  stop could get VERIFIED, or nothing to check, under its own policy. `usabl check
+  --branch-scope` reads policy the same way. A stop with no starting commit (no trusted branch)
+  still compares policy with HEAD only and reads the floor and the waivers from the working tree,
+  so there a policy change committed before the first stop is seen only in CI. The receipt binds that
   starting commit (`baseRevision`) and verification compares it, so a receipt minted for a
   narrower set of changes, for example by a stop that checked only uncommitted changes, does not
   answer a stop of the same tree that checks more. When a trusted branch is named but the
