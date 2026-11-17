@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CoverageGap, Finding, Result } from '../../src/contracts/index.js';
-import { NO_FIX_RECORDED, discloseGaps, isBlockingBarrier } from '../../src/output/disclosure.js';
+import { NO_FIX_RECORDED, discloseGaps, formatBlockingSplit, isBlockingBarrier } from '../../src/output/disclosure.js';
 import { projectCli } from '../../src/surfaces/cli.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { projectSelfCheck } from '../../src/surfaces/self-check.js';
@@ -620,6 +620,14 @@ describe('a clean run does not invent coverage language', () => {
 describe('the overlay client answers "does it block" with the shared predicate', () => {
   it('carries the predicate source itself, rather than a second copy of the rule', () => {
     expect(overlayClientSource).toContain(`const isBlockingBarrier = ${isBlockingBarrier.toString()}`);
+  });
+
+  it('carries the blocking split source itself, so the panel counts in the gate words', () => {
+    // The panel names the blocking count with the same words the gate summary uses. Like the
+    // predicate, the function is carried as its own source rather than written a second time.
+    expect(overlayClientSource).toContain(`const formatBlockingSplit = ${formatBlockingSplit.toString()}`);
+    const declarations = overlayClientSource.match(/(?:function|const|let|var) formatBlockingSplit\b/g) ?? [];
+    expect(declarations.length).toBe(2);
   });
 
   it('names the predicate exactly once, so nothing shadows it later in the client', () => {

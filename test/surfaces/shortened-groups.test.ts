@@ -94,3 +94,56 @@ for (const surface of surfaces) {
     });
   });
 }
+
+/**
+ * The note that counts left-out items names what they are.
+ *
+ * It called every dropped group an accessibility barrier, so a not_covered run held only by checks
+ * usabl could not decide said "28 accessibility barrier(s) left out" when nothing had failed.
+ * Failing groups rank first, so the dropped ones are most often the undecided ones.
+ */
+const undecidedResult = (failing: number): Result => {
+  const base = result();
+  return {
+    ...base,
+    verdict: failing > 0 ? 'regression' : 'not_covered',
+    exitCode: failing > 0 ? 1 : 3,
+    accessibilityVerdict: failing > 0 ? 'regression' : 'not_covered',
+    accessibilityExitCode: failing > 0 ? 1 : 3,
+    summary: 'test summary',
+    findings: base.findings.map((item, index) => (index < failing ? item : { ...item, confidence: 'unverified' as const })),
+  };
+};
+
+const undecidedSurfaces = [
+  { name: 'stop hook', render: (r: Result) => evaluateStopDecision(r, { stopHookActive: false }, config).message },
+  { name: 'self-check', render: (r: Result) => projectSelfCheck(r, config).message },
+];
+
+for (const surface of undecidedSurfaces) {
+  describe(`${surface.name} shortened with checks usabl could not decide`, () => {
+    it('counts left-out undecided checks as checks, never as accessibility barriers', () => {
+      const message = surface.render(undecidedResult(0));
+      const shown = [...message.matchAll(/^- check undecided (\d+), needs a person to review: /gm)].length;
+
+      expect(shown).toBeGreaterThan(0);
+      expect(shown).toBeLessThan(40);
+      expect(message).toContain(`(${40 - shown} undecided check(s) left out)`);
+      expect(message).not.toMatch(/accessibility barrier/);
+    });
+
+    it('splits the count when both kinds are left out', () => {
+      // 39 failing groups rank first and one undecided group last, so the undecided group goes
+      // first and some failing groups go after it.
+      const message = surface.render(undecidedResult(39));
+      const barriers = [...message.matchAll(/^- accessibility barrier (\d+): /gm)].length;
+      const checks = [...message.matchAll(/^- check undecided (\d+), needs a person to review: /gm)].length;
+      const leftBarriers = 39 - barriers;
+      const leftChecks = 1 - checks;
+
+      expect(leftBarriers).toBeGreaterThan(0);
+      expect(leftChecks).toBe(1);
+      expect(message).toContain(`(${leftBarriers} accessibility barrier(s) and 1 undecided check(s) left out)`);
+    });
+  });
+}

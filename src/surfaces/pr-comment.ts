@@ -740,7 +740,12 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const severity = boundField(neutralize(finding.severity), 'word');
   const status = boundField(neutralize(group.status), 'word');
   const count = formatCollapsedGroupCount(group);
-  const headline = `${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
+  // A blocking group of findings usabl could not decide gets engine words before the sealed
+  // fields, as the Stop hook labels it. A group holds one confidence, so the words hold for every
+  // finding in it, and a failing group on the same rule reads apart from it.
+  const label =
+    isBlockingBarrier(finding) && finding.confidence === 'unverified' ? 'check undecided, needs a person to review: ' : '';
+  const headline = `${label}${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
   // The headline names the screen id, layer, rule, and severity, so the frame follows it directly.
   // A second line naming the same four values only repeated them. The frame lines are
   // continuations of the item, not a nested item, so they render inside this item.
@@ -1104,7 +1109,19 @@ export function projectPrCommentWithin(result: Result, config: UsablConfig | und
     collapsedGating !== null
       ? [collapsedGating, blank, renderFindingGroup('Advisory (non-gating)', advisory, 'advisory')]
       : [
-          renderFindingGroup('New accessibility barriers', deterministicNew, 'recorded'),
+          // A new finding usabl could not decide blocks the run, but it is not an accessibility
+          // barrier found, so it has its own heading. Failures first, as the terminal lists them.
+          renderFindingGroup(
+            'New accessibility barriers',
+            deterministicNew.filter((finding) => finding.confidence === 'fail'),
+            'recorded',
+          ),
+          blank,
+          renderFindingGroup(
+            'New checks that need a person to review',
+            deterministicNew.filter((finding) => finding.confidence === 'unverified'),
+            'recorded',
+          ),
           blank,
           renderFindingGroup('Known (recorded debt)', deterministicRecorded, 'recorded', true),
           blank,

@@ -9,6 +9,7 @@ import { isJudgeDisclosure, judgeLine } from '../judge/disclosure.js';
 import {
   discloseGaps,
   fixOrAbsence,
+  formatBlockingSplit,
   gapDetail,
   gapHeadline,
   isBlockingBarrier,
@@ -177,7 +178,7 @@ function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
  * were: a finding the run proved gone is not something a developer can act on. Advisory evidence is
  * left out too, again as before, because this surface has never listed it.
  */
-const BLOCKING_HEADING = 'accessibility barriers that block this run';
+const BLOCKING_HEADING = 'blocking this run';
 const RECORDED_HEADING = 'recorded, not blocking';
 const RECORDED_NOTE = 'usabl already recorded these. They do not block this run.';
 const HEADROOM_HEADING = 'floor ahead of this run';
@@ -424,11 +425,20 @@ export function formatSummary(result: Result): string {
   // Blocking work first, always. Recorded debt after it, never above it: a reader who has
   // something to fix must not have to scroll past a list of things that are not blocking to
   // find it.
+  // The blocking findings are listed in the two parts the gate's summary names, failures first,
+  // each under a heading in the gate's words, so a check usabl could not decide is never counted
+  // or listed as an accessibility barrier found.
   const blocking = result.findings.filter(isBlockingBarrier);
   const recorded = result.findings.filter(isRecordedNotBlocking);
-  if (blocking.length > 0) {
-    lines.push(`  ${BLOCKING_HEADING}: ${blocking.length} finding(s)`);
-    lines.push(...renderFindingList(blocking, BLOCKING_FIX_LABEL));
+  const found = blocking.filter((finding) => finding.confidence === 'fail');
+  const undecided = blocking.filter((finding) => finding.confidence === 'unverified');
+  if (found.length > 0) {
+    lines.push(`  ${BLOCKING_HEADING}: ${formatBlockingSplit(found.length, 0)}`);
+    lines.push(...renderFindingList(found, BLOCKING_FIX_LABEL));
+  }
+  if (undecided.length > 0) {
+    lines.push(`  ${BLOCKING_HEADING}: ${formatBlockingSplit(0, undecided.length)}`);
+    lines.push(...renderFindingList(undecided, BLOCKING_FIX_LABEL));
   }
   if (recorded.length > 0) {
     lines.push(`  ${RECORDED_HEADING}: ${recorded.length} finding(s)`);

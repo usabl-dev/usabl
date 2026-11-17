@@ -91,7 +91,7 @@ describe('verdict summary names unseen coverage', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     expect(out.accessibilityExitCode).toBe(1);
-    expect(out.summary).toBe('regression: 1 blocking finding(s), 1 gap(s)');
+    expect(out.summary).toBe('regression: 1 accessibility barrier found, 1 gap(s)');
   });
 
   it('says nothing about coverage on a clean run that reached everything', () => {
@@ -135,7 +135,7 @@ describe('verdict summary names unseen coverage', () => {
     });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.summary).toBe('not_covered: 1 blocking finding(s)');
+    expect(out.summary).toBe('not_covered: 1 check undecided, needs a person to review');
     expect(out.summary).not.toContain('gap');
   });
 
@@ -234,7 +234,7 @@ describe('verdict summary counts only what blocks', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     // One barrier caused this verdict, so the line says one. It used to say 30.
-    expect(out.summary).toBe('regression: 1 blocking finding(s), 29 recorded');
+    expect(out.summary).toBe('regression: 1 accessibility barrier found, 29 recorded');
   });
 
   it('counts a waived finding as recorded, the way every surface groups it', () => {
@@ -281,12 +281,77 @@ describe('verdict summary counts only what blocks', () => {
         expect(out.summary).toContain('nothing blocking');
       } else {
         sawBlocked = true;
-        expect(out.summary).toMatch(/\d+ blocking finding\(s\)|\d+ gap\(s\)|\d+ unmapped file\(s\)/);
+        expect(out.summary).toMatch(
+          /\d+ accessibility barriers? found|1 check undecided, needs a person to review|\d+ checks undecided, need a person to review|\d+ gap\(s\)|\d+ unmapped file\(s\)/,
+        );
       }
     }
 
     // Guard the guard: a loop that reached only one side would pass while proving half of it.
     expect(sawVerified).toBe(true);
     expect(sawBlocked).toBe(true);
+  });
+});
+
+/**
+ * The blocking count is split by confidence, because the two halves mean different things.
+ *
+ * A new finding blocks when it fails or when usabl could not decide it. The summary used to print
+ * both as one "N blocking finding(s)", so a run held back only by a check axe could not decide
+ * read "not_covered: 1 blocking finding(s)", and a person took that as one accessibility barrier
+ * found. Nothing had failed: a check could not decide, and a person needs to look. The verdict
+ * rules do not change here, only the words the count is printed with.
+ */
+describe('verdict summary splits the blocking count by confidence', () => {
+  it('names an undecided check as one, not as an accessibility barrier', () => {
+    const out = gate({ ...base, coverage: coverage(), drafts: [d({ confidence: 'unverified' })] });
+
+    expect(out.accessibilityVerdict).toBe('not_covered');
+    expect(out.summary).toBe('not_covered: 1 check undecided, needs a person to review');
+    expect(out.summary).not.toContain('accessibility barrier');
+  });
+
+  it('names a failing finding as an accessibility barrier found', () => {
+    const out = gate({ ...base, coverage: coverage(), drafts: [d()] });
+
+    expect(out.accessibilityVerdict).toBe('regression');
+    expect(out.summary).toBe('regression: 1 accessibility barrier found');
+    expect(out.summary).not.toContain('undecided');
+  });
+
+  it('prints both parts, failures first, when a run has both', () => {
+    const out = gate({
+      ...base,
+      coverage: coverage(),
+      drafts: [
+        d({ rule: 'button-name' }),
+        d({ rule: 'link-name' }),
+        d({ rule: 'aria-allowed-attr', confidence: 'unverified' }),
+        d({ rule: 'color-contrast', confidence: 'unverified' }),
+      ],
+    });
+
+    expect(out.accessibilityVerdict).toBe('regression');
+    expect(out.summary).toBe(
+      'regression: 2 accessibility barriers found, 2 checks undecided, need a person to review',
+    );
+  });
+
+  it('keeps nothing blocking when neither part has a finding', () => {
+    const out = gate({ ...base, coverage: coverage(), drafts: [] });
+
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.summary).toBe('verified: nothing blocking');
+  });
+
+  it('leaves the rest of the line as it was', () => {
+    // The verdict word and the coverage clause are unchanged around the split.
+    const out = gate({
+      ...base,
+      coverage: coverage({ gaps: [gap()] }),
+      drafts: [d({ confidence: 'unverified' })],
+    });
+
+    expect(out.summary).toBe('not_covered: 1 check undecided, needs a person to review, 1 gap(s)');
   });
 });

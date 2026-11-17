@@ -12,8 +12,9 @@
  * see the symbol, or a screen reader that names it oddly, loses nothing. No colour is used, so
  * no state depends on colour to be understood.
  */
-import type { Result } from '../contracts/index.js';
+import type { Finding, Result } from '../contracts/index.js';
 import { ownEntry, wholeNumberText } from './carried.js';
+import { isBlockingBarrier } from './disclosure.js';
 import { listFileNotes } from './file-notes.js';
 import { hasKnownLimits } from './notes.js';
 
@@ -65,6 +66,48 @@ const VERDICT_MEANINGS: Record<string, string> = {
   // who approves it and how the state clears; this line only has room to say where.
   approval_required: 'This change edits guarded policy files. It needs approval on the pull request.',
 };
+
+// not_covered has two causes, and the gate's words for them differ. Coverage failed: a gap or a
+// file usabl could not map, so part of the change was not checked. Or a new finding could not be
+// decided: the change was checked, and a person has to look. The default sentence above is for the
+// first cause, and it stays the answer whenever this unit cannot see the second one alone, so an
+// unchecked change is never described as checked.
+const NOT_COVERED_UNDECIDED_MEANING = 'Checked, but some checks could not decide. A person must review them to pass.';
+const NOT_COVERED_BOTH_MEANING = 'usabl could not check all of this change, and some checks could not decide.';
+
+/**
+ * The two causes that can hold a run back besides a failing finding, as this Result shows them.
+ * `coverageFailed` is a gap or an unmapped file, and a coverage list that is not a list counts as
+ * failed, so a broken Result is never described as checked. `undecided` is a blocking finding
+ * usabl could not decide. It reads the coverage lists and the findings the gate wrote and decides
+ * no verdict. The verdict line and the Stop hook's next step both read it, so they name the same
+ * causes.
+ */
+export function blockingCauses(result: Result): { coverageFailed: boolean; undecided: boolean } {
+  const coverage = result.coverage as { gaps?: unknown; unresolvedFiles?: unknown } | undefined;
+  const coverageFailed =
+    !Array.isArray(coverage?.gaps) ||
+    !Array.isArray(coverage?.unresolvedFiles) ||
+    coverage.gaps.length > 0 ||
+    coverage.unresolvedFiles.length > 0;
+  const findings: unknown = result.findings;
+  const undecided =
+    Array.isArray(findings) &&
+    findings.some(
+      (finding: Finding) =>
+        typeof finding === 'object' && finding !== null && isBlockingBarrier(finding) && finding.confidence === 'unverified',
+    );
+  return { coverageFailed, undecided };
+}
+
+/** The not_covered sentence for the causes this Result shows. */
+function notCoveredMeaning(result: Result): string | undefined {
+  const { coverageFailed, undecided } = blockingCauses(result);
+  if (!undecided) {
+    return undefined;
+  }
+  return coverageFailed ? NOT_COVERED_BOTH_MEANING : NOT_COVERED_UNDECIDED_MEANING;
+}
 
 const IDLE_SYMBOL = '○'; // white circle: nothing happened
 const FAILED_SYMBOL = '!';
@@ -144,7 +187,10 @@ export function describeVerdict(result: Result): VerdictLine {
   // A listed region is a known limit. Only the verified meaning changes, because it is the one a
   // reader could take for a check of everything. A blocked verdict already says it is blocked.
   const knownLimits = hasKnownLimits(result);
-  const meaning = ownEntry(VERDICT_MEANINGS, result.verdict) ?? 'usabl reached a verdict it has no words for.';
+  const meaning =
+    (result.verdict === 'not_covered' ? notCoveredMeaning(result) : undefined) ??
+    ownEntry(VERDICT_MEANINGS, result.verdict) ??
+    'usabl reached a verdict it has no words for.';
   return {
     symbol: ownEntry(VERDICT_SYMBOLS, result.verdict) ?? '',
     word: ownEntry(VERDICT_WORDS, result.verdict) ?? UNRECOGNIZED_VERDICT_WORD,
