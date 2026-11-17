@@ -4906,8 +4906,9 @@ each case gives:
 - With a selector measured after the checks: those four stay covered while the selector holds.
   The selector is then what catches a plain fragment route move: a page that moved to a view
   without the selector's content is a `readiness:<screenId>` gap. A move to a view that still
-  matches the selector is not caught, as in the CLI, so point the selector at content only this
-  screen has.
+  matches the selector is not caught, as in the CLI. The whole fragment rule caught it before, so
+  that is the cost on a screen with a selector. Point the selector at content only this screen
+  has.
 
 An address that cannot be read after the checks is the same gap. When the page left, the keyboard
 walk's gaps from that run go with its findings: the gap for a walk that was cut short and the gap for each region it
