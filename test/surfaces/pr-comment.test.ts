@@ -153,16 +153,22 @@ describe('projectPrComment', () => {
 
     // The number really is the number of items rendered, counted out of the markdown rather than
     // asserted from the fixture, so the headline and the list cannot drift apart again.
+    // The new findings are listed under two headings, the failing one under the barriers and the
+    // two unconfirmed ones under the checks a person needs to review, and the count is both.
     const lines = markdown.split('\n');
-    const start = lines.indexOf('### New accessibility barriers');
-    expect(start).toBeGreaterThan(-1);
-    const rest = lines.slice(start + 1);
-    const end = rest.findIndex((line) => line.startsWith('### '));
-    const listed = rest.slice(0, end === -1 ? rest.length : end)
-      .filter((line) => line.startsWith('- ') && line !== '- none').length;
+    const listedUnder = (heading: string): number => {
+      const start = lines.indexOf(heading);
+      expect(start).toBeGreaterThan(-1);
+      const rest = lines.slice(start + 1);
+      const end = rest.findIndex((line) => line.startsWith('### '));
+      return rest.slice(0, end === -1 ? rest.length : end)
+        .filter((line) => line.startsWith('- ') && line !== '- none').length;
+    };
+    const barriers = listedUnder('### New accessibility barriers');
+    const checks = listedUnder('### New checks that need a person to review');
     const printed = Number(/- deterministic: new (\d+)/.exec(markdown)?.[1]);
-    expect(listed).toBe(3);
-    expect(printed).toBe(listed);
+    expect([barriers, checks]).toEqual([1, 2]);
+    expect(printed).toBe(barriers + checks);
   });
 
   it('says a run held at not_covered by unconfirmed findings is blocked', () => {
@@ -1218,5 +1224,92 @@ describe('pr comment collapse never mixes statuses', () => {
     expect(markdown).toContain('Of these, 6 gate this run and 2 are recorded debt that does not block it.');
     expect(markdown).toContain('- &#91;`new serious`&#93; `clusters`/`axe/rule-0`');
     expect(markdown).not.toContain('`axe/rule-0` (×3)');
+  });
+});
+
+/**
+ * A new finding usabl could not decide is listed under its own heading.
+ *
+ * Both kinds of new finding were listed under "New accessibility barriers", so a reviewer read an
+ * undecided check as an accessibility barrier found. They now go under their own heading, which
+ * is printed on every real verdict like the others, "none" included.
+ */
+describe('pull request comment lists undecided checks apart', () => {
+  const NEW_BARRIERS = '### New accessibility barriers';
+  const NEW_CHECKS = '### New checks that need a person to review';
+  const noGaps = { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false };
+  const items = (markdown: string, heading: string): string[] => {
+    const lines = markdown.split('\n');
+    const start = lines.indexOf(heading);
+    if (start === -1) {
+      return ['(heading missing)'];
+    }
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => line.startsWith('### '));
+    return rest.slice(0, end === -1 ? rest.length : end).filter((line) => line.startsWith('- '));
+  };
+
+  it('lists an undecided check under its own heading, not as an accessibility barrier', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'not_covered',
+        exitCode: 3,
+        findings: [baseFinding({ confidence: 'unverified' })],
+        coverage: noGaps,
+      }),
+    );
+
+    expect(items(markdown, NEW_BARRIERS)).toEqual(['- none']);
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/color-contrast`']);
+  });
+
+  it('lists each new finding under the heading for what it is, failures first', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        findings: [
+          baseFinding({ rule: 'walk-a', elementKey: 'k-a', confidence: 'unverified' }),
+          baseFinding({ rule: 'button-name', elementKey: 'k-b', confidence: 'fail' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+    const lines = markdown.split('\n');
+
+    expect(items(markdown, NEW_BARRIERS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/button-name`']);
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/walk-a`']);
+    expect(lines.indexOf(NEW_CHECKS)).toBeGreaterThan(lines.indexOf(NEW_BARRIERS));
+    expect(lines.indexOf('### Known (recorded debt)')).toBeGreaterThan(lines.indexOf(NEW_CHECKS));
+  });
+
+  it('marks an undecided group in the collapsed view, so it reads apart from a failing group on the same rule', () => {
+    // Failing and undecided findings on one rule form two groups. Both printed the same headline,
+    // so nothing told them apart and the undecided one was never marked as needing review.
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        findings: [
+          baseFinding({ elementKey: 'k-1' }),
+          baseFinding({ elementKey: 'k-2' }),
+          baseFinding({ elementKey: 'k-3', confidence: 'unverified' }),
+          baseFinding({ elementKey: 'k-4', confidence: 'unverified' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+    const collapsed = items(markdown, '### Findings (collapsed by rule)');
+
+    expect(collapsed).toEqual([
+      '- &#91;`new serious`&#93; `clusters`/`axe/color-contrast` (×2)',
+      '- check undecided, needs a person to review: &#91;`new serious`&#93; `clusters`/`axe/color-contrast` (×2)',
+    ]);
+  });
+
+  it('prints the heading with none on a real verdict that has no undecided check', () => {
+    const markdown = projectPrComment(baseResult({ verdict: 'verified', findings: [], coverage: noGaps }));
+
+    expect(items(markdown, NEW_CHECKS)).toEqual(['- none']);
   });
 });

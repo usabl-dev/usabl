@@ -3,7 +3,7 @@
  * This unit renders read-only status from server projections.
  * It must never influence gate outcomes or trust page text as HTML.
  */
-import { isBlockingBarrier } from '../output/disclosure.js';
+import { formatBlockingSplit, isBlockingBarrier } from '../output/disclosure.js';
 import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from './scrub.js';
 
 /** The badge label before any result has arrived. Tests wait for the badge to leave it. */
@@ -49,6 +49,36 @@ export const overlayClientSource = `(() => {
   // carries, evidenceClass, status, and confidence, and closes over nothing, so its own source is
   // the whole of it.
   const isBlockingBarrier = ${isBlockingBarrier.toString()};
+
+  // The blocking count in the gate's words, carried in the same way: a failing finding is an
+  // accessibility barrier found, and a finding usabl could not decide is a check that needs a
+  // person to review. It closes over nothing.
+  const formatBlockingSplit = ${formatBlockingSplit.toString()};
+  // True when the run left something unexamined: a coverage gap or a changed file it could not map.
+  // A payload without the lists counts as failed, so a missing field never reads as checked.
+  function coverageFailed(payload) {
+    const coverage = payload && payload.coverage;
+    if (!coverage || !Array.isArray(coverage.gaps) || !Array.isArray(coverage.unresolvedFiles)) {
+      return true;
+    }
+    return coverage.gaps.length > 0 || coverage.unresolvedFiles.length > 0;
+  }
+
+  // How many blocking findings, on any screen, usabl could not decide.
+  function undecidedBlockingCount(payload) {
+    const findings = payload && Array.isArray(payload.findings) ? payload.findings : [];
+    return findings.filter((finding) => isBlockingBarrier(finding) && finding.confidence === 'unverified').length;
+  }
+
+  function blockingSplitOf(findings) {
+    let found = 0;
+    let undecided = 0;
+    for (const finding of findings) {
+      if (finding.confidence === 'fail') found += 1;
+      else if (finding.confidence === 'unverified') undecided += 1;
+    }
+    return { found, undecided, text: formatBlockingSplit(found, undecided) };
+  }
 
   // Captured at module load, before any page script has had a chance to replace them. The overlay
   // runs in the page's own realm, so it can never be made tamper proof, but the cheapest lever is a
@@ -96,9 +126,11 @@ export const overlayClientSource = `(() => {
 
   // The two headings the findings on a screen are listed under, and the words the header uses when
   // it refers to them. One name each, written once, so the sentence in the header and the heading
-  // in the list can never say different things about the same finding. The terminal summary prints
-  // the same two names in lower case.
-  const BLOCKING_HEADING = 'Accessibility barriers that block this run';
+  // in the list can never say different things about the same finding. The blocking group holds
+  // failing findings and findings usabl could not decide, so its heading names findings and its
+  // count says how many of each, in the gate's words. The terminal prints the recorded name in
+  // lower case and lists the blocking findings under "blocking this run:", one heading per part.
+  const BLOCKING_HEADING = 'Findings that block this run';
   const RECORDED_HEADING = 'Recorded, not blocking';
   const HEADROOM_HEADING = 'Floor ahead of this run';
   // Floored barriers the run did not see on a screen it cannot show rendered. The sentences come in
@@ -718,7 +750,19 @@ export const overlayClientSource = `(() => {
     }
     const verdict = verdictFor(payload, error, scanning);
     if (verdict.key === 'not-covered') {
-      return 'usabl could not check the affected screens, so nothing here is proven.';
+      // not_covered has two causes. When coverage failed, part of the change was not checked, and
+      // the sentence says so. When the only cause is a check usabl could not decide, the screens
+      // were checked, so the panel goes on to name the checks on this screen, as it does for a
+      // blocked run. A run that shows neither cause keeps the coverage sentence.
+      const undecided = undecidedBlockingCount(payload);
+      if (coverageFailed(payload)) {
+        return undecided > 0
+          ? 'usabl could not check all of the affected screens, and some checks could not decide, so nothing here is proven.'
+          : 'usabl could not check the affected screens, so nothing here is proven.';
+      }
+      if (undecided === 0) {
+        return 'usabl could not check the affected screens, so nothing here is proven.';
+      }
     }
     if (verdict.key === 'approval') {
       return approvalLines(payload, split);
@@ -765,8 +809,17 @@ export const overlayClientSource = `(() => {
     }
     // Blocking verdict from here down.
     if (split.hereBlocking.length > 0) {
-      const found = 'usabl found ' + countLabel(split.hereBlocking.length, 'accessibility barrier')
-        + ' on this screen. Fix ' + (split.hereBlocking.length === 1 ? 'it' : 'them') + ' first.';
+      // A finding usabl could not decide blocks too, but it is not an accessibility barrier found,
+      // so the sentence names each part in the gate's words and asks for the right next step.
+      const parts = blockingSplitOf(split.hereBlocking);
+      const found = parts.undecided === 0
+        ? 'usabl found ' + countLabel(parts.found, 'accessibility barrier')
+          + ' on this screen. Fix ' + (parts.found === 1 ? 'it' : 'them') + ' first.'
+        : 'On this screen: ' + parts.text + '. '
+          + (parts.found > 0
+            ? 'Fix the accessibility barrier' + (parts.found === 1 ? '' : 's') + ' and review the '
+              + (parts.undecided === 1 ? 'check' : 'checks') + ' first.'
+            : 'Review ' + (parts.undecided === 1 ? 'it' : 'them') + ' first.');
       return split.hereRecorded.length > 0 ? [found, recordedNote(split)] : found;
     }
     if (split.hereRecorded.length > 0) {
@@ -774,7 +827,7 @@ export const overlayClientSource = `(() => {
       // barriers would send the developer to fix accepted debt, which is the thing the evidence
       // floor exists to stop.
       const lead = split.elsewhereBlockingTotal > 0
-        ? 'No accessibility barriers on this screen. Other screens have accessibility barriers and the gate is blocked.'
+        ? 'No accessibility barriers on this screen. Other screens have findings that block this run.'
         : 'No accessibility barriers on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
       return [lead, recordedNote(split)];
     }
@@ -1436,6 +1489,13 @@ export const overlayClientSource = `(() => {
       .finding-title-wrap {
         flex: 1 1 auto;
         min-width: 0;
+      }
+
+      .finding-confidence {
+        display: block;
+        color: var(--graphite);
+        font-size: 0.75rem;
+        font-weight: 650;
       }
 
       /* Collapsed rows clamp the title to one line. The full string stays in the DOM, so the
@@ -2580,6 +2640,11 @@ export const overlayClientSource = `(() => {
     // The clamped title sits inside a wrapper rather than being a flex child itself, because a flex
     // item is blockified and the line clamp would never take effect.
     const titleWrap = make('span', 'finding-title-wrap');
+    // A blocking finding usabl could not decide names its state on the row, so a reader can tell
+    // it from an accessibility barrier found without opening it. Text, never colour alone.
+    if (entry.blocking && finding.confidence === 'unverified') {
+      titleWrap.appendChild(make('span', 'finding-confidence', 'Check undecided, needs a person to review'));
+    }
     titleWrap.appendChild(
       make('span', 'finding-title', boundedText(finding.whatUserExperiences, MAX_TITLE_CHARS)),
     );
@@ -2609,11 +2674,11 @@ export const overlayClientSource = `(() => {
   //
   // The heading is a real heading element, and the count beside it is text. Nothing about the
   // difference between the two groups is carried by colour or by position alone.
-  function renderFindingGroup(title, count, note) {
+  function renderFindingGroup(title, countText, note) {
     const group = make('div', 'finding-group');
     const heading = make('div', 'group-heading');
     heading.appendChild(make('h4', '', title));
-    heading.appendChild(make('span', 'section-count', countLabel(count, 'finding')));
+    heading.appendChild(make('span', 'section-count', countText));
     group.appendChild(heading);
     if (note) {
       group.appendChild(make('p', 'group-note', note));
@@ -2722,7 +2787,7 @@ export const overlayClientSource = `(() => {
         make(
           'p',
           'empty',
-          verdict.key === 'not-covered'
+          verdict.key === 'not-covered' && (coverageFailed(payload) || undecidedBlockingCount(payload) === 0)
             ? 'usabl could not check the affected screens, so there is nothing to list.'
             : unaffectedBodyLine(),
         ),
@@ -2757,14 +2822,14 @@ export const overlayClientSource = `(() => {
     let blockingList = null;
     let recordedList = null;
     if (split.hereBlocking.length > 0) {
-      const built = renderFindingGroup(BLOCKING_HEADING, split.hereBlocking.length, '');
+      const built = renderFindingGroup(BLOCKING_HEADING, blockingSplitOf(split.hereBlocking).text, '');
       blockingList = built.list;
       scroll.appendChild(built.group);
     }
     if (split.hereRecorded.length > 0) {
       const built = renderFindingGroup(
         RECORDED_HEADING,
-        split.hereRecorded.length,
+        countLabel(split.hereRecorded.length, 'finding'),
         'usabl already recorded these. They do not block this run. Fix them when you choose to.',
       );
       recordedList = built.list;

@@ -180,6 +180,35 @@ export function isBlockingBarrier(finding: Finding): boolean {
 }
 
 /**
+ * The blocking count in the gate's words, split by confidence.
+ *
+ * `found` counts the blocking findings that failed, and `undecided` the ones usabl could not
+ * decide. Both block, but they mean different things to a person: the first is an accessibility
+ * barrier, and the second is a check that needs a person to look. One "N blocking" count made a
+ * check axe could not decide read as an accessibility barrier found. Each part is printed only
+ * when its count is above zero, failures first, and the result is empty when both are zero, so the
+ * caller says "nothing blocking" in its own way.
+ *
+ * The gate writes the same words into its summary. A test drives the gate and checks that this
+ * function, given the counts from the findings the gate returned, prints the clause the summary
+ * printed. It closes over nothing, so the overlay carries its source into the browser as it is.
+ */
+export function formatBlockingSplit(found: number, undecided: number): string {
+  const parts: string[] = [];
+  if (found > 0) {
+    parts.push(found + ' accessibility barrier' + (found === 1 ? '' : 's') + ' found');
+  }
+  if (undecided > 0) {
+    parts.push(
+      undecided === 1
+        ? '1 check undecided, needs a person to review'
+        : undecided + ' checks undecided, need a person to review',
+    );
+  }
+  return parts.join(', ');
+}
+
+/**
  * What a blocked reader is owed when guarded policy files changed: how the state clears, and
  * the one lever a person has over the stop.
  *

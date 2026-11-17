@@ -72,6 +72,23 @@ describe('collapseFindingsByRule', () => {
       ['waived', 1],
     ]);
   });
+
+  it('never puts a failing finding and an undecided one in one group, and ranks failures first', () => {
+    // A group is labelled from its representative. A failing finding and a check axe could not
+    // decide on one rule shared a group, so the label of one was printed for both. Failures come
+    // first, as the terminal lists them, whatever the severity of the undecided check.
+    const groups = collapseFindingsByRule([
+      finding({ rule: 'a', confidence: 'unverified', severity: 'critical', elementKey: 'k1' }),
+      finding({ rule: 'a', confidence: 'fail', elementKey: 'k2' }),
+      finding({ rule: 'b', confidence: 'fail', severity: 'minor', elementKey: 'k3' }),
+    ]);
+
+    expect(groups.map((group) => [group.rule, group.representative.confidence, group.count])).toEqual([
+      ['a', 'fail', 1],
+      ['b', 'fail', 1],
+      ['a', 'unverified', 1],
+    ]);
+  });
 });
 
 describe('applyNoiseBudget', () => {

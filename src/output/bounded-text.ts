@@ -178,15 +178,26 @@ export interface BoundedMessageInput {
   tailPieces?: string[];
 }
 
-/** One barrier: its headline outside the frame and its pieces inside it. */
+/**
+ * One blocking item: its headline outside the frame and its pieces inside it. `undecided` marks
+ * a group of findings usabl could not decide, so the note that counts left-out groups never calls
+ * one an accessibility barrier.
+ */
 export interface BoundedGroup {
   headline: string;
   pieces: string[];
+  undecided?: boolean;
 }
 
-function noteFor(omitted: number, droppedGroups = 0): string {
-  const barriers = droppedGroups > 0 ? ` (${droppedGroups} accessibility barrier(s) left out)` : '';
-  return `[shortened to fit the message budget, ${omitted} line(s) omitted${barriers}; run usabl check --json for the full list]`;
+function noteFor(omitted: number, dropped: readonly BoundedGroup[] = []): string {
+  const checks = dropped.filter((group) => group.undecided === true).length;
+  const barriers = dropped.length - checks;
+  const parts = [
+    ...(barriers > 0 ? [`${barriers} accessibility barrier(s)`] : []),
+    ...(checks > 0 ? [`${checks} undecided check(s)`] : []),
+  ];
+  const left = parts.length > 0 ? ` (${parts.join(' and ')} left out)` : '';
+  return `[shortened to fit the message budget, ${omitted} line(s) omitted${left}; run usabl check --json for the full list]`;
 }
 
 /**
@@ -209,7 +220,8 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
   const budget = input.budget ?? AGENT_MESSAGE_BUDGET;
   const keepPieces = input.keepPieces ?? 0;
   const scaffold = [...input.scaffold];
-  const groups = [...(input.groups ?? [])];
+  const allGroups = [...(input.groups ?? [])];
+  const groups = [...allGroups];
   const totalGroups = groups.length;
   // Pieces in frame order: the leading pieces, then each group's, then the tail. Only leading and
   // tail pieces are dropped one at a time; a group's pieces go with its headline.
@@ -237,7 +249,8 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
       lines.push(input.frame(pieces));
     }
     if (omitted > 0) {
-      lines.push(noteFor(omitted, totalGroups - groups.length));
+      // Groups are dropped from the end, so the dropped ones are the tail of the original list.
+      lines.push(noteFor(omitted, allGroups.slice(groups.length)));
     }
     return lines.join('\n');
   };
@@ -275,7 +288,7 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
   const footerCost = (input.groupFooter?.(totalGroups)?.length ?? 0) + 1;
   let estimate =
     lengthOf(scaffold) + lengthOf(groupLines()) + footerCost + lengthOf(framed()) + frameCost +
-    noteFor(lineCount, totalGroups).length + 1;
+    noteFor(lineCount, allGroups).length + 1;
   while (estimate > budget && canDrop()) {
     estimate -= drop();
   }

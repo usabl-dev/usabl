@@ -1041,3 +1041,236 @@ describe('evaluateStopDecision on a verdict it does not recognize', () => {
     expect(decision.message.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
   });
 });
+
+/**
+ * A check usabl could not decide blocks a stop, but it is not an accessibility barrier found.
+ *
+ * Every blocking item was labelled "Accessibility barrier", so a model was told to fix a barrier
+ * that may not exist. An undecided item is now labelled as a check that needs a person to review,
+ * and failures are listed first.
+ */
+describe('evaluateStopDecision names undecided checks apart from accessibility barriers', () => {
+  const item = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
+    rule: 'color-contrast',
+    layer: 'axe',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: 'clusters',
+    elementPath: 'button',
+    elementName: 'Save',
+    role: 'button',
+    whatUserExperiences: 'Text may be hard to read.',
+    why: '',
+    fix: 'Check the contrast by hand.',
+    evidence: {},
+    confidence: 'unverified',
+    elementKey: 'clusters|color-contrast|name:save',
+    identityBasis: 'name',
+    status: 'new',
+    ...over,
+  });
+  const lines = (findings: Result['findings'], verdict: 'regression' | 'not_covered'): string[] =>
+    evaluateStopDecision(
+      baseResult({ verdict, exitCode: verdict === 'regression' ? 1 : 3, summary: `${verdict}: test`, findings }),
+      { stopHookActive: false },
+    ).message.split('\n');
+
+  it('labels a lone undecided check as one, never as an accessibility barrier', () => {
+    const message = lines([item({})], 'not_covered');
+
+    expect(message).toContain('Check undecided, needs a person to review: [new serious]');
+    expect(message).toContain('check undecided: axe/color-contrast');
+    expect(message.join('\n')).not.toMatch(/accessibility barrier/i);
+  });
+
+  it('lists failures first and labels each item by what it is', () => {
+    const message = lines(
+      [
+        item({ elementKey: 'clusters|color-contrast|name:a' }),
+        item({ rule: 'button-name', confidence: 'fail', severity: 'minor', elementKey: 'clusters|button-name|name:b' }),
+      ],
+      'regression',
+    );
+    const heading = message.indexOf('Findings that block this run:');
+    const barrier = message.indexOf('- accessibility barrier 1: [new minor]');
+    const check = message.indexOf('- check undecided 2, needs a person to review: [new serious]');
+
+    expect(heading).toBeGreaterThan(-1);
+    expect(barrier).toBeGreaterThan(heading);
+    expect(check).toBeGreaterThan(barrier);
+    expect(message).toContain('accessibility barrier 1: axe/button-name');
+    expect(message).toContain('check undecided 2: axe/color-contrast');
+  });
+
+  it('heads a list of undecided checks only with their own heading', () => {
+    const message = lines(
+      [item({ elementKey: 'clusters|color-contrast|name:a' }), item({ rule: 'link-name', elementKey: 'clusters|link-name|name:b' })],
+      'not_covered',
+    );
+
+    expect(message).toContain('Checks undecided, need a person to review:');
+    expect(message.join('\n')).not.toMatch(/accessibility barrier/i);
+  });
+
+  it('keeps the barrier heading when every item fails', () => {
+    const message = lines(
+      [
+        item({ confidence: 'fail', elementKey: 'clusters|color-contrast|name:a' }),
+        item({ rule: 'link-name', confidence: 'fail', elementKey: 'clusters|link-name|name:b' }),
+      ],
+      'regression',
+    );
+
+    expect(message).toContain('Accessibility barriers:');
+    expect(message.join('\n')).not.toContain('undecided');
+  });
+});
+
+/**
+ * The next step names the work that is really there.
+ *
+ * A not_covered run held only by checks usabl could not decide told the model to resolve every
+ * reason under "Not evaluated", a list that was empty. A regression with undecided items told it
+ * to fix each one as a barrier. An undecided check is a person's call: the model is told to raise
+ * it, and not to change code to make it pass or to mark it reviewed itself.
+ */
+describe('evaluateStopDecision gives undecided checks the review step', () => {
+  // The rule names the concrete ways an agent could clear a check on its own, so none is left open.
+  const RULE =
+    'Do not change code to make an undecided check pass, and do not mark one as reviewed yourself, for example by adding a waiver or recording it in the evidence floor.';
+  const BLOCK_REVIEW = `Each check undecided below needs a person to review it, so tell the user. ${RULE}`;
+  const ACTIVE_REVIEW = `Tell the user that each check usabl could not decide needs a person to review it. ${RULE}`;
+  // When undecided checks are the only cause, the step is the action alone: the verdict line above
+  // it already says the change was checked and some checks could not decide.
+  const BLOCK_ONLY = `Next: tell the user that each check undecided below needs a person to review it. ${RULE}`;
+  const ACTIVE_ONLY = `Next: tell the user that each check usabl could not decide needs a person to review it. ${RULE}`;
+  const CHECKED = 'usabl checked this change, but some checks could not decide.';
+
+  const item = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
+    rule: 'color-contrast',
+    layer: 'axe',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: 'clusters',
+    elementPath: 'button',
+    elementName: 'Save',
+    role: 'button',
+    whatUserExperiences: 'Text may be hard to read.',
+    why: '',
+    fix: 'Check the contrast by hand.',
+    evidence: {},
+    confidence: 'unverified',
+    elementKey: 'clusters|color-contrast|name:save',
+    identityBasis: 'name',
+    status: 'new',
+    ...over,
+  });
+  const failing = item({ rule: 'button-name', confidence: 'fail', elementKey: 'clusters|button-name|name:b' });
+  const gaps: Result['coverage'] = {
+    changedFiles: [],
+    affected: [],
+    unresolvedFiles: [],
+    gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: 'never opened' }],
+    nothingToCheck: false,
+  };
+  const step = (over: Partial<Result>, stopHookActive: boolean): string =>
+    evaluateStopDecision(baseResult(over), { stopHookActive }).message.split('\n')[1]!;
+
+  describe('on a blocked stop', () => {
+    it('sends only undecided checks to a person and never to Not evaluated', () => {
+      const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})] }, false);
+
+      expect(next).toBe(BLOCK_ONLY);
+      expect(next).not.toContain('Not evaluated');
+    });
+
+    it('asks for the barriers to be fixed and the undecided checks to be reviewed', () => {
+      const next = step({ verdict: 'regression', exitCode: 1, findings: [failing, item({})] }, false);
+
+      expect(next).toBe(
+        `Next: fix each accessibility barrier below, then stop again so usabl can re-check the change. ${BLOCK_REVIEW}`,
+      );
+    });
+
+    it('says both when coverage gaps and undecided checks hold the run', () => {
+      const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})], coverage: gaps }, false);
+
+      expect(next.startsWith('Next: resolve every reason under Not evaluated below')).toBe(true);
+      expect(next.endsWith(BLOCK_REVIEW)).toBe(true);
+    });
+
+    it('raises undecided checks beside guarded files when the accessibility half has nothing else', () => {
+      const next = step(
+        {
+          verdict: 'approval_required',
+          exitCode: 2,
+          accessibilityVerdict: 'not_covered',
+          accessibilityExitCode: 3,
+          dirtyGuardedPaths: ['.usabl-waivers.json'],
+          findings: [item({})],
+        },
+        false,
+      );
+
+      expect(next).not.toContain('Not evaluated');
+      expect(next).toContain('tell the user that guarded policy files changed');
+      expect(next).not.toContain(CHECKED);
+      expect(next.endsWith(BLOCK_REVIEW)).toBe(true);
+    });
+
+    it('raises undecided checks beside barriers and guarded files', () => {
+      const next = step(
+        {
+          verdict: 'approval_required',
+          exitCode: 2,
+          accessibilityVerdict: 'regression',
+          accessibilityExitCode: 1,
+          dirtyGuardedPaths: ['.usabl-waivers.json'],
+          findings: [failing, item({})],
+        },
+        false,
+      );
+
+      expect(next.startsWith('Next: fix each accessibility barrier below')).toBe(true);
+      expect(next).toContain('tell the user that guarded policy files changed');
+      expect(next.endsWith(BLOCK_REVIEW)).toBe(true);
+    });
+
+    it('keeps the old step when no check is undecided', () => {
+      const next = step({ verdict: 'regression', exitCode: 1, findings: [failing] }, false);
+
+      expect(next).toBe('Next: fix each barrier below, then stop again so usabl can re-check the change.');
+    });
+  });
+
+  describe('on a stop let through because continuation is already active', () => {
+    it('sends only undecided checks to a person and never to Not evaluated', () => {
+      const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})] }, true);
+
+      expect(next).toBe(ACTIVE_ONLY);
+    });
+
+    it('asks for the barriers to be fixed and the undecided checks to be reviewed', () => {
+      const next = step({ verdict: 'regression', exitCode: 1, findings: [failing, item({})] }, true);
+
+      expect(next).toBe(
+        `Next: fix each accessibility barrier usabl reported, then run usabl check before you tell the user this change is accessible. ${ACTIVE_REVIEW}`,
+      );
+    });
+
+    it('says both when coverage gaps and undecided checks hold the run', () => {
+      const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})], coverage: gaps }, true);
+
+      expect(next.startsWith('Next: resolve every reason usabl reported under Not evaluated')).toBe(true);
+      expect(next.endsWith(ACTIVE_REVIEW)).toBe(true);
+    });
+  });
+
+  it('keeps page text out of the step', () => {
+    // The step is engine scaffold outside the frame. A rule name the page or a caller chose stays
+    // inside the frame.
+    const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({ rule: 'rule-from-page' })] }, false);
+
+    expect(next).not.toContain('rule-from-page');
+  });
+});

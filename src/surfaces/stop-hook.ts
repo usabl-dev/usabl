@@ -7,7 +7,7 @@ import type { Result, UsablConfig } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
-import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
+import { blockingCauses, describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
   barrierLines,
   excludedFilePieces,
@@ -80,6 +80,12 @@ export interface StopDecision {
  *
  * Guarded policy files are the one thing the model must not touch to clear a block, so that step
  * says so.
+ *
+ * A check usabl could not decide is not work the model can finish. A person has to review it, so
+ * its step tells the model to raise it, and not to change code to make it pass or mark it
+ * reviewed itself, for example with a waiver or a floor entry. When such checks are the only cause,
+ * the step is that action alone and does not send the model to the Not evaluated list, which is
+ * empty then.
  */
 interface NextSteps {
   regression: string;
@@ -87,10 +93,32 @@ interface NextSteps {
   approvalOnly: string;
   approvalWithRegression: string;
   approvalWithGaps: string;
+  // The steps for a run that also holds checks usabl could not decide. The barrier step names
+  // accessibility barriers only, because the undecided checks get the review sentence after it.
+  regressionWithChecks: string;
+  approvalWithRegressionAndChecks: string;
+  // What an undecided check needs. It is a person's call, so the model raises it and must not
+  // change code to make it pass or mark it reviewed itself. `review` follows another step.
+  // `reviewOnly` is the whole step when undecided checks are the only cause: the verdict line
+  // above it already says the change was checked, so the step is the action alone and never
+  // points at the Not evaluated list, which is empty then.
+  review: string;
+  reviewOnly: string;
 }
+
+// Names the concrete ways an agent could clear an undecided check on its own. Both edit guarded
+// files, so the gate would hold the run for approval anyway; the words close the door earlier.
+const REVIEW_RULE =
+  'Do not change code to make an undecided check pass, and do not mark one as reviewed yourself, for example by adding a waiver or recording it in the evidence floor.';
 
 const BLOCK_STEPS: NextSteps = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
+  regressionWithChecks:
+    'Next: fix each accessibility barrier below, then stop again so usabl can re-check the change.',
+  approvalWithRegressionAndChecks:
+    'Next: fix each accessibility barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  review: `Each check undecided below needs a person to review it, so tell the user. ${REVIEW_RULE}`,
+  reviewOnly: `Next: tell the user that each check undecided below needs a person to review it. ${REVIEW_RULE}`,
   notCovered:
     'Next: resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>). Then stop again.',
   approvalOnly:
@@ -121,6 +149,11 @@ const unrecognizedContinuationStep = (check: CheckCommand): string =>
  */
 const continuationSteps = (check: CheckCommand): NextSteps => ({
   regression: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  regressionWithChecks: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  approvalWithRegressionAndChecks:
+    'Next: fix each accessibility barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
+  review: `Tell the user that each check usabl could not decide needs a person to review it. ${REVIEW_RULE}`,
+  reviewOnly: `Next: tell the user that each check usabl could not decide needs a person to review it. ${REVIEW_RULE}`,
   notCovered: `Next: resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
   approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
@@ -139,20 +172,33 @@ const continuationSteps = (check: CheckCommand): NextSteps => ({
  * caller routes through here so no path can answer this on its own.
  */
 function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
+  // An undecided check adds the review sentence to whatever else the run needs. When it is the
+  // only thing holding the accessibility half, the coverage step is left out, because the list it
+  // points at is empty. The causes are read from the Result and choose no verdict.
+  const { coverageFailed, undecided } = blockingCauses(result);
+  const withReview = (step: string): string => `${step} ${steps.review}`;
   if (result.verdict === 'approval_required') {
     if (result.accessibilityVerdict === 'regression') {
-      return steps.approvalWithRegression;
+      return undecided ? withReview(steps.approvalWithRegressionAndChecks) : steps.approvalWithRegression;
     }
     if (result.accessibilityVerdict === 'not_covered') {
-      return steps.approvalWithGaps;
+      if (!undecided) {
+        return steps.approvalWithGaps;
+      }
+      return coverageFailed
+        ? withReview(steps.approvalWithGaps)
+        : withReview(steps.approvalOnly);
     }
     return steps.approvalOnly;
   }
   if (result.verdict === 'regression') {
-    return steps.regression;
+    return undecided ? withReview(steps.regressionWithChecks) : steps.regression;
   }
   if (result.verdict === 'not_covered') {
-    return steps.notCovered;
+    if (!undecided) {
+      return steps.notCovered;
+    }
+    return coverageFailed ? withReview(steps.notCovered) : steps.reviewOnly;
   }
   return undefined;
 }
@@ -188,14 +234,16 @@ function summaryPiece(result: Result): string {
  *
  * It opens with the verdict word and exit code, what the verdict means, and the next step, so a
  * model reads the decision before any detail. The trusted engine scaffold stays outside the
- * frame: those opening lines, the guarded-file lines when policy files changed, the Barrier or
- * Barriers headline lines with their checked status, severity, and count, and the show-all hint.
+ * frame: those opening lines, the guarded-file lines when policy files changed, the headline of
+ * each blocking item with its checked status, severity, and count, and the show-all hint. An item
+ * is an accessibility barrier or a check usabl could not decide, and its headline says which.
  * Every value the Result carried goes inside one frame, each with a short inline label so the
  * model can map evidence to cause: the gate's summary first, then the guarded file paths, then
- * each barrier's rule, layer, screen id, experience, and fix, and each gap detail.
+ * each item's rule, layer, screen id, experience, and fix, and each gap detail.
  *
- * Inside the frame the pieces read in the order a reader needs them: each barrier opens with a
- * "barrier:" line naming its layer and rule, and the "Not evaluated:" label sits directly above the gap
+ * Inside the frame the pieces read in the order a reader needs them: each item opens with an
+ * "accessibility barrier:" or "check undecided:" line naming its layer and rule, and the
+ * "Not evaluated:" label sits directly above the gap
  * lines rather than outside the frame, so a reader never meets "Not evaluated:" and then reads
  * about a button. Both labels are engine text; they are pieces only so they stay next to what
  * they label.
