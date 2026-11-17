@@ -813,15 +813,19 @@ async function leftScreenAfterChecks(
       'that routes with plain fragments moved. So a tab panel that sets #tab-2 counts as leaving too. To let a ' +
       "fragment that is not a route change, declare a reachedWhen selector for the screen in usabl.config.json and " +
       'pass its screenId. The query counts only when the expected address has one.';
+  // The address advice fits only the rule used with a selector. With no selector the whole fragment
+  // is compared, so removing an anchor from the expected address would make the read at load fail.
+  const addressAdvice = selectorMeasuredAfter
+    ? ' If the app routes with the query or with a plain fragment, put that part in the url in usabl.config.json ' +
+      'or in expectedUrl. If the fragment in that address is only an anchor, not a route, remove it.'
+    : '';
   return landingGap(
     screenId,
     `checkPage was told ${claimOf(screenId, labeled, expected)}. When the checks began, ${atLoad}; ` +
       `after the checks, ${where}. ${outcome} ${rule} If the session expired ` +
       'during the checks, sign in again before the check. If a script on the page navigates on focus or on a ' +
-      'timer, find it and stop it from moving the page while it is checked. If the app routes with the query or ' +
-      'with a plain fragment, put that part in the url in usabl.config.json or in expectedUrl. If the fragment in ' +
-      'that address is only an anchor, not a route, remove it. Addresses are shown without their sign-in ' +
-      'credentials, query string, or fragment, because any of them can carry a token.',
+      `timer, find it and stop it from moving the page while it is checked.${addressAdvice} Addresses are shown ` +
+      'without their sign-in credentials, query string, or fragment, because any of them can carry a token.',
   );
 }
 

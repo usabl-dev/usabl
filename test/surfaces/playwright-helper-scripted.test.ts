@@ -589,6 +589,10 @@ describe('checkPage reads the address after the checks the way the CLI does', ()
     expect(result.verdict).toBe('not_covered');
     expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
     expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+    // With the whole fragment compared, removing an anchor from the expected address would make
+    // the read at load fail, so that advice must not appear here.
+    expect(result.gaps[0]?.reason).not.toContain('remove it');
+    expect(result.gaps[0]?.reason).not.toContain('put that part in the url');
   });
 
   const stays: Array<[string, string, string, string | undefined]> = [
