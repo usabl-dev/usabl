@@ -111,7 +111,10 @@ in the pull request and change it in a separate commit.
 These paths are listed in `.github/CODEOWNERS`: `src/gate/`, `src/trust/`, `src/run.ts`,
 `src/coverage/completeness.ts`, `src/surfaces/policy-enforce.ts`, `.github/workflows/`,
 `.github/CODEOWNERS`, `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`,
-`.usabl-evidence.json`, and `.usabl-waivers.json`.
+`.usabl-evidence.json`, and `.usabl-waivers.json`. The engine pin check scripts,
+`scripts/engine-pin.ts`, `scripts/check-engine-pin.ts`, and `scripts/engine-pin-draft.ts`, are
+guarded too: they are in `guardedPaths` in `usabl.config.json`, and CODEOWNERS covers them through
+its default rule.
 
 Never edit a guarded path without saying so in the pull request summary, with the reason
 and why the change is safe.

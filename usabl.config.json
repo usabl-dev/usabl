@@ -14,7 +14,8 @@
     ".github/workflows/",
     ".github/CODEOWNERS",
     "scripts/engine-pin.ts",
-    "scripts/check-engine-pin.ts"
+    "scripts/check-engine-pin.ts",
+    "scripts/engine-pin-draft.ts"
   ],
   "promotedObligations": []
 }

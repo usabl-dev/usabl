@@ -4371,13 +4371,15 @@ email). A later rule with no owner takes ownership away, and a pattern usabl can
 reads as unknown. Only an organization-required workflow takes the
 workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
 and "CI trust boundary") for what each job holds. The engine's own repo checks in the generated
-gate, byte for byte, pinned to a commit on main, so `usabl doctor` reads it as `wired`. Its
-judge serves `fixtures/live` (repository variables `USABL_APP_BUILD_COMMAND=true` and
-`USABL_APP_BUILD_DIR=fixtures/live`), and its config names one screen, `users`. The pin moves
-only to a commit on main, by the rule in `docs/threat-model.md`, and the `check` job in
-`usabl.yml` runs `scripts/check-engine-pin.ts` to hold it there. The required status check named in branch protection is
-`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is the
-one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
+gate, byte for byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor`
+built at the pin reads it as `wired`; a build whose gate template changed after the pin reads it
+as `drifted` until the pin moves. Its judge serves `fixtures/live` (repository variables
+`USABL_APP_BUILD_COMMAND=true` and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one
+screen, `users`. The pin moves only forward, to a commit on main, by the rule in
+`docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
+from the base commit to hold it there, and reads the head's gate only as data. The required
+status check named in branch protection is `usabl-required` (the workflow *file* is named
+`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape

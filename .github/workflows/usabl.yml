@@ -40,14 +40,6 @@ jobs:
       - name: Install
         run: npm ci
 
-      # The self gate judges every pull request with the engine commit pinned in usabl-gate.yml.
-      # That commit must be one main has held, so the gate never runs engine code no merge put on
-      # main. The checkout above has full history; this fetch makes sure origin/main is current.
-      - name: Engine pin is a commit on main
-        run: |
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          npx vite-node scripts/check-engine-pin.ts origin/main
-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
@@ -90,6 +82,61 @@ jobs:
 
       - name: Docs badge check
         run: npm run docs:badges
+
+  # The self gate judges every pull request with the engine commit pinned in usabl-gate.yml. This
+  # job checks that pin with trusted code only: it checks out the base commit of the pull request
+  # (on a push, the pushed commit), installs from that tree without install scripts, and runs that
+  # tree's check scripts. The head's gate is fetched as git objects and read with git show, so no
+  # file the pull request adds or changes is run or loaded. A pull request that edits this
+  # workflow can still change the job, so every pin move is a guarded change the owner reviews.
+  engine-pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the trusted commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          # A cache can be written by pull request code, so this trusted job uses none.
+          package-manager-cache: false
+
+      - name: Engine pin is a commit on main
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ ! -f scripts/check-engine-pin.ts ] || [ ! -f scripts/engine-pin.ts ] || [ ! -f scripts/engine-pin-draft.ts ]; then
+            echo "The trusted commit has no engine pin check scripts yet, so there is no trusted check to run. This holds only until the change that adds them merges."
+            exit 0
+          fi
+          if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+            echo "The head commit id is not a full lowercase commit id; failing closed."
+            exit 1
+          fi
+          # A fresh npm cache under the runner temp directory, never one a pull request could seed.
+          export npm_config_cache="${RUNNER_TEMP}/usabl-npm-cache"
+          npm ci --ignore-scripts
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            if ! [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+              echo "The base commit id is not a full lowercase commit id; failing closed."
+              exit 1
+            fi
+            git fetch --no-tags origin "${HEAD_SHA}"
+            ./node_modules/.bin/vite-node scripts/check-engine-pin.ts --main origin/main --head "${HEAD_SHA}" --base "${BASE_SHA}"
+          else
+            ./node_modules/.bin/vite-node scripts/check-engine-pin.ts --main origin/main --head "${HEAD_SHA}"
+          fi
 
   # Real Chromium suites gated by USABL_INTEGRATION. Default `npm run check` skips them, so a
   # merge could stay green while the live driver path drifted. This job runs only the in-repo
