@@ -14,7 +14,7 @@ import { globMatcher } from '../../src/primitives/match-glob.js';
 
 const ROOT = new URL('../../', import.meta.url);
 const CONFIG_RAW = readFileSync(new URL('usabl.config.json', ROOT), 'utf8');
-const SCREEN_FILE = 'fixtures/live/users-screen.html';
+const SCREEN_FILE = 'fixtures/live/self-gate-screen.html';
 
 function trackedFiles(): string[] {
   const listed = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
@@ -39,15 +39,24 @@ describe("this repository's own gate config", () => {
     expect(() => parseConfigText(CONFIG_RAW, () => {})).not.toThrow();
   });
 
-  it('plans the users screen for a change to the clean fixture screen', async () => {
+  it('plans the self-gate screen for a change to the clean fixture screen', async () => {
     const brief = await briefFor([SCREEN_FILE]);
     expect(brief.nothingToCheck).toBe(false);
-    expect(brief.screens.map((screen) => screen.id)).toEqual(['users']);
-    expect(brief.screens[0]?.url).toBe('http://127.0.0.1:5173/users-screen.html');
+    expect(brief.screens.map((screen) => screen.id)).toEqual(['self-gate']);
+    expect(brief.screens[0]?.url).toBe('http://127.0.0.1:5173/self-gate-screen.html');
+  });
+
+  it('confirms the self-gate screen by a selector only that page has', () => {
+    const config = parseConfigText(CONFIG_RAW, () => {});
+    expect(config.surfaces.map((surface) => surface.reachedWhen)).toEqual(['#self-gate-screen']);
+    const holders = trackedFiles()
+      .filter((path) => path.startsWith('fixtures/live/') && path.endsWith('.html'))
+      .filter((path) => readFileSync(new URL(path, ROOT), 'utf8').includes('id="self-gate-screen"'));
+    expect(holders).toEqual([SCREEN_FILE]);
   });
 
   it('reads a change to other fixtures and to engine source as nothing to check', async () => {
-    const brief = await briefFor(['fixtures/live/sign-in.html', 'src/cli.ts']);
+    const brief = await briefFor(['fixtures/live/users-screen.html', 'fixtures/live/sign-in.html', 'src/cli.ts']);
     expect(brief.nothingToCheck).toBe(true);
     expect(brief.screens).toEqual([]);
   });

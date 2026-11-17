@@ -4569,7 +4569,7 @@ gate, byte for byte as the pinned commit writes it, pinned to a commit on main. 
 built at the pin reads it as `wired`; a build whose gate template changed after the pin reads it
 as `drifted` until the pin moves. Its judge serves `fixtures/live` (repository variables
 `USABL_APP_BUILD_COMMAND=true` and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one
-screen, `users`. The pin moves only forward, to a commit on main, by the rule in
+screen, `self-gate` (`fixtures/live/self-gate-screen.html`, a page made to pass every check). The pin moves only forward, to a commit on main, by the rule in
 `docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
 from the base commit to hold it there, and reads the head's gate only as data. The required
 status check named in branch protection is `usabl-required` (the workflow *file* is named

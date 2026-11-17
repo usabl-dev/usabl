@@ -1712,8 +1712,11 @@ the `engine-pin` job below. What this repository's gate checks, and what it does
 - **What it serves.** The repository variables `USABL_APP_BUILD_COMMAND` (`true`, nothing to
   build) and `USABL_APP_BUILD_DIR` (`fixtures/live`) make `build-app` pack the static fixture
   pages, and the judge serves them on the `appBaseUrl` origin. `usabl.config.json` names one
-  screen, `users` at `/users-screen.html`, and one UI file, `fixtures/live/users-screen.html`. A
-  pull request that changes that file or a dependency is scanned. A change under `src/`, or to any
+  screen, `self-gate` at `/self-gate-screen.html`, confirmed by the selector `#self-gate-screen`,
+  and one UI file, `fixtures/live/self-gate-screen.html`. That page is made for this gate and
+  passes every check, so a pull request that changes it can read `verified`;
+  `test/judge/self-gate-screen.real.integration.test.ts` runs the judge's check on it and requires
+  that verdict. A pull request that changes that file or a dependency is scanned. A change under `src/`, or to any
   other fixture, reads "nothing to check" for this gate, because no other file is a UI file. The
   engine itself is tested by the `check` job in `usabl.yml`, so a green `usabl-required` on an
   engine change does not mean the engine change was checked by usabl.

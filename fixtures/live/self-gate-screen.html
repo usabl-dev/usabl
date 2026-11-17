@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Release check</title>
+<style>
+  body { margin: 0; padding: 24px; background: #ffffff; color: #111111; font: 16px/1.5 sans-serif; }
+  a { color: #0b3d91; }
+  label { display: block; margin-bottom: 4px; }
+  input { min-height: 32px; padding: 4px 8px; background: #ffffff; color: #111111; border: 2px solid #111111; }
+  button { min-height: 36px; padding: 6px 16px; background: #111111; color: #ffffff; border: 2px solid #111111; }
+  a:focus, input:focus, button:focus { outline: 3px solid #0b3d91; outline-offset: 2px; }
+  table { border-collapse: collapse; margin: 16px 0; }
+  caption { text-align: left; font-weight: bold; }
+  th, td { padding: 4px 12px; border: 1px solid #111111; text-align: left; }
+</style>
+</head>
+<body>
+<main id="self-gate-screen">
+  <h1>Release check</h1>
+  <p>This page lists the checks for the next release. Enter a release name to save it.</p>
+  <form>
+    <label for="release-name">Release name</label>
+    <input id="release-name" name="release-name" type="text">
+    <button type="button">Save release name</button>
+  </form>
+  <table>
+    <caption id="checks">Release checks</caption>
+    <thead><tr><th scope="col">Check</th><th scope="col">Status</th></tr></thead>
+    <tbody>
+      <tr><td>Unit tests</td><td>Passed</td></tr>
+      <tr><td>Link check</td><td>Passed</td></tr>
+    </tbody>
+  </table>
+  <p><a href="#checks">Go to the release checks</a></p>
+</main>
+</body>
+</html>
