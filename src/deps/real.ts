@@ -8,6 +8,8 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import { readDesignAxTree, readFullAxTree } from './ax-tree.js';
 import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, DesignAxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead, UnreadRegionName } from '../contracts/index.js';
 import { BOX_LIMITS } from '../primitives/box-limits.js';
+import { firstLine } from '../primitives/first-line.js';
+import { neutralize } from '../primitives/neutralize.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -32,6 +34,8 @@ import {
 // An operator whose application needs longer sets readyTimeoutMs in usabl.config.json.
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
 const CLICK_TIMEOUT_MS = 3_000;
+// How long a read of one element's attribute waits for the element: the same bound as a click.
+const ATTRIBUTE_READ_TIMEOUT_MS = CLICK_TIMEOUT_MS;
 // How often readiness re-reads the page, and how many equal reads in a row mean it stopped changing.
 // Four equal reads 500 ms apart is 1.5 seconds of a DOM that is not moving. The window has to
 // outlast the pause between two render passes, and a shorter one does not: a 500 ms window measured
@@ -2927,7 +2931,19 @@ function wrapPage(
       return readHostMarkup(await callInWorld(cdp, READ_WORLD, 'read element markup', HOST_MARKUP_FUNCTION, [selector]));
     },
     async getAttribute(selector: string, name: string): Promise<string | null> {
-      return pw.locator(selector).getAttribute(name);
+      // Playwright waits for the element to appear, for its 30 second default when no bound is
+      // given. An element a re-render removed then stalls the scan. The wait is bounded like a
+      // click. A read that cannot finish throws, so its caller reads it as unknown, never as an
+      // absent attribute. Only the first line of Playwright's error is kept, because its call log
+      // can quote the page's markup.
+      try {
+        return await pw.locator(selector).getAttribute(name, { timeout: ATTRIBUTE_READ_TIMEOUT_MS });
+      } catch (error: unknown) {
+        throw new Error(
+          `the browser could not read the ${name} attribute of an element within ${ATTRIBUTE_READ_TIMEOUT_MS} ms, so its value is unknown: ` +
+            neutralize(firstLine(error instanceof Error ? error.message : String(error))),
+        );
+      }
     },
     async ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead> {
       return readAncestorAttributes(cdp, selector, names);

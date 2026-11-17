@@ -5,7 +5,11 @@
  *
  *   vite-node scripts/axe-compare-summary.ts -- --out <summary.json> --sweep <sweep.jsonl> <harness.json>...
  *
- * Every difference is copied into the summary in full. Counts are per page.
+ * Every difference is copied into the summary in full. Counts are per page. A fixture in a later
+ * harness file replaces the same fixture from an earlier one, so a page run again on its own takes
+ * the place of its result in the full run. `--sweep-from <summary.json>` keeps the sweep part of an
+ * earlier summary in place of `--sweep`, for when only the fixtures were measured again. The script
+ * writes nothing when any page was unstable.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -37,9 +41,10 @@ interface SweepRecord {
   error?: string;
 }
 
-function parseArgs(argv: string[]): { out: string; sweep: string | null; harness: string[] } {
+function parseArgs(argv: string[]): { out: string; sweep: string | null; sweepFrom: string | null; harness: string[] } {
   let out = '';
   let sweep: string | null = null;
+  let sweepFrom: string | null = null;
   const harness: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
@@ -48,12 +53,19 @@ function parseArgs(argv: string[]): { out: string; sweep: string | null; harness
       out = argv[++index] ?? '';
     } else if (arg === '--sweep') {
       sweep = argv[++index] ?? null;
+    } else if (arg === '--sweep-from') {
+      sweepFrom = argv[++index] ?? null;
     } else {
       harness.push(arg);
     }
   }
-  if (out === '') throw new Error('usage: axe-compare-summary --out <file> [--sweep <file>] <harness.json>...');
-  return { out, sweep, harness };
+  if (out === '') {
+    throw new Error('usage: axe-compare-summary --out <file> [--sweep <file> | --sweep-from <summary.json>] <harness.json>...');
+  }
+  if (sweep !== null && sweepFrom !== null) {
+    throw new Error('axe-compare-summary: pass --sweep or --sweep-from, not both. --sweep-from keeps the sweep part of an earlier summary.');
+  }
+  return { out, sweep, sweepFrom, harness };
 }
 
 // The origin is the only part of a frame address that reaches the summary, and test servers listen
@@ -70,11 +82,17 @@ function total(rows: Array<Record<string, number> | undefined>): Record<string, 
   return sum;
 }
 
-const { out, sweep, harness } = parseArgs(process.argv.slice(2));
-const outcomes: HarnessOutcome[] = [];
+const { out, sweep, sweepFrom, harness } = parseArgs(process.argv.slice(2));
+// One outcome per fixture. A fixture in a later harness file replaces the same fixture from an
+// earlier one, so a page run again on its own, with USABL_AXE_COMPARE_GROUPS, takes the place of
+// its result in the full run.
+const byFixture = new Map<string, HarnessOutcome>();
 for (const file of harness) {
-  outcomes.push(...(JSON.parse(await readFile(file, 'utf8')) as HarnessOutcome[]));
+  for (const outcome of JSON.parse(await readFile(file, 'utf8')) as HarnessOutcome[]) {
+    byFixture.set(outcome.fixture, outcome);
+  }
 }
+const outcomes: HarnessOutcome[] = [...byFixture.values()];
 outcomes.sort((a, b) => (a.fixture < b.fixture ? -1 : a.fixture > b.fixture ? 1 : 0));
 const records: SweepRecord[] =
   sweep === null
@@ -83,6 +101,30 @@ const records: SweepRecord[] =
         .split('\n')
         .filter((line) => line.trim() !== '')
         .map((line) => JSON.parse(line) as SweepRecord);
+// The sweep part of an earlier summary, kept as it was, when only the fixtures were measured again.
+const earlierSweep: unknown =
+  sweepFrom === null ? null : ((JSON.parse(await readFile(sweepFrom, 'utf8')) as { sweep?: unknown }).sweep ?? null);
+if (sweepFrom !== null && earlierSweep === null) {
+  process.stderr.write(`axe-compare-summary: not written. ${sweepFrom} has no sweep part to keep.\n`);
+  process.exit(1);
+}
+
+// A page whose results changed between two runs of the same world was still loading, so its
+// differences say nothing about the two worlds. A summary that holds one would read as an engine
+// difference, so the script writes nothing and names each such page.
+const unstable = [
+  ...outcomes.filter((outcome) => outcome.unstable).map((outcome) => `fixture "${outcome.fixture}"`),
+  ...records.filter((record) => record.unstable === true).map((record) => `sweep "${record.file} > ${record.test}" (${stablePort(record.page)})`),
+];
+if (unstable.length > 0) {
+  process.stderr.write(
+    `axe-compare-summary: not written. These pages were unstable, so their results changed between two runs of ` +
+      `the same world and their differences say nothing about the engine: ${unstable.join(', ')}. ` +
+      'Run the harness again for them, for example with USABL_AXE_COMPARE_GROUPS, on a machine that is not busy, ' +
+      'and build the summary from a run where every page is stable.\n',
+  );
+  process.exit(1);
+}
 
 const plain = outcomes.filter((outcome) => !outcome.internals);
 const internals = outcomes.filter((outcome) => outcome.internals);
@@ -117,7 +159,20 @@ const summary = {
       .filter((outcome) => outcome.differences.length > 0)
       .map((outcome) => ({ fixture: outcome.fixture, internals: outcome.internals, differences: outcome.differences })),
   },
-  sweep: {
+  sweep: earlierSweep ?? sweepPart(),
+};
+await writeFile(out, `${JSON.stringify(summary, null, 2)}\n`);
+const sweepLine =
+  earlierSweep === null
+    ? `sweep: ${records.length} comparisons, ${sweepPart().withDifferences.length} differ, ${sweepPart().errors.length} errors`
+    : `sweep: kept from ${sweepFrom}`;
+process.stdout.write(
+  `fixtures: ${outcomes.length} pages, ${plain.filter((o) => o.differences.length > 0).length} without internals differ, ` +
+    `${internals.filter((o) => o.differences.length > 0).length} with internals differ; ${sweepLine}\n`,
+);
+
+function sweepPart() {
+  return {
     comparisons: records.length,
     byFile,
     comparedEntries: total(records.map((record) => record.counts)),
@@ -130,11 +185,5 @@ const summary = {
     errors: records
       .filter((record) => record.error !== undefined)
       .map((record) => ({ file: record.file, test: record.test, page: record.page, error: stablePort(record.error ?? '') })),
-  },
-};
-await writeFile(out, `${JSON.stringify(summary, null, 2)}\n`);
-process.stdout.write(
-  `fixtures: ${outcomes.length} pages, ${plain.filter((o) => o.differences.length > 0).length} without internals differ, ` +
-    `${internals.filter((o) => o.differences.length > 0).length} with internals differ; ` +
-    `sweep: ${records.length} comparisons, ${summary.sweep.withDifferences.length} differ, ${summary.sweep.errors.length} errors\n`,
-);
+  };
+}

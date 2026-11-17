@@ -397,6 +397,38 @@
 
 ### Fixed
 
+- `checkPage` reads the page's address after the checks with the CLI's rule as well:
+  `stayedOnScreen`, against the address the page reported before the checks. The origin and the
+  path always count. The query counts only when the expected address has one. A fragment counts
+  only as a route (`#/` or `#!`), or any fragment when the expected address has a plain one. That
+  rule leaves a plain fragment route to a `reachedWhen` selector, so it is the whole rule only on a
+  labeled screen whose config declares a selector, which `checkPage` measures again after the
+  checks. On any other page, including one checked with only `expectedUrl`, the read also keeps
+  the earlier rule, the path and the whole fragment against the expected address, so `checkPage`
+  catches every move it caught before. The read before the checks is unchanged, and still sets the
+  origin aside. Gain: a page that moved to the same path on another host or port while the checks
+  ran read as checked, and is now `not_covered`; so is a page whose query changed when the
+  expected address has a query. With no selector nothing is lost: a tab panel that sets `#tab-2`,
+  an anchor set inside a hash route, and a query change inside a `#!` route are still
+  `not_covered`, as before, because the read cannot tell them from a route move. With a selector
+  measured after the checks, those three now stay checked while the selector holds. The cost, on
+  such a screen only: the selector is then what catches a plain fragment route move, such as
+  `/app` to `/app#login`, so a move to a view that still matches the selector was `not_covered`
+  before and now reads as checked, as in the CLI. Point the selector at content only that screen
+  has. To let a fragment that is not a route change, declare a `reachedWhen` selector for the
+  screen and pass its `screenId`. `checkPage` output drops every fragment and
+  query from the addresses it prints, so a move in a hash route or a query says the two addresses
+  differ in a part that is not shown. `checkPage` is not a gate, so no gate verdict changes.
+- `usabl init` and `usabl init --docs` strip bidirectional controls, such as a right-to-left
+  override, from a file read error they print. Such a character in a path made the terminal draw
+  the rest of the line in reverse, so the path could read as another path. Each line is scrubbed
+  as the other init prints are, with no length cap.
+- The real browser driver's attribute read waits at most 3 seconds for its element, the same bound
+  as a click. It waited for Playwright's 30 second default, so an element a re-render removed
+  stalled the scan. A read that cannot finish throws with only the first line of the browser's
+  error, so its caller reads it as unknown, never as an absent attribute. No verdict changes: a
+  PatternFly check whose read cannot finish gave a gap or an undecided result before, and gives
+  the same now, only sooner.
 - The CLI reads a screen's address again after the checks. It read the address once, at load, so
   a page that moved during the walk, such as a focus handler that navigates or an auth timer that
   sends it to a sign-in page with no refused identity request, was checked on the other page. The

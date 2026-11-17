@@ -64,6 +64,28 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real menu state attribut
       await page.close()
     }
   })
+
+  // An element that is gone, such as a toggle a re-render removed, made the read wait for
+  // Playwright's 30 second default. It is bounded like a click now, and a read that cannot finish
+  // throws, so it is unknown and never reads as an absent attribute.
+  it('gives up within the short bound on an element that is gone, and throws rather than return a value', async () => {
+    const page = await driver.open(url)
+    try {
+      await page.gotoReady()
+      const started = Date.now()
+      const read = page.getAttribute('.gone-toggle', 'aria-expanded').then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      )
+      const outcome = await read
+      const elapsed = Date.now() - started
+      expect('error' in outcome).toBe(true)
+      expect(String((outcome as { error: unknown }).error)).toContain('aria-expanded')
+      expect(elapsed).toBeLessThan(10_000)
+    } finally {
+      await page.close()
+    }
+  }, 40_000)
 })
 
 // The menu probe in Chromium: a menu that mounts a moment after the click, a toggle that promises a

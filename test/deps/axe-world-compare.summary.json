@@ -2,16 +2,16 @@
   "axeCore": "4.13.0",
   "playwright": "1.62.1",
   "fixtures": {
-    "pages": 75,
+    "pages": 82,
     "withoutInternals": {
-      "pages": 55,
+      "pages": 62,
       "pagesWithDifferences": 0,
       "unstablePages": 0,
       "comparedEntries": {
-        "violation": 144,
-        "incomplete": 20,
-        "pass": 3249,
-        "inapplicable": 3650
+        "violation": 146,
+        "incomplete": 23,
+        "pass": 3691,
+        "inapplicable": 4082
       }
     },
     "withInternals": {
@@ -621,7 +621,7 @@
         "counts": {
           "violation": 0,
           "incomplete": 0,
-          "pass": 422,
+          "pass": 436,
           "inapplicable": 74
         },
         "differences": 0,
@@ -664,6 +664,30 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "live: roles.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 136,
+          "inapplicable": 53
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: self-gate-screen.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 61,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "live: shadow-sign-in.html",
         "internals": false,
         "counts": {
@@ -682,6 +706,18 @@
           "violation": 0,
           "incomplete": 0,
           "pass": 39,
+          "inapplicable": 67
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: silent-change.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 28,
           "inapplicable": 67
         },
         "differences": 0,
@@ -719,6 +755,54 @@
           "incomplete": 0,
           "pass": 24,
           "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen-broken.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 1,
+          "pass": 47,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen-small-target.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 1,
+          "pass": 54,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: users-screen.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 1,
+          "pass": 54,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: voice-delete-row.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 48,
+          "inapplicable": 60
         },
         "differences": 0,
         "uncheckedFrames": []

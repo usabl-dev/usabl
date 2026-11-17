@@ -2,7 +2,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import type { Finding, Result } from '../../src/contracts/index.js';
-import { overlayClientSource } from '../../src/surfaces/overlay-client.js';
+import { overlayClientSource, PENDING_BADGE_LABEL } from '../../src/surfaces/overlay-client.js';
 import { projectOverlay } from '../../src/surfaces/vite-plugin.js';
 
 let browser: Browser;
@@ -111,7 +111,7 @@ function deferred(): { promise: Promise<void>; release: () => void } {
   return { promise, release };
 }
 
-// How long mount waits for the inspector host. See mount.
+// How long mount waits for the inspector host, and then for the first result. See mount.
 const MOUNT_TIMEOUT_MS = 15_000;
 
 async function mount(
@@ -183,6 +183,23 @@ async function mount(
     await page.locator(OVERLAY).waitFor({ timeout: MOUNT_TIMEOUT_MS });
   } catch {
     throw new Error(`inspector host was not created: ${pageErrors.join(' | ') || 'no page error reported'}`);
+  }
+  // The host is built before the first result arrives, so a test that read the badge as soon as the
+  // host existed raced the result fetch, and on a loaded machine read "no result yet". So mount
+  // waits until the badge has left the pending state, unless the test holds the first response to
+  // look at that state itself. This waits on the page, never on a fixed time.
+  if (options.holdResults?.[0] === undefined) {
+    try {
+      await page.waitForFunction(
+        ({ selector, pendingLabel }) =>
+          document.querySelector(selector)?.shadowRoot?.querySelector('.badge')?.getAttribute('aria-label') !==
+          pendingLabel,
+        { selector: OVERLAY, pendingLabel: PENDING_BADGE_LABEL },
+        { timeout: MOUNT_TIMEOUT_MS },
+      );
+    } catch {
+      throw new Error(`the first result never reached the badge: ${pageErrors.join(' | ') || 'no page error reported'}`);
+    }
   }
   return page;
 }
