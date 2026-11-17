@@ -2506,7 +2506,8 @@ same selector gaps the last flow, as above.
 address the page reported when it passed the check before the checks, with the expected address in
 the place of the configured `url`. When the screen has no `reachedWhen` selector that is measured
 again after the checks, it also keeps its earlier rule, `sameScreenPath` against the expected
-address, which compares the whole fragment, so it is never weaker than before. See "The page's
+address, which compares the whole fragment, so on such a screen it is never weaker than before.
+With a selector, a plain fragment route move is left to the selector, as in the CLI. See "The page's
 address" under `checkPage` (section 11) for what each case gives. `checkPage` output drops every
 fragment and query from the addresses it prints, so a move in a hash route or a query prints two
 equal addresses, and the gap says they differ in a part that is not shown.
