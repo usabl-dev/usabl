@@ -84,6 +84,23 @@ const records: SweepRecord[] =
         .filter((line) => line.trim() !== '')
         .map((line) => JSON.parse(line) as SweepRecord);
 
+// A page whose results changed between two runs of the same world was still loading, so its
+// differences say nothing about the two worlds. A summary that holds one would read as an engine
+// difference, so the script writes nothing and names each such page.
+const unstable = [
+  ...outcomes.filter((outcome) => outcome.unstable).map((outcome) => `fixture "${outcome.fixture}"`),
+  ...records.filter((record) => record.unstable === true).map((record) => `sweep "${record.file} > ${record.test}" (${stablePort(record.page)})`),
+];
+if (unstable.length > 0) {
+  process.stderr.write(
+    `axe-compare-summary: not written. These pages were unstable, so their results changed between two runs of ` +
+      `the same world and their differences say nothing about the engine: ${unstable.join(', ')}. ` +
+      'Run the harness again for them, for example with USABL_AXE_COMPARE_GROUPS, on a machine that is not busy, ' +
+      'and build the summary from a run where every page is stable.\n',
+  );
+  process.exit(1);
+}
+
 const plain = outcomes.filter((outcome) => !outcome.internals);
 const internals = outcomes.filter((outcome) => outcome.internals);
 const byFile: Record<string, number> = {};
