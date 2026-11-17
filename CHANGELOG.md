@@ -397,6 +397,22 @@
 
 ### Fixed
 
+- The receipt binds the files the app reads that git does not see. git skips ignored files, so an
+  edit only to `.env.local`, which Vite loads, changed neither the tree nor the status, and a
+  stored receipt kept answering the Stop hook with
+  `VERIFIED (exit 0, stored receipt, not re-scanned)`. The receipt now records `localFilesHash`, a
+  hash over the path, the kind, and the content hash of every `.env*` file in the repository root
+  and in each app folder, of every path in the new optional config field `localFiles`, and of
+  `usabl.config.json`. It never records a
+  byte, a key, or a value of those files, or their paths. An edit, a file that appears or
+  disappears, or a config byte change that parses the same (such as white space) makes the
+  receipt stop matching, and the next stop checks again. A path usabl cannot read as a file of the
+  repository (a link, a folder, a file it may not open) never matches. `localFiles` takes exact
+  paths from the repository root, at most 64, and the loader refuses a glob, a `..` segment, a
+  leading `/`, and the other forms that could leave the repository. Effect: every receipt written
+  before this stops matching once, so the first stop after the upgrade runs a full check. Other
+  git-ignored files the app reads stay invisible to the run and the receipt until they are listed
+  in `localFiles`.
 - `checkPage` reads the page's address after the checks with the CLI's rule as well:
   `stayedOnScreen`, against the address the page reported before the checks. The origin and the
   path always count. The query counts only when the expected address has one. A fragment counts
