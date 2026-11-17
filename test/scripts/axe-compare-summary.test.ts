@@ -89,6 +89,52 @@ describe('axe-compare-summary', () => {
     expect(await exists(out)).toBe(false);
   }, 60_000);
 
+  it('takes a fixture from a later harness file over an earlier one, so a page can be run again on its own', async () => {
+    const full = join(dir, 'full.json');
+    await writeFile(full, JSON.stringify([outcome('frame: frameset', true), outcome('cell: named', false)]));
+    const rerun = join(dir, 'rerun.json');
+    await writeFile(rerun, JSON.stringify([{ ...outcome('frame: frameset', false), counts: { violation: 8, incomplete: 0, pass: 45, inapplicable: 63 } }]));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, full, rerun]);
+
+    expect(result.code).toBe(0);
+    const summary = JSON.parse(await readFile(out, 'utf8')) as {
+      fixtures: { pages: number; withoutInternals: { unstablePages: number }; perPage: Array<{ fixture: string; counts: Record<string, number> }> };
+    };
+    expect(summary.fixtures.pages).toBe(2);
+    expect(summary.fixtures.withoutInternals.unstablePages).toBe(0);
+    expect(summary.fixtures.perPage.find((page) => page.fixture === 'frame: frameset')?.counts['violation']).toBe(8);
+  }, 60_000);
+
+  it('keeps the sweep part of an earlier summary when asked, so the fixtures can be measured again on their own', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const earlier = join(dir, 'earlier.json');
+    const sweep = { comparisons: 7, byFile: { 'test/a.test.ts': 7 }, comparedEntries: { pass: 70 }, withDifferences: [], withUncheckedFrames: [], errors: [] };
+    await writeFile(earlier, JSON.stringify({ axeCore: 'x', playwright: 'y', fixtures: {}, sweep }));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+
+    expect(result.code).toBe(0);
+    const summary = JSON.parse(await readFile(out, 'utf8')) as { sweep: unknown; fixtures: { pages: number } };
+    expect(summary.sweep).toEqual(sweep);
+    expect(summary.fixtures.pages).toBe(1);
+  }, 60_000);
+
+  it('refuses both a sweep log and an earlier sweep part', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep', join(dir, 'a.jsonl'), '--sweep-from', join(dir, 'b.json'), harness]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('--sweep-from');
+    expect(await exists(out)).toBe(false);
+  }, 60_000);
+
   it('writes the summary when every page was stable', async () => {
     const harness = join(dir, 'harness.json');
     await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
