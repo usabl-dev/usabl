@@ -397,6 +397,26 @@
 
 ### Fixed
 
+- `checkPage` reads the page's address after the checks the way the CLI does: with
+  `stayedOnScreen`, against the address the page reported before the checks. The origin and the
+  path always count. The query counts only when the expected address has one. A fragment counts
+  only as a route (`#/` or `#!`), or any fragment when the expected address has a plain one. The
+  read before the checks keeps its rule, which sets the origin aside. Effect on `checkPage`
+  results: a page that moved to the same path on another host or port while the checks ran read
+  as checked, and is now `not_covered`; a page whose tab panel set `#tab-2` during the checks was
+  `not_covered`, and is now checked. `checkPage` output drops every fragment and query from the
+  addresses it prints, so a move in a hash route or a query says the two addresses differ in a
+  part that is not shown. `checkPage` is not a gate, so no gate verdict changes.
+- `usabl init` and `usabl init --docs` strip bidirectional controls, such as a right-to-left
+  override, from a file read error they print. Such a character in a path made the terminal draw
+  the rest of the line in reverse, so the path could read as another path. Each line is scrubbed
+  as the other init prints are, with no length cap.
+- The real browser driver's attribute read waits at most 3 seconds for its element, the same bound
+  as a click. It waited for Playwright's 30 second default, so an element a re-render removed
+  stalled the scan. A read that cannot finish throws with only the first line of the browser's
+  error, so its caller reads it as unknown, never as an absent attribute. No verdict changes: a
+  PatternFly check whose read cannot finish gave a gap or an undecided result before, and gives
+  the same now, only sooner.
 - The CLI reads a screen's address again after the checks. It read the address once, at load, so
   a page that moved during the walk, such as a focus handler that navigates or an auth timer that
   sends it to a sign-in page with no refused identity request, was checked on the other page. The
