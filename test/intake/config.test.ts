@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/cli.js';
 import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
+import { operatorText } from '../../src/intake/config-error.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
@@ -1024,7 +1025,9 @@ describe('loadConfig', () => {
     const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
     const path = join(dir, 'other.json');
     const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
-    expect(message).toContain(`${path} not found`);
+    // The message quotes the path as operatorText prints it, which caps a long path. So the check
+    // holds for a temp folder of any length.
+    expect(message).toContain(`${operatorText(path)} not found`);
     expect(message).toContain('Check the path given to --config');
     expect(message).not.toContain('or pass --config <path>');
   });
@@ -1037,7 +1040,9 @@ describe('loadConfig', () => {
     await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
     const docsManifest = join(dir, 'usabl.docs.json');
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/uiFileGlobs/);
-    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(path);
+    await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(
+      `${operatorText(path)} has an empty uiFileGlobs list`,
+    );
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/usabl\.docs\.json/);
   });
 
