@@ -355,6 +355,17 @@
 
 ### Changed
 
+- The verdict summary splits the blocking count by confidence. A new failing finding reads
+  `N accessibility barrier(s) found` and a new finding usabl could not decide reads
+  `N check(s) undecided, needs a person to review`, each printed only when its count is above
+  zero, failures first. Before, both read `N blocking finding(s)`, so a run held back only by a
+  check axe could not decide read `not_covered: 1 blocking finding(s)` and was taken for an
+  accessibility barrier found. The terminal report lists each blocking finding under a
+  `blocking this run:` heading for its part, and the overlay heading is now "Findings that block
+  this run", with the same split as its count and in its header sentence. Gate effect: none. The
+  verdict is still decided from the whole blocking set; only the words change. Guarded file:
+  `src/gate/index.ts`, the summary text only (lines 124 to 125, 755 to 764, 791 to 792, and 799
+  to 808).
 - This repository's own gate is now the workflow `usabl install --ci` writes, byte for byte, with
   the engine pinned to `usabl-dev/usabl` commit `b18fdb25e47dbb09aa12e315ea02a2401bcac08c` on main.
   Before, it was a hand-written three-job gate that built and ran the pull request's own engine in
