@@ -501,10 +501,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // router that moved to a sign-in page, was not that screen for every check, so its findings go.
     // It is read the way the CLI reads it, with stayedOnScreen against the address read at load,
     // so a move to another origin is leaving and a tab panel's #tab-2 is not.
-    const moved =
-      expected === null || loadedUrl === null
-        ? null
-        : await leftScreenAfterChecks(page, screenId, labeledScreenId !== null, expected, loadedUrl);
+    const moved = expected === null ? null : await leftScreenAfterChecks(page, screenId, labeledScreenId !== null, expected, loadedUrl);
     if (moved !== null) {
       return otherPage(moved);
     }
@@ -759,13 +756,16 @@ async function leftScreenAfterChecks(
   screenId: string,
   labeled: boolean,
   expected: string,
-  loadedUrl: string,
+  loadedUrl: string | null,
 ): Promise<CoverageGap | null> {
   const checkedUrl = await readReportedAddress(page);
-  const stayed = checkedUrl === null ? null : stayedOnScreen(expected, loadedUrl, checkedUrl);
+  const stayed = checkedUrl === null || loadedUrl === null ? null : stayedOnScreen(expected, loadedUrl, checkedUrl);
   if (stayed === true) {
     return null;
   }
+  // The load check passes only with an address, so loadedUrl is null only if that ever changes.
+  // Then nothing confirms the checks ran on the screen, and the page is a gap.
+  const atLoad = loadedUrl === null ? 'the page had reported no address' : `the page was at ${sanitizeUrlForDisplay(loadedUrl)}`;
   const where =
     checkedUrl === null
       ? 'the page could not report its address'
@@ -776,7 +776,10 @@ async function leftScreenAfterChecks(
   // included (scrubOutboundData). So a move in the query or the fragment prints two equal
   // addresses, and the reason says so.
   const hidden =
-    stayed === false && checkedUrl !== null && sanitizeUrlForDisplay(loadedUrl) === sanitizeUrlForDisplay(checkedUrl)
+    stayed === false &&
+    checkedUrl !== null &&
+    loadedUrl !== null &&
+    sanitizeUrlForDisplay(loadedUrl) === sanitizeUrlForDisplay(checkedUrl)
       ? ' The two addresses differ only in a part that is not shown.'
       : '';
   const outcome =
@@ -785,8 +788,8 @@ async function leftScreenAfterChecks(
       : 'So usabl cannot tell whether the page stayed on that screen while it was checked, and it reports no findings for it.';
   return landingGap(
     screenId,
-    `checkPage was told ${claimOf(screenId, labeled, expected)}. When the checks began, the page was at ` +
-      `${sanitizeUrlForDisplay(loadedUrl)}; after the checks, ${where}. ${outcome} The origin and the path are compared. ` +
+    `checkPage was told ${claimOf(screenId, labeled, expected)}. When the checks began, ${atLoad}; ` +
+      `after the checks, ${where}. ${outcome} The origin and the path are compared. ` +
       'The query counts only when the expected address has one, and the fragment only when it names a route: one ' +
       'that starts with #/ or #!, or any fragment when the expected address has one. Any other change to the query ' +
       'or the fragment, such as a tab panel that sets #tab-2, counts as the same screen. If the session expired ' +
