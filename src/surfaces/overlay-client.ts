@@ -126,10 +126,10 @@ export const overlayClientSource = `(() => {
 
   // The two headings the findings on a screen are listed under, and the words the header uses when
   // it refers to them. One name each, written once, so the sentence in the header and the heading
-  // in the list can never say different things about the same finding. The terminal summary prints
-  // the same two names in lower case.
-  // The blocking group holds failing findings and findings usabl could not decide, so its heading
-  // names findings and its count says how many of each, in the gate's words.
+  // in the list can never say different things about the same finding. The blocking group holds
+  // failing findings and findings usabl could not decide, so its heading names findings and its
+  // count says how many of each, in the gate's words. The terminal prints the recorded name in
+  // lower case and lists the blocking findings under "blocking this run:", one heading per part.
   const BLOCKING_HEADING = 'Findings that block this run';
   const RECORDED_HEADING = 'Recorded, not blocking';
   const HEADROOM_HEADING = 'Floor ahead of this run';
