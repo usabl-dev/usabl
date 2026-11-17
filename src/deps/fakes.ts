@@ -5,7 +5,17 @@
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
 import { createHash } from 'node:crypto';
-import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions, StoredEntry, TreeEntry } from '../contracts/index.js';
+import type {
+  Deps,
+  GitReader,
+  ListedText,
+  RequirementBundle,
+  ScreenScan,
+  Page,
+  ScannerVersions,
+  StoredEntry,
+  TreeEntry,
+} from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
@@ -150,6 +160,30 @@ export function treeEntryOf(text: string): TreeEntry {
   return { mode: '100644', type: 'blob', id };
 }
 
+/**
+ * The tree entry listing a text-only test reader would give: each path its text read names, as a
+ * 100644 blob with git's id for that text. With recursion the names come from lsFilesUnder. The
+ * reads are called on the reader at call time, so a test that replaces show or lsFilesUnder
+ * changes the listing too. Every entry is a file, so only 'blobs' adds the text, which is the text
+ * the id was computed from.
+ */
+export async function listTextEntries(
+  reader: Pick<GitReader, 'show' | 'lsFilesUnder'>,
+  ref: string,
+  paths: readonly string[],
+  options: { recursive: boolean; text?: ListedText },
+): Promise<Map<string, TreeEntry>> {
+  const names = options.recursive ? await reader.lsFilesUnder(ref, paths) : [...new Set(paths)];
+  const entries = new Map<string, TreeEntry>();
+  for (const name of names) {
+    const text = await reader.show(ref, name);
+    if (text !== null) {
+      entries.set(name, options.text === 'blobs' ? { ...treeEntryOf(text), text } : treeEntryOf(text));
+    }
+  }
+  return entries;
+}
+
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
   const spec: FakeDepsSpec = { ...DEFAULTS, ...overrides };
   return {
@@ -165,16 +199,8 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     git: {
       writeTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
-      async listEntries(ref, paths, { recursive }) {
-        const names = recursive ? await this.lsFilesUnder(ref, paths) : [...new Set(paths)];
-        const entries = new Map<string, TreeEntry>();
-        for (const name of names) {
-          const text = await this.show(ref, name);
-          if (text !== null) {
-            entries.set(name, treeEntryOf(text));
-          }
-        }
-        return entries;
+      async listEntries(ref, paths, options) {
+        return listTextEntries(this, ref, paths, options);
       },
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],

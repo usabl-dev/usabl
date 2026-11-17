@@ -312,6 +312,22 @@ function driftMessage(drift: string[], continuation: boolean): string {
   return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
 }
 
+// Stored pins in a format an older usabl wrote. usabl cannot compare them, so it cannot tell
+// whether policy changed in this session, and it says exactly that, never that policy changed.
+// The pin file path comes from the environment, so it goes inside the frame.
+function olderPinsMessage(pinPath: string, continuation: boolean): string {
+  const head =
+    'NOT verified - the session pins were written by an older usabl, so usabl cannot tell whether ' +
+    'guarded policy files changed during this session.';
+  const steps =
+    'review the guarded policy files changed since the session started, then delete the pin file named ' +
+    'under "pin fix" in the untrusted text below to go on.';
+  const next = continuation
+    ? `usabl let this stop through without blocking again (continuation already active). Next: tell the user to ${steps}`
+    : `Next: tell the user to ${steps} Do not edit those files to clear this block.`;
+  return framedMessage([head, next], [`pin fix: ${deletePinFileFix(pinPath)}`]);
+}
+
 // The config file the hook compares with the last commit before it parses anything.
 const CONFIG_FILE = 'usabl.config.json';
 
@@ -960,8 +976,6 @@ export async function runStopHook(
     // then checked under the weaker policy, mints a receipt that matches. Only the pins see that
     // drift, so a stored receipt must never answer a stop before they are compared.
     let pinsCompared = false;
-    // Set when the stored pins are from an older usabl: the stop then skips the receipt fast path.
-    let olderPins = false;
     const parsedSession = parseSessionId(input.sessionId);
     if ('notice' in parsedSession) {
       // No usable session id means no pins to compare. That is never silent: an allow on this stop
@@ -983,17 +997,18 @@ export async function runStopHook(
           [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
         );
       } else if (previousPins !== null && !pinsAreCurrent(previousPins)) {
-        // Pins an older usabl wrote say nothing this usabl can compare. Read as drift, they would
-        // tell the user that policy files changed when nothing did. Replaced, they would take
-        // whatever is committed now as the baseline. So neither: the stop says so, and checks the
-        // change in full below instead of trusting a stored receipt.
-        olderPins = true;
-        pinNotice = pinsNotUsed(
-          'the session pins were recorded by an older usabl, in a format this usabl does not compare, ' +
-            'so this stop checks the change in full',
-          'start a new session, or see "pin fix" in the untrusted text below.',
-          [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
-        );
+        // Pins an older usabl wrote say nothing this usabl can compare, so it cannot tell whether
+        // policy was weakened and committed earlier in this session. A full check now would run
+        // under that policy and could pass, and replacing the pins would take it as the baseline.
+        // So the stop takes the drift path: it blocks, or lets one continuation through, keeps the
+        // pins, and never reaches the receipt fast path. The message never says policy changed.
+        const message = olderPinsMessage(ports.pins.locate(pinName), input.stopHookActive);
+        if (input.stopHookActive) {
+          await emitProtocolAllow(ports, { message }, options);
+          return 0;
+        }
+        await emitProtocolBlock(ports, message, options);
+        return 0;
       } else {
         const nextPins = await guarded(() => computeSessionPins(guardDeps, config));
         const serialized = JSON.stringify(nextPins, null, 2);
@@ -1046,7 +1061,7 @@ export async function runStopHook(
     checkCommand = checkCommandFor(scope.baseRevision);
 
     let receiptNotUsed: string | null = null;
-    if (dirtyGuardedPaths.length === 0 && !olderPins) {
+    if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
       // The stored receipt only offers a fast allow. A receipt the hook cannot read or check is no
       // guard failure: the hook drops the fast path and runs the full check below.

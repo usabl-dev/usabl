@@ -129,19 +129,28 @@ async function resolveLink<T>(
   return null;
 }
 
-/** The parts of a git reader the guard compares refs with. */
-type EntryReader = Pick<GitReader, 'show' | 'listEntries'>;
+/**
+ * The part of a git reader the guard compares refs with: the tree entry listing. Every text the
+ * guard reads at a ref, a link's text or the config, comes from the listing itself, read by the
+ * id the listing gave, so the text and the id are always from the same tree.
+ */
+type EntryReader = Pick<GitReader, 'listEntries'>;
 
-// A lookup of one path at a ref for resolveLink. A link's text is read with show, which reads a
-// link's blob as its text.
+// A link's text as its listing read it. A link listed without its text has no text the guard can
+// trust, so it reads as empty text, which resolves to nothing and compares as changed.
+function linkTextOf(entry: TreeEntry): string {
+  return entry.text ?? '';
+}
+
+// A lookup of one path at a ref for resolveLink.
 function refLookup(git: EntryReader, ref: string): (path: string) => Promise<LinkStep<TreeEntry> | null> {
   return async (path) => {
-    const entry = (await git.listEntries(ref, [path], { recursive: false })).get(path);
+    const entry = (await git.listEntries(ref, [path], { recursive: false, text: 'links' })).get(path);
     if (entry === undefined) {
       return null;
     }
     if (entry.mode === SYMLINK_MODE) {
-      return { kind: 'link', text: (await git.show(ref, path)) ?? '' };
+      return { kind: 'link', text: linkTextOf(entry) };
     }
     return entry.type === 'tree' ? { kind: 'folder', value: entry } : { kind: 'leaf', value: entry };
   };
@@ -167,7 +176,8 @@ function workingLookup(readBytes: (path: string) => Promise<StoredEntry | null>)
  * What a path at a ref stores, as text that is equal for two paths exactly when they store the
  * same thing: nothing, or the mode and the id, and for a link also the path it resolves to and
  * the mode and id there. `resolved` is false for a link that does not resolve, which compares as
- * changed even against itself. The session pins hash this same text.
+ * changed even against itself. The session pins hash this same text. The entry comes from a
+ * listing asked for link text, so a link's text is the one its id names.
  */
 async function refIdentity(
   git: EntryReader,
@@ -181,7 +191,7 @@ async function refIdentity(
   if (entry.mode !== SYMLINK_MODE) {
     return { text: JSON.stringify([entry.mode, entry.id]), resolved: true };
   }
-  const target = await resolveLink(path, (await git.show(ref, path)) ?? '', refLookup(git, ref));
+  const target = await resolveLink(path, linkTextOf(entry), refLookup(git, ref));
   if (target === null || target.step.kind === 'link') {
     return { text: JSON.stringify([entry.mode, entry.id, 'unresolved']), resolved: false };
   }
@@ -245,14 +255,12 @@ async function sameLocal(reads: LocalReads, path: string, working: StoredEntry |
 }
 
 /**
- * A reader of guarded paths at refs. The CI policy check hands in a reader typed with show and
- * lsFilesUnder only, from a file outside this folder, so the tree entry read is optional in this
- * type. The command line hands that check the git reader's tree entry read, so in CI every guarded
- * path is compared by mode and id. A reader without one is compared as text on both sides, which
- * is what the check did before. Text keeps a submodule apart from any file, but two byte sequences
- * that are not valid UTF-8, and a link and a file with the same text, read the same.
+ * A reader of guarded paths at refs, for the CI policy check. The tree entry read is required, so
+ * every guarded path is compared by mode and id. There is no text compare to fall back to: text
+ * reads two byte sequences that are not valid UTF-8, and a link and a file with the same text, as
+ * the same.
  */
-type RefReader = Pick<GitReader, 'show' | 'lsFilesUnder'> & Partial<Pick<GitReader, 'listEntries'>>;
+type RefReader = EntryReader;
 
 function parseGuardConfigBytes(raw: string): GuardConfigSource | null {
   try {
@@ -665,7 +673,7 @@ async function expandWithListings(
   const prefixes = listingPrefixes(entries);
   const unique = [...new Set(refs)];
   const [refListings, workingByEntry] = await Promise.all([
-    Promise.all(unique.map((ref) => deps.git.listEntries(ref, prefixes, { recursive: true }))),
+    Promise.all(unique.map((ref) => deps.git.listEntries(ref, prefixes, { recursive: true, text: 'links' }))),
     Promise.all(entries.map((entry) => workingTreeFiles(deps, entry))),
   ]);
   const listings = new Map(unique.map((ref, index) => [ref, refListings[index] ?? new Map<string, TreeEntry>()]));
@@ -711,15 +719,17 @@ export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<strin
   };
   const [workingConfig, trustedConfigs] = await Promise.all([
     reads.readBytes(CONFIG_PATH),
-    deps.git.listEntries(trustedRef, [CONFIG_PATH], { recursive: false }),
+    deps.git.listEntries(trustedRef, [CONFIG_PATH], { recursive: false, text: 'blobs' }),
   ]);
-  const configDiverged = !(await sameLocal(reads, CONFIG_PATH, workingConfig, trustedConfigs.get(CONFIG_PATH) ?? null));
+  const trustedConfig = trustedConfigs.get(CONFIG_PATH) ?? null;
+  const configDiverged = !(await sameLocal(reads, CONFIG_PATH, workingConfig, trustedConfig));
 
-  // Scope is trusted-ref config when the config diverged. An unchanged config can use the
-  // working-tree parse because it is the same document. A config that is a link is read through
-  // the link, as the config loader reads it; the compare above checked what it resolves to.
+  // Scope is trusted-ref config when the config diverged, read by the id the compare used. An
+  // unchanged config can use the working-tree parse because it is the same document. A config that
+  // is a link is read through the link, as the config loader reads it; the compare above checked
+  // what it resolves to.
   const scopeRaw = configDiverged
-    ? await deps.git.show(trustedRef, CONFIG_PATH)
+    ? (trustedConfig?.text ?? null)
     : workingConfig?.kind === 'file'
       ? decodeText(workingConfig.bytes)
       : workingConfig?.kind === 'symlink'
@@ -751,7 +761,10 @@ export async function checkGuard(deps: Deps, trustedRef = 'HEAD'): Promise<strin
 }
 
 // The local guard for a file reader without a byte read, such as one a test builds: both sides
-// read as text, as the guard did before it compared what git stores.
+// read as text, as the guard did before it compared what git stores. Every file reader usabl
+// itself builds has the byte read. It stays optional in the file reader type because the run also
+// builds a file reader of that type with readFile and glob only, for coverage, which never reaches
+// the guard.
 async function checkGuardAsText(deps: Deps, trustedRef: string): Promise<string[]> {
   const [workingConfig, trustedConfig] = await Promise.all([
     deps.fs.readFile(CONFIG_PATH),
@@ -795,19 +808,26 @@ export async function guardScopeAtRefs(
   trustedRef: string,
   workingRef: string,
 ): Promise<{ diverged: string[]; readWide: string[] }> {
-  const listEntries = git.listEntries;
-  if (listEntries === undefined) {
-    return guardScopeAtRefsAsText(git, trustedRef, workingRef);
+  // The type requires the tree entry read. A reader built past the type without one is refused,
+  // never compared as text.
+  if (typeof git.listEntries !== 'function') {
+    throw new Error(
+      'usabl cannot check guarded policy files: the git reader it was given cannot list tree entries, ' +
+        'so usabl checked nothing. This is a fault in usabl itself, not in the repository.',
+    );
   }
   const reader: EntryReader = {
-    show: (ref, path) => git.show(ref, path),
-    listEntries: (ref, paths, options) => listEntries.call(git, ref, paths, options),
+    listEntries: (ref, paths, options) => git.listEntries(ref, paths, options),
   };
-  const configAt = async (ref: string) =>
-    refIdentity(reader, ref, CONFIG_PATH, (await reader.listEntries(ref, [CONFIG_PATH], { recursive: false })).get(CONFIG_PATH) ?? null);
+  // The config's entry, with its text read by the id the listing gave, and what the ref stores
+  // there. The scope is parsed from that same text, so the compare and the parse read one tree.
+  const configAt = async (ref: string) => {
+    const entry = (await reader.listEntries(ref, [CONFIG_PATH], { recursive: false, text: 'blobs' })).get(CONFIG_PATH) ?? null;
+    return { text: entry?.text ?? null, identity: await refIdentity(reader, ref, CONFIG_PATH, entry) };
+  };
   const [workingConfig, trustedConfig] = await Promise.all([configAt(workingRef), configAt(trustedRef)]);
-  const configDiverged = !sameIdentity(workingConfig, trustedConfig);
-  const scope = scopeConfigFrom(configDiverged, await git.show(configDiverged ? trustedRef : workingRef, CONFIG_PATH));
+  const configDiverged = !sameIdentity(workingConfig.identity, trustedConfig.identity);
+  const scope = scopeConfigFrom(configDiverged, configDiverged ? trustedConfig.text : workingConfig.text);
   if (scope === 'config-unreadable') {
     return { diverged: [CONFIG_PATH], readWide: [] };
   }
@@ -819,8 +839,8 @@ export async function guardScopeAtRefs(
   const readWide = [...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice))];
   const prefixes = listingPrefixes(entries);
   const [trustedEntries, workingEntries] = await Promise.all([
-    reader.listEntries(trustedRef, prefixes, { recursive: true }),
-    reader.listEntries(workingRef, prefixes, { recursive: true }),
+    reader.listEntries(trustedRef, prefixes, { recursive: true, text: 'links' }),
+    reader.listEntries(workingRef, prefixes, { recursive: true, text: 'links' }),
   ]);
   const expanded = selectGuarded(entries, [...trustedEntries.keys(), ...workingEntries.keys()]);
 
@@ -847,39 +867,6 @@ function sameIdentity(a: { text: string; resolved: boolean }, b: { text: string;
   return a.resolved && b.resolved && a.text === b.text;
 }
 
-// The CI policy check for a reader without the tree entry read: both refs read as text, as the
-// check did before it compared what git stores.
-async function guardScopeAtRefsAsText(
-  git: RefReader,
-  trustedRef: string,
-  workingRef: string,
-): Promise<{ diverged: string[]; readWide: string[] }> {
-  const [workingConfig, trustedConfig] = await Promise.all([
-    git.show(workingRef, CONFIG_PATH),
-    git.show(trustedRef, CONFIG_PATH),
-  ]);
-  const configDiverged = workingConfig !== trustedConfig;
-  const scope = scopeConfigFrom(configDiverged, configDiverged ? trustedConfig : workingConfig);
-  if (scope === 'config-unreadable') {
-    return { diverged: [CONFIG_PATH], readWide: [] };
-  }
-  const entries = readGuardedEntries(scope);
-  const readWide = [...new Set(entries.filter((entry) => entry.readWide !== null).map(readWideNotice))];
-  const prefixes = listingPrefixes(entries);
-  const [trustedFiles, workingFiles] = await Promise.all([
-    git.lsFilesUnder(trustedRef, prefixes),
-    git.lsFilesUnder(workingRef, prefixes),
-  ]);
-  const diverged: string[] = [];
-  for (const path of selectGuarded(entries, [...trustedFiles, ...workingFiles])) {
-    const [working, trusted] = await Promise.all([git.show(workingRef, path), git.show(trustedRef, path)]);
-    if (working !== trusted) {
-      diverged.push(path);
-    }
-  }
-  return { diverged: diverged.sort(), readWide };
-}
-
 /**
  * The pin format. Each pin is `v4:` and a sha256 over a fixed label and what HEAD stores at the
  * path, as refIdentity gives it: nothing, or the mode and the object id, and for a link also the
@@ -898,9 +885,8 @@ function pinOf(identity: { text: string }): string {
 
 /**
  * Whether every stored pin is in the current format. Pins an older usabl wrote say nothing this
- * usabl can compare, so the Stop hook does not read them as drift and does not take the current
- * state as the baseline either: it says the pins are from an older usabl and checks the change in
- * full.
+ * usabl can compare, so the Stop hook cannot tell whether policy changed in the session. It blocks
+ * and says so, and never takes the current state as the baseline.
  */
 export function pinsAreCurrent(pins: SessionPins): boolean {
   return Object.values(pins).every((pin) => pin.startsWith(PIN_PREFIX));

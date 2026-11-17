@@ -653,6 +653,31 @@ describe('makeGitReader reads a trusted file from git objects only', { timeout: 
     expect(listed['link']).toMatch(/^120000 [0-9a-f]{40}$/);
   });
 
+  it('listEntries reads the text it is asked for by the id it listed', async () => {
+    await symlink('screen.tsx', join(repoPath, 'link'));
+    await runGit(repoPath, ['add', 'link']);
+    await runGit(repoPath, ['commit', '-m', 'a link']);
+    const git = makeGitReader({ cwd: repoPath });
+    const none = await git.listEntries('HEAD', ['link', 'screen.tsx'], { recursive: true });
+    expect([none.get('link')?.text, none.get('screen.tsx')?.text]).toEqual([undefined, undefined]);
+    const links = await git.listEntries('HEAD', ['link', 'screen.tsx'], { recursive: true, text: 'links' });
+    expect([links.get('link')?.text, links.get('screen.tsx')?.text]).toEqual(['screen.tsx', undefined]);
+    const blobs = await git.listEntries('HEAD', ['link', 'screen.tsx', 'src/gate'], { recursive: false, text: 'blobs' });
+    expect([blobs.get('link')?.text, blobs.get('screen.tsx')?.text]).toEqual(['screen.tsx', 'first version\n']);
+    // A folder has no blob, so no text.
+    expect(blobs.get('src/gate')?.text).toBeUndefined();
+  });
+
+  it('listEntries refuses a blob too large to read as text, naming the file', async () => {
+    await writeFile(join(repoPath, 'big.json'), 'x'.repeat(4096));
+    await runGit(repoPath, ['add', 'big.json']);
+    await runGit(repoPath, ['commit', '-m', 'a big file']);
+    const git = makeGitReader({ cwd: repoPath, maxBuffer: 1024 });
+    const refused = git.listEntries('HEAD', ['big.json'], { recursive: false, text: 'blobs' });
+    await expect(refused).rejects.toThrow(/could not read big\.json at HEAD: it is larger than/);
+    await expect(git.listEntries('HEAD', ['big.json'], { recursive: false })).resolves.toHaveProperty('size', 1);
+  });
+
   it('listEntries reads a path from the root of the tree when run from a subfolder', async () => {
     await mkdir(join(repoPath, 'apps/web'), { recursive: true });
     const git = makeGitReader({ cwd: join(repoPath, 'apps/web') });

@@ -290,6 +290,17 @@ async function runListing(
   }
 }
 
+// A file too large to read as text. usabl stops and says so, never with a raw buffer error and
+// never with a cut-off text.
+function tooLargeToReadError(path: string, ref: string, maxBuffer: number): Error {
+  return new Error(
+    `usabl could not read ${operatorText(path)} at ${operatorText(ref)}: it is larger than the ` +
+      `${String(Math.floor(maxBuffer / (1024 * 1024)))} MiB usabl reads as text, so usabl checked nothing. ` +
+      'Keep a policy file that usabl parses under that size, then run usabl again. The guard ' +
+      'compares a large guarded file without reading it as text.',
+  );
+}
+
 // True when the ref names a commit in this repository. With --verify --quiet, git exits 1 and
 // prints nothing when it does not. Any other failure is not an answer, so it is thrown.
 async function namesCommit(cwd: string, ref: string): Promise<boolean> {
@@ -432,12 +443,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return output;
       } catch (err) {
         if (isMaxBufferError(err)) {
-          throw new Error(
-            `usabl could not read ${operatorText(path)} at ${operatorText(ref)}: it is larger than the ` +
-              `${String(Math.floor(maxBuffer / (1024 * 1024)))} MiB usabl reads as text, so usabl checked nothing. ` +
-              'Keep a policy file that usabl parses under that size, then run usabl again. The guard ' +
-              'compares a large guarded file without reading it as text.',
-          );
+          throw tooLargeToReadError(path, ref, maxBuffer);
         }
         const failed = await readFailedBlob(cwd, ref, path, err);
         if (failed.kind === 'absent') {
@@ -452,7 +458,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
       }
     },
-    async listEntries(ref, paths, { recursive }) {
+    async listEntries(ref, paths, { recursive, text = 'none' }) {
       // One ls-tree for every path, so a ref is read once. The mode and the object id say what the
       // ref stores, so no file content is read. --full-tree reads each path from the root of the
       // tree, whatever folder usabl runs in.
@@ -478,7 +484,19 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       }
       // Without recursion, ls-tree also lists what is in a folder named with a trailing slash, so
       // only the exact names asked for are kept.
-      return parseTreeEntries(output, recursive ? undefined : new Set(unique));
+      const entries = parseTreeEntries(output, recursive ? undefined : new Set(unique));
+      // Text is read by the id this listing gave, never by <ref>:<path> again, so it comes from the
+      // same tree as the mode and the id even if the ref moves in between.
+      for (const [path, entry] of entries) {
+        if (entry.type === 'blob' && (text === 'blobs' || (text === 'links' && entry.mode === '120000'))) {
+          try {
+            entry.text = await runGit(cwd, ['cat-file', 'blob', entry.id], undefined, maxBuffer);
+          } catch (err) {
+            throw isMaxBufferError(err) ? tooLargeToReadError(path, ref, maxBuffer) : err;
+          }
+        }
+      }
+      return entries;
     },
     async tracksFileMode() {
       // git exits 1 when the setting is not there, and then reads the executable bit. Any other

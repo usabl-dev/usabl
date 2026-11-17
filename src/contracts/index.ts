@@ -1108,12 +1108,23 @@ export type StoredEntry =
  * a symbolic link, 160000 for a submodule, or 040000 for a folder), the type (blob, commit, or
  * tree), and the object id. Two entries with the same mode and id store the same thing, so the
  * guard compares guarded paths at refs by these alone and reads no file content.
+ *
+ * `text` is the blob's content as text, read by this id, and is there only when the listing was
+ * asked for it. Read by the id, never by the path at the ref again, it always comes from the same
+ * tree as the mode and the id, even when the ref moves while usabl reads it.
  */
 export interface TreeEntry {
   mode: string;
   type: string;
   id: string;
+  text?: string;
 }
+
+/**
+ * Which blobs a tree entry listing also reads as text: none, the symbolic links only (their link
+ * text), or every blob, link or file.
+ */
+export type ListedText = 'none' | 'links' | 'blobs';
 export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
@@ -1121,8 +1132,14 @@ export interface GitReader {
   // and submodule that is one of the paths or under one, in one listing; an empty path stands for
   // the whole tree. Without it, the entry each path names itself, a folder included. A path that
   // names nothing has no key. Paths are read by their exact names, never as patterns. A ref git
-  // cannot read throws the same errors as show.
-  listEntries(ref: string, paths: readonly string[], options: { recursive: boolean }): Promise<Map<string, TreeEntry>>;
+  // cannot read throws the same errors as show. With text, the blobs it names also carry their
+  // text, read by the id the listing gave; a blob too large to read as text throws the same
+  // refusal as show.
+  listEntries(
+    ref: string,
+    paths: readonly string[],
+    options: { recursive: boolean; text?: ListedText },
+  ): Promise<Map<string, TreeEntry>>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
   diffNameOnly(ref: string): Promise<string[]>;
