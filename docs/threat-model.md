@@ -231,6 +231,9 @@ re-baseline to green.
   a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
   as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section
   11.2).
+- On a Stop hook stop, the requirement providers and the commercial engines are still built from
+  the working-tree `usabl.config.json`, and a change there is a guarded change, so the stop blocks
+  for approval.
 - A waiver ends by the clock. A receipt minted while a waiver was live used to keep verifying
   after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
   would now block. The receipt binds the earliest end among the waivers the run applied
