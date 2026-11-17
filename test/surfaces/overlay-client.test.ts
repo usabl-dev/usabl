@@ -2,7 +2,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import type { Finding, Result } from '../../src/contracts/index.js';
-import { overlayClientSource } from '../../src/surfaces/overlay-client.js';
+import { overlayClientSource, PENDING_BADGE_LABEL } from '../../src/surfaces/overlay-client.js';
 import { projectOverlay } from '../../src/surfaces/vite-plugin.js';
 
 let browser: Browser;
@@ -113,8 +113,6 @@ function deferred(): { promise: Promise<void>; release: () => void } {
 
 // How long mount waits for the inspector host, and then for the first result. See mount.
 const MOUNT_TIMEOUT_MS = 15_000;
-// The badge label before any result has arrived.
-const PENDING_BADGE_LABEL = 'usabl: no result yet. Open inspector.';
 
 async function mount(
   payload: Projection | null,

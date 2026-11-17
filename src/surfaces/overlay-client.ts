@@ -6,7 +6,11 @@
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from './scrub.js';
 
+/** The badge label before any result has arrived. Tests wait for the badge to leave it. */
+export const PENDING_BADGE_LABEL = 'usabl: no result yet. Open inspector.';
+
 export const overlayClientSource = `(() => {
+  const PENDING_LABEL = ${JSON.stringify(PENDING_BADGE_LABEL)};
   const RESULT_ENDPOINT = '/__usabl/result';
   const HOST_ATTRIBUTE = 'data-usabl-inspector';
   const HIGHLIGHT_ATTRIBUTE = 'data-usabl-highlight';
@@ -805,7 +809,7 @@ export const overlayClientSource = `(() => {
       return { key: 'error', symbol: '!', count: null, label: 'usabl: could not load a result. Open inspector.' };
     }
     if (!payload || !payload.loaded) {
-      return { key: 'pending', symbol: '○', count: null, label: 'usabl: no result yet. Open inspector.' };
+      return { key: 'pending', symbol: '○', count: null, label: PENDING_LABEL };
     }
 
     const word = verdict.word.toLowerCase();
@@ -1814,7 +1818,7 @@ export const overlayClientSource = `(() => {
     badge.type = 'button';
     badge.setAttribute('aria-controls', PANEL_ID);
     badge.setAttribute('aria-expanded', 'false');
-    badge.setAttribute('aria-label', 'usabl: no result yet. Open inspector.');
+    badge.setAttribute('aria-label', PENDING_LABEL);
     badge.addEventListener('click', () => setOpen(host, true, true));
 
     const panel = make('section', 'panel');
