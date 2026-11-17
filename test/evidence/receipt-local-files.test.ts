@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Deps, LocalFileRead, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
+import { withoutLocalFileBinding } from '../../src/evidence/local-files.js';
 import { mintReceipt, receiptFailureReasons, verifyReceipt } from '../../src/evidence/receipt.js';
 
 const config: UsablConfig = {
@@ -47,7 +48,29 @@ function withOther(deps: Deps, paths: readonly string[]): Deps {
     ...deps,
     fs: {
       ...deps.fs,
-      readLocalFile: async (path: string): Promise<LocalFileRead> => (paths.includes(path) ? { kind: 'other' } : read(path)),
+      readLocalFile: async (path: string, maxBytes: number): Promise<LocalFileRead> =>
+        paths.includes(path) ? { kind: 'other' } : read(path, maxBytes),
+    },
+  };
+}
+
+const MIB = 1024 * 1024;
+
+/**
+ * The same deps with some files read as the given size, as the real reader reads them: a file over
+ * the cap it is handed is other, and its bytes are never read.
+ */
+function withSizes(deps: Deps, sizes: Record<string, number>): Deps {
+  const read = deps.fs.readLocalFile!.bind(deps.fs);
+  return {
+    ...deps,
+    fs: {
+      ...deps.fs,
+      readLocalFile: async (path: string, maxBytes: number): Promise<LocalFileRead> => {
+        const size = sizes[path];
+        if (size === undefined) return read(path, maxBytes);
+        return size > maxBytes ? { kind: 'other' } : { kind: 'file', sha256: `hash-${path}`, size };
+      },
     },
   };
 }
@@ -122,6 +145,47 @@ describe('the receipt binds local files git does not see', () => {
     expect(await verifyAfter(deps, deps)).toEqual(['localFiles']);
     const folder = withOther(depsWith({}), ['public/generated']);
     expect(await verifyAfter(folder, folder, listed)).toEqual(['localFiles']);
+  });
+
+  it('binds a .env file whatever the case of its name', async () => {
+    for (const name of ['.ENV.local', '.Env']) {
+      expect(await verifyAfter(depsWith({ [name]: 'A=1\n' }), depsWith({ [name]: 'A=2\n' }))).toEqual(['localFiles']);
+      expect(await verifyAfter(depsWith({}), depsWith({ [name]: 'A=1\n' }))).toEqual(['localFiles']);
+    }
+  });
+
+  it('binds no file whose name only contains .env', async () => {
+    expect(await verifyAfter(depsWith({ 'x.env': 'A=1\n' }), depsWith({ 'x.env': 'A=2\n' }))).toEqual([]);
+  });
+
+  it('caps a .env file at 1 MiB and a listed file at 16 MiB', async () => {
+    const listed: UsablConfig = { ...config, localFiles: ['public/bundle.js'] };
+    const big = withSizes(depsWith({ '.env': 'A=1\n', 'public/bundle.js': 'x' }), { '.env': MIB + 1, 'public/bundle.js': 2 * MIB });
+    // The listed file at 2 MiB is under its cap, the .env file at just over 1 MiB is not.
+    expect(await verifyAfter(big, big, listed)).toEqual(['localFiles']);
+    const fits = withSizes(depsWith({ '.env': 'A=1\n', 'public/bundle.js': 'x' }), { '.env': MIB, 'public/bundle.js': 16 * MIB });
+    expect(await verifyAfter(fits, fits, listed)).toEqual([]);
+    const over = withSizes(depsWith({ 'public/bundle.js': 'x' }), { 'public/bundle.js': 16 * MIB + 1 });
+    expect(await verifyAfter(over, over, listed)).toEqual(['localFiles']);
+  });
+
+  it('reads at most 64 MiB across all bound files, so many files at the cap bind nothing that matches', async () => {
+    const names = ['a', 'b', 'c', 'd', 'e'].map((name) => `public/${name}.js`);
+    const files = Object.fromEntries(names.map((name) => [name, 'x']));
+    const four: UsablConfig = { ...config, localFiles: names.slice(0, 4) };
+    const five: UsablConfig = { ...config, localFiles: names };
+    const sizes = Object.fromEntries(names.map((name) => [name, 15 * MIB]));
+    const deps = withSizes(depsWith(files), sizes);
+    expect(await verifyAfter(deps, deps, four)).toEqual([]);
+    expect(await verifyAfter(deps, deps, five)).toEqual(['localFiles']);
+  });
+
+  it('binds nothing in a CI run, and a local stop never matches its receipt', async () => {
+    const local = depsWith({ '.env': 'A=1\n' });
+    const ci = withoutLocalFileBinding(local);
+    const receipt = await mintReceipt(ci, config, mintArgs);
+    expect(Object.hasOwn(receipt, 'localFilesHash')).toBe(false);
+    expect((await verifyReceipt(local, config, receipt, 'tree-a')).failedFields).toEqual(['localFiles']);
   });
 
   it('never matches when the file reader cannot tell what is at a path', async () => {

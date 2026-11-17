@@ -108,7 +108,7 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
         throw err;
       }
     },
-    async readLocalFile(path) {
+    async readLocalFile(path, maxBytes) {
       try {
         // A file above the path holds nothing, so nothing is there. A link above, or anything else
         // that is not a folder, could lead out of the repository, so usabl does not read through it.
@@ -130,19 +130,32 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
         // hash, in fixed-size pieces, so a large file is never held in memory whole.
         const handle = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         try {
-          if (!(await handle.stat()).isFile()) {
+          const opened = await handle.stat();
+          if (!opened.isFile()) {
+            return { kind: 'other' };
+          }
+          // The size is checked before any byte is read. A sparse file uses no disk, so a file of any
+          // size costs nothing to make, and hashing it would make every stop slow enough to time out.
+          if (opened.size > maxBytes) {
             return { kind: 'other' };
           }
           const hash = createHash('sha256');
           const piece = Buffer.alloc(64 * 1024);
+          let total = 0;
           for (;;) {
             const { bytesRead } = await handle.read(piece, 0, piece.length, null);
             if (bytesRead === 0) {
               break;
             }
+            total += bytesRead;
+            // A file that grows while it is read, or that says a smaller size than it gives, is
+            // not read to its end.
+            if (total > opened.size) {
+              return { kind: 'other' };
+            }
             hash.update(piece.subarray(0, bytesRead));
           }
-          return { kind: 'file', sha256: hash.digest('hex') };
+          return { kind: 'file', sha256: hash.digest('hex'), size: total };
         } finally {
           await handle.close();
         }

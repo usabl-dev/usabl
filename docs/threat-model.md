@@ -319,8 +319,9 @@ passing bundle from another run.
   from git status, so an edit only to a git-ignored file the app reads, such as `.env.local`
   (Vite loads it, and the Vite templates ignore it), moved neither. A stored receipt kept
   answering the stop with "VERIFIED (exit 0, stored receipt, not re-scanned)". This hit honest
-  work and needed no forgery. The receipt now binds `localFilesHash`: for every `.env*` file in
-  the repository root and in each app folder, every path config `localFiles` lists, and
+  work and needed no forgery. The receipt now binds `localFilesHash`: for every file in the
+  repository root and in each app folder whose name, in lower case, starts with `.env` (so a
+  rename to `.ENV.local` is still bound), every path config `localFiles` lists, and
   `usabl.config.json` at the root, the path, its kind (missing, file, or other), and the sha256
   of its bytes, sorted by path. It never holds a byte, a line, a key, or a value of any of them,
   and no path either, only the hash over the entries. An edit, a file that appears, or a file
@@ -341,7 +342,22 @@ passing bundle from another run.
   only to an ignored file on a branch with no other change is still nothing to check. The run
   reads the bound files when it mints the receipt, after the scan, so an edit to one during the
   scan is bound as if the scan had seen it; the tree is read before and after the scan, but
-  these files are not.
+  these files are not. Closing that needs a second read in `src/run.ts`, a guarded file, and is
+  not built. A `.env` file outside the root and the app folders, such as one in a folder Vite's
+  `envDir` names, is bound only when it is listed in `localFiles`.
+- Each stop reads every bound file whole, on the fast path too, and a sparse file of any size
+  costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
+  every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
+  on. So each bound file has a size cap, read from the file's size before any byte: 1 MiB for a
+  `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
+  one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
+  the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
+  cost of a large bound file is its hash time on every stop: about a tenth of a second at the
+  16 MiB cap.
+- A `usabl check --ci` run binds no local files, and its receipt has no `localFilesHash`. CI has
+  no ignored files to bind, and a hash with no key of a short secret in `.env`, in a Result
+  artifact that others read, could be guessed offline. A local stop never matches such a
+  receipt.
 - `sourceTree` is the tree the run read before it planned. The run reads the tree again after
   the scan and every policy read, before the gate. If the two reads differ, a file changed
   while the check ran, so the scan may have seen code that is neither the planned tree nor the

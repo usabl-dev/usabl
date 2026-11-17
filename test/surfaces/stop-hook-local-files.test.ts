@@ -8,7 +8,7 @@
  * use: buildDeps is replaced so no browser starts, and the check runner records what it scanned.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,6 +61,8 @@ let repo = '';
 let outside = '';
 let originalCwd = '';
 let printed: string[] = [];
+// What the CLI wrote to stdout.
+let out: string[] = [];
 
 function git(...args: string[]): string {
   return execFileSync('git', ['-c', 'user.name=usabl test', '-c', 'user.email=test@example.invalid', ...args], {
@@ -119,11 +121,16 @@ beforeEach(async () => {
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-local-files-')));
   outside = await realpath(await mkdtemp(join(tmpdir(), 'usabl-local-files-outside-')));
   process.chdir(repo);
+  out = [];
   const capture = ((chunk: string | Uint8Array) => {
     printed.push(String(chunk));
     return true;
   }) as typeof process.stdout.write;
-  vi.spyOn(process.stdout, 'write').mockImplementation(capture);
+  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+    out.push(String(chunk));
+    printed.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
   vi.spyOn(process.stderr, 'write').mockImplementation(capture);
 });
 
@@ -203,6 +210,44 @@ describe('the stored receipt and files git does not see', { timeout: REAL_PROCES
     const next = await stop();
     expect(next.stderr).not.toContain('not re-scanned');
     expect(next.scanned).toEqual(['home']);
+  });
+
+  it('checks again after an edit to a .env file whose name is in capitals', async () => {
+    await setUp({}, ['.ENV*', '.Env*']);
+    await write('.ENV.local', 'VITE_API=/one\n');
+    await write('.Env', 'VITE_MODE=a\n');
+    expect(await check()).toBe(0);
+    expect((await stop()).stderr.startsWith(FAST_PATH)).toBe(true);
+
+    await write('.Env', 'VITE_MODE=b\n');
+    expect(git('status', '--porcelain')).toBe('');
+    const next = await stop();
+    expect(next.stderr).not.toContain('not re-scanned');
+    expect(next.scanned).toEqual(['home']);
+  });
+
+  it('never answers from the receipt while a .env file is larger than the cap', async () => {
+    await setUp();
+    await writeFile(join(repo, '.env.big'), '');
+    await truncate(join(repo, '.env.big'), 4 * 1024 * 1024 * 1024);
+    expect(await check()).toBe(0);
+    const started = performance.now();
+    const next = await stop();
+    expect(performance.now() - started).toBeLessThan(REAL_PROCESS_BUDGET_MS);
+    expect(next.stderr).not.toContain('not re-scanned');
+    expect(next.scanned).toEqual(['home']);
+  });
+
+  it('binds no local files in a --ci run, so its Result holds no local files hash', async () => {
+    await setUp();
+    await write('.env.local', `token=${SECRET}\n`);
+    out = [];
+    expect(await main(['check', '--ci', '--trusted-ref', 'main', '--json'])).toBe(0);
+    const result = JSON.parse(out.join('')) as { verdict: string; receipt: Record<string, unknown> | null };
+    expect(result.verdict).toBe('verified');
+    expect(result.receipt).not.toBeNull();
+    expect(Object.hasOwn(result.receipt!, 'localFilesHash')).toBe(false);
+    expect(Object.hasOwn(result.receipt!, 'policyHash')).toBe(true);
   });
 
   it('never prints or stores what a bound file holds', async () => {

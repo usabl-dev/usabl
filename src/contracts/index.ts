@@ -1174,18 +1174,20 @@ export interface FsGlob {
   // sides as text, as it did before.
   readBytes?(path: string): Promise<StoredEntry | null>;
   // What is at a path the receipt binds, for a file git may not see. It never follows a link and
-  // never throws. The real reader and the fakes have it. A reader without it binds nothing the
-  // receipt can match, so a receipt minted or checked with it never verifies.
-  readLocalFile?(path: string): Promise<LocalFileRead>;
+  // never throws. A file larger than maxBytes is `other`, and its bytes are never read. The real
+  // reader and the fakes have it. A reader without it binds nothing: a receipt minted with it has no
+  // local files hash, and a receipt checked with it never verifies. A --ci run uses such a reader.
+  readLocalFile?(path: string, maxBytes: number): Promise<LocalFileRead>;
   glob(patterns: string[]): Promise<string[]>;
 }
 
 /**
  * What is at one path the receipt binds. A regular file carries the sha256 hash of its bytes and
- * never the bytes. `other` is anything usabl does not read as a file of the repository: a folder,
- * a symbolic link, a path below a link, a pipe, or a file it may not open.
+ * its size, never the bytes. `other` is anything usabl does not read as a file of the repository:
+ * a folder, a symbolic link, a path below a link, a pipe, a file it may not open, a file over the
+ * size cap, or a file that gave more bytes than its size said.
  */
-export type LocalFileRead = { kind: 'missing' } | { kind: 'file'; sha256: string } | { kind: 'other' };
+export type LocalFileRead = { kind: 'missing' } | { kind: 'file'; sha256: string; size: number } | { kind: 'other' };
 export interface CheckRunner {
   // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
   scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;

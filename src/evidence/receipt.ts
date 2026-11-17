@@ -342,10 +342,12 @@ export async function mintReceipt(
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
   const expandedGuardedPaths = await expandConfigGuardedSet(deps, config);
+  // A reader with no local file read, as a --ci run builds, binds no local files: the receipt has
+  // no hash, and a receipt with none never verifies. See withoutLocalFileBinding.
   const [sourceTree, policy, localFilesHash] = await Promise.all([
     args.sourceTree ?? deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
-    computeLocalFilesHash(deps, config),
+    deps.fs.readLocalFile === undefined ? Promise.resolve(null) : computeLocalFilesHash(deps, config),
   ]);
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
@@ -353,7 +355,7 @@ export async function mintReceipt(
     baseRevision: args.baseRevision ?? null,
     historyHead: args.historyHead ?? null,
     policyHash: policy,
-    localFilesHash,
+    ...(localFilesHash === null ? {} : { localFilesHash }),
     runnerVersion: deps.runnerVersion,
     scannerVersions: deps.scannerVersions,
     surfaces: sortBy([...args.surfaces], (s) => s),
