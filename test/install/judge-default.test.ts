@@ -1,9 +1,9 @@
 /**
  * `usabl install --ci` with no other flag writes the trusted judge workflow: build-app builds the
  * pull request with no secret, and usabl-scan judges the build in the isolated browser without
- * running head code. The older shape, which builds head code in the job that writes the Result
- * and which only the engine's own repository still runs, is not something install can write: no
- * flag selects it, and its rule is never embedded in a generated workflow.
+ * running head code. The older shape, which built head code in the job that wrote the Result, is
+ * not something install can write: no flag selects it, and its rule is never embedded in a
+ * generated workflow.
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { load } from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../../src/cli.js';
 import { findCliCommand } from '../../src/surfaces/cli-commands.js';
-import { ENGINE_SELF_GATE_SCRIPT, REQUIRED_GATE_SCRIPT, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
+import { REQUIRED_GATE_SCRIPT, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
 
 let workspace: string;
 let originalCwd: string;
@@ -40,9 +40,8 @@ describe('install --ci writes the trusted judge by default', () => {
     expect(Object.keys(jobs)).toEqual(['usabl-engine', 'build-app', 'usabl-scan', 'gate-comment', 'usabl-policy', 'usabl-required']);
     expect(written).toContain('check --ci --trusted-ref "${BASE_SHA}" --isolated-browser');
     expect(written).toContain(REQUIRED_GATE_SCRIPT.split('\n')[0]);
-    // The older rule reads the verdict from an artifact. Its distinctive line never appears.
+    // The older rule read the verdict from an artifact. Its distinctive line never appears.
     expect(written).not.toContain('the accessibility verdict from the Result artifact is not a pass');
-    expect(ENGINE_SELF_GATE_SCRIPT).toContain('the accessibility verdict from the Result artifact is not a pass');
   });
 
   it('offers no install flag that selects another gate shape', () => {

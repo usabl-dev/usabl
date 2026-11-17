@@ -4370,11 +4370,12 @@ rule for any such file a pull request could add, names valid owners (`@user`, `@
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
 reads as unknown. Only an organization-required workflow takes the
 workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
-and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier
-three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it has no app to
-build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
-`usabl doctor` reads the engine's own gate as `drifted`. That is the expected reading for the
-one repository that is its own engine. The required status check named in branch protection is
+and "CI trust boundary") for what each job holds. The engine's own repo checks in the generated
+gate, byte for byte, pinned to a commit on main, so `usabl doctor` reads it as `wired`. Its
+judge serves `fixtures/live` (repository variables `USABL_APP_BUILD_COMMAND=true` and
+`USABL_APP_BUILD_DIR=fixtures/live`), and its config names one screen, `users`. The pin moves
+only to a commit on main, by the rule in `docs/threat-model.md`, and the `check` job in
+`usabl.yml` runs `scripts/check-engine-pin.ts` to hold it there. The required status check named in branch protection is
 `usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is the
 one the gate's trigger names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
 
@@ -4385,8 +4386,7 @@ check: on `pull_request` all five must be `success`; on `pull_request_review` `b
 which only the judge's own steps can set, so code that replaces artifacts in the run cannot
 change it. Anything else, an unknown event, a cancelled job, or any verdict that is not exactly
 `pass`, blocks. The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded
-verbatim in both generated workflows; the engine's own gate embeds `ENGINE_SELF_GATE_SCRIPT`, its
-three-job rule.
+verbatim in both generated workflows and in the engine's own gate.
 
 **The judge's browser.** `check --isolated-browser` reads the origins the browser may reach from
 the trusted ref: the `appBaseUrl` origin, the `docsBaseUrl` origin when `usabl.docs.json` exists,
