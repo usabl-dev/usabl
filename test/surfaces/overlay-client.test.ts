@@ -3818,7 +3818,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     const page = await mount(
       projectOverlay(
         result({
-          summary: 'regression: 1 accessibility barrier found, 2 checks undecided, needs a person to review',
+          summary: 'regression: 1 accessibility barrier found, 2 checks undecided, need a person to review',
           findings: [
             finding({ whatUserExperiences: 'Failing focus.' }),
             finding({ rule: 'color-contrast', layer: 'axe', confidence: 'unverified', whatUserExperiences: 'Undecided one.', elementKey: 'clusters|color-contrast|a' }),
@@ -3833,13 +3833,13 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     expect(
       await panel
         .getByText(
-          'On this screen: 1 accessibility barrier found, 2 checks undecided, needs a person to review. Fix the accessibility barrier and review the checks first.',
+          'On this screen: 1 accessibility barrier found, 2 checks undecided, need a person to review. Fix the accessibility barrier and review the checks first.',
           { exact: true },
         )
         .isVisible(),
     ).toBe(true);
     expect(await blockingCountText(page)).toBe(
-      '1 accessibility barrier found, 2 checks undecided, needs a person to review',
+      '1 accessibility barrier found, 2 checks undecided, need a person to review',
     );
 
     await page.context().close();

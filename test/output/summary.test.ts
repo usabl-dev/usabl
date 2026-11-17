@@ -390,7 +390,7 @@ describe('formatSummary', () => {
       expect(out).not.toContain(BLOCKING_HEADING);
     });
 
-    it('calls a new finding usabl could not verify a barrier', () => {
+    it('lists a new finding usabl could not verify as blocking work, under the check heading', () => {
       // The gate cannot call a run verified while a new finding is unverified, so this one is work.
       // It is listed as a check a person needs to review, not as an accessibility barrier found.
       const out = formatSummary(
@@ -816,7 +816,7 @@ describe('formatSummary splits the blocking count by confidence', () => {
       finding('unverified', 'aria-allowed-attr'),
     ]);
     const found = lines.indexOf(`${BLOCKING}2 accessibility barriers found`);
-    const undecided = lines.indexOf(`${BLOCKING}2 checks undecided, needs a person to review`);
+    const undecided = lines.indexOf(`${BLOCKING}2 checks undecided, need a person to review`);
 
     expect(found).toBeGreaterThan(1);
     expect(undecided).toBeGreaterThan(found);
@@ -836,7 +836,7 @@ describe('formatSummary splits the blocking count by confidence', () => {
 
     expect(headings).toEqual([
       `${BLOCKING}60 accessibility barriers found`,
-      `${BLOCKING}60 checks undecided, needs a person to review`,
+      `${BLOCKING}60 checks undecided, need a person to review`,
     ]);
     for (const line of headings) {
       expect(line.length).toBeLessThanOrEqual(80);

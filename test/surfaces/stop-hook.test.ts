@@ -1135,10 +1135,15 @@ describe('evaluateStopDecision names undecided checks apart from accessibility b
  * it, and not to change code to make it pass or to mark it reviewed itself.
  */
 describe('evaluateStopDecision gives undecided checks the review step', () => {
-  const BLOCK_REVIEW =
-    'Each check undecided below needs a person to review it, so tell the user. Do not change code to make an undecided check pass, and do not mark one as reviewed yourself.';
-  const ACTIVE_REVIEW =
-    'Tell the user that each check usabl could not decide needs a person to review it. Do not change code to make an undecided check pass, and do not mark one as reviewed yourself.';
+  // The rule names the concrete ways an agent could clear a check on its own, so none is left open.
+  const RULE =
+    'Do not change code to make an undecided check pass, and do not mark one as reviewed yourself, for example by adding a waiver or recording it in the evidence floor.';
+  const BLOCK_REVIEW = `Each check undecided below needs a person to review it, so tell the user. ${RULE}`;
+  const ACTIVE_REVIEW = `Tell the user that each check usabl could not decide needs a person to review it. ${RULE}`;
+  // When undecided checks are the only cause, the step is the action alone: the verdict line above
+  // it already says the change was checked and some checks could not decide.
+  const BLOCK_ONLY = `Next: tell the user that each check undecided below needs a person to review it. ${RULE}`;
+  const ACTIVE_ONLY = `Next: tell the user that each check usabl could not decide needs a person to review it. ${RULE}`;
   const CHECKED = 'usabl checked this change, but some checks could not decide.';
 
   const item = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
@@ -1175,7 +1180,7 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
     it('sends only undecided checks to a person and never to Not evaluated', () => {
       const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})] }, false);
 
-      expect(next).toBe(`Next: ${CHECKED} ${BLOCK_REVIEW}`);
+      expect(next).toBe(BLOCK_ONLY);
       expect(next).not.toContain('Not evaluated');
     });
 
@@ -1209,7 +1214,7 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
 
       expect(next).not.toContain('Not evaluated');
       expect(next).toContain('tell the user that guarded policy files changed');
-      expect(next).toContain(CHECKED);
+      expect(next).not.toContain(CHECKED);
       expect(next.endsWith(BLOCK_REVIEW)).toBe(true);
     });
 
@@ -1242,7 +1247,7 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
     it('sends only undecided checks to a person and never to Not evaluated', () => {
       const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({})] }, true);
 
-      expect(next).toBe(`Next: ${CHECKED} ${ACTIVE_REVIEW}`);
+      expect(next).toBe(ACTIVE_ONLY);
     });
 
     it('asks for the barriers to be fixed and the undecided checks to be reviewed', () => {

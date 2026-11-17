@@ -282,7 +282,7 @@ describe('verdict summary counts only what blocks', () => {
       } else {
         sawBlocked = true;
         expect(out.summary).toMatch(
-          /\d+ accessibility barriers? found|\d+ checks? undecided, needs a person to review|\d+ gap\(s\)|\d+ unmapped file\(s\)/,
+          /\d+ accessibility barriers? found|1 check undecided, needs a person to review|\d+ checks undecided, need a person to review|\d+ gap\(s\)|\d+ unmapped file\(s\)/,
         );
       }
     }
@@ -333,7 +333,7 @@ describe('verdict summary splits the blocking count by confidence', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     expect(out.summary).toBe(
-      'regression: 2 accessibility barriers found, 2 checks undecided, needs a person to review',
+      'regression: 2 accessibility barriers found, 2 checks undecided, need a person to review',
     );
   });
 
