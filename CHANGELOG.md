@@ -412,7 +412,12 @@
   leading `/`, and the other forms that could leave the repository. Effect: every receipt written
   before this stops matching once, so the first stop after the upgrade runs a full check. Other
   git-ignored files the app reads stay invisible to the run and the receipt until they are listed
-  in `localFiles`.
+  in `localFiles`, and so does a `.env` file outside the root and the app folders. A `.env` file is
+  found whatever the case of its name, such as `.ENV.local`. Each bound file has a size cap, read
+  before any byte: 1 MiB for a `.env` file and 16 MiB for a listed file or the config, with at most
+  64 MiB read in all. A file over its cap, or one that grows while it is read, never matches, so a
+  sparse file of any size cannot make a stop run past its timeout. A `usabl check --ci` run binds
+  no local files, so a CI Result carries no hash of a secret in `.env`.
 - A Stop hook stop with a starting commit, and `usabl check --branch-scope`, read policy at that
   commit, as CI reads it at the base of the pull request. The stop runs the guard against HEAD and
   against the starting commit, before the receipt fast path, and both pass the starting commit to
