@@ -954,8 +954,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       scopeNote = scope.note;
     }
 
+    // With a starting commit, policy is read and guarded at that commit, as the Stop hook and CI
+    // read it, so a policy change committed on the branch is a guarded change here too. Deps are
+    // still built without a trusted ref, so a saved session still signs the scan in.
+    const policyRef = opts.trustedRef ?? baseRevision;
     const ran = await run(deps, config, {
-      ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+      ...(policyRef === null ? {} : { trustedRef: policyRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
       ...(baseRevision === null ? {} : { baseRevision }),
     });
@@ -984,7 +988,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return projected.exitCode;
     }
     // A local run has no pull request to approve on, so it also says how to clear the state here.
-    const nextSteps = opts.trustedRef === null ? localApprovalNextSteps(result) : [];
+    const nextSteps =
+      opts.trustedRef === null
+        ? localApprovalNextSteps(result, baseRevision === null ? 'last-commit' : 'starting-commit')
+        : [];
     process.stdout.write([projected.text, ...nextSteps].join('\n') + '\n');
     return projected.exitCode;
   } finally {

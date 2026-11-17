@@ -33,6 +33,28 @@ export interface HookContext {
   // The check the advice names. A stop with a starting commit names usabl check --branch-scope,
   // because only its receipt answers such a stop. Absent means usabl check. See checkCommandFor.
   checkCommand?: CheckCommand;
+  // True when the stop compared guarded policy with the commit where the branch left the trusted
+  // branch, as CI compares it with the base of the pull request. A guarded-file message then says
+  // that a file committed on the branch still counts. Absent means the last commit was the
+  // reference.
+  policyFromStartingCommit?: boolean;
+}
+
+/**
+ * What a guarded-file message adds when policy was compared with the starting commit. Without it,
+ * a reader who committed the file would take "changed" to mean uncommitted, and commit again.
+ */
+export const POLICY_FROM_STARTING_COMMIT =
+  'usabl compared guarded policy files with the commit where this branch left the trusted branch, as CI compares them with the base of the pull request. ' +
+  'A guarded file committed on this branch still counts as changed, and CI will ask for a code owner approval for it. ' +
+  'To clear this without approval, put the file back as it is at that commit.';
+
+/** The guarded-file lines for a stop message, with the starting commit line when it applies. */
+function stopGuardedFileLines(result: Result, ctx: HookContext): { scaffold: string[]; piece: string | null } {
+  const guarded = guardedFileLines(result);
+  return ctx.policyFromStartingCommit === true
+    ? { scaffold: [...guarded.scaffold, POLICY_FROM_STARTING_COMMIT], piece: guarded.piece }
+    : guarded;
 }
 
 // The note an allow line carries when the session drift comparison did not run.
@@ -182,7 +204,7 @@ function summaryPiece(result: Result): string {
  * length. Cutting could remove the single closing marker and hand the model an unterminated
  * block of untrusted text.
  */
-function buildBlockMessage(result: Result, config?: UsablConfig): string {
+function buildBlockMessage(result: Result, ctx: HookContext, config?: UsablConfig): string {
   const scaffold = [verdictLine(result, 'NOT verified. ')];
   const budget = resolveNoiseBudgetDefault(config);
   // The barriers this block is about are the ones the gate blocks on, by the gate's own rule.
@@ -195,7 +217,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   }
   const pieces: string[] = [summaryPiece(result)];
   if (result.verdict === 'approval_required') {
-    const guarded = guardedFileLines(result);
+    const guarded = stopGuardedFileLines(result, ctx);
     scaffold.push(...guarded.scaffold);
     if (guarded.piece !== null) {
       pieces.push(guarded.piece);
@@ -309,7 +331,8 @@ function divergedGuardedPaths(result: Result, ctx: HookContext): string[] {
  * holds the stop for approval whatever the exit code. The verdict line is the run's own, the
  * guarded files go inside the frame, and the block lets one continuation through like every other.
  */
-function divergedPolicyDecision(result: Result, diverged: string[], continuation: boolean): StopDecision {
+function divergedPolicyDecision(result: Result, diverged: string[], ctx: HookContext): StopDecision {
+  const continuation = ctx.stopHookActive;
   const verdict = describeVerdict(result);
   const opening =
     `${formatVerdictWord(verdict)}: NOT verified. ` +
@@ -319,7 +342,7 @@ function divergedPolicyDecision(result: Result, diverged: string[], continuation
   const steps = continuation ? continuationSteps('usabl check') : BLOCK_STEPS;
   const scaffold = [opening, steps.approvalOnly];
   const pieces = [summaryPiece(result)];
-  const guarded = guardedFileLines({ ...result, dirtyGuardedPaths: diverged });
+  const guarded = stopGuardedFileLines({ ...result, dirtyGuardedPaths: diverged }, ctx);
   scaffold.push(...guarded.scaffold);
   if (guarded.piece !== null) {
     pieces.push(guarded.piece);
@@ -349,7 +372,7 @@ export function evaluateStopDecision(
   // own message, and an unrecognized verdict blocks below, so this catches every other state.
   const diverged = divergedGuardedPaths(safe, ctx);
   if (diverged.length > 0) {
-    return divergedPolicyDecision(safe, diverged, ctx.stopHookActive);
+    return divergedPolicyDecision(safe, diverged, ctx);
   }
 
   if (safe.verdict === 'verified') {
@@ -469,7 +492,7 @@ export function evaluateStopDecision(
     }
     const pieces = [summaryPiece(safe)];
     if (safe.verdict === 'approval_required') {
-      const guarded = guardedFileLines(safe);
+      const guarded = stopGuardedFileLines(safe, ctx);
       scaffold.push(...guarded.scaffold);
       if (guarded.piece !== null) {
         pieces.push(guarded.piece);
@@ -491,6 +514,6 @@ export function evaluateStopDecision(
 
   return {
     block: true,
-    message: buildBlockMessage(safe, config),
+    message: buildBlockMessage(safe, ctx, config),
   };
 }
