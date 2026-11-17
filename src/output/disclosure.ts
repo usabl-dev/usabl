@@ -199,7 +199,11 @@ export function formatBlockingSplit(found: number, undecided: number): string {
     parts.push(found + ' accessibility barrier' + (found === 1 ? '' : 's') + ' found');
   }
   if (undecided > 0) {
-    parts.push(undecided + ' check' + (undecided === 1 ? '' : 's') + ' undecided, needs a person to review');
+    parts.push(
+      undecided === 1
+        ? '1 check undecided, needs a person to review'
+        : undecided + ' checks undecided, need a person to review',
+    );
   }
   return parts.join(', ');
 }

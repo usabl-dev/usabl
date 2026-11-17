@@ -754,10 +754,10 @@ function approvalSummary(
  *
  * The blocking count is printed in two parts, because the two kinds of blocking finding mean
  * different things to a person. A new failing finding is "N accessibility barrier(s) found". A new
- * finding usabl could not decide, such as an axe incomplete result, is "N check(s) undecided, needs
- * a person to review". The line used to print both as one "N blocking finding(s)", so a run held
- * back only by a check axe could not decide read as one accessibility barrier found, when nothing
- * had failed. Each part is printed only when its count is above zero, failures first. The split
+ * finding usabl could not decide, such as an axe incomplete result, is "1 check undecided, needs a
+ * person to review" or "N checks undecided, need a person to review". Both used to print as one "N
+ * blocking finding(s)", so a run held back only by a check axe could not decide read as one
+ * accessibility barrier found. Each part is printed only when its count is above zero. The split
  * changes words only: the verdict is still decided from the whole blocking set. The surfaces print
  * the same words through `formatBlockingSplit` in `src/output/disclosure.ts`, pinned against this
  * line by a test that drives the gate.
@@ -801,7 +801,7 @@ function verdictSummary(
     clauses.push(`${found} accessibility barrier${found === 1 ? '' : 's'} found`);
   }
   if (undecided > 0) {
-    clauses.push(`${undecided} check${undecided === 1 ? '' : 's'} undecided, needs a person to review`);
+    clauses.push(undecided === 1 ? '1 check undecided, needs a person to review' : `${undecided} checks undecided, need a person to review`);
   }
   if (clauses.length === 0) {
     clauses.push('nothing blocking');
