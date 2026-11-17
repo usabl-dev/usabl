@@ -61,8 +61,8 @@ npm run docs:badges       # when you touch the README or the version
 Report the real output, including counts. If a test times out, run it again and report
 both runs.
 
-`npm run test:sensitivity` runs the sensitivity catalog in real Chromium. CI does not run it
-yet, so run it by hand until the workflow gains a job for it.
+`npm run test:sensitivity` runs the sensitivity catalog in real Chromium. CI runs it in the
+`sensitivity-chromium` job of `.github/workflows/usabl.yml`.
 
 ## Hard rules
 

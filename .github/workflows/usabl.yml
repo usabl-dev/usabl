@@ -40,6 +40,14 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The self gate judges every pull request with the engine commit pinned in usabl-gate.yml.
+      # That commit must be one main has held, so the gate never runs engine code no merge put on
+      # main. The checkout above has full history; this fetch makes sure origin/main is current.
+      - name: Engine pin is a commit on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          npx vite-node scripts/check-engine-pin.ts origin/main
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
@@ -113,3 +121,32 @@ jobs:
 
       - name: Real Chromium integration
         run: npm run test:integration
+
+  # The sensitivity catalog in real Chromium. Its pages are served on loopback by the tests
+  # themselves, so it needs no demo app.
+  sensitivity-chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Ubuntu 24.04 runners stop unprivileged user namespaces through AppArmor, and Chromium's
+      # sandbox needs them. Without this the sensitivity tests scan with the sandbox off.
+      - name: Let Chromium start its sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Real Chromium sensitivity
+        run: npm run test:sensitivity
