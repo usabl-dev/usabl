@@ -569,10 +569,33 @@ function touchedScreenReport(result: Result): string[] {
  * change, and the comment there says so. A local run has no pull request, and its most common
  * cause is a new user whose drafted policy files are not committed yet, so it says what clears the
  * state and what the run still reported. It reads the Result and never changes the verdict.
+ *
+ * `policyRef` is what the run compared policy with. `usabl check --branch-scope` compares it with
+ * the commit where the branch left the trusted branch, as CI does, so a committed file still
+ * counts as changed there, and committing it is not the way out.
  */
-export function localApprovalNextSteps(result: Result): string[] {
+export function localApprovalNextSteps(
+  result: Result,
+  policyRef: 'last-commit' | 'starting-commit' = 'last-commit',
+): string[] {
   if (result.verdict !== 'approval_required') {
     return [];
+  }
+  if (policyRef === 'starting-commit') {
+    const lines = [
+      '  next: usabl compared these guarded files with the commit where this',
+      '    branch left the trusted branch, as CI compares them with the base of',
+      '    the pull request. A file committed on this branch still counts as',
+      '    changed, so committing it again does not clear this. On the pull',
+      '    request, a code owner approves it. If the change was unintended, put',
+      '    the file back as it is at that commit.',
+    ];
+    if (result.coverage.nothingToCheck) {
+      lines.push('  accessibility report: none yet. No UI file changed, so no screen was', '    scanned.');
+    } else if (result.screens.length > 0) {
+      lines.push(...touchedScreenReport(result));
+    }
+    return lines;
   }
   const lines = [
     '  next: usabl trusts policy files only after they are committed.',

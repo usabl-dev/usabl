@@ -828,6 +828,11 @@ type StopScope =
  * What this stop checks: what CI will check. The scope comes from resolveBranchScope, the same
  * function `usabl check --branch-scope` uses, so that check and a stop list the same changes and
  * bind the same starting commit. See stop-hook-scope.ts.
+ *
+ * With a starting commit, the run reads policy at that commit, as CI reads it at the base of the
+ * pull request: the guard compares the working tree with it, and the floor, the waivers, and a
+ * changed config are read from it. A policy change committed on the branch is then a guarded
+ * change, as it is in CI. Without one, the run keeps the last commit as the reference.
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
@@ -840,7 +845,9 @@ async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopSc
   return {
     kind: 'scan',
     runOptions:
-      scope.changedFiles === undefined ? {} : { changedFiles: scope.changedFiles, baseRevision: scope.baseRevision },
+      scope.changedFiles === undefined || scope.baseRevision === null
+        ? {}
+        : { changedFiles: scope.changedFiles, baseRevision: scope.baseRevision, trustedRef: scope.baseRevision },
     baseRevision: scope.baseRevision,
     note: scope.note,
   };
@@ -1059,6 +1066,15 @@ export async function runStopHook(
       return 0;
     }
     checkCommand = checkCommandFor(scope.baseRevision);
+    // The session pins and the guard above compare with the last commit, so a policy change
+    // committed on the branch before the first stop passes both. CI compares policy with the base
+    // of the pull request, so the stop also compares it with the starting commit. A file found
+    // here is a guarded change: it skips the receipt fast path and blocks for approval.
+    const startingCommit = scope.baseRevision;
+    if (startingCommit !== null) {
+      const sinceStart = await guarded(() => checkGuard(guardDeps, startingCommit));
+      dirtyGuardedPaths = [...new Set([...dirtyGuardedPaths, ...sinceStart])].sort();
+    }
 
     let receiptNotUsed: string | null = null;
     if (dirtyGuardedPaths.length === 0) {
@@ -1096,6 +1112,7 @@ export async function runStopHook(
       stopHookActive: input.stopHookActive,
       guardDivergedPaths: dirtyGuardedPaths,
       checkCommand,
+      ...(startingCommit === null ? {} : { policyFromStartingCommit: true }),
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);

@@ -18,7 +18,8 @@ import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
-const state = vi.hoisted(() => ({ scanned: [] as string[] }));
+// What the fake check runner records, and the drafts it reports for each screen id.
+const state = vi.hoisted(() => ({ scanned: [] as string[], drafts: {} as Record<string, unknown[]> }));
 
 vi.mock('../../src/deps/build.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/deps/build.js')>();
@@ -34,7 +35,8 @@ vi.mock('../../src/deps/build.js', async (importOriginal) => {
         checkRunner: {
           scan: async (screen) => {
             state.scanned.push(screen.id);
-            return fake.checkRunner.scan(screen);
+            const scanned = await fake.checkRunner.scan(screen);
+            return { ...scanned, drafts: (state.drafts[screen.id] ?? []) as typeof scanned.drafts };
           },
         },
       };
@@ -92,22 +94,38 @@ async function check(...args: string[]): Promise<{ code: number; stdout: string;
   return { code, stdout: stdout.join(''), stderr: stderr.join(''), scanned: [...state.scanned] };
 }
 
-async function stop(): Promise<{ stderr: string; scanned: string[] }> {
+async function stop(): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
   const out: string[] = [];
+  const said: string[] = [];
   state.scanned = [];
   const ports = {
     ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
     pins: memoryPinStore(),
-    stdoutWrite: async () => {},
+    stdoutWrite: async (text: string) => {
+      said.push(text);
+    },
     stderrWrite: async (text: string) => {
       out.push(text);
     },
   };
   await runStopHookFromStdin('{}', ports);
-  return { stderr: out.join(''), scanned: [...state.scanned] };
+  return { stderr: out.join(''), stdout: said.join(''), scanned: [...state.scanned] };
+}
+
+// The block a stop sent, or null when it let the stop through.
+function blockReason(stopped: { stdout: string }): string | null {
+  for (const line of stopped.stdout.split('\n')) {
+    if (line.trim().length === 0) continue;
+    const parsed = JSON.parse(line) as { decision?: string; reason?: string };
+    if (parsed.decision === 'block') {
+      return parsed.reason ?? '';
+    }
+  }
+  return null;
 }
 
 beforeEach(async () => {
+  state.drafts = {};
   originalCwd = process.cwd();
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-branch-scope-')));
   git('init', '-q', '-b', 'main');
@@ -293,5 +311,188 @@ describe('usabl check --branch-scope', { timeout: REAL_PROCESS_BUDGET_MS }, () =
     const code = await main(['brief', '--branch-scope']);
     expect(code).toBe(2);
     expect(stderr.join('')).toContain('--branch-scope');
+  });
+});
+
+// A barrier on the home screen, as the fake check runner reports it.
+const homeBarrier = {
+  rule: 'color-contrast',
+  layer: 'axe',
+  severity: 'serious',
+  evidenceClass: 'deterministic',
+  screenId: 'home',
+  elementPath: 'button',
+  elementName: 'Save',
+  role: 'button',
+  whatUserExperiences: 'Save is hard to read',
+  why: 'contrast too low',
+  fix: 'Increase contrast',
+  evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
+  confidence: 'fail',
+};
+
+// Live at the fake clock (2026-01-01), so a run that reads it waives the barrier.
+const homeWaiver = {
+  rule: 'color-contrast',
+  surface: 'home',
+  scope: '*',
+  reason: 'tracked',
+  owner: 'team',
+  approvedBy: 'owner',
+  created: '2025-12-01T00:00:00.000Z',
+  expires: '2026-06-01T00:00:00.000Z',
+};
+
+// The policy a stop with a starting commit reads is the policy at that commit, as CI reads the
+// policy at the pull request's base. A guarded file that differs from it, committed on the branch
+// or not, needs approval, so the stop and the check say NOT verified and name the file.
+describe('policy changed on the branch since the starting commit', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  function expectApprovalBlock(stopped: { stdout: string; stderr: string }, file: string): void {
+    const reason = blockReason(stopped);
+    expect(reason).not.toBeNull();
+    expect(reason).toContain('NOT verified');
+    expect(reason).toContain('APPROVAL REQUIRED');
+    expect(reason).toContain(`guarded files: ${file}`);
+    expect(reason).toContain('code owner');
+    expect(reason).toContain('A guarded file committed on this branch still counts as changed');
+    expect(stopped.stderr).not.toContain('VERIFIED (exit 0');
+  }
+
+  async function expectApprovalCheck(file: string): Promise<void> {
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(2);
+    expect(ran.stdout).toContain(file);
+    expect(ran.stdout).not.toContain('then commit them');
+    expect(ran.stdout).toContain('with the commit where this');
+    expect(ran.stdout).toContain('branch left the trusted branch');
+    expect(ran.stdout).toContain('code owner');
+    await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+  }
+
+  it('a waiver committed before the first stop is not taken as policy', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    state.drafts = { home: [homeBarrier] };
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the app and waive its barrier');
+
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual(['home']);
+    expectApprovalBlock(stopped, '.usabl-waivers.json');
+    // The waiver is read at the starting commit, where it does not exist, so the barrier counts.
+    expect(blockReason(stopped)).toContain('color-contrast');
+    await expectApprovalCheck('.usabl-waivers.json');
+  });
+
+  it('a floor entry committed before the first stop is not taken as policy', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    state.drafts = { home: [homeBarrier] };
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    expect(await main(['baseline'])).toBe(0);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'accept the barrier in the floor');
+    expect(git('show', '--name-only', '--format=', 'HEAD').trim()).toBe('.usabl-evidence.json');
+
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual(['home']);
+    expectApprovalBlock(stopped, '.usabl-evidence.json');
+    expect(blockReason(stopped)).toContain('color-contrast');
+    await expectApprovalCheck('.usabl-evidence.json');
+  });
+
+  it('a narrower uiFileGlobs committed before the first stop does not read as nothing to check', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('usabl.config.json', JSON.stringify({ ...config, uiFileGlobs: ['src/Other.tsx'] }, null, 2) + '\n');
+    git('commit', '-q', '-am', 'change the app and narrow the UI globs');
+
+    const stopped = await stop();
+    // The scan plans from the config at the starting commit, so the changed screen is checked.
+    expect(stopped.scanned).toEqual(['home']);
+    expectApprovalBlock(stopped, 'usabl.config.json');
+    expect(stopped.stderr).not.toContain('NO VERDICT: IDLE');
+    await expectApprovalCheck('usabl.config.json');
+  });
+
+  it('a routes edit committed before the first stop is not taken as policy', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('usabl.routes.json', JSON.stringify({ routes: [] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the app and the routes');
+
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual(['home']);
+    expectApprovalBlock(stopped, 'usabl.routes.json');
+    await expectApprovalCheck('usabl.routes.json');
+  });
+
+  it('a waiver already on the trusted branch is policy, and the stop verifies', async () => {
+    state.drafts = { home: [homeBarrier] };
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'waive the barrier on main');
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual(['home']);
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.stderr.startsWith('VERIFIED')).toBe(true);
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(0);
+    expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
+  });
+
+  it('a branch that sets usabl up is a guarded change until the config is on the trusted branch', async () => {
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'main has no usabl config yet');
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'set usabl up');
+
+    const stopped = await stop();
+    expectApprovalBlock(stopped, 'usabl.config.json');
+  });
+
+  it('a waiver changed only in the working tree is still reported', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    state.drafts = { home: [homeBarrier] };
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+
+    const stopped = await stop();
+    expectApprovalBlock(stopped, '.usabl-waivers.json');
+    await expectApprovalCheck('.usabl-waivers.json');
+  });
+
+  // With no trusted branch there is no starting commit, so policy is read from the working tree
+  // and compared with the last commit, as before. A committed waiver is then policy.
+  it('keeps the last commit as the policy reference when there is no trusted branch', async () => {
+    git('switch', '-q', '-c', 'feature');
+    state.drafts = { home: [homeBarrier] };
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'waive the barrier');
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual(['home']);
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.stderr.startsWith('VERIFIED')).toBe(true);
+    expect(stopped.stderr).toContain('Note: usabl found no trusted branch to compare this branch with');
   });
 });
