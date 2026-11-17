@@ -355,6 +355,19 @@
 
 ### Changed
 
+- This repository's own gate is now the workflow `usabl install --ci` writes, byte for byte, with
+  the engine pinned to `usabl-dev/usabl` commit `b18fdb25e47dbb09aa12e315ea02a2401bcac08c` on main.
+  Before, it was a hand-written three-job gate that built and ran the pull request's own engine in
+  the job that wrote the Result, with a write token and a shared npm cache, and its config named a
+  fixture app that is not in the tree. Gate effect for this repository: every pull request is
+  judged by the pinned engine, which the pull request cannot change. The judge serves
+  `fixtures/live` and checks one screen, `users` at `/users-screen.html`, so a change to
+  `fixtures/live/users-screen.html` or to a dependency is scanned. A change under `src/` reads
+  "nothing to check" for this gate; the `check` job tests the engine. The pin moves only to a
+  commit on main, in a pull request that changes nothing else in `.github/workflows/`, and the
+  `check` job now fails when the pin is not an ancestor of `origin/main`. The history workflow is
+  not installed here. CI also runs `npm run test:sensitivity`, in a new `sensitivity-chromium` job.
+  `ENGINE_SELF_GATE_SCRIPT`, the old gate's rule, is removed from `src/install/ci.ts`.
 - A requirement with `approved: false` no longer blocks, whatever its kind. Before, `approved` was
   not read on the check path: a content, flow, or voice requirement with `approved: false` blocked
   like an approved one, and a check of it that could not run was a coverage gap. Now its findings
