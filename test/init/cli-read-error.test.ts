@@ -12,6 +12,10 @@ import { main } from '../../src/cli.js';
 
 const ESC = '\u001b';
 const BEL = '\u0007';
+const RLO = '‮';
+
+// The bidirectional controls: the embeddings, overrides, and isolates, and the marks.
+const BIDI_CONTROL = /[‎‏‪-‮⁦-⁩]/;
 
 // Any C0 or C1 control character other than the line break that separates printed lines.
 const RAW_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/;
@@ -63,5 +67,29 @@ describe('usabl init --docs when a file read fails', () => {
     expect(printed).toContain('ELOOP');
     expect(printed).toContain('loop<U+001B>]0;owned<U+0007>.adoc');
     expect(RAW_CONTROL.test(printed)).toBe(false);
+  });
+
+  it('strips a right-to-left override from the path, so the printed path cannot read as another path', async () => {
+    // U+202E makes the terminal draw the rest of the line in reverse.
+    const name = `loop${RLO}cod.adoc`;
+    await symlink(name, join(workspace, 'titles/guide', name));
+    await writeFile(join(workspace, 'titles/guide/master.adoc'), `= Guide\ninclude::${name}[]\n`);
+
+    expect(await main(['init', '--docs'])).toBe(2);
+    const printed = stderr.join('');
+    expect(printed).toContain('ELOOP');
+    expect(printed).not.toContain(RLO);
+    expect(BIDI_CONTROL.test(printed)).toBe(false);
+  });
+
+  it('prints the whole path of a long read error, with no length cap', async () => {
+    const target = `${RLO}${'a'.repeat(300)}.adoc`;
+    await writeFile(join(workspace, 'titles/guide/master.adoc'), `= Guide\ninclude::${target}[]\n`);
+
+    expect(await main(['init', '--docs'])).toBe(2);
+    const printed = stderr.join('');
+    expect(printed).toContain('ENAMETOOLONG');
+    expect(printed).toContain(`${'a'.repeat(300)}.adoc`);
+    expect(printed).not.toContain(RLO);
   });
 });
