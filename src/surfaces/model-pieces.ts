@@ -235,6 +235,7 @@ export function barrierLines(
             `experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`,
             `fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`,
           ],
+          ...(undecided ? { undecided: true } : {}),
         },
       ],
       // One barrier is the whole list, so there is no count to disclose beside it.
@@ -257,6 +258,8 @@ export function barrierLines(
         `experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
         `fix (${n}): ${boundField(fixOrAbsence(group.representative), 'fix')}`,
       ],
+      // Carried so the note that counts left-out groups names them by kind.
+      ...(undecided ? { undecided: true } : {}),
     };
   });
   const undecidedGroups = view.groups.filter(isUndecided).length;
