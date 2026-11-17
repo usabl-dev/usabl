@@ -947,6 +947,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
         { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/clusters.tsx'] },
         { id: 'hash-clusters', url: 'http://127.0.0.1:5173/#/clusters', files: ['src/hash.tsx'] },
         { id: 'account', url: 'http://127.0.0.1:5173/account', files: ['src/account.tsx'] },
+        { id: 'tab-panel', url: 'http://127.0.0.1:5173/sets-tab-hash-on-focus', files: ['src/tabs.tsx'], reachedWhen: 'main h1' },
       ],
       guardedPaths: [],
     };
@@ -1036,8 +1037,17 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage holds a labele
     expect(result.gaps[0]?.reason).toContain('/login');
   });
 
-  it('keeps a page covered when a tab panel sets a plain fragment while the checks run', async () => {
+  // With no reachedWhen selector measured after the checks, only the fragment can show that an app
+  // that routes with plain fragments moved, so a tab panel hash is a gap. A screen whose selector is
+  // measured again stays covered: the selector tells a route apart.
+  it('is not_covered when a tab panel sets a plain fragment on a screen with no selector', async () => {
     const result = await checkAt(`http://127.0.0.1:${port}/sets-tab-hash-on-focus`, { screenId: 'moving', expectedUrl: '/sets-tab-hash-on-focus' });
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:moving']);
+  });
+
+  it('keeps a page covered when a tab panel sets a plain fragment on a screen whose selector holds', async () => {
+    const result = await checkAt(`http://127.0.0.1:${port}/sets-tab-hash-on-focus`, { screenId: 'tab-panel' });
     expect(result.gaps).toEqual([]);
     expect(result.verdict).toBe('verified');
   });

@@ -579,8 +579,19 @@ describe('checkPage reads the address after the checks the way the CLI does', ()
     expect(result.gaps[0]?.reason).toContain('differ only in a part that is not shown');
   });
 
+  // This screen has no reachedWhen selector, so nothing measured after the checks could tell a tab
+  // panel's fragment from a plain fragment route. The whole fragment then counts, as it did before
+  // the CLI rule, and a tab panel hash is a gap. With a selector it stays covered; see the cases
+  // with and without a reachedWhen selector below.
+  it('is not covered when a tab panel sets a plain fragment on a screen with no selector', async () => {
+    const result = await checkMove(PAGE_URL, `${PAGE_URL}#tab-2`);
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+    expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+  });
+
   const stays: Array<[string, string, string, string | undefined]> = [
-    ['a tab panel sets a plain fragment', PAGE_URL, `${PAGE_URL}#tab-2`, undefined],
     ['a filter adds a query on a screen configured without one', PAGE_URL, `${PAGE_URL}?sort=name`, undefined],
     [
       'a hash route gains its own query and an anchor',
