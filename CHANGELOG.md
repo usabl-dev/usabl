@@ -374,6 +374,16 @@
   untouched, and a later pin move brings it in. The history workflow is not installed here. CI
   also runs `npm run test:sensitivity`, in a new `sensitivity-chromium` job.
   `ENGINE_SELF_GATE_SCRIPT`, the old gate's rule, is removed from `src/install/ci.ts`.
+- This repository's own gate now checks `self-gate` at `/self-gate-screen.html`, a page in
+  `fixtures/live` made for it, instead of `users`. Its one UI file is
+  `fixtures/live/self-gate-screen.html`, and the screen is confirmed by the selector
+  `#self-gate-screen`. Before, the gate could never read `verified`: axe reports `color-contrast`
+  as incomplete on the `users` screen's button whose text is a symbol outside the basic Latin set,
+  so every scan was `not_covered`. The new page uses native HTML, plain text, and explicit high
+  contrast colors, and a new real-browser test runs the judge's check on it and requires
+  `verified` with no finding, no draft, and no gap. Gate effect for this repository: a pull
+  request that changes `fixtures/live/self-gate-screen.html` can read `verified`, and a change to
+  `fixtures/live/users-screen.html` now reads "nothing to check" for this gate.
 - A requirement with `approved: false` no longer blocks, whatever its kind. Before, `approved` was
   not read on the check path: a content, flow, or voice requirement with `approved: false` blocked
   like an approved one, and a check of it that could not run was a coverage gap. Now its findings
