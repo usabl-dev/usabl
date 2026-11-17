@@ -12,7 +12,9 @@
     "src/coverage/completeness.ts",
     "src/surfaces/policy-enforce.ts",
     ".github/workflows/",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "scripts/engine-pin.ts",
+    "scripts/check-engine-pin.ts"
   ],
   "promotedObligations": []
 }

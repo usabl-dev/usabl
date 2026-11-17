@@ -1636,7 +1636,9 @@ gate checks, and what it does not:
   `usabl install --ci` writes from a clean build of the new commit, made in a fresh checkout of
   main, and the new commit must be a commit on main. The `check` job in `usabl.yml` runs
   `scripts/check-engine-pin.ts`, which fails unless the pin is an ancestor of `origin/main`
-  (`git merge-base --is-ancestor`). Move the pin after a merge that changes the gate, the guard,
+  (`git merge-base --is-ancestor`). That script and `scripts/engine-pin.ts` run from the pull
+  request's own tree, so both are in `guardedPaths`: a pull request that weakens the check needs a
+  code owner approval. Move the pin after a merge that changes the gate, the guard,
   `src/surfaces/policy-enforce.ts`, coverage, intake, or a check, and before a change to
   `usabl.config.json` that the pinned engine cannot read: the judge reads the config at the base
   commit with the pinned engine, and the loader refuses a key it does not know in some sections,
