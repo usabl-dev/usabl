@@ -390,7 +390,9 @@
   flow ran, the selector is measured again at the end of the scan; when it is gone, the last flow
   that ran gets a `not-covered` gap and its own drafts are dropped, and every draft taken before it
   stays. Gate effect of that end check: on a screen with a selector only it has, a last flow that
-  moves the route on purpose and leaves that content behind cannot verify. Limits: the read does
+  leaves the selector unmatched cannot verify, whether it moves the route on purpose or only
+  removes that content, such as a flow that empties a table. Point `reachedWhen` at content the
+  flow does not remove. Limits: the read does
   not catch a move and a move back, before the read or within one flow, content that changes
   without the address, a plain fragment or query router on a screen configured without that part,
   or a move made by the last flow or voice contract that runs, or by a timer while it runs, on a

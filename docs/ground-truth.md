@@ -2441,9 +2441,10 @@ the scan. When it held at the read point and matches nothing at the end, the las
 that ran gets a `not-covered` gap that names it and the selector, and its own drafts are dropped:
 its result may come from a page that is not this screen, such as a sign-in form swapped in at the
 same address. Every draft taken before it stays. The cost, and a gate effect: on a screen with a
-selector only it has, a last flow that moves the route on purpose and leaves that content behind
-cannot verify. It gets the gap. End it on the route and the content it started on, or check its
-requirement on the screen it moves to.
+selector only it has, a last flow that leaves the selector unmatched cannot verify, whether it
+moves the route on purpose or only removes that content, such as a flow that empties a table. It
+gets the gap. Point `reachedWhen` at content the flow does not remove, end the flow on the route
+and the content it started on, or check its requirement on the screen it moves to.
 
 **What it does.** When the two addresses name different screens, or an address cannot be read, the
 screen is a `not-covered` gap. The gap names both addresses: origin, path, and the route of a hash
