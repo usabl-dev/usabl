@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { gate } from '../../src/gate/index.js';
-import { isBlockingBarrier } from '../../src/output/disclosure.js';
+import { formatBlockingSplit, isBlockingBarrier } from '../../src/output/disclosure.js';
 import type { Coverage, Draft, EvidenceFloor, GateInput, Waiver } from '../../src/contracts/index.js';
 
 const complete: Coverage = {
@@ -178,5 +178,56 @@ describe('isBlockingBarrier against the gate', () => {
 
     expect(out.accessibilityVerdict).toBe('not_covered');
     expect(out.findings.some(isBlockingBarrier)).toBe(true);
+  });
+});
+
+/**
+ * The surfaces print the blocking count with the same words the gate's summary uses.
+ *
+ * The gate writes its own split into the summary, and the surfaces build theirs from the findings
+ * the gate returned. Two places write the same words, so this drives the gate and checks that the
+ * surface split, built from the returned findings, is exactly the clause the summary printed.
+ */
+describe('formatBlockingSplit against the gate summary', () => {
+  const split = (input: GateInput): { summary: string; clause: string } => {
+    const out = gate(input);
+    const blocking = out.findings.filter(isBlockingBarrier);
+    const clause = formatBlockingSplit(
+      blocking.filter((f) => f.confidence === 'fail').length,
+      blocking.filter((f) => f.confidence === 'unverified').length,
+    );
+    return { summary: out.summary, clause };
+  };
+
+  it('matches the summary on an undecided check alone', () => {
+    const { summary, clause } = split({ ...base, drafts: [draft({ confidence: 'unverified' })], floor: emptyFloor });
+    expect(clause).toBe('1 check undecided, needs a person to review');
+    expect(summary).toBe(`not_covered: ${clause}`);
+  });
+
+  it('matches the summary on a failing finding alone', () => {
+    const { summary, clause } = split({ ...base, drafts: [draft()], floor: emptyFloor });
+    expect(clause).toBe('1 accessibility barrier found');
+    expect(summary).toBe(`regression: ${clause}`);
+  });
+
+  it('matches the summary when a run has both', () => {
+    const { summary, clause } = split({
+      ...base,
+      drafts: [
+        draft(),
+        draft({ rule: 'link-name' }),
+        draft({ rule: 'button-name', confidence: 'unverified' }),
+      ],
+      floor: emptyFloor,
+    });
+    expect(clause).toBe('2 accessibility barriers found, 1 check undecided, needs a person to review');
+    expect(summary).toBe(`regression: ${clause}`);
+  });
+
+  it('is empty when nothing blocks, where the summary says nothing blocking', () => {
+    const { summary, clause } = split({ ...base, drafts: [], floor: emptyFloor });
+    expect(clause).toBe('');
+    expect(summary).toBe('verified: nothing blocking');
   });
 });
