@@ -8,6 +8,7 @@
  * engine version, so the generator refuses rather than clobber it.
  */
 import { parseUsablConfig } from '../intake/config.js';
+import { CURSOR_STOP_TIMEOUT_SECONDS } from '../surfaces/stop-hook-deadline.js';
 import type { InstallFs, InstallResult } from './index.js';
 import { LEGACY_USABL_RUN, USABL_MISSING_GUIDANCE, USABL_NOT_INSTALLED_LINE, USABL_RUN } from './usabl-command.js';
 
@@ -47,10 +48,13 @@ fi
 
 // The hooks.json content. Written as a string so byte-identical comparison works for
 // idempotence, the same way the other install drafts work.
+// The timeout is Cursor's limit for the hook. The runner plans its own deadline to this number
+// when the hook sets no USABL_STOP_HOOK_TIMEOUT (see stop-hook-deadline.ts), so a lower timeout in
+// hooks.json would let Cursor end the hook first.
 export function buildCursorHooksJson(existingHooks: Record<string, unknown> | null): string {
   const stopEntry = {
     command: '.cursor/hooks/usabl-stop.sh',
-    timeout: 300,
+    timeout: CURSOR_STOP_TIMEOUT_SECONDS,
     loop_limit: STOP_LOOP_LIMIT,
   };
 
@@ -220,9 +224,29 @@ function simpleFiles(uiFileGlobs: string[]) {
   ] as const;
 }
 
+/**
+ * Why the usabl stop entry's limit lets Cursor end the hook before the runner's deadline: it has
+ * no timeout that is a number, or one below the limit the runner plans to.
+ */
+export type CursorTimeoutProblem = 'missing' | 'below-limit';
+
+function cursorTimeoutProblem(entry: unknown): CursorTimeoutProblem | null {
+  const timeout = isRecord(entry) ? entry['timeout'] : undefined;
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout)) {
+    return 'missing';
+  }
+  return timeout < CURSOR_STOP_TIMEOUT_SECONDS ? 'below-limit' : null;
+}
+
 // `rewrites` names the files written over an old npx form, which doctor reports as a security drift.
+// `timeoutProblem` is set when hooks.json is written again to fix the stop entry's limit.
 export type CursorPlan =
-  | { action: 'write'; files: Array<{ path: string; draft: string }>; rewrites: string[] }
+  | {
+      action: 'write';
+      files: Array<{ path: string; draft: string }>;
+      rewrites: string[];
+      timeoutProblem?: CursorTimeoutProblem;
+    }
   | { action: 'already-wired'; paths: string[] }
   | { action: 'refuse'; path: string; reason: string };
 
@@ -231,7 +255,7 @@ export type CursorPlan =
 async function planHooksJson(
   fs: InstallFs,
 ): Promise<
-  | { ok: true; action: 'write'; draft: string }
+  | { ok: true; action: 'write'; draft: string; timeoutProblem?: CursorTimeoutProblem }
   | { ok: true; action: 'already-wired' }
   | { ok: false; reason: string }
 > {
@@ -280,7 +304,14 @@ async function planHooksJson(
       };
     }
     if (usablCount > 0) {
-      return { ok: true, action: 'already-wired' };
+      // Every entry is usabl's own. One whose limit is missing or lower than the runner plans to
+      // is written again with the usabl limit. A higher limit is left as it is: the runner still
+      // ends first.
+      const problem = stop.map(cursorTimeoutProblem).find((found) => found !== null) ?? null;
+      if (problem === null) {
+        return { ok: true, action: 'already-wired' };
+      }
+      return { ok: true, action: 'write', draft: buildCursorHooksJson(isRecord(hooks) ? hooks : {}), timeoutProblem: problem };
     }
   }
 
@@ -353,7 +384,8 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
     return { action: 'already-wired', paths: allPaths };
   }
 
-  return { action: 'write', files: toWrite, rewrites };
+  const timeoutProblem = hooksPlan.action === 'write' ? hooksPlan.timeoutProblem : undefined;
+  return { action: 'write', files: toWrite, rewrites, ...(timeoutProblem === undefined ? {} : { timeoutProblem }) };
 }
 
 function cursorRefusalMessage(path: string): string {
@@ -379,11 +411,16 @@ export async function writeCursor(fs: InstallFs, plan: CursorPlan): Promise<Inst
         ? ''
         : `\nRewrote ${plan.rewrites.join(', ')}: the old files ran "${LEGACY_USABL_RUN}", which downloads a package when usabl is not installed. ` +
           `They now run "${USABL_RUN}", which never downloads.`;
+    const timeoutNote =
+      plan.timeoutProblem === undefined
+        ? ''
+        : `\nSet the usabl stop hook's timeout in ${CURSOR_HOOKS_JSON_PATH} to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, ` +
+          'the limit usabl plans its own deadline to, so usabl answers before Cursor ends the hook.';
     return {
       exitCode: 0,
       action: 'written',
       path: plan.files[0]?.path ?? CURSOR_HOOKS_JSON_PATH,
-      message: `Wrote ${paths}. Review these drafts before you merge them.${rewriteNote}${chmodHint}`,
+      message: `Wrote ${paths}. Review these drafts before you merge them.${rewriteNote}${timeoutNote}${chmodHint}`,
     };
   }
   if (plan.action === 'already-wired') {
