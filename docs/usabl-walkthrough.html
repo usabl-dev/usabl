@@ -2097,7 +2097,7 @@ kbd {
 
   <h3>An invariant on the summary line</h3>
 
-  <p>The gate holds a property that a blocked run must always name its cause: either a blocking finding count or a gap count, and the count reported is the exact set that decided the verdict, not the total of all deterministic findings. This exists because of a real earlier bug where the summary counted every deterministic finding, including carried ones, so a run blocked by one new barrier reported "148 findings" and nobody could find the one that mattered.</p>
+  <p>The gate holds a property that a blocked run must always name its cause: either a blocking finding count or a gap count, and the count reported is the exact set that decided the verdict, not the total of all deterministic findings. The blocking count is split by confidence: failing findings read "N accessibility barrier(s) found", and findings usabl could not decide read "N check(s) undecided, needs a person to review", so a check axe could not decide is never read as an accessibility barrier found. This exists because of a real earlier bug where the summary counted every deterministic finding, including carried ones, so a run blocked by one new barrier reported "148 findings" and nobody could find the one that mattered.</p>
 </section>
 
 <!-- ========== E10: dark band ========== -->

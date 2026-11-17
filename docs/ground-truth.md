@@ -2861,6 +2861,18 @@ their own.
    the residual section under Evidence floor. The floor
    stores how many barriers it accepted at an identity, and more than that comes back as
    `new` and blocks.
+7. **Summary line.** The summary opens with the verdict word and then the blocking count,
+   split by confidence. A new failing finding is counted as `N accessibility barrier(s)
+   found`. A new finding usabl could not decide, such as an axe incomplete result, is counted
+   as `N check(s) undecided, needs a person to review`. Each part is printed only when its
+   count is above zero, failures first, with the plural written out (`1 check`, `2 checks`).
+   When neither has a finding the clause is `nothing blocking`. So a run held back only by a
+   check axe could not decide reads `not_covered: 1 check undecided, needs a person to
+   review`, not as one accessibility barrier found. The split changes words only: the verdict
+   is still decided from the whole blocking set. The recorded, floor and coverage clauses
+   follow as before. The terminal report and the overlay print the blocking count with the
+   same words, and the terminal lists each blocking finding under the part it belongs to,
+   under a `blocking this run:` heading for each part.
 
 ### Identity
 
