@@ -928,6 +928,640 @@ describe('makeCheckRunner and what a body-only page shows', () => {
   });
 });
 
+describe('makeCheckRunner and a page that leaves its screen during the checks', () => {
+  // The CLI reads the address once at load to judge how the page loaded. A page can still move
+  // after that: a focus handler navigates, or an auth timer sends it to a sign-in page. With no
+  // reachedWhen selector nothing else would notice, and the checks would measure the other page.
+  const SIGN_IN = 'http://127.0.0.1:5173/sign-in';
+
+  // A scripted page whose address is `before` until the first Tab, and `after` from then on.
+  async function movingPage(before: string, after: () => Promise<string>): Promise<Page> {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#second', '#first'], activeNodes: [null, null, null] });
+    let moved = false;
+    const tab = page.tab.bind(page);
+    return Object.assign(page, {
+      tab: async () => {
+        moved = true;
+        await tab();
+      },
+      currentUrl: async () => (moved ? after() : before),
+    });
+  }
+
+  // A provider that reports one accessibility barrier only on the sign-in page.
+  const signInBarrier = (page: Page): Provider => ({
+    id: 'fake-axe',
+    layer: 'fake',
+    capabilities: ['live'],
+    run: async (): Promise<Draft[]> => ((await page.currentUrl()) === SIGN_IN ? [makeDraft('sign-in-rule')] : []),
+  });
+
+  async function scanOf(page: Page, providers: Provider[], surfaces?: SurfaceConfig[], screen = SCREEN) {
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers,
+      config: testConfig(surfaces === undefined ? {} : { surfaces }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    }).scan(screen);
+    // The unseen pass runs over collected scans after the page is closed. It must not add or
+    // remove anything here, so the scan is read as the gate would read it.
+    return markUnseenScreens([scan]).screens[0]!;
+  }
+
+  function expectLeftScreen(scan: Awaited<ReturnType<typeof scanOf>>, ref = SCREEN.url) {
+    // Checked first, so a scan with no gap fails on the line that says it would read verified.
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.ref).toBe(ref);
+    expect(scan.gaps[0]?.state).toBe('not-covered');
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+    expect(scan.notes).toEqual([]);
+  }
+
+  it('does not verify a screen whose page moves to a clean page on the first Tab', async () => {
+    const page = await movingPage(SCREEN.url, async () => 'http://127.0.0.1:5173/elsewhere');
+
+    const scan = await scanOf(page, [signInBarrier(page)]);
+
+    expectLeftScreen(scan);
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toContain('left');
+    expect(reason).toContain('http://127.0.0.1:5173/clusters');
+    expect(reason).toContain('http://127.0.0.1:5173/elsewhere');
+    expect(reason).toContain('sign in again');
+    expect(reason).toContain('on focus or on a timer');
+    // A tab panel's fragment no longer leaves the screen, so the advice is about route parts.
+    expect(reason).toContain('configure the screen url with');
+    expect(reason).not.toContain('tab panels');
+  });
+
+  it('reports no finding from the page it moved to when that page carries an accessibility barrier', async () => {
+    const page = await movingPage(SCREEN.url, async () => SIGN_IN);
+
+    const scan = await scanOf(page, [signInBarrier(page)]);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain(SIGN_IN);
+  });
+
+  it('names both addresses without their query or fragment', async () => {
+    const page = await movingPage(`${SCREEN.url}?token=SECRETPOISON`, async () => `${SIGN_IN}?token=SECRETPOISON#state=SECRETPOISON`);
+
+    const scan = await scanOf(page, []);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).not.toContain('SECRETPOISON');
+  });
+
+  it('still verifies a page that stays on its address, and keeps its findings', async () => {
+    // A read-only provider stands in for the checks. The real keyboard walk provider would read this
+    // scripted page's cycling focus as a walk cut short, which is a gap of its own.
+    const page = await movingPage(SCREEN.url, async () => SCREEN.url);
+    const finds: Provider = {
+      id: 'fake-axe',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => [makeDraft('axe-rule')],
+    };
+
+    const scan = await scanOf(page, [finds]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+  });
+
+  it('still verifies a page whose query changes during the walk while its path and fragment stay', async () => {
+    const page = await movingPage(`${SCREEN.url}?tab=a#/list`, async () => `${SCREEN.url}?tab=b#/list`);
+
+    const scan = await scanOf(page, []);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+  });
+
+  it('compares with the address the page loaded at, so a redirect on load is not a move', async () => {
+    const page = await movingPage(`${SCREEN.url}/overview`, async () => `${SCREEN.url}/overview`);
+
+    const scan = await scanOf(page, []);
+
+    expect(scan.gaps).toEqual([]);
+  });
+
+  it('still verifies a page whose tab panel sets the hash during the walk', async () => {
+    // A plain fragment is a place on the page, not a route, when the screen's url has none. A tab
+    // panel that sets #tab-2, gains a fragment, changes one, or drops one stays on the screen.
+    for (const [before, after] of [
+      [SCREEN.url, `${SCREEN.url}#tab-2`],
+      [`${SCREEN.url}#tab-1`, `${SCREEN.url}#tab-2`],
+      [`${SCREEN.url}#section`, SCREEN.url],
+    ] as const) {
+      const page = await movingPage(before, async () => after);
+
+      const scan = await scanOf(page, []);
+
+      expect(scan.gaps).toEqual([]);
+      expect(scan.stops.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not verify a page whose hash route changes during the walk', async () => {
+    // A fragment that starts with #/ or #! is a hash route: the whole screen lives there.
+    for (const [before, after] of [
+      [`${SCREEN.url}#/clusters`, `${SCREEN.url}#/login`],
+      [`${SCREEN.url}#!/a`, `${SCREEN.url}#!/b`],
+      [SCREEN.url, `${SCREEN.url}#/login`],
+    ] as const) {
+      const page = await movingPage(before, async () => after);
+
+      const scan = await scanOf(page, []);
+
+      expectLeftScreen(scan);
+    }
+  });
+
+  it('reads every fragment as a route for a screen whose url has a plain fragment', async () => {
+    // An app that routes with plain fragments is configured that way, as /app#clusters. On such a
+    // screen a fragment change is leaving it.
+    const screen = { id: 'app-clusters', url: 'http://127.0.0.1:5173/app#clusters' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/app#login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+  });
+
+  it('does not catch a plain fragment route on a screen configured without a fragment', async () => {
+    // The limit, held here so a change to it is a decision. /app gaining #login reads as a tab
+    // panel would. A reachedWhen selector that the sign-in page lacks is what catches it.
+    const screen = { id: 'app', url: 'http://127.0.0.1:5173/app' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/app#login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expect(scan.gaps).toEqual([]);
+  });
+
+  it('does not verify a screen whose address cannot be read after the checks', async () => {
+    for (const after of [async () => '', async (): Promise<string> => Promise.reject(new Error('page closed'))]) {
+      const page = await movingPage(SCREEN.url, after);
+
+      const scan = await scanOf(page, [signInBarrier(page)]);
+
+      expectLeftScreen(scan);
+      expect(scan.gaps[0]?.reason).toContain('could not report its address');
+    }
+  });
+
+  it('does not verify a screen whose address could not be read at load', async () => {
+    const page = await movingPage('', async () => SCREEN.url);
+
+    const scan = await scanOf(page, []);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain('could not report its address');
+  });
+
+  it('still verifies a tab panel that sets the hash on a screen with a reachedWhen selector', async () => {
+    const page = await movingPage(SCREEN.url, async () => `${SCREEN.url}#tab-2`);
+    Object.assign(page, { queryAll: async () => [{ selector: 'header nav' }] });
+
+    const scan = await scanOf(page, [], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'header nav' }]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(true);
+  });
+
+  it('does not verify a move to another path even when a selector both pages match held', async () => {
+    // A selector that a shared header matches is on the sign-in page too, so it held before and
+    // after the walk. The address is read whatever the selector, so the move is still a gap.
+    const page = await movingPage(SCREEN.url, async () => 'http://127.0.0.1:5173/login');
+    Object.assign(page, { queryAll: async () => [{ selector: 'header nav' }] });
+
+    const scan = await scanOf(page, [signInBarrier(page)], [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'header nav' }]);
+
+    expectLeftScreen(scan);
+    expect(scan.gaps[0]?.reason).toContain('http://127.0.0.1:5173/login');
+  });
+
+  it('does not verify a page that moves to another origin at the same path', async () => {
+    // An SSO portal root, or a www home page after the session ends, has the path of the app root.
+    const screen = { id: 'home', url: 'https://app.example.com/' };
+    const page = await movingPage(screen.url, async () => 'https://login.example.com/');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+    expect(scan.gaps[0]?.reason).toContain('https://login.example.com/');
+  });
+
+  it('reads the query as part of the route for a screen whose url has one', async () => {
+    const screen = { id: 'admin-clusters', url: 'http://127.0.0.1:5173/admin.php?page=clusters' };
+    const page = await movingPage(screen.url, async () => 'http://127.0.0.1:5173/admin.php?page=login');
+
+    const scan = await scanOf(page, [], undefined, screen);
+
+    expectLeftScreen(scan, screen.url);
+    expect(scan.gaps[0]?.reason).not.toContain('page=');
+  });
+
+  it('reports the late refusal, not the move, when both happened', async () => {
+    const page = await movingPage(SCREEN.url, async () => SIGN_IN);
+    let walked = false;
+    Object.assign(page, {
+      markWalkStart: async () => {
+        walked = true;
+      },
+      unauthorizedApiRequests: async () => (walked ? ['http://127.0.0.1:5173/api/me'] : []),
+    });
+
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [signInBarrier(page)],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      sessionConfigured: true,
+    }).scan(SCREEN);
+
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('401');
+  });
+});
+
+describe('makeCheckRunner and where the address is read when a provider acts on the page', () => {
+  // Flow and voice requirements click and type, and a flow may move the route on purpose. The
+  // address is read before the first provider that may move the page on purpose, so an intended
+  // move after that point does not drop the findings taken on the screen before it. A provider that
+  // acts on the page but never means to leave it, such as the PatternFly probes, runs before that
+  // read, so a move while it runs is still leaving.
+  const HASH_SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/#/clusters' };
+
+  async function hashPage(): Promise<{ page: Page; go: (url: string) => void }> {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#second', '#first'], activeNodes: [null, null, null] });
+    let address = HASH_SCREEN.url;
+    Object.assign(page, { currentUrl: async () => address });
+    return {
+      page,
+      go: (url: string) => {
+        address = url;
+      },
+    };
+  }
+
+  const readOnly: Provider = {
+    id: 'fake-axe',
+    layer: 'fake',
+    capabilities: ['live'],
+    run: async (): Promise<Draft[]> => [makeDraft('axe-rule')],
+  };
+
+  // A flow that activates the Settings link, which moves the hash route on purpose.
+  const routingFlow = (go: (url: string) => void): Provider => ({
+    id: 'intake-flow',
+    layer: 'flow',
+    capabilities: ['live'],
+    mutatesPageState: true,
+    navigatesOnPurpose: true,
+    run: async (): Promise<Draft[]> => {
+      go('http://127.0.0.1:5173/#/settings');
+      return [];
+    },
+  });
+
+  // A provider like the PatternFly rulepack: it clicks and presses Escape, and never means to move
+  // the page. `during` runs inside its run, so a test can move the page while it runs.
+  const prober = (during: () => void = () => {}): Provider => ({
+    id: 'pf-rulepack',
+    layer: 'pf',
+    capabilities: ['live'],
+    mutatesPageState: true,
+    run: async (): Promise<Draft[]> => {
+      during();
+      return [makeDraft('pf-rule')];
+    },
+  });
+
+  async function scanWith(page: Page, providers: Provider[], surfaces?: SurfaceConfig[]) {
+    const scan = await makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers,
+      config: testConfig(surfaces === undefined ? {} : { surfaces }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    }).scan(HASH_SCREEN);
+    return markUnseenScreens([scan]).screens[0]!;
+  }
+
+  // A flow or voice contract that reports a marker draft only when the page is at `route`, so a test
+  // can see on which route it ran. A requirement checked on the wrong page would count for this one.
+  const passesOnlyAt = (id: string, layer: string, page: Page, route: string): Provider => ({
+    id,
+    layer,
+    capabilities: ['live'],
+    mutatesPageState: true,
+    navigatesOnPurpose: true,
+    run: async (): Promise<Draft[]> => ((await page.currentUrl()) === route ? [makeDraft(`${id}-passed`)] : []),
+  });
+
+  it('skips a later flow when an earlier flow moved the route, and names the flow that moved it', async () => {
+    const { page, go } = await hashPage();
+    const later = passesOnlyAt('intake:flow-save', 'intake-flow', page, 'http://127.0.0.1:5173/#/settings');
+
+    const scan = await scanWith(page, [readOnly, prober(), routingFlow(go), later]);
+
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:flow-save', state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('intake-flow');
+    expect(scan.gaps[0]?.reason).toContain('intake:flow-save');
+  });
+
+  it('skips a later voice contract the same way', async () => {
+    const { page, go } = await hashPage();
+    const contract = passesOnlyAt('intake:voice-save', 'voicing', page, 'http://127.0.0.1:5173/#/settings');
+
+    const scan = await scanWith(page, [readOnly, routingFlow(go), contract]);
+
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:voice-save', state: 'not-covered' });
+  });
+
+  it('runs a later flow when the earlier flow left the route where it was', async () => {
+    const { page } = await hashPage();
+    const stays: Provider = { ...routingFlow(() => {}), id: 'intake:flow-open' };
+    const later = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, stays, later]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'intake:flow-save-passed']);
+  });
+
+  it('keeps the findings on a screen whose own selector a flow removes when it moves the route on purpose, and gaps that flow', async () => {
+    // The selector is read where the address is, before the flow, so the flow's intended move does
+    // not make the whole screen a gap. It is read again at the end, and it is gone, so the flow's own
+    // result is not confirmed to be on this screen: the flow gets a gap. That is the cost of guarding
+    // the last flow: a last flow that leaves the screen's own content behind cannot verify.
+    const { page, go } = await hashPage();
+    let flowRan = false;
+    Object.assign(page, { queryAll: async () => (flowRan ? [] : [{ selector: 'table#clusters' }]) });
+    const flow = routingFlow((url) => {
+      flowRan = true;
+      go(url);
+    });
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake-flow', state: 'not-covered' });
+  });
+
+  it('drops the last flow result and gaps it when the content is swapped at the same address while it runs', async () => {
+    // No 401 and no address change: the app swaps a sign-in form in while the only flow runs. The
+    // selector held at the read point and is gone at the end.
+    const { page } = await hashPage();
+    let flowRan = false;
+    Object.assign(page, { queryAll: async () => (flowRan ? [] : [{ selector: 'table#clusters' }]) });
+    const flow: Provider = {
+      id: 'intake:flow-save',
+      layer: 'intake-flow',
+      capabilities: ['live'],
+      mutatesPageState: true,
+      navigatesOnPurpose: true,
+      run: async (): Promise<Draft[]> => {
+        flowRan = true;
+        return [makeDraft('intake:flow-save-passed')];
+      },
+    };
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: 'provider:intake:flow-save', state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('table#clusters');
+  });
+
+  it('skips the second flow when the selector is gone after the first', async () => {
+    const { page } = await hashPage();
+    let firstRan = false;
+    Object.assign(page, { queryAll: async () => (firstRan ? [] : [{ selector: 'table#clusters' }]) });
+    const first: Provider = {
+      id: 'intake:flow-open',
+      layer: 'intake-flow',
+      capabilities: ['live'],
+      mutatesPageState: true,
+      navigatesOnPurpose: true,
+      run: async (): Promise<Draft[]> => {
+        firstRan = true;
+        return [makeDraft('intake:flow-open-passed')];
+      },
+    };
+    const second = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, first, second], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.drafts.map((draft) => draft.rule)).toEqual(['axe-rule']);
+    const skipped = scan.gaps.find((gap) => gap.ref === 'provider:intake:flow-save');
+    expect(skipped?.state).toBe('not-covered');
+    expect(skipped?.reason).toContain('intake:flow-open');
+    // The first flow is the last that ran, and the selector is gone at the end too, so its own
+    // result is not confirmed either.
+    expect(scan.gaps.map((gap) => gap.ref).sort()).toEqual(['provider:intake:flow-open', 'provider:intake:flow-save']);
+  });
+
+  it('still verifies a last flow that keeps the selector', async () => {
+    const { page } = await hashPage();
+    Object.assign(page, { queryAll: async () => [{ selector: 'table#clusters' }] });
+    const flow = passesOnlyAt('intake:flow-save', 'intake-flow', page, HASH_SCREEN.url);
+
+    const scan = await scanWith(page, [readOnly, prober(), flow], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'intake:flow-save-passed', 'pf-rule']);
+  });
+
+  it('leaves a flow-free scan as it was: a selector gone after the providers makes the screen unseen', async () => {
+    const { page } = await hashPage();
+    let rowsRead = false;
+    Object.assign(page, {
+      queryAll: async () => (rowsRead ? [] : [{ selector: 'table#clusters' }]),
+      rowContext: async () => {
+        rowsRead = true;
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, prober()], [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }]);
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+  });
+
+  it('still fails the selector when it is gone before the flows run', async () => {
+    const { page, go } = await hashPage();
+    let probed = false;
+    Object.assign(page, { queryAll: async () => (probed ? [] : [{ selector: 'table#clusters' }]) });
+
+    const scan = await scanWith(
+      page,
+      [readOnly, prober(() => (probed = true)), routingFlow(go)],
+      [{ id: HASH_SCREEN.id, url: HASH_SCREEN.url, files: [], reachedWhen: 'table#clusters' }],
+    );
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+  });
+
+  it('reads at the end of the scan when the only flow is written for another screen', async () => {
+    // The flow for screen settings runs here and reports nothing. It must not move the read point,
+    // so a move during the row read after the providers is still seen.
+    const { page, go } = await hashPage();
+    const elsewhere: Provider = {
+      ...routingFlow(() => {}),
+      id: 'intake:flow-settings',
+      appliesBeforeScan: () => ({ applies: false, why: 'the requirement names another screen' }),
+    };
+    Object.assign(page, {
+      rowContext: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, elsewhere]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('at the end of the scan');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('names the flow the address was read before', async () => {
+    const { page, go } = await hashPage();
+    const tab = page.tab.bind(page);
+    Object.assign(page, {
+      tab: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        await tab();
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, routingFlow(go)]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('before intake-flow ran');
+  });
+
+  it('keeps the axe and rulepack findings taken before a hash-routed flow that moves the route on purpose', async () => {
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [routingFlow(go), prober(), readOnly]);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts.map((draft) => draft.rule).sort()).toEqual(['axe-rule', 'pf-rule']);
+  });
+
+  it('does not verify a page that a provider acting on it moved, with no flow present', async () => {
+    // A probe click that navigates, or anything else that moves the page while the rulepack runs.
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [readOnly, prober(() => go('http://127.0.0.1:5173/#/login'))]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('does not verify a page that a sign-in timer moves while the rulepack runs, with a flow present', async () => {
+    // The timer fires while the probes run, before any flow. The flow then moves the route on
+    // purpose, which would hide the earlier move if the address were read only before the probes.
+    const { page, go } = await hashPage();
+
+    const scan = await scanWith(page, [routingFlow(go), prober(() => go('http://127.0.0.1:5173/#/login')), readOnly]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('http://127.0.0.1:5173/#/login');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('still does not verify a page that a timer moves during the walk, with a flow present', async () => {
+    const { page, go } = await hashPage();
+    const tab = page.tab.bind(page);
+    Object.assign(page, {
+      tab: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        await tab();
+      },
+    });
+
+    const scan = await scanWith(page, [routingFlow(go), readOnly]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('does not verify a page that a read-only provider moved, with a flow present', async () => {
+    const { page, go } = await hashPage();
+    const moving: Provider = {
+      ...readOnly,
+      run: async (): Promise<Draft[]> => {
+        go('http://127.0.0.1:5173/#/login');
+        return [makeDraft('axe-rule')];
+      },
+    };
+
+    const scan = await scanWith(page, [routingFlow(go), moving]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('reads the address after every provider when none acts on the page', async () => {
+    const { page, go } = await hashPage();
+    const moving: Provider = {
+      ...readOnly,
+      run: async (): Promise<Draft[]> => {
+        go('http://127.0.0.1:5173/#/login');
+        return [makeDraft('axe-rule')];
+      },
+    };
+
+    const scan = await scanWith(page, [readOnly, moving]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.drafts).toEqual([]);
+  });
+
+  it('reads the address at the very end on a screen with no flow or voice contract', async () => {
+    // No provider may move the page on purpose, so the read waits for everything, including the
+    // row read after the providers. The page moves during that row read, after the rulepack ran, so
+    // only a read at the very end sees it.
+    const { page, go } = await hashPage();
+    Object.assign(page, {
+      rowContext: async () => {
+        go('http://127.0.0.1:5173/#/login');
+        return { kind: 'none' } as const;
+      },
+    });
+
+    const scan = await scanWith(page, [readOnly, prober()]);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('left its screen');
+    expect(scan.drafts).toEqual([]);
+  });
+});
+
 describe('makeCheckRunner page images for the docs generator', () => {
   function imagePage(page: Page): Page {
     return Object.assign(page, {

@@ -433,6 +433,9 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
     // that reads the page as loaded, such as the PatternFly rulepack, which would otherwise check a
     // page where the flow had already removed or opened something.
     mutatesPageState: true,
+    // A flow step can activate a link and move the route on purpose. Its navigated gap and the
+    // silent change rule judge that, so the address read for the whole screen is taken before it.
+    navigatesOnPurpose: true,
     async run(ctx) {
       // Wrong surface is out of scope for this scan. Coverage wiring decides this later.
       if (!requirementPlan(requirement, ctx.screen.id).applies) {
@@ -709,6 +712,8 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
         appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
         // The contract clicks and presses keys, so it changes the page, the same as a flow.
         mutatesPageState: true,
+        // And like a flow, a step may move the route on purpose.
+        navigatesOnPurpose: true,
         // Each run gets its own silent change watch, which the step runner calls around each step
         // it drives. Its drafts keep the rule's own id, voicing/silent-change, because the rule is
         // not part of the contract.

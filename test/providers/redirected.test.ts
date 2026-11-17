@@ -21,6 +21,7 @@ import type { Draft, Page, Provider } from '../../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import {
+  leftScreenGap,
   observeLanding,
   readRefusedRequests,
   redirectedAwayGap,
@@ -28,6 +29,7 @@ import {
   sameScreenPath,
   sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
+  stayedOnScreen,
   type LandingObservation,
 } from '../../src/providers/redirected.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -985,5 +987,121 @@ describe('sameScreenPath', () => {
 
   it('makes no claim when an address does not parse', () => {
     expect(sameScreenPath('not a url', 'http://127.0.0.1:5173/clusters')).toBeNull();
+  });
+});
+
+describe('stayedOnScreen', () => {
+  const BASE = 'http://127.0.0.1:5173';
+
+  it('counts the origin and the path always, and the query only when the configured url has one', () => {
+    // Both addresses come from the same browser in the same scan, so the origin differs only when
+    // the page moved: an SSO portal root or a www home page has the same path as the app root.
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/clusters/?page=2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'http://localhost:4000/clusters')).toBe(false);
+    expect(stayedOnScreen('https://app.example.com/', 'https://app.example.com/', 'https://www.example.com/')).toBe(false);
+    expect(stayedOnScreen('https://app.example.com/', 'https://app.example.com/', 'http://app.example.com/')).toBe(false);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/login`)).toBe(false);
+  });
+
+  it('reads a plain fragment as a place on the page when the configured url has none', () => {
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/clusters#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters#tab-1`, `${BASE}/clusters#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters#section`, `${BASE}/clusters`)).toBe(true);
+  });
+
+  it('reads #/ and #! as hash routes, like a path', () => {
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters`, `${BASE}/#/login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#!/a`, `${BASE}/#!/b`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/`, `${BASE}/#/login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters`, `${BASE}/#/clusters/?page=2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#!/a`, `${BASE}/#!/a?x=1`)).toBe(true);
+  });
+
+  it('reads every fragment as a route when the configured url has a plain fragment', () => {
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app#login`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app`)).toBe(false);
+    expect(stayedOnScreen(`${BASE}/app#clusters`, `${BASE}/app#clusters`, `${BASE}/app#clusters`)).toBe(true);
+  });
+
+  it('does not catch a plain fragment route on a screen configured without a fragment', () => {
+    // The documented limit: a reachedWhen selector the other page lacks catches this one.
+    expect(stayedOnScreen(`${BASE}/app`, `${BASE}/app`, `${BASE}/app#login`)).toBe(true);
+  });
+
+  it('reads the query as part of the route when the configured url has one', () => {
+    const configured = `${BASE}/admin.php?page=clusters`;
+    expect(stayedOnScreen(configured, configured, `${BASE}/admin.php?page=login`)).toBe(false);
+    expect(stayedOnScreen(configured, configured, `${BASE}/admin.php`)).toBe(false);
+    expect(stayedOnScreen(configured, configured, `${BASE}/admin.php?page=clusters#tab-2`)).toBe(true);
+    // Without a query in the configured url, the query is a filter or a page number, as before.
+    expect(stayedOnScreen(`${BASE}/admin.php`, `${BASE}/admin.php?page=clusters`, `${BASE}/admin.php?page=login`)).toBe(true);
+  });
+
+  it('reads a hash route up to its own query or a second fragment', () => {
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters`, `${BASE}/#/clusters#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters#tab-1`, `${BASE}/#/clusters/#tab-2`)).toBe(true);
+    expect(stayedOnScreen(`${BASE}/`, `${BASE}/#/clusters#tab-1`, `${BASE}/#/login#tab-1`)).toBe(false);
+  });
+
+  it('makes no claim when an address does not parse', () => {
+    expect(stayedOnScreen('not a url', `${BASE}/clusters`, `${BASE}/clusters`)).toBeNull();
+    expect(stayedOnScreen(`${BASE}/clusters`, `${BASE}/clusters`, 'not a url')).toBeNull();
+  });
+});
+
+describe('leftScreenGap', () => {
+  const BASE = 'http://127.0.0.1:5173';
+  const reasonOf = (requestedUrl: string, loadedUrl: string | null, checkedUrl: string | null): string =>
+    leftScreenGap('clusters', { requestedUrl, loadedUrl, checkedUrl })?.reason ?? '';
+
+  it('prints the route of a hash route for both addresses, so the two shown addresses differ', () => {
+    const reason = reasonOf(`${BASE}/#/clusters`, `${BASE}/#/clusters?token=SECRETPOISON`, `${BASE}/#/login#state=SECRETPOISON`);
+    expect(reason).toContain(`${BASE}/#/clusters`);
+    expect(reason).toContain(`${BASE}/#/login`);
+    expect(reason).not.toContain('SECRETPOISON');
+    expect(reason).toContain('left its screen');
+  });
+
+  it('never prints a plain fragment or a query, and says when that is the only difference', () => {
+    const fragment = reasonOf(`${BASE}/app#orders`, `${BASE}/app#orders`, `${BASE}/app#SECRETPOISON`);
+    expect(fragment).not.toContain('SECRETPOISON');
+    expect(fragment).not.toContain('#orders');
+    expect(fragment).toContain('differ only in a part that is not shown');
+    const query = reasonOf(`${BASE}/admin.php?page=clusters`, `${BASE}/admin.php?page=clusters`, `${BASE}/admin.php?page=SECRETPOISON`);
+    expect(query).not.toContain('SECRETPOISON');
+    expect(query).not.toContain('page=');
+    expect(query).toContain('differ only in a part that is not shown');
+  });
+
+  it('names a move to another origin by both origins', () => {
+    const reason = reasonOf('https://app.example.com/', 'https://app.example.com/', 'https://sso.example.com/?return=SECRETPOISON');
+    expect(reason).toContain('https://app.example.com/');
+    expect(reason).toContain('https://sso.example.com/');
+    expect(reason).not.toContain('SECRETPOISON');
+    expect(reason).toContain('origin');
+  });
+
+  it('says it could not read an address that does not parse, not that the page left', () => {
+    const reason = reasonOf(`${BASE}/clusters`, `${BASE}/clusters`, 'not a url');
+    expect(reason).toContain('could not read the address');
+    expect(reason).not.toContain('left its screen');
+    expect(reason).toContain('cannot tell whether the page stayed on its screen');
+  });
+
+  it('says it cannot tell when the page could not report its address', () => {
+    const reason = reasonOf(`${BASE}/clusters`, `${BASE}/clusters`, null);
+    expect(reason).toContain('could not report its address');
+    expect(reason).not.toContain('left its screen');
+    expect(reason).not.toMatch(/usabl cannot tell[^.]*usabl did not measure/);
+  });
+
+  it('tells the operator to put a route part in the url and to take an anchor out of it', () => {
+    const reason = reasonOf(`${BASE}/clusters`, `${BASE}/clusters`, `${BASE}/login`);
+    expect(reason).toContain('configure the screen url with');
+    expect(reason).toContain('only an anchor');
+  });
+
+  it('is null when the page stayed on its screen', () => {
+    expect(leftScreenGap('clusters', { requestedUrl: `${BASE}/clusters`, loadedUrl: `${BASE}/clusters`, checkedUrl: `${BASE}/clusters#tab-2` })).toBeNull();
   });
 });

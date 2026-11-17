@@ -67,12 +67,19 @@ function dirtyPageGap(providerId: string, mutatorId: string): CoverageGap {
 
 /**
  * Providers that change the page run last, so a provider reading the loaded page still sees it.
- * Each group keeps the caller's order, because a provider list is also a stated running order.
+ * Among those, a provider that may move the page on purpose (a flow or a voice contract) runs after
+ * the ones that only click and never mean to leave, such as the PatternFly probes, so the address
+ * read taken before the first of them comes after every provider that should leave the page where
+ * it was. The core stack already lists the probes before the requirement providers, so this keeps
+ * the order every CLI scan had. Each group keeps the caller's order, because a provider list is
+ * also a stated running order.
  */
 function orderByPageEffect(providers: Provider[]): Provider[] {
+  const navigates = (provider: Provider): boolean => provider.navigatesOnPurpose === true;
   return [
-    ...providers.filter((provider) => provider.mutatesPageState !== true),
-    ...providers.filter((provider) => provider.mutatesPageState === true),
+    ...providers.filter((provider) => provider.mutatesPageState !== true && !navigates(provider)),
+    ...providers.filter((provider) => provider.mutatesPageState === true && !navigates(provider)),
+    ...providers.filter(navigates),
   ];
 }
 
@@ -112,10 +119,46 @@ function walkRecordOf(walk: unknown): WalkRecord | null {
   return { stops: stops as TranscriptStop[], complete };
 }
 
+export interface RunProvidersOptions {
+  /**
+   * Called right before each provider that may move the page on purpose (navigatesOnPurpose, a
+   * flow or a voice contract) runs, after every other provider. Called only for one that passed the
+   * capability and pristine checks and that applies to this screen, so a flow written for another
+   * screen moves nothing. The check runner reads the page address here: the first call tells a move
+   * the walk, a read-only provider, or the PatternFly probes saw from a move a flow makes on purpose,
+   * and each later call tells whether an earlier flow left the route. A gap it returns skips that
+   * provider and is kept with the other gaps. It decides no verdict.
+   */
+  beforeIntendedNavigation?: (provider: Provider) => Promise<CoverageGap | null>;
+  /**
+   * Called right after each provider that beforeIntendedNavigation let run, with the drafts that
+   * provider added, the same draft objects that are in the result. The check runner keeps them so
+   * it can drop the last flow's own result when the screen's content is gone by the end of the scan.
+   * Called even when the provider threw, with the partial drafts kept from it.
+   */
+  afterIntendedNavigation?: (provider: Provider, drafts: Draft[]) => void;
+}
+
+/**
+ * Whether a provider applies to the screen being scanned, by its own plan. A provider with no plan,
+ * or a plan that throws, is read as applying, so it is never run without the read before it.
+ */
+function appliesToScreen(provider: Provider, ctx: ProviderContext): boolean {
+  if (provider.appliesBeforeScan === undefined) {
+    return true;
+  }
+  try {
+    return provider.appliesBeforeScan({ id: ctx.screen.id, profile: ctx.profile ?? 'app' }).applies;
+  } catch {
+    return true;
+  }
+}
+
 export async function runProviders(
   providers: Provider[],
   ctx: ProviderContext,
   allowedCapabilities: Capability[],
+  options: RunProvidersOptions = {},
 ): Promise<ProviderRunResult> {
   const allowed = new Set(allowedCapabilities);
   const drafts: Draft[] = [];
@@ -142,11 +185,22 @@ export async function runProviders(
       continue;
     }
 
+    let watched = false;
+    if (provider.navigatesOnPurpose === true && options.beforeIntendedNavigation !== undefined && appliesToScreen(provider, ctx)) {
+      const skipped = await options.beforeIntendedNavigation(provider);
+      if (skipped !== null) {
+        gaps.push(skipped);
+        continue;
+      }
+      watched = true;
+    }
+
     // Recorded before the run because a provider that throws mid-probe has already clicked.
     if (provider.mutatesPageState === true) {
       mutatedBy ??= provider.id;
     }
 
+    const draftsBefore = drafts.length;
     try {
       const output = normalizeOutput(await provider.run(ctx));
       drafts.push(...output.drafts);
@@ -165,6 +219,9 @@ export async function runProviders(
       if (err instanceof ProviderRunFailed) {
         drafts.push(...err.drafts.filter((draft) => draft.evidenceClass !== 'deterministic'));
       }
+    }
+    if (watched) {
+      options.afterIntendedNavigation?.(provider, drafts.slice(draftsBefore));
     }
   }
 

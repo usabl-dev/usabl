@@ -21,6 +21,7 @@ import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { isGradientContrastReview } from '../../src/primitives/gradient-contrast.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
+import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { readPageImages } from '../../src/providers/page-images.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -141,6 +142,45 @@ const CONTENT_PAGES: Record<string, string> = {
     'Hidden',
     '<div id="content"><p style="display: none">Hidden by display</p><p style="visibility: hidden">Hidden by visibility</p>' +
       `<p style="opacity: 0">Hidden by opacity</p><img src="${GIF}" alt="Hidden chart" width="40" height="40" style="display: none" /></div>`,
+  ),
+  // Focusing its only control sends the page to /moved-clean.html, which is what a focus handler
+  // that navigates does. The address does not change at load, so only a read after the checks
+  // can tell. The page it moves to has a link to Tab to and nothing axe reports, so without that
+  // read the walk and the checks pass it.
+  '/navigate-on-focus.html': contentPage(
+    'Clusters',
+    '<main><h1>Clusters</h1><button id="open" type="button">Open</button></main>' +
+      "<script>document.getElementById('open').addEventListener('focus', () => { location.href = '/moved-clean.html'; });</script>",
+  ),
+  '/moved-clean.html': contentPage('Elsewhere', '<main><h1>Elsewhere</h1><p><a href="/">Home</a></p></main>'),
+  // Served at 127.0.0.1, focusing its control sends the page to the same path at localhost, which is
+  // another origin on the same server: the shape of a move to an SSO portal or a www home page that
+  // has the app's path. At localhost the handler does nothing, so the page has a stop to walk.
+  '/origin-move.html': contentPage(
+    'Home',
+    '<main><h1>Home</h1><button id="open" type="button">Open</button></main>' +
+      "<script>document.getElementById('open').addEventListener('focus', () => { if (location.hostname === '127.0.0.1') { location.href = `http://localhost:${location.port}${location.pathname}`; } });</script>",
+  ),
+  // A PatternFly page whose disclosure control sends the page to /moved-clean.html when it is
+  // clicked. Focus does nothing, so the walk stays. The PatternFly rulepack clicks the control in its
+  // dialog probe, so the page moves while the rulepack runs, the way a sign-in timer firing then
+  // would. It is a disclosure control, not aria-haspopup="dialog", so the probe makes no draft when
+  // no dialog opens: a draft would send the source read after the providers to an element that is
+  // gone, and the real driver waits 30 seconds for it.
+  '/pf-click-moves.html': contentPage(
+    'Clusters',
+    '<div class="pf-v6-c-page"><main><h1>Clusters</h1>' +
+      '<button id="open" type="button" class="pf-v6-c-button" aria-expanded="false" aria-controls="details">Show details</button>' +
+      '<div id="details" hidden>Details</div></main></div>' +
+      "<script>document.getElementById('open').addEventListener('click', () => { location.href = '/moved-clean.html'; });</script>",
+  ),
+  // Two panel buttons. Focusing one sets the address hash to its panel, the way a tab panel does,
+  // so the walk leaves the page at #panel-2 on the same path.
+  '/hash-on-focus.html': contentPage(
+    'Panels',
+    '<main><h1>Panels</h1><button id="show-1" type="button">First panel</button> ' +
+      '<button id="show-2" type="button">Second panel</button><p id="panel-1">First</p><p id="panel-2">Second</p></main>' +
+      '<script>for (const n of [1, 2]) { document.getElementById(`show-${n}`).addEventListener(\'focus\', () => { location.hash = `panel-${n}`; }); }</script>',
   ),
   '/background-only.html': contentPage('Banner', `<div id="banner" style="width: 200px; height: 100px; background-image: url(${GIF})"></div>`),
 };
@@ -1179,6 +1219,110 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
     expect(scan.gaps).toEqual([]);
   });
+
+  it('does not cover a screen with no reachedWhen whose page navigates away when a control is focused', async () => {
+    // The page loads at its own address with no password field and no refused request, so none of
+    // the load rules fire. The first Tab focuses the button and the page goes to a clean page,
+    // where axe and the walk would otherwise have run and found nothing.
+    const url = `${fixture.url}navigate-on-focus.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'clusters', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'clusters', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
+    expect(scan?.drafts).toEqual([]);
+    expect(scan?.stops).toEqual([]);
+  }, 30_000);
+
+  it('does not cover a screen whose page moves to another origin at the same path when a control is focused', async () => {
+    const url = `${fixture.url}origin-move.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'home', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'home', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('http://localhost:');
+    expect(scan?.drafts).toEqual([]);
+  }, 30_000);
+
+  it('does not cover a screen whose page moves while the PatternFly rulepack runs', async () => {
+    const url = `${fixture.url}pf-click-moves.html`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider, makeRulepackProvider()],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'clusters', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'clusters', url })]).screens[0];
+
+    expect(scan?.gaps).toHaveLength(1);
+    expect(scan?.gaps[0]).toMatchObject({ ref: url, state: 'not-covered' });
+    expect(scan?.gaps[0]?.reason).toContain('left its screen');
+    expect(scan?.gaps[0]?.reason).toContain('/moved-clean.html');
+    expect(scan?.drafts).toEqual([]);
+  }, 30_000);
+
+  it('still covers a screen with no reachedWhen whose tab panel sets the hash when focused', async () => {
+    // A plain fragment is a place on the page, not a route, so the read after the checks lets it
+    // stay. The wrapper records each address the page reports, to show the hash really changed.
+    const url = `${fixture.url}hash-on-focus.html`;
+    const addresses: string[] = [];
+    const recording: BrowserDriver = {
+      open: async (target: string): Promise<UsablPage> => {
+        const page = await driver.open(target);
+        return {
+          ...page,
+          currentUrl: async () => {
+            const address = await page.currentUrl();
+            addresses.push(address);
+            return address;
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+    const runner = makeCheckRunner({
+      browser: recording,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: fixture.url, surfaces: [{ id: 'panels', url, files: [] }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = markUnseenScreens([await runner.scan({ id: 'panels', url })]).screens[0];
+
+    expect(addresses.at(-1)).toMatch(/#panel-\d$/);
+    expect(scan?.gaps).toEqual([]);
+    expect(scan?.drafts).toEqual([]);
+    expect(scan?.stops.length).toBeGreaterThan(0);
+  }, 30_000);
 
   it('catches a 401 that only arrives after readiness, during the walk', async () => {
     // The timing window, through a real Chromium and a real 401. Readiness needs four equal DOM

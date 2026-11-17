@@ -14,6 +14,7 @@ import type {
   BrowserDriver,
   CheckRunner,
   CoverageGap,
+  Draft,
   Page,
   Provider,
   ReadinessProbe,
@@ -35,7 +36,14 @@ import {
   type ReadinessSignal,
 } from './reachability.js';
 import { readPageImages } from './page-images.js';
-import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import {
+  leftScreenGap,
+  observeLanding,
+  readPageAddress,
+  readRefusedRequests,
+  redirectedAwayGap,
+  stayedOnScreen,
+} from './redirected.js';
 import { isBrowserSandboxRefusal } from '../deps/sandbox.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
@@ -121,6 +129,67 @@ async function readBlockedOrigins(page: Page): Promise<string | null> {
     'If the app needs an origin, add it to judge.allowOrigins in the trusted usabl.config.json. ' +
     'An allowed hostname must be answered by a public address; list a local service by its IP address and port.'
   );
+}
+
+/**
+ * A flow or voice contract that did not run, because an earlier one moved the page to another
+ * route. Both are named by provider id, which comes from the requirement id in the requirement
+ * file, never from the page. The route the page moved to is not printed: the gap on the earlier
+ * flow, if any, is where that move is judged.
+ */
+function flowSkippedGap(screenId: string, providerId: string, movedBy: { id: string; lostSelector: string | null }): CoverageGap {
+  const left =
+    movedBy.lostSelector === null
+      ? 'left the page on another route'
+      : `left a page where the reachedWhen selector ${movedBy.lostSelector}, which matched before it, matches nothing`;
+  return {
+    ref: `provider:${providerId}`,
+    state: 'not-covered',
+    reason:
+      `${providerId} did not run on screen ${screenId}, because ${movedBy.id} ran before it and ${left}. Run ` +
+      'here, it would have checked a page that is not this screen, so its requirement is not checked on this ' +
+      `run. End ${movedBy.id} on the route and the content it started on, or check the later requirement on ` +
+      'its own screen.',
+  };
+}
+
+/**
+ * The last flow or voice contract that ran, when the screen's own reachedWhen selector matched
+ * before it and matches nothing at the end of the scan. Its result is not confirmed to be on this
+ * screen, so its own drafts are dropped and this gap takes their place. Named by provider id and by
+ * the operator's selector, never by page text.
+ */
+function lastFlowUnconfirmedGap(screenId: string, providerId: string, selector: string): CoverageGap {
+  return {
+    ref: `provider:${providerId}`,
+    state: 'not-covered',
+    reason:
+      `${providerId} ran on screen ${screenId}, and the reachedWhen selector ${selector} matched before it and ` +
+      'matches nothing at the end of the scan. Its result may come from a page that is not this screen, so ' +
+      'usabl reports nothing from it and its requirement is not checked on this run. The findings taken ' +
+      `before it stay. If ${providerId} leaves the screen on purpose, end it on the route and the content it ` +
+      'started on, or check its requirement on the screen it moves to.',
+  };
+}
+
+/**
+ * The enriched drafts without the ones a given provider added. `raw` is the list the providers
+ * returned and `enriched` is the same list after the source and row reads, one draft per draft in
+ * order, so a draft found in `raw` is dropped at the same position in `enriched`. If the two lists
+ * ever differ in length, every draft from the first dropped one on is dropped, which is the safe
+ * direction: the flows run last, so their drafts are at the end.
+ */
+function withoutDraftsOf(raw: Draft[], enriched: Draft[], dropped: Draft[]): Draft[] {
+  const drop = new Set(dropped);
+  const positions = raw.flatMap((draft, index) => (drop.has(draft) ? [index] : []));
+  if (positions.length === 0) {
+    return enriched;
+  }
+  if (raw.length !== enriched.length) {
+    return enriched.slice(0, Math.min(...positions));
+  }
+  const at = new Set(positions);
+  return enriched.filter((_draft, index) => !at.has(index));
 }
 
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
@@ -264,10 +333,12 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         });
         const readiness = await page.gotoReady(readyWhen);
 
-        // Whether this is the requested screen, signed in. The address and the password count are
-        // read here and only here: providers click and press keys, a click can navigate, so a
-        // later DOM read could not tell what the application did on load from what usabl did to
-        // it afterwards.
+        // Whether this is the requested screen, signed in. Rules A to C judge how the page loaded,
+        // so the address and the password count they read are taken here and only here: providers
+        // click and press keys, a click can navigate, so a later DOM read could not tell what the
+        // application did on load from what usabl did to it afterwards. The address is read once
+        // more after the checks, for a different question: whether the page was still this screen
+        // when they ended. See leftScreenGap below.
         const landing = await observeLanding(page, landingOptions);
         const notReached = redirectedAwayGap(screen.id, landing);
         if (notReached !== null) {
@@ -309,10 +380,64 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // that leaves the element in the DOM for a few hundred milliseconds. Content the scanner
           // itself caused is not the page, so the providers wait for it to go.
           await waitForScannerArtifactsToClear(page);
+          // The read point: right before the first flow or voice contract that applies to this
+          // screen and runs. They run after every other provider, the PatternFly probes included, so
+          // a move during the walk, a read-only provider, or the probes, such as a sign-in timer, is
+          // still leaving the screen. The address and the readiness selector are both read there. A
+          // flow may move the route on purpose, and its own rules judge that, so a move after this
+          // point does not drop what was measured on the screen before it. Null when no flow or
+          // voice contract ran here; both are then read after everything below.
+          //
+          // Before each later flow or voice contract the address and the selector are read again.
+          // Once the page has left the route seen at the read point, or the selector that held there
+          // matches nothing, every remaining one is skipped with a gap that names the flow that ran
+          // before the change. A later flow would otherwise prove its requirement on another page and
+          // count it for this screen. The last flow that ran is checked once more at the end, below.
+          const selector = signal === null ? null : signal.selector;
+          const selectorHolds = async (): Promise<boolean | null> =>
+            selector === null
+              ? null
+              : (await measureReadiness(page, { selector, response: null }, deps.config.appBaseUrl)).selectorPresent;
+          const navigation: {
+            readPoint: { providerId: string; url: string | null; selectorPresent: boolean | null } | null;
+            lastRan: string | null;
+            lastRanDrafts: Draft[];
+            movedBy: { id: string; lostSelector: string | null } | null;
+          } = { readPoint: null, lastRan: null, lastRanDrafts: [], movedBy: null };
           const providerResult = await runProviders(
             deps.providers,
             { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
             deps.allowedCapabilities,
+            {
+              beforeIntendedNavigation: async (provider) => {
+                if (navigation.readPoint === null) {
+                  navigation.readPoint = {
+                    providerId: provider.id,
+                    url: await readPageAddress(page),
+                    selectorPresent: await selectorHolds(),
+                  };
+                  navigation.lastRan = provider.id;
+                  return null;
+                }
+                const seen = navigation.readPoint.url;
+                if (navigation.movedBy === null && seen !== null && navigation.lastRan !== null) {
+                  const now = await readPageAddress(page);
+                  if (now === null || stayedOnScreen(screen.url, seen, now) !== true) {
+                    navigation.movedBy = { id: navigation.lastRan, lostSelector: null };
+                  } else if (navigation.readPoint.selectorPresent === true && (await selectorHolds()) === false) {
+                    navigation.movedBy = { id: navigation.lastRan, lostSelector: selector };
+                  }
+                }
+                if (navigation.movedBy !== null) {
+                  return flowSkippedGap(screen.id, provider.id, navigation.movedBy);
+                }
+                navigation.lastRan = provider.id;
+                return null;
+              },
+              afterIntendedNavigation: (_provider, added) => {
+                navigation.lastRanDrafts = added;
+              },
+            },
           );
           // The row a finding sits in is read on the same page the providers saw, before anything
           // else changes it, so the gate can key a control repeated in every table row per row.
@@ -321,27 +446,46 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             screen,
             await attachDomSourceToDrafts(page, providerResult.drafts),
           );
-          const drafts = rows.drafts;
           const images = deps.collectPageImages === true ? await pageImagesOf(page) : {};
 
           // Measure the readiness signal again after the walk and providers have run, while the
           // page is still open. This is the only place the live page exists; markUnseenScreens runs
           // later over collected scans and cannot query it. The response part counts only requests
           // sent before the walk began, so one a key press or a provider caused does not count. The
-          // selector part sees the page as the checks left it, so a walk that navigated away fails.
+          // selector part is the one taken at the read point when a flow or voice contract ran, so
+          // a flow that moves the route on purpose does not make the whole screen unseen, and
+          // otherwise it sees the page as the checks left it, so a walk that navigated away fails.
           // A part holds only when it held both here and before the walk; see heldThroughout.
+          const measuredAtEnd = await measureReadiness(page, signal, deps.config.appBaseUrl);
           const readiness = heldThroughout(
             { selectorPresent: landing.reachedSelectorPresent, responseSeen: landing.reachedResponseSeen ?? null },
-            await measureReadiness(page, signal, deps.config.appBaseUrl),
+            navigation.readPoint === null ? measuredAtEnd : { ...measuredAtEnd, selectorPresent: navigation.readPoint.selectorPresent },
           );
+
+          // The last flow or voice contract that ran is guarded by the selector at the end, as the
+          // whole scan was before the read point existed. When the selector held at the read point
+          // and matches nothing now, that flow's result may come from another page: its own drafts
+          // go and one gap names it. Everything taken before it stays, because the selector held
+          // then. The cost: a last flow that moves the route on purpose and leaves this screen's
+          // own content behind cannot verify. The source and row reads above keep one draft per
+          // draft, in order, so a draft is matched to its enriched copy by position.
+          const lastFlowUnconfirmed =
+            navigation.lastRan !== null &&
+            selector !== null &&
+            navigation.readPoint !== null &&
+            navigation.readPoint.selectorPresent === true &&
+            measuredAtEnd.selectorPresent === false
+              ? lastFlowUnconfirmedGap(screen.id, navigation.lastRan, selector)
+              : null;
+          const drafts = lastFlowUnconfirmed === null ? rows.drafts : withoutDraftsOf(providerResult.drafts, rows.drafts, navigation.lastRanDrafts);
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
           // after a stable shell appears, so an application that sends its identity request later
           // than that had sent nothing at the first read. A refusal recorded by either read means
           // the screen was not reached signed in, and everything collected from it goes with it.
           // This is the second and last read: a refusal that arrives after it is not seen. Only
-          // the refused-request record is re-read; the address and the password count keep their
-          // load-time values for the reason given above.
+          // the refused-request record is re-read for Rule A; the address and the password count
+          // keep their load-time values for the reason given above.
           //
           // The response record is re-read with it, so a refusal the application recovered from
           // during the walk is read against its later answer. Recovery also needs the declared
@@ -354,8 +498,39 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             unauthorizedApiUrls: await readRefusedRequests(page),
             apiResponses: await readApiResponses(page),
           });
+          // The address again, after the checks, compared with the address read at load. A page can
+          // leave its screen while it is checked: a focus handler navigates, or an auth timer sends
+          // it to a sign-in page with no refused identity request. The checks then measured the
+          // other page, so its findings would be reported against this screen, or a clean other
+          // page would read verified. Either way everything collected goes, as for a late refusal.
+          //
+          // This runs whether or not the screen declares a reachedWhen selector. A selector that a
+          // shared header or shell matches is on the other page too, so it cannot rule out a move.
+          // The fragment counts only when it names a route, so a tab panel that sets #tab-2 stays
+          // on the screen; see stayedOnScreen in redirected.ts.
+          //
+          // An address that cannot be read now, or could not be read at load, is a gap too: nothing
+          // then confirms the checks ran on this screen, and a gap is the safe direction. The real
+          // browser always reports an open page's address, so this only fires on a broken page.
+          //
+          // Which address: the one taken at the read point, before the first flow or voice contract,
+          // when one ran. There is no whole-screen read at the end then. It could not tell an
+          // intended flow move from a timer, and any gap it raised would make the whole screen not
+          // covered, so a flow that moves the route on purpose would lose the screen. A move after
+          // that point skips the later flows, as above, and the last flow's own move is left to its
+          // navigated gap and the silent change rule. When no flow or voice contract ran, the
+          // address is read here, the last read of the page, so it also covers the row and source
+          // reads, the image read, and the readiness measure above.
+          const leftScreen = leftScreenGap(screen.id, {
+            requestedUrl: screen.url,
+            loadedUrl: landing.landedUrl,
+            checkedUrl: navigation.readPoint === null ? await readPageAddress(page) : navigation.readPoint.url,
+            readBefore: navigation.readPoint === null ? null : navigation.readPoint.providerId,
+          });
           if (lateRefusal !== null) {
             result = notReachedScan(screen, lateRefusal, signal);
+          } else if (leftScreen !== null) {
+            result = notReachedScan(screen, leftScreen, signal);
           } else {
             result = {
               screenId: screen.id,
@@ -364,7 +539,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               drafts,
               // A row the scan could not tell apart is a gap on this screen, so the screen is not
               // cleanly scanned: no floored row is claimed fixed and prune keeps its entries.
-              gaps: [...providerResult.gaps, ...rows.gaps],
+              gaps: [...providerResult.gaps, ...rows.gaps, ...(lastFlowUnconfirmed === null ? [] : [lastFlowUnconfirmed])],
               applicability: providerResult.applicability,
               // Disclosures only. They are not gaps, so a screen with only notes is cleanly scanned.
               notes: providerResult.notes,

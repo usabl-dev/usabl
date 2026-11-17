@@ -2391,6 +2391,119 @@ set the gate is given, so no floored barrier on it can be reported as resolved.
   requested and that page carries a password input. This applies whether or not a storage state was
   configured, because a redirect to a sign-in page is the wrong page either way.
 
+**After the checks, the address again.** Rules A to C judge how the page loaded, so the address and
+the password count they read are taken once, when readiness settles. The keyboard walk and the
+providers press keys and click, and a click can navigate, so a later read could not tell what the
+application did on load from what usabl did to it afterwards. A page can still leave its screen
+after load: a focus handler navigates, or an auth timer sends it to a sign-in page with no refused
+identity request. The checks then measure the other page. Its accessibility barriers would be
+reported against the screen, or a clean other page would read verified though the screen was
+never checked. So the CLI reads the address again and compares it with the address the page
+reported at load. This read runs on every screen, with or without a `reachedWhen` selector,
+because a selector that a shared header or shell matches is on the other page too. A redirect the
+application ran on load to its own canonical address is not a move, because the comparison is with
+the address at load, not the configured one.
+
+**When it is read.** At the read point: after the keyboard walk and every other provider, right
+before the first provider that may move the page on purpose and that applies to this screen. Those
+are the flows and voice contracts, the providers marked `navigatesOnPurpose`. They run after every
+other provider, the PatternFly probes included. The probes click and press Escape but never mean
+to leave the page, so a move while they run, such as a sign-in timer that fires then, is leaving
+the screen. A flow or contract written for another screen still runs and reports nothing, so it
+does not move the read point. A flow may move the route on purpose, and its own rules judge that:
+a flow step that changes the path is already a `navigated` gap, and the silent change rule reads
+each step. So a move after the read point does not drop what was measured on the screen before it.
+When no flow or voice contract runs on this screen, the read point is the very end of the scan,
+next to the second Rule A read, after the row and source reads and the readiness measure. There is
+no whole-screen read at the end when a flow or voice contract ran: it could not tell an intended
+move from a timer, and any gap it raised would make the whole screen not covered. The gap names the
+read point it used: right before a named flow or contract, or at the end of the scan.
+
+**The readiness selector at the same point.** A `reachedWhen` selector is measured at the read
+point too, so a flow that moves the route on purpose and leaves the screen's own content behind
+does not make the whole screen unseen. For the whole screen, the selector has to hold before the
+walk and at the read point. The response part keeps its rule: it counts only requests sent before
+the walk, read at the end.
+
+**Later flows.** Before each later flow or voice contract that applies to this screen, the address
+is read again and compared with the address at the read point, by the same rule, and the selector
+is measured again. Once a read shows the page left that route, or the selector that held at the
+read point matches nothing, every remaining flow and contract is skipped, each with a `not-covered`
+gap that names it and the flow or contract that ran before the change, both by their requirement
+id. A later flow would otherwise check its requirement on a page an earlier flow moved to and count
+it for this screen. The findings and gaps taken before the change stay. To check both, end the
+first flow on the route and the content it started on, or give the later requirement its own
+screen. A flow that moves away and comes back within its own run is not seen, so the next flow
+runs.
+
+**The last flow.** When a flow or voice contract ran, the selector is measured again at the end of
+the scan. When it held at the read point and matches nothing at the end, the last flow or contract
+that ran gets a `not-covered` gap that names it and the selector, and its own drafts are dropped:
+its result may come from a page that is not this screen, such as a sign-in form swapped in at the
+same address. Every draft taken before it stays. The cost, and a gate effect: on a screen with a
+selector only it has, a last flow that leaves the selector unmatched cannot verify, whether it
+moves the route on purpose or only removes that content, such as a flow that empties a table. It
+gets the gap. Point `reachedWhen` at content the flow does not remove, end the flow on the route
+and the content it started on, or check its requirement on the screen it moves to.
+
+**What it does.** When the two addresses name different screens, or an address cannot be read, the
+screen is a `not-covered` gap. The gap names both addresses: origin, path, and the route of a hash
+route, without credentials, query, or any other fragment. When those printed parts are equal, it
+says the addresses differ only in a part that is not shown. An address the page reported that does
+not parse is said to be unreadable, not a move. The gap says what to do: sign in again if a session
+expired; find the script that navigates on focus or on a timer; for an app that routes with the
+query or a plain fragment, configure the screen's `url` with that part; and remove a plain anchor
+that is not a route from the `url`. The drafts, the keyboard stops, the applicability, the notes,
+and every gap from the checks go, as they do for a late refusal. A refusal found at the late Rule A
+read is reported instead, because it names an endpoint.
+
+The comparison is its own rule, used for this read only. `checkPage` and the landing rules keep
+`sameScreenPath`.
+
+- The origin (scheme, host, and port) always counts. Both addresses come from the same browser in
+  the same scan, so the origin changes only when the page moved, for example to an SSO portal at
+  its root or to a `www.` home page, which have the same path as the app root.
+- The path, with one trailing slash removed, always counts. A change of path is leaving the
+  screen.
+- The query counts only when the screen's configured `url` has one, such as
+  `/admin.php?page=clusters`. That app routes with the query, so on that screen any change to the
+  query is leaving, compared as written. The query is never printed. Without a query in the
+  configured `url`, the query is a filter or a page number and never counts.
+- A fragment counts only when it names a route. A fragment that starts with `#/` or `#!` is a hash
+  route and is read like a path: the part before its own `?` or a second `#`, with one trailing
+  slash removed, so `#/clusters#tab-2` is `#/clusters`. A change to it is leaving the screen, and so
+  is gaining or losing one. A plain fragment, such as `#tab-2` or `#section`, is a place on the page
+  that a tab panel or an anchor sets. Gaining, losing, or changing one is not leaving.
+- The exception: when the screen's configured `url` has a plain fragment, such as `/app#clusters`,
+  that app routes with plain fragments, so on that screen any change to the fragment is leaving. A
+  `url` with an anchor that is not a route, such as `/docs#install`, then makes a tab panel's
+  `#tab-2` a gap, so take the anchor out of the `url`.
+- When the address could not be read at load either, nothing confirms the checks ran on the
+  screen, so the screen is the same gap. That is the safe direction. The real browser reports the
+  committed address of every open page, so a real scan never meets it; only a broken page does.
+
+What this read does not catch:
+
+- a screen configured without a fragment, in an app that routes with plain fragments, that moves
+  from `/app` to `/app#login`. The read counts the fragment as a place on the page;
+- a screen configured without a query, in an app that routes with the query, that moves from
+  `/admin.php?page=clusters` to `/admin.php?page=login`;
+- a page that leaves its screen and comes back to the same address before the read;
+- a page that changes its content without changing its address;
+- a move made by the last flow or voice contract that runs on the screen, or by a timer that fires
+  while it runs, unless the screen's `reachedWhen` selector is gone at the end (see "The last
+  flow"). The flow's own rules see a flow step's path change; nothing here sees the rest;
+- a flow that moves away and comes back within its own run.
+
+For the first two, configure the screen's `url` with its query or fragment. For the first four, a
+`reachedWhen` selector that the other page lacks is measured again at the read point, and one that
+did not hold at both moments makes the screen a gap in `coverage/unseen.ts`. For the fifth, the
+same selector gaps the last flow, as above.
+
+`checkPage` reads its address after the checks with `sameScreenPath`, which compares a plain
+fragment whole, so on `checkPage` a tab panel that sets `#tab-2` during the checks is still a gap.
+That is the safe direction, and it is not changed here.
+
 The two session rules require a configured storage state because only that is an assertion that the
 run is signed in. Without it a 401 and a login form are ordinary things for a signed-out visitor to
 meet, and firing on them would turn every deliberate signed-out scan into a gap.
@@ -4683,7 +4796,9 @@ left its screen while they ran is the same gap, with its findings dropped. The k
 from that run go with them: the gap for a walk that was cut short and the gap for each region it
 could not read describe the other page, so the landing gap alone names the cause. The same holds
 when Rule A, read again after the checks, finds a refused request. Other gaps the checks made are
-kept. A page at another path or fragment is a `not-covered` gap with ref
+kept. The CLI reads the address again too, against the address read at load, with a comparison of
+its own that counts the origin, and the query and fragment only when they name a route. A page at
+another path or fragment is a `not-covered` gap with ref
 `landing:<screenId>` that names both addresses, without their credentials, query, or fragment,
 and no provider runs. Then the CLI's landing rules A to C from `providers/redirected.ts` are
 applied to the page, with the expected address moved onto the page's own origin, so Rule C
