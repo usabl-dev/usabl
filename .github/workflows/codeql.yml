@@ -1,0 +1,62 @@
+# GitHub CodeQL code scanning for the JavaScript and TypeScript code.
+# Results go to the Security tab under Code scanning, and a pull request shows its new
+# alerts as a check and on the changed lines. This is not a required check.
+
+name: codeql
+
+on:
+  pull_request:
+    branches: [main]
+    # Default types omit `edited`. Retargeting a PR onto main must still run the scan.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  schedule:
+    # Once a week, Monday 04:23 UTC, so new CodeQL queries also run on code that has not changed.
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  # A new push to a pull request replaces its older scan. Runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Read the code, and upload the results to code scanning. Nothing else.
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        # init and analyze must carry the same commit.
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: javascript-typescript
+          # JavaScript and TypeScript need no build step.
+          build-mode: none
+          # The default query suite. security-and-quality is not used until a run on this
+          # repository shows it stays under 10 minutes.
+          # The scan scope is set here, inside the guarded workflow folder, so a change to
+          # it needs the same approval as any workflow edit. fixtures/ holds test pages that
+          # carry accessibility barriers on purpose.
+          config: |
+            paths-ignore:
+              - dist
+              - node_modules
+              - fixtures
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: "/language:javascript-typescript"

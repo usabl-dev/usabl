@@ -3934,15 +3934,32 @@ Six bindings are compared on re-verification, plus the waiver end below:
   one that gives more bytes than its size said (it grew while usabl read it), is `other`, so the
   value is `unreadable` and the stop runs the full check. Across all bound files usabl reads at
   most 64 MiB, and a file that would pass that total makes the value `unreadable` too. Hashing
-  takes about 5.5 seconds per GiB here, so a file at the 16 MiB cap adds about a tenth of a
-  second to every stop, and the 64 MiB total about a third of a second.
+  takes about 5.5 seconds per GiB here, so one hash of a file at the 16 MiB cap takes about a
+  tenth of a second, and one hash at the 64 MiB total about half a second as measured. A stop
+  that runs the full check hashes the local files three times (the fast-path verify, then the two
+  reads in the run), and an idle run pays one read, so the worst case is about 1.5 seconds per
+  stop at the caps.
   A `.env` file outside the root and the app folders is bound only when it is listed in
   `localFiles`, for example one in a folder that Vite's `envDir` names, or a `config/.env` a
   server loads. A `usabl check --ci` run binds no local files: CI has no ignored files, and its
   Result is an artifact that others read, where a hash with no key of a short secret in `.env`
   could be guessed offline. Its receipt has no `localFilesHash`, so a local stop never matches it.
-  The run reads the bound files when it mints the receipt, after the scan, so an edit to one
-  during the scan is bound as if the scan had seen it.
+  A team's own CI job that runs `usabl check` should pass `--ci` for the same reason: without it
+  the Result carries the hash with no key.
+  The run reads this hash before it plans and again at the second tree read, with the same config
+  both times. If the two differ, a bound file changed during the check: the run carries a
+  not-covered gap (ref `local files`) that names no path, is never verified, and mints no
+  receipt. The receipt binds the first read, and the mint in `run()` reads no bound file, so an
+  edit after the second read moves the files away from it. A library caller of the exported
+  `mintReceipt` that passes no hash still makes mint read the files itself. `unreadable` at
+  either read leaves no receipt that matches. An idle run is left idle. Known limits: an edit
+  made during the scan and undone before the second read leaves the reads equal, so the run is
+  verified. When the binding is `unreadable` at both reads (a link, a file over its cap, a total
+  past the cap, or more than 256 paths), the reads are equal and cannot be compared, so an edit
+  to such a file during the scan is not seen and the run can be verified; its receipt binds
+  `unreadable` and never matches a later stop. A config edit after the Stop hook parsed
+  `usabl.config.json` is caught by the guard, because the config is a guarded path, so that run
+  reads `approval_required` and mints no receipt.
 
 A source-tree change or committed policy change invalidates the receipt, and so does a
 different starting commit, an engine or scanner change, a move of the history branch, the
