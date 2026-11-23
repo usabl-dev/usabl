@@ -433,19 +433,34 @@
 
 ### Fixed
 
+- `usabl check` saves a receipt only when the config it planned with is `usabl.config.json` at
+  the repository root, by the real path the operating system opens. A receipt binds the bytes of
+  that root file, the one the Stop hook plans from, and not the config the check used. Before, a
+  plain `usabl check --config <other file>`, or `--branch-scope --config x/../usabl.config.json`
+  with `x` a link out of the repository, planned with another config and saved a receipt the
+  next stop answered from, VERIFIED without a scan. Such a check now saves none and says so on
+  stderr; its verdict stands. A run through `--isolated-browser` saves none either. Gate effect: a
+  stop no longer answers from a scan planned with a config it does not read.
 - `usabl check --branch-scope` from a subfolder accepts `--config ../usabl.config.json`. The path
-  is compared with `usabl.config.json` at the repository root, without following links, so the
-  root file named by its relative path runs, and a file outside the repository is still refused
-  with exit 2. A check from a subfolder runs at the repository root, as the Stop hook does, so it
-  reads the same guarded files and saves its receipt where the next stop looks. From a subfolder
-  with no `--config`, the default name means a file in that folder, so the check is refused with
-  exit 2 and says to run from the project root or pass `--config` with the path to the root file.
-  Gate effect: none. The check still reads the root config the hook reads.
+  must match `usabl.config.json` at the repository root both as written, without following links,
+  and by real path, with every link followed as opening the file does. So the root file named by
+  its relative path runs, and a path that opens any other file is refused with exit 2: a file
+  outside the repository, a link elsewhere that points at the root file, and
+  `x/../usabl.config.json` where `x` is a link out of the repository. A run that passes reads the
+  root file by its plain name. A check from a subfolder runs at the repository root, as the Stop
+  hook does, so it reads the same guarded files and saves its receipt where the next stop looks.
+  From a subfolder with no `--config`, the default name means a file in that folder, so the check
+  is refused with exit 2 and says to run from the project root or pass `--config` with the path to
+  the root file. Gate effect: none. The check reads the root config the hook reads.
 - A `uiFileGlobs` entry whose brace groups expand to more than 256 patterns is refused when the
-  config is read, the same cap `guardedPaths` has. The matcher builds one pattern for each
-  expansion, so a short entry could stall a run or exhaust memory. The message names the entry
-  and says to split it or use a wildcard. The entry is never cut to fewer patterns. Gate effect:
-  a config with such an entry no longer loads; split the entry.
+  config is read, the same cap `guardedPaths` has. The list is bounded as a whole too: a pattern
+  longer than 1024 characters, more than 4096 patterns across the list, or more than 262,144
+  pattern characters in all is refused, and a pattern the regular expression engine cannot build
+  is a config refusal, not a crash in a run. The matcher builds one pattern for each expansion,
+  so a short entry could stall a run or exhaust memory. The message names the entry and says to
+  split it or use a wildcard. The entry is never cut to fewer patterns. The planner now builds
+  each entry's matcher once per run. Gate effect: a config past a bound no longer loads; split or
+  shorten the entry.
 - A long config path in the missing-file and empty `uiFileGlobs` messages keeps its file name.
   It is shortened from the middle, so the start of the path and the file name both stay readable,
   where before it was cut at the end.
@@ -462,8 +477,9 @@
   rewrote the file with only `version` and `hooks`.
 - The axe world compare summary script records the usabl, axe-core, and Playwright versions in the
   sweep part it builds, and `--sweep-from` refuses a kept sweep from other versions, or one that
-  holds an unstable comparison, and writes nothing. A sweep from before this change is checked
-  against its summary's header, and the output says its usabl version was not checked.
+  holds an unstable comparison, and writes nothing. A sweep from before this change records no
+  versions, so it is refused unless `--accept-unversioned-sweep` is passed, and the output then
+  says its versions were not checked.
 - A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook
   at its limit lets the stop go on, so a slow stop let an agent stop without the accessibility
   work. `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command
