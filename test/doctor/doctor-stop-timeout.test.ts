@@ -78,6 +78,14 @@ describe('doctor and the Claude Code Stop hook time limit', () => {
     expect(stop.state).toBe('drifted');
     expect(stop.nextStep).toContain('does not match USABL_STOP_HOOK_TIMEOUT');
   });
+
+  it('reports a timeout on a command that sets no limit, and says the command sets none', async () => {
+    const stop = await report(claudeSettings({ type: 'command', command: PREVIOUS_STOP_HOOK_COMMAND, timeout: 600 }), 'stop-hook');
+    expect(stop.state).toBe('drifted');
+    expect(stop.nextStep).toContain('or the command sets none');
+    // The runner then plans to the shortest Claude Code default, so it stops checking early.
+    expect(stop.nextStep).toContain('60 seconds');
+  });
 });
 
 describe('doctor and the Cursor stop hook time limit', () => {

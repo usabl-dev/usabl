@@ -82,11 +82,31 @@ describe('the Claude Code Stop hook states its time limit', () => {
     expect((await planClaude(fs)).action).toBe('already-wired');
   });
 
-  it('sets both to the larger limit when only one was raised', async () => {
+  it('sets the command to a timeout a person raised', async () => {
     const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: settingsWith({ type: 'command', command: STOP_HOOK_COMMAND, timeout: 900 }) });
     const plan = await planClaude(fs);
     expect(plan).toMatchObject({ action: 'update', reason: 'timeout', timeoutProblem: 'mismatch' });
     await writeClaude(fs, plan);
+    expect(stopHooks(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([{ type: 'command', command: stopHookCommand(900), timeout: 900 }]);
+  });
+
+  it('keeps the timeout a person set, lower or higher, and makes the command match it', async () => {
+    // The timeout is the limit Claude Code enforces, so it wins over the number in the command.
+    for (const [commandLimit, timeout] of [
+      [600, 120],
+      [1200, 600],
+    ] as const) {
+      const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: settingsWith({ type: 'command', command: stopHookCommand(commandLimit), timeout }) });
+      const plan = await planClaude(fs);
+      expect(plan).toMatchObject({ action: 'update', reason: 'timeout', timeoutProblem: 'mismatch' });
+      await writeClaude(fs, plan);
+      expect(stopHooks(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([{ type: 'command', command: stopHookCommand(timeout), timeout }]);
+    }
+  });
+
+  it('takes the limit from the command when the timeout is unusable', async () => {
+    const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: settingsWith({ type: 'command', command: stopHookCommand(900), timeout: '900' }) });
+    await writeClaude(fs, await planClaude(fs));
     expect(stopHooks(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([{ type: 'command', command: stopHookCommand(900), timeout: 900 }]);
   });
 

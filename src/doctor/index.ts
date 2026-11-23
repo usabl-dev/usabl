@@ -14,6 +14,7 @@ import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
 import { planClaude, type TimeoutProblem } from '../install/claude.js';
 import {
+  CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS,
   CLAUDE_STOP_TIMEOUT_SECONDS,
   CURSOR_STOP_TIMEOUT_SECONDS,
   MIN_HOST_TIMEOUT_SECONDS,
@@ -577,8 +578,10 @@ const CLAUDE_TIMEOUT_STEPS: Record<TimeoutProblem, string> = {
     `${STOP_HOOK_TIMEOUT_ENV} in the command to the same number of at least ${MIN_HOST_TIMEOUT_SECONDS}.`,
   mismatch:
     `The timeout of the usabl Stop hook in .claude/settings.json does not match ${STOP_HOOK_TIMEOUT_ENV} in its command, ` +
-    'so usabl plans its own deadline to a different limit than the one Claude Code uses. ' +
-    'Run "usabl install --claude" to set both to the same number.',
+    'or the command sets none, so usabl plans its own deadline to a different limit than the one Claude Code uses. ' +
+    `A command that sets none makes usabl plan to ${CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS} seconds, the shortest Claude Code default. ` +
+    'A larger number than the timeout lets Claude Code end the hook first, and then the stop goes on with nothing checked. ' +
+    'Run "usabl install --claude" to make the command match the timeout.',
 };
 
 const CURSOR_TIMEOUT_STEPS: Record<CursorTimeoutProblem, string> = {

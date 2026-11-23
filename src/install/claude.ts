@@ -146,18 +146,30 @@ export function stopHookTimeoutProblem(hook: Record<string, unknown>): TimeoutPr
   return commandLimit === timeout ? null : 'mismatch';
 }
 
+// True for a limit usabl can write in both places: whole seconds the runner reads, at or above
+// the minimum.
+function usableLimit(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_HOST_TIMEOUT_SECONDS &&
+    parseTimeoutSeconds(String(value)) !== null
+  );
+}
+
 /**
- * The limit a rewrite gives a usabl hook: the larger of the limits the command and the timeout
- * state, when each is whole seconds at or above the minimum, so a limit a person raised in one of
- * the two places is kept. Otherwise the default.
+ * The limit a rewrite gives a usabl hook. The hook's `timeout` is the limit Claude Code enforces,
+ * so a usable one is kept, lower or higher than the default, and the command is made to match it.
+ * Without one, a usable limit in the command is kept. Otherwise the default.
  */
 function rewriteLimit(hook: Record<string, unknown>): number {
+  const timeout = hook['timeout'];
+  if (usableLimit(timeout)) {
+    return timeout;
+  }
   const command = typeof hook['command'] === 'string' ? hook['command'].trim() : '';
-  const candidates = [stopHookCommandLimit(command), typeof hook['timeout'] === 'number' ? hook['timeout'] : null].filter(
-    (value): value is number =>
-      value !== null && Number.isInteger(value) && value >= MIN_HOST_TIMEOUT_SECONDS && parseTimeoutSeconds(String(value)) !== null,
-  );
-  return candidates.length === 0 ? CLAUDE_STOP_TIMEOUT_SECONDS : Math.max(...candidates);
+  const commandLimit = stopHookCommandLimit(command);
+  return usableLimit(commandLimit) ? commandLimit : CLAUDE_STOP_TIMEOUT_SECONDS;
 }
 
 function canonicalStopEntry(): { hooks: Array<{ type: string; command: string; timeout: number }> } {
