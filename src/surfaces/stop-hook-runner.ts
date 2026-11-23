@@ -32,6 +32,7 @@ import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import {
   checkCommandFor,
   findStartingCommit,
+  NO_TRUSTED_BRANCH_NOTE,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
   scopeGapNextStep,
@@ -1311,6 +1312,8 @@ async function runStopChecks(
     }
     state.checkCommand = checkCommandFor(scope.baseRevision);
     const checkCommand = state.checkCommand;
+    // With no trusted branch the allow line itself says so, not only the note after it.
+    const noTrustedBranch = scope.note === NO_TRUSTED_BRANCH_NOTE;
     // The session pins and the guard above compare with the last commit, so a policy change
     // committed on the branch before the first stop passes both. CI compares policy with the base
     // of the pull request, so the stop also compares it with the starting commit. A file found
@@ -1329,6 +1332,7 @@ async function runStopChecks(
       const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
+        ...(noTrustedBranch ? { noTrustedBranch: true } : {}),
       }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
@@ -1359,6 +1363,7 @@ async function runStopChecks(
       checkCommand,
       ...(startingCommit === null ? {} : { policyFromStartingCommit: true }),
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
+      ...(noTrustedBranch ? { noTrustedBranch: true } : {}),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
     const notices = [

@@ -23,6 +23,7 @@ import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeStopHookRunnerPorts, runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
 import { NO_TRUSTED_BRANCH_NOTE, type StartingCommit } from '../../src/surfaces/stop-hook-scope.js';
+import { NO_TRUSTED_BRANCH_WARNING } from '../../src/surfaces/stop-hook.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
 import { sha256 } from '../../src/primitives/canonical.js';
 
@@ -311,7 +312,7 @@ describe.skipIf(REAL_UID === null)('Stop hook session pins on a shared temp dire
 
     const lines = result.stderr.trimEnd().split('\n');
     expect(lines.slice(-7)).toEqual([
-      'VERIFIED (exit 0, session drift not checked): the gate verified this change. You may stop.',
+      `VERIFIED (exit 0, session drift not checked, ${NO_TRUSTED_BRANCH_WARNING}): the gate verified this change. You may stop.`,
       NO_TRUSTED_BRANCH_NOTE,
       'NOT verified - usabl did not use session pins for this stop because the pin store refused to read them ' +
         '(its reason is under "pin reason" in the untrusted text below). Guarded policy drift during this ' +

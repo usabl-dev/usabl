@@ -224,7 +224,9 @@ re-baseline to green.
   starting commit cannot be found or used, or the listing fails, the stop is a not-covered gap
   that blocks once; it never falls back to the uncommitted changes, to the whole history, or to
   nothing to check. With no trusted branch at all, the stop keeps the uncommitted scope and
-  every decision says that committed work was not checked. Limits: the trusted branch is what
+  every decision says that committed work was not checked. A VERIFIED or idle line says inside
+  its parentheses that no trusted branch was found to compare policy with, so a reader who skips
+  the note that follows still sees it. Limits: the trusted branch is what
   the local clone records for origin, so a stale `origin/HEAD` or an old fetch moves the
   starting commit, and a branch whose base is not origin's default branch is compared with the
   default branch anyway. In both cases the stop checks the changes since the commit the local

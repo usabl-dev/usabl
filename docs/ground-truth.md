@@ -4277,7 +4277,11 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     decision, a block, an idle line, and a stored receipt allow included, is followed by "Note:
     usabl found no trusted branch to compare this branch with ... Work already committed on this
     branch was not checked on this stop." and the `git remote set-head origin --auto` step. In
-    Claude Code the note reaches the person through `systemMessage`.
+    Claude Code the note reaches the person through `systemMessage`. A note after the decision is
+    easy to miss, so an allow line also says it inside its parentheses: "VERIFIED (exit 0, no
+    trusted branch found to compare policy with; see the note below): ...", the stored receipt
+    line ("VERIFIED (exit 0, stored receipt, not re-scanned, no trusted branch found ...)"), and
+    the idle line ("NO VERDICT: IDLE (exit 0, no trusted branch found ...)") alike.
   - Limit: any process in the session can move `origin/HEAD`, or the branch it names, with
     ordinary git commands such as `git update-ref refs/remotes/origin/main HEAD`. That shrinks
     the stop's scope to the uncommitted changes, and usabl cannot tell this from a fetch. CI,

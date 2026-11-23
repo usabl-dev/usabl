@@ -305,6 +305,62 @@ describe('no trusted branch at all', { timeout: REAL_PROCESS_BUDGET_MS }, () => 
     expect(h.stderr()).toContain('stored receipt, not re-scanned');
     expect(h.stderr()).toContain(NOTE);
   });
+
+  // A reader can miss a note that comes after the decision, so the VERIFIED line itself says that
+  // policy was not compared with a trusted branch. The note still follows with its next step.
+  const WARNING = 'no trusted branch found to compare policy with; see the note below';
+  // The verdict word and what its parentheses hold, up to the colon that ends them.
+  const verdictParentheses = (line: string): string => line.slice(0, line.indexOf('): ') + 1);
+
+  it('puts the warning inside the VERIFIED line of a fresh check', async () => {
+    await write('src/App.tsx', 'export const App = 2;\n');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    const first = h.stderr().split('\n')[0] ?? '';
+    expect(verdictParentheses(first)).toMatch(/^VERIFIED \(exit 0, /);
+    expect(verdictParentheses(first)).toContain(WARNING);
+    expect(h.stderr()).toContain(NOTE);
+    expect(h.stderr()).toContain('git remote set-head origin --auto');
+  });
+
+  it('puts the warning inside the VERIFIED line of a stored receipt allow', async () => {
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await runStopHookFromStdin('{}', hook().ports);
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual([]);
+    const first = h.stderr().split('\n')[0] ?? '';
+    expect(verdictParentheses(first)).toMatch(/^VERIFIED \(exit 0, stored receipt, not re-scanned, /);
+    expect(verdictParentheses(first)).toContain(WARNING);
+    expect(h.stderr()).toContain(NOTE);
+  });
+
+  // An idle stop here can follow committed UI work, so its line carries the warning too.
+  it('puts the warning inside the idle line', async () => {
+    git('switch', '-q', '-c', 'feature');
+    await write('src/Other.tsx', 'export const Other = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the other screen');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual([]);
+    const first = h.stderr().split('\n')[0] ?? '';
+    expect(verdictParentheses(first)).toMatch(/^NO VERDICT: IDLE \(exit 0, /);
+    expect(verdictParentheses(first)).toContain(WARNING);
+    expect(h.stderr()).toContain(NOTE);
+  });
+
+  it('leaves the VERIFIED line alone when a trusted branch is recorded', async () => {
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.stderr()).toMatch(/^VERIFIED \(exit 0/);
+    expect(h.stderr()).not.toContain(WARNING);
+    expect(h.stderr()).not.toContain(NOTE);
+  });
 });
 
 describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, () => {

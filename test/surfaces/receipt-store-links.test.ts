@@ -260,7 +260,8 @@ describe('A receipt save that fails for another reason', () => {
     expect(await runStopHookFromStdin('{"session_id":"session-one"}', ports)).toBe(0);
 
     const text = stderr.join('');
-    expect(text.startsWith('VERIFIED (exit 0)')).toBe(true);
+    // The temporary repository records no trusted branch, so the line also carries that warning.
+    expect(text).toMatch(/^VERIFIED \(exit 0[,)]/);
     expect(text).not.toContain('stop hook error');
     expect(text.indexOf('NOT saved - usabl did not save the receipt')).toBeGreaterThan(0);
     const payload = JSON.parse(stdout.join('').trim()) as { systemMessage?: string };
