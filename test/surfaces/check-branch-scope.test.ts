@@ -94,13 +94,16 @@ async function check(...args: string[]): Promise<{ code: number; stdout: string;
   return { code, stdout: stdout.join(''), stderr: stderr.join(''), scanned: [...state.scanned] };
 }
 
-async function stop(): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
+async function stop(
+  input = '{}',
+  pins: ReturnType<typeof memoryPinStore> = memoryPinStore(),
+): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
   const out: string[] = [];
   const said: string[] = [];
   state.scanned = [];
   const ports = {
     ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
-    pins: memoryPinStore(),
+    pins,
     stdoutWrite: async (text: string) => {
       said.push(text);
     },
@@ -108,7 +111,7 @@ async function stop(): Promise<{ stderr: string; stdout: string; scanned: string
       out.push(text);
     },
   };
-  await runStopHookFromStdin('{}', ports);
+  await runStopHookFromStdin(input, ports);
   return { stderr: out.join(''), stdout: said.join(''), scanned: [...state.scanned] };
 }
 
@@ -452,7 +455,9 @@ describe('policy changed on the branch since the starting commit', { timeout: RE
     expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
   });
 
-  it('a branch that sets usabl up is a guarded change until the config is on the trusted branch', async () => {
+  // A branch that sets usabl up has no trusted policy to compare with, so the stop reads the
+  // branch's own policy and says so on the verdict line. CI still asks a code owner to approve it.
+  it('a branch that sets usabl up is scanned with its own policy, and the verdict line says so', async () => {
     git('rm', '-q', 'usabl.config.json');
     git('commit', '-q', '-m', 'main has no usabl config yet');
     recordTrustedBranch();
@@ -462,8 +467,11 @@ describe('policy changed on the branch since the starting commit', { timeout: RE
     git('add', '-A');
     git('commit', '-q', '-m', 'set usabl up');
 
-    const stopped = await stop();
-    expectApprovalBlock(stopped, 'usabl.config.json');
+    const stopped = await stop(JSON.stringify({ session_id: 'session-one' }));
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.scanned).toEqual(['home']);
+    expect(stopped.stderr.startsWith('VERIFIED (exit 0, policy from this branch, not approved yet)')).toBe(true);
+    expect(stopped.stderr).toContain('Note: this branch sets usabl up.');
   });
 
   it('a waiver changed only in the working tree is still reported', async () => {
