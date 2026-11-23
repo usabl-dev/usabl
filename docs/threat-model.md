@@ -244,28 +244,46 @@ re-baseline to green.
   change, a file that is slow to read) could then stop without the accessibility work. So every
   stop ends inside the host's limit. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
-  hook states `"timeout": 300`, which the runner assumes in Cursor mode. A Claude Code hook
-  command that sets no number, such as the one earlier releases wrote, makes the runner plan to
-  600 seconds, the default Claude Code's hooks documentation gives for a command hook, so its
-  deadline is 570 seconds. The runner's own deadline is the limit less 30 seconds. A stop that reaches it saves no receipt, stops the scan, and blocks once with
-  "NOT verified - usabl ran out of time", or lets an active continuation through once with the
-  same notice, so a slow app cannot loop the agent. It never reads as a pass. Only one answer
-  reaches the host: when the deadline comes after the check started its own answer, that
-  answer stands and the deadline writes nothing. `usabl doctor` reports a hook with no
-  timeout, a limit below 60 seconds, or a command whose number differs from the timeout (ground
-  truth, sections 11.2 and 11.9). `npm run measure:stop-time` measures how long a stop takes.
-- Limits of the timeout rule. The runner cannot read the hook's `timeout`, only the number its
-  command sets. A command whose number is larger than the timeout makes the runner plan past
-  the host's limit, and a slow stop then goes on. Editing the hook settings is as strong as
-  removing the hook, which any process with write access to the repository can do, and
-  `.claude/settings.json` is not guarded unless a project lists it in `guardedPaths`. Doctor
-  reports the mismatch. An answer the check started before the deadline
-  and has not finished 10 seconds later is cut short when the process ends.
+  hook states `"timeout": 300`, and the generated adapter script passes the stop entry's
+  timeout to the runner in the same variable. Both set the variable themselves, so a value in
+  the environment the assistant runs in does not win over them. A Claude Code hook command that
+  sets no number, such as the one earlier releases wrote, makes the runner plan to 600 seconds,
+  the default Claude Code's hooks documentation gives for a command hook, so its deadline is
+  570 seconds. The runner's own deadline is the limit less 30 seconds. A stop that reaches it
+  saves no receipt, stops the scan, and blocks once with "NOT verified - usabl ran out of
+  time", or lets an active continuation through once with the same notice, so a slow app
+  cannot loop the agent. It never reads as a pass. Only one answer reaches the host: when the
+  deadline comes after the check started its own answer, that answer stands and the deadline
+  writes nothing. `usabl doctor` reports a hook with no timeout, a limit below 60 seconds, a
+  timeout usabl cannot match, or a command or script whose number differs from the timeout
+  (ground truth, sections 11.2 and 11.9). `npm run measure:stop-time` measures how long a stop
+  takes.
+- Limits of the timeout rule. The runner cannot read the hook's `timeout`. It reads
+  `USABL_STOP_HOOK_TIMEOUT` from its environment, whatever set it. A number larger than the
+  timeout makes the runner plan past the host's limit, and a slow stop then goes on. Editing
+  the hook settings is as strong as removing the hook, which any process with write access to
+  the repository can do, and `.claude/settings.json` is not guarded unless a project lists it
+  in `guardedPaths`. Doctor reports a command or script whose number differs from the timeout.
+  An answer the check started before the deadline and has not finished when its wait ends is
+  cut short when the process ends.
+- Limit, stated plainly: the Claude Code command and the Cursor script earlier releases wrote
+  set no `USABL_STOP_HOOK_TIMEOUT`, so a value the assistant's process inherits wins, for
+  example one a person exported in a shell profile. If it is larger than the host's limit, the
+  host can end the hook before usabl answers, and the stop goes on. Doctor cannot see the
+  environment, but it reports both older forms as drifted, and `usabl install --claude` or
+  `usabl install --cursor` closes the gap by writing a hook that sets the variable itself.
 - Limit, stated plainly: on an older Claude Code release whose default for a command hook was
   60 seconds, a hook that states no limit can still be ended by Claude Code before usabl
   answers, and the stop then goes on, as in earlier releases of usabl. This lasts until
   `usabl install --claude` runs again and the hook states its limit. Doctor reports such a hook
   as drifted, and a stop of it that runs out of usabl's time names the reinstall step.
+- Limit, stated plainly: each wait after the deadline (for an answer the check was writing, and
+  for the browser to close) takes at most a third of the time between the deadline and the
+  host's limit, so for a limit below 60 seconds the waits shrink with the margin. The time npm
+  takes to start the hook, before usabl's process starts, is not counted. For a host limit of a
+  few seconds, starting npm and node alone can use the whole limit, and usabl cannot answer
+  inside it. Doctor reports any limit
+  below 60 seconds.
 - On a Stop hook stop, the requirement providers and the commercial engines are still built from
   the working-tree `usabl.config.json`, and a change there is a guarded change, so the stop blocks
   for approval.

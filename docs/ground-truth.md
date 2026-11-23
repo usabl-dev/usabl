@@ -4306,13 +4306,23 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - The host's limit. The Claude Code hook `usabl install --claude` writes has `"timeout": 600`,
     and its command sets `USABL_STOP_HOOK_TIMEOUT=600` in front of `npm exec`, so the runner
     reads the same number from its environment. An environment variable, not a flag, so a usabl
-    older than the command ignores it instead of refusing an unknown flag. The Cursor hook keeps
-    `"timeout": 300` in `.cursor/hooks.json`, and in Cursor mode the runner plans to 300 seconds
-    when the variable is unset. A Claude Code hook command that sets no variable, such as the
-    one earlier releases wrote, makes the runner plan to 600 seconds, the default Claude Code's
-    hooks documentation gives for a command hook with no `timeout` (the Stop event keeps it), so
-    its deadline is 570 seconds. A variable that is set always wins. A value that is not whole
-    seconds of at most six digits counts as unset.
+    older than the command ignores it instead of refusing an unknown flag. The Cursor hook has
+    `"timeout": 300` in `.cursor/hooks.json`, and the adapter script `usabl install --cursor`
+    writes sets `USABL_STOP_HOOK_TIMEOUT` to the usabl stop entry's timeout (the smallest one
+    when there are several, in whole seconds of at most six digits). A Claude Code hook command
+    that sets no variable, such as the one earlier releases wrote, makes the runner plan to 600
+    seconds, the default Claude Code's hooks documentation gives for a command hook with no
+    `timeout` (the Stop event keeps it), so its deadline is 570 seconds. An adapter script that
+    sets none, such as the one earlier releases wrote, makes the runner plan to 300 seconds. A
+    variable that is set always wins. A value that is not whole seconds from 1 to 999999 with no
+    leading zero is ignored, and the out-of-time message then says it was set to a value that is
+    not a whole number of seconds and was ignored. The message never prints the value.
+  - Limit: the Claude Code command and the Cursor script earlier releases wrote set no variable,
+    so a value the assistant's process inherits from its environment wins. A value larger than
+    the host's limit lets the host end the hook first, and the stop goes on. `usabl doctor`
+    cannot see the environment, but it reports both older forms as drifted, and
+    `usabl install --claude` or `usabl install --cursor` closes the gap. The hooks it writes set
+    the variable themselves, so an inherited value does not reach the runner.
   - Limit: on an older Claude Code release whose default for a command hook was 60 seconds, a
     hook that states no limit can still be ended by Claude Code before usabl answers, and the
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
@@ -4320,30 +4330,37 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
-    exit. Below a host limit of 60 seconds the runner keeps half the limit instead. The clock
-    counts from the start of the hook process, and the timer is injected, so tests never wait.
+    exit. Below a host limit of 60 seconds the runner keeps half the limit instead. Each wait
+    after the deadline takes at most a third of the time between the deadline and the host's
+    limit, so with a 40 second limit each wait is 6.666 seconds. The clock counts from the start
+    of usabl's process, and the timer is injected, so tests never wait. Limit: npm's own start
+    is not counted, and for a host limit of a few seconds starting npm and node can use the whole
+    limit, so usabl cannot answer inside it. `usabl doctor` reports any limit below 60 seconds.
   - When the deadline comes before the check starts its answer, the runner closes the browser,
     which stops the scan, saves no receipt, and blocks once: "NOT verified - usabl ran out of
-    time: this stop took longer than usabl's own limit of 570 seconds, so usabl stopped the check
-    before it could check the change. Nothing is proven about this change, and no receipt was
-    saved.", then the limit it used and where it came from, then "Next: narrow the change and
-    stop again, or run usabl check by hand, or raise the limit in the hook settings." and how to
-    raise it for that assistant. When a Claude Code hook command set no limit, the message ends
-    with "Run usabl install --claude again so the hook states its time limit." The check named is `usabl check --branch-scope` once the stop
-    found a starting commit. On an active continuation it lets the stop through once with the
-    same notice and "usabl let this stop through without blocking again (continuation already
-    active).", as the drift and older-pins blocks do, so a slow app cannot loop the agent. Pins
-    the check would still write after the deadline are not written. Then the process ends, so
-    the assistant reads the answer inside its limit.
+    time: this stop took longer than usabl's own limit of 570 seconds, so usabl stopped the
+    check before it could check the change. Nothing is proven about this change, and no receipt
+    was saved.", then the limit it used and where it came from, then "Next: narrow the change
+    and stop again, or run usabl check by hand, or raise the limit in the hook settings." and
+    how to raise it for that assistant: for Claude Code, set the hook's `timeout` and the number
+    in its command; for Cursor, set the stop entry's `timeout`, then run
+    `usabl install --cursor` again so the adapter script passes it. When a Claude Code hook command set no
+    limit, the message ends with "Run usabl install --claude again so the hook states its time
+    limit." The check named is `usabl check --branch-scope` once the stop found a starting
+    commit. On an active continuation it lets the stop through once with the same notice and
+    "usabl let this stop through without blocking again (continuation already active).", as the
+    drift and older-pins blocks do, so a slow app cannot loop the agent. Pins the check would
+    still write after the deadline are not written. Then the process ends, so the assistant
+    reads the answer inside its limit.
   - Only one answer reaches the host. The check claims the answer with its first write of it
     (saving the receipt, removing the bypass file, or a line of output), and the deadline claims
     it when it comes first. When the deadline comes after the check claimed it, the check's
-    answer stands, receipt included, and the deadline writes nothing. The runner waits up to 10
-    seconds for that answer, then closes the browser and ends the process. After a check
-    answered, a browser close still running at the deadline is not waited for.
-  - Limit: an answer still unfinished 10 seconds after the deadline is cut short when the
-    process ends. Claude Code then reads only what was written by then. The answer is a few
-    small writes, so this needs a write that hangs.
+    answer stands, receipt included, and the deadline writes nothing. The runner waits for that
+    answer, then closes the browser and ends the process, each wait bounded as above. After a
+    check answered, a browser close still running at the deadline is not waited for.
+  - Limit: an answer still unfinished when its wait ends is cut short when the process ends.
+    Claude Code then reads only what was written by then. The answer is a few small writes, so
+    this needs a write that hangs.
   - `usabl doctor` reports a hook usabl cannot plan to (section 11.9).
   - `npm run measure:stop-time -- 1 5 20` measures a cold and a warm stop on the demo app for each
     number of changed screens, beside usabl's deadline for each assistant. It runs the generated
@@ -5163,16 +5180,22 @@ reads the same expiry rule `usabl check` refuses on, so the two surfaces cannot 
 one file. Doctor reports whether a session is set and never prints the variable's path or the
 file contents. The saved file's fixed path is printed, because usabl chose it. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
-sentinel), or `drifted` (any other shape). The stop-hook surface is drifted when the usabl Stop hook
-in `.claude/settings.json` has no `timeout` that is a number, when the timeout or the
-`USABL_STOP_HOOK_TIMEOUT` value in its command is below 60 seconds, or when the command sets no
-value or one that differs from the timeout. A command that sets no value makes the runner plan to
-Claude Code's default of 600 seconds, not to the timeout. The cursor surface is drifted when the usabl stop entry
-in `.cursor/hooks.json` has no `timeout` that is a number, or one below 300 seconds. Each next
-step says the stop goes on with nothing checked when the assistant ends the hook, and names the
-install command, which writes the timeout and the matching value. A reinstall keeps a Claude Code
-timeout of 60 seconds or more and makes the command match it. A higher Cursor timeout is left as
-it is, because the runner still plans to 300 seconds and ends first. Doctor never mints a verdict or a receipt.
+sentinel), or `drifted` (any other shape).
+The stop-hook surface is drifted when the usabl Stop hook in `.claude/settings.json` has no
+`timeout` that is a number, when the timeout or the `USABL_STOP_HOOK_TIMEOUT` value in its
+command is below 60 seconds, when the timeout is one usabl cannot match (not whole seconds, or
+above 999999), or when the command sets no value or one that differs from the timeout. A command
+that sets no value makes the runner plan to Claude Code's default of 600 seconds, not to the
+timeout. The cursor surface is drifted when the usabl stop entry in `.cursor/hooks.json` has no
+`timeout` that is a number or one below 300 seconds, when the adapter script passes no limit
+(the script earlier releases wrote), or when it passes a limit other than the stop entry's
+timeout. Each next step says the stop goes on with nothing checked when the assistant ends the
+hook, and names the install command, which writes the timeout and the matching value.
+A Claude Code reinstall keeps a timeout of 60 seconds or more and makes the command match it. A
+timeout usabl cannot match is left as the person wrote it, and the reinstall refuses with the fix.
+A Cursor reinstall that fixes a missing or low timeout changes only that key in `.cursor/hooks.json`
+and keeps every other key, `loop_limit` included. A higher Cursor timeout is kept, and the
+reinstall makes the adapter script pass it. Doctor never mints a verdict or a receipt.
 
 After the surfaces, doctor prints an `optional engines` section (section 7.7). It opens with the line
 "Tested against the vendor's documented result format. Not yet run on a licensed SDK. Engine findings
