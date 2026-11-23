@@ -22,7 +22,7 @@ import {
   runnerDeadlineSeconds,
 } from '../../src/surfaces/stop-hook-deadline.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
-import { memoryPinStore } from '../support/memory-pin-store.js';
+import { memoryPinStore, type MemoryPinStore } from '../support/memory-pin-store.js';
 
 const RECEIPT_PATH = '.usabl/receipt.json';
 
@@ -437,6 +437,102 @@ describe('the Stop hook deadline and an answer already being written', () => {
   });
 });
 
+describe('the Stop hook deadline and the session pins', () => {
+  it('writes no pin after the deadline, neither the first pins nor a replacement', async () => {
+    // A stop under the deadline records the first pins for the session.
+    const first = harness(fakeDeadline('600'));
+    expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-pins' }), first.ports)).toBe(0);
+    const firstPins = first.ports.pins as MemoryPinStore;
+    expect(firstPins.writes).toHaveLength(1);
+
+    for (const seeded of [false, true]) {
+      const deadline = fakeDeadline('600');
+      const h = harness(deadline);
+      const pins = h.ports.pins as MemoryPinStore;
+      if (seeded) {
+        for (const [name, contents] of firstPins.files) {
+          pins.files.set(name, contents);
+        }
+      }
+      // The deadline comes before the pins are compared and written.
+      h.ports.buildDeps = async () => {
+        deadline.fire();
+        await settle();
+        return h.deps;
+      };
+      expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-pins' }), h.ports)).toBe(0);
+      await settle();
+
+      expect(pins.writes).toEqual([]);
+      expect(String(stdoutObjects(h.stdout)[0]?.['reason'])).toContain('usabl ran out of time');
+    }
+  });
+});
+
+describe('the waits after the deadline fit the time left', () => {
+  function engineFiresDeadline(deadline: ReturnType<typeof fakeDeadline>, h: ReturnType<typeof harness>): void {
+    h.ports.runEngine = async () => {
+      deadline.fire();
+      return verifiedResult(null);
+    };
+  }
+
+  it('keeps each wait at 10 seconds when the limit leaves the full 30 second margin', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    engineFiresDeadline(deadline, h);
+    await runStopHookFromStdin('{}', h.ports);
+    expect(deadline.state.requestedMs).toEqual([570_000, 10_000]);
+  });
+
+  it('shrinks the browser close wait to a third of the margin for a short limit', async () => {
+    // A 40 second limit has a 20 second deadline and 20 seconds left, so the wait is 6.666 seconds.
+    const deadline = fakeDeadline('40');
+    const h = harness(deadline);
+    engineFiresDeadline(deadline, h);
+    await runStopHookFromStdin('{}', h.ports);
+    expect(deadline.state.requestedMs).toEqual([20_000, 6_666]);
+  });
+
+  it('shrinks both waits when the check was already answering', async () => {
+    const deadline = fakeDeadline('40');
+    const h = harness(deadline);
+    h.ports.evaluateDecision = () => ({ block: true, message: 'NOT verified - a check block.' });
+    const stdoutWrite = h.ports.stdoutWrite;
+    h.ports.stdoutWrite = async (text: string) => {
+      await stdoutWrite(text);
+      deadline.fire();
+      await new Promise<void>(() => {});
+    };
+    await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-waits' }), h.ports);
+    expect(deadline.state.requestedMs).toEqual([20_000, 6_666, 6_666]);
+    expect(deadline.state.ended).toBe(1);
+  });
+});
+
+describe('a USABL_STOP_HOOK_TIMEOUT value usabl cannot use', () => {
+  for (const value of ['0600', '6.5', '-1']) {
+    it(`says ${JSON.stringify(value)} was set and ignored, not that the hook sets none`, async () => {
+      const deadline = fakeDeadline(value);
+      const h = harness(deadline);
+      h.ports.runEngine = async () => {
+        deadline.fire();
+        return verifiedResult(null);
+      };
+      expect(await runStopHookFromStdin('{}', h.ports)).toBe(0);
+      await settle();
+
+      expect(deadline.state.requestedMs[0]).toBe(570_000);
+      const reason = String(stdoutObjects(h.stdout)[0]?.['reason']);
+      expect(reason).toContain(`${STOP_HOOK_TIMEOUT_ENV} was set to a value that is not a whole number of seconds`);
+      expect(reason).toContain('so usabl ignored it');
+      expect(reason).not.toContain(`sets no ${STOP_HOOK_TIMEOUT_ENV}`);
+      // The value itself is never printed.
+      expect(reason).not.toContain(` ${value} `);
+    });
+  }
+});
+
 describe('the host limit and the runner deadline', () => {
   it('states the numbers', () => {
     expect(CLAUDE_STOP_TIMEOUT_SECONDS).toBe(600);
@@ -447,12 +543,13 @@ describe('the host limit and the runner deadline', () => {
   });
 
   it('takes the limit the hook sets, or the host default when it sets none or an unusable value', () => {
-    expect(hostLimit('600', false)).toEqual({ seconds: 600, source: 'hook' });
-    expect(hostLimit(' 1200 ', true)).toEqual({ seconds: 1200, source: 'hook' });
-    expect(hostLimit(undefined, false)).toEqual({ seconds: 600, source: 'claude-default' });
-    expect(hostLimit(undefined, true)).toEqual({ seconds: 300, source: 'cursor-install' });
-    for (const bad of ['', 'abc', '0', '-5', '1.5', '1e3', '9999999']) {
-      expect(hostLimit(bad, false)).toEqual({ seconds: 600, source: 'claude-default' });
+    expect(hostLimit('600', false)).toEqual({ seconds: 600, source: 'hook', ignored: false });
+    expect(hostLimit(' 1200 ', true)).toEqual({ seconds: 1200, source: 'hook', ignored: false });
+    expect(hostLimit(undefined, false)).toEqual({ seconds: 600, source: 'claude-default', ignored: false });
+    expect(hostLimit(undefined, true)).toEqual({ seconds: 300, source: 'cursor-install', ignored: false });
+    for (const bad of ['', 'abc', '0', '-5', '1.5', '1e3', '9999999', '0600']) {
+      expect(hostLimit(bad, false)).toEqual({ seconds: 600, source: 'claude-default', ignored: true });
+      expect(hostLimit(bad, true)).toEqual({ seconds: 300, source: 'cursor-install', ignored: true });
     }
   });
 

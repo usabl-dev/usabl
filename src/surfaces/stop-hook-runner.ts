@@ -44,6 +44,7 @@ import { frameUntrustedBlock } from './scrub.js';
 import {
   ANSWER_FINISH_WAIT_MS,
   BROWSER_CLOSE_WAIT_MS,
+  afterDeadlineWaitMs,
   STOP_HOOK_TIMEOUT_ENV,
   deadlineMessage,
   hostLimit,
@@ -1044,7 +1045,10 @@ async function closeBrowser(state: StopRunState): Promise<void> {
  * which stops the scan, no receipt is saved, and the process ends so the host reads the answer in
  * time. When the deadline comes while the checks are writing their answer, that answer stands: the
  * runner waits a short time for it, then closes the browser and ends the process. Every wait after
- * the deadline is bounded, so the process ends inside the host's limit.
+ * the deadline is bounded by a third of the time left before the host's limit (see
+ * afterDeadlineWaitMs), so the process ends inside the limit as long as npm starting the hook
+ * took less than the last third. Limit: for a host limit of a few seconds, starting npm and node
+ * alone can take longer than that, and nothing usabl does can end inside it.
  */
 export async function runStopHook(
   input: StopHookInput,
@@ -1105,8 +1109,8 @@ export async function runStopHook(
     // The checks were writing their answer when the deadline came. That answer stands, and the
     // deadline writes none of its own.
     try {
-      await boundedWait(deadline, work, ANSWER_FINISH_WAIT_MS);
-      await boundedWait(deadline, closeBrowser(state), BROWSER_CLOSE_WAIT_MS);
+      await boundedWait(deadline, work, afterDeadlineWaitMs(limit.seconds, ANSWER_FINISH_WAIT_MS));
+      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
     } finally {
       await deadline.endProcess();
     }
@@ -1128,7 +1132,7 @@ export async function runStopHook(
     // Closing the browser stops the scan. A close that hangs is not waited for past a short limit,
     // because the process ends next anyway.
     try {
-      await boundedWait(deadline, closeBrowser(state), BROWSER_CLOSE_WAIT_MS);
+      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
     } finally {
       await deadline.endProcess();
     }

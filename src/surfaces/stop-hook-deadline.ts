@@ -67,6 +67,8 @@ export type HostLimitSource = 'hook' | 'claude-default' | 'cursor-install';
 export interface HostLimit {
   seconds: number;
   source: HostLimitSource;
+  // True when USABL_STOP_HOOK_TIMEOUT was set to a value usabl cannot use, so it was ignored.
+  ignored: boolean;
 }
 
 /** The value as whole seconds, or null when it is not one usabl can plan to. */
@@ -82,11 +84,12 @@ export function parseTimeoutSeconds(value: string | undefined): number | null {
 export function hostLimit(setting: string | undefined, cursorMode: boolean): HostLimit {
   const seconds = parseTimeoutSeconds(setting);
   if (seconds !== null) {
-    return { seconds, source: 'hook' };
+    return { seconds, source: 'hook', ignored: false };
   }
+  const ignored = setting !== undefined;
   return cursorMode
-    ? { seconds: CURSOR_STOP_TIMEOUT_SECONDS, source: 'cursor-install' }
-    : { seconds: CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS, source: 'claude-default' };
+    ? { seconds: CURSOR_STOP_TIMEOUT_SECONDS, source: 'cursor-install', ignored }
+    : { seconds: CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS, source: 'claude-default', ignored };
 }
 
 /** The runner's own deadline for a host limit, in seconds. */
@@ -95,6 +98,18 @@ export function runnerDeadlineSeconds(hostSeconds: number): number {
     return hostSeconds - ANSWER_MARGIN_SECONDS;
   }
   return Math.max(1, Math.floor(hostSeconds / 2));
+}
+
+/**
+ * How long each wait after the deadline may last, in milliseconds: the answer a check was writing,
+ * and the browser close. Each gets a third of the time between the deadline and the host's limit,
+ * and never more than its fixed bound, so both waits together end before the limit with a third
+ * left for npm starting the hook and the exit. With the full 30 second margin each keeps its
+ * fixed bound.
+ */
+export function afterDeadlineWaitMs(hostSeconds: number, fixedMs: number): number {
+  const marginMs = (hostSeconds - runnerDeadlineSeconds(hostSeconds)) * 1000;
+  return Math.min(fixedMs, Math.floor(marginMs / 3));
 }
 
 /** A timer the runner races its work against. */
@@ -116,14 +131,25 @@ export interface StopHookDeadlinePort {
   endProcess: () => Promise<void>;
 }
 
+// Why usabl did not use USABL_STOP_HOOK_TIMEOUT. The value is not printed: it comes from the
+// environment, and the reason is enough to fix it.
+function unusedSettingReason(limit: HostLimit, unsetWords: string): string {
+  return limit.ignored
+    ? `because ${STOP_HOOK_TIMEOUT_ENV} was set to a value that is not a whole number of seconds from 1 to 999999, so usabl ignored it`
+    : unsetWords;
+}
+
 function limitSource(limit: HostLimit): string {
   if (limit.source === 'hook') {
-    return `set by ${STOP_HOOK_TIMEOUT_ENV} in the hook command`;
+    return `set by ${STOP_HOOK_TIMEOUT_ENV}`;
   }
   if (limit.source === 'cursor-install') {
-    return 'the timeout usabl install --cursor writes in .cursor/hooks.json';
+    return (
+      'the timeout usabl install --cursor writes in .cursor/hooks.json, ' +
+      unusedSettingReason(limit, `because .cursor/hooks/usabl-stop.sh passes no ${STOP_HOOK_TIMEOUT_ENV}`)
+    );
   }
-  return `Claude Code's default, because the hook command sets no ${STOP_HOOK_TIMEOUT_ENV}`;
+  return `Claude Code's default, ${unusedSettingReason(limit, `because the hook command sets no ${STOP_HOOK_TIMEOUT_ENV}`)}`;
 }
 
 function raiseStep(cursorMode: boolean): string {
