@@ -428,6 +428,39 @@
 
 ### Fixed
 
+- A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook
+  at its limit lets the stop go on, so a slow stop let an agent stop without the accessibility
+  work. `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command
+  sets `USABL_STOP_HOOK_TIMEOUT=600`, which the runner reads. The Cursor hook keeps
+  `"timeout": 300`, and the adapter script `usabl install --cursor` writes now sets the variable
+  to the stop entry's timeout. Both set it themselves, so a value inherited from the environment
+  does not win. A Claude Code hook command that sets no limit, such as the one earlier releases
+  wrote, makes the runner plan to Claude Code's default of 600 seconds, and the out-of-time
+  message for it adds the step to run `usabl install --claude` again. A value that is set but
+  not whole seconds is ignored, and the message says so. The runner ends each stop 30 seconds
+  before the limit, or at half a limit below 60 seconds, and each wait after that takes at most a
+  third of the time left. A stop that reaches the deadline saves no receipt, writes no session
+  pin, stops the scan, and blocks once with "NOT verified - usabl ran out of time", what it
+  means, and what to do: narrow the change, run `usabl check` by hand, or raise the limit in the
+  hook settings. On an active continuation it lets the stop through once with the same notice.
+  When the deadline comes while a check is already writing its own answer, that answer stands
+  and the deadline writes none.
+  `usabl doctor` reports a Claude Code Stop hook with no timeout, a limit below 60 seconds, a
+  timeout usabl cannot match (not whole seconds, or above 999999), or a command whose limit
+  differs from the timeout. It reports a Cursor stop entry with no timeout or one below 300
+  seconds, and an adapter script that passes no limit or a different one. A Claude Code
+  reinstall keeps a timeout of 60 seconds or more and makes the command match it, and refuses,
+  leaving the file as it is, for a timeout usabl cannot match. A Cursor reinstall that fixes a
+  timeout changes only that key and keeps the rest of `.cursor/hooks.json`, and it makes the
+  adapter script pass a raised timeout.
+  Effect: after an upgrade, the Claude Code hook and the Cursor script earlier releases wrote
+  read as drifted until the install runs again. Until then usabl ends a Claude Code stop after
+  570 seconds and a Cursor stop after 270 seconds, and a value inherited from the environment
+  can still set the limit. On an older Claude Code release whose default was 60 seconds, Claude
+  Code can still end such a hook before usabl answers, and the stop goes on, as before.
+  `npm run measure:stop-time` reports each stop beside usabl's deadline. A signal now stops a
+  fixture server that is still starting and a running stop, and after a signal the script starts
+  no new stop or server.
 - The receipt binds the files the app reads that git does not see. git skips ignored files, so an
   edit only to `.env.local`, which Vite loads, changed neither the tree nor the status, and a
   stored receipt kept answering the Stop hook with

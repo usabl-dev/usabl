@@ -238,11 +238,52 @@ re-baseline to green.
   origin --auto`. So pointing `origin/HEAD` at a local branch or a tag on HEAD no longer makes a
   stop idle. Pointing it at a branch of origin that sits on HEAD still does, whether the session
   made that branch with `git update-ref` or pushed it and ran `git remote set-head`. That is the
-  limit stated above. A stop the assistant
-  times out is not
-  a block: the assistant ends the hook and the stop goes on, with nothing from usabl that reads
-  as a pass. `npm run measure:stop-time` measures how long a stop takes (ground truth, section
-  11.2).
+  limit stated above.
+- The timeout rule. A hook the assistant ends at its time limit is not a block: the assistant
+  reads no answer and the stop goes on. An agent that can make a stop slow (a slow app, a large
+  change, a file that is slow to read) could then stop without the accessibility work. So every
+  stop ends inside the host's limit. The generated Claude Code hook states `"timeout": 600`, and
+  its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
+  hook states `"timeout": 300`, and the generated adapter script passes the stop entry's
+  timeout to the runner in the same variable. Both set the variable themselves, so a value in
+  the environment the assistant runs in does not win over them. A Claude Code hook command that
+  sets no number, such as the one earlier releases wrote, makes the runner plan to 600 seconds,
+  the default Claude Code's hooks documentation gives for a command hook, so its deadline is
+  570 seconds. The runner's own deadline is the limit less 30 seconds. A stop that reaches it
+  saves no receipt, stops the scan, and blocks once with "NOT verified - usabl ran out of
+  time", or lets an active continuation through once with the same notice, so a slow app
+  cannot loop the agent. It never reads as a pass. Only one answer reaches the host: when the
+  deadline comes after the check started its own answer, that answer stands and the deadline
+  writes nothing. `usabl doctor` reports a hook with no timeout, a limit below 60 seconds, a
+  timeout usabl cannot match, or a command or script whose number differs from the timeout
+  (ground truth, sections 11.2 and 11.9). `npm run measure:stop-time` measures how long a stop
+  takes.
+- Limits of the timeout rule. The runner cannot read the hook's `timeout`. It reads
+  `USABL_STOP_HOOK_TIMEOUT` from its environment, whatever set it. A number larger than the
+  timeout makes the runner plan past the host's limit, and a slow stop then goes on. Editing
+  the hook settings is as strong as removing the hook, which any process with write access to
+  the repository can do, and `.claude/settings.json` is not guarded unless a project lists it
+  in `guardedPaths`. Doctor reports a command or script whose number differs from the timeout.
+  An answer the check started before the deadline and has not finished when its wait ends is
+  cut short when the process ends.
+- Limit, stated plainly: the Claude Code command and the Cursor script earlier releases wrote
+  set no `USABL_STOP_HOOK_TIMEOUT`, so a value the assistant's process inherits wins, for
+  example one a person exported in a shell profile. If it is larger than the host's limit, the
+  host can end the hook before usabl answers, and the stop goes on. Doctor cannot see the
+  environment, but it reports both older forms as drifted, and `usabl install --claude` or
+  `usabl install --cursor` closes the gap by writing a hook that sets the variable itself.
+- Limit, stated plainly: on an older Claude Code release whose default for a command hook was
+  60 seconds, a hook that states no limit can still be ended by Claude Code before usabl
+  answers, and the stop then goes on, as in earlier releases of usabl. This lasts until
+  `usabl install --claude` runs again and the hook states its limit. Doctor reports such a hook
+  as drifted, and a stop of it that runs out of usabl's time names the reinstall step.
+- Limit, stated plainly: each wait after the deadline (for an answer the check was writing, and
+  for the browser to close) takes at most a third of the time between the deadline and the
+  host's limit, so for a limit below 60 seconds the waits shrink with the margin. The time npm
+  takes to start the hook, before usabl's process starts, is not counted. For a host limit of a
+  few seconds, starting npm and node alone can use the whole limit, and usabl cannot answer
+  inside it. Doctor reports any limit
+  below 60 seconds.
 - On a Stop hook stop, the requirement providers and the commercial engines are still built from
   the working-tree `usabl.config.json`, and a change there is a guarded change, so the stop blocks
   for approval.
@@ -365,8 +406,9 @@ passing bundle from another run.
 - Each stop reads every bound file whole, on the fast path too, and a sparse file of any size
   costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
   every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
-  on. So each bound file has a size cap, read from the file's size before any byte: 1 MiB for a
-  `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
+  on. usabl's own deadline now blocks such a stop (the timeout rule above), but every stop would
+  still block. So each bound file has a size cap, read from the file's size before any byte: 1
+  MiB for a `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
   one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
   the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
   cost of a large bound file is its hash time, paid more than once per stop: a stop that runs the

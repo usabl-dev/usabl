@@ -20,10 +20,14 @@
  *      npm run measure:stop-time -- 1 5 20
  *
  * The hook runs from this repository's dist folder through the clone's node_modules, so build
- * first. The budgets: a Claude Code command hook with no timeout field gets Claude Code's default
- * (usabl install --claude writes none), and Cursor gets the timeout usabl install --cursor writes.
- * The Claude Code default is set below from its hooks documentation. Check it against the Claude
- * Code version in use before reading the result.
+ * first. The budgets are the timeouts usabl install writes: the Claude Code hook's `timeout`, which
+ * its command also passes to the runner, and the Cursor hook's `timeout`. The runner ends each stop
+ * by its own deadline, 30 seconds short of the budget, so a stop past that deadline blocks with
+ * "usabl ran out of time" instead of being ended by the assistant. The command run here is the
+ * Claude Code one, so the Claude Code deadline is the one that applies.
+ *
+ * A signal while the fixture server is still starting stops that server once its start ends, and
+ * a signal while a stop runs stops the stop's whole process group (see stop-time-cleanup.ts).
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -32,6 +36,8 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { STOP_HOOK_COMMAND } from '../src/install/claude.js';
 import { buildCursorHooksJson } from '../src/install/cursor.js';
+import { CLAUDE_STOP_TIMEOUT_SECONDS, runnerDeadlineSeconds } from '../src/surfaces/stop-hook-deadline.js';
+import { stopTimeCleanup, type StopTimeCleanup } from './stop-time-cleanup.js';
 import {
   assertDemoApp,
   createDisposableApp,
@@ -45,8 +51,6 @@ import {
   type FixtureServer,
 } from '../test/integration/fixture-app.js';
 
-// Claude Code's documented default for a command hook with no timeout field, in seconds.
-const CLAUDE_DEFAULT_HOOK_TIMEOUT_S = 60;
 // No stop is let run past this, so a hung stop ends the script. It is above every budget.
 const STOP_CEILING_MS = 15 * 60_000;
 const GIT_MS = 60_000;
@@ -82,22 +86,42 @@ interface StopRun {
   blocked: boolean;
 }
 
-/** Runs the generated Stop hook command the way Claude Code does: sh -c, JSON on stdin. */
-async function runStop(cwd: string): Promise<StopRun> {
+/**
+ * Runs the generated Stop hook command the way Claude Code does: sh -c, JSON on stdin. The hook
+ * runs in a process group of its own, so the ceiling and the cleanup stop sh, npm, and usabl
+ * together.
+ */
+async function runStop(cwd: string, cleanup: StopTimeCleanup<FixtureServer>): Promise<StopRun> {
+  // After a signal, the run starts no new stop.
+  cleanup.assertRunning();
   const started = performance.now();
   const child = spawn('sh', ['-c', STOP_HOOK_COMMAND], {
     cwd,
     env: { ...process.env, CLAUDE_PROJECT_DIR: cwd },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
   });
+  const signalGroup = (signal: NodeJS.Signals): void => {
+    if (child.pid !== undefined) {
+      process.kill(-child.pid, signal);
+    }
+  };
+  const exited = cleanup.trackStop(() => signalGroup('SIGTERM'));
   const stdout: string[] = [];
   const stderr: string[] = [];
   child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk.toString('utf8')));
   child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk.toString('utf8')));
   child.stdin.end('{}');
-  const ceiling = setTimeout(() => child.kill('SIGKILL'), STOP_CEILING_MS);
+  const ceiling = setTimeout(() => {
+    try {
+      signalGroup('SIGKILL');
+    } catch {
+      // The group is already gone.
+    }
+  }, STOP_CEILING_MS);
   const exitCode = await new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
   clearTimeout(ceiling);
+  exited();
   const ms = performance.now() - started;
   const out = stdout.join('');
   let blocked = false;
@@ -130,8 +154,15 @@ function screensToChange(app: DisposableApp, baseUrl: string, n: number): Array<
   return screens.slice(0, n);
 }
 
-async function measure(app: DisposableApp, server: FixtureServer, n: number, trusted: string): Promise<string> {
+async function measure(
+  app: DisposableApp,
+  server: FixtureServer,
+  n: number,
+  trusted: string,
+  cleanup: StopTimeCleanup<FixtureServer>,
+): Promise<string> {
   const branch = `stop-time-${n}`;
+  cleanup.assertRunning();
   await git(app.cwd, ['switch', '--quiet', '--force', '-c', branch, trusted]);
   const screens = screensToChange(app, server.baseUrl, n);
   for (const screen of screens) {
@@ -140,15 +171,17 @@ async function measure(app: DisposableApp, server: FixtureServer, n: number, tru
   }
   // A cold stop has no stored receipt to use.
   await rm(join(app.cwd, '.usabl', 'receipt.json'), { force: true });
-  const cold = await runStop(app.cwd);
-  const warm = await runStop(app.cwd);
+  const cold = await runStop(app.cwd, cleanup);
+  const warm = await runStop(app.cwd, cleanup);
   const changed = screens.length === n ? `${n}` : `${screens.length} (the demo names only ${screens.length} screens with files)`;
+  const claude = runnerDeadlineSeconds(CLAUDE_STOP_TIMEOUT_SECONDS);
+  const cursor = runnerDeadlineSeconds(cursorTimeoutSeconds());
   return [
     `screens changed: ${changed}`,
     `  cold stop: ${(cold.ms / 1000).toFixed(1)} s, exit ${String(cold.exitCode)}, ${cold.blocked ? 'blocked' : 'allowed'}: ${cold.firstLine}`,
     `  warm stop: ${(warm.ms / 1000).toFixed(1)} s, exit ${String(warm.exitCode)}, ${warm.blocked ? 'blocked' : 'allowed'}: ${warm.firstLine}`,
-    `  fits Claude Code ${CLAUDE_DEFAULT_HOOK_TIMEOUT_S} s: cold ${fits(cold.ms, CLAUDE_DEFAULT_HOOK_TIMEOUT_S)}, warm ${fits(warm.ms, CLAUDE_DEFAULT_HOOK_TIMEOUT_S)}`,
-    `  fits Cursor ${cursorTimeoutSeconds()} s: cold ${fits(cold.ms, cursorTimeoutSeconds())}, warm ${fits(warm.ms, cursorTimeoutSeconds())}`,
+    `  under usabl's Claude Code deadline of ${claude} s: cold ${fits(cold.ms, claude)}, warm ${fits(warm.ms, claude)}`,
+    `  under usabl's Cursor deadline of ${cursor} s: cold ${fits(cold.ms, cursor)}, warm ${fits(warm.ms, cursor)}`,
   ].join('\n');
 }
 
@@ -169,23 +202,20 @@ async function main(argv: string[]): Promise<number> {
   }
   const requested = counts(argv);
   const app = await createDisposableApp(source);
-  let server: FixtureServer | null = null;
-  // A signal skips the finally below, so it stops the server and removes the clone first.
-  let cleaned: Promise<void> | null = null;
-  const cleanUp = (): Promise<void> =>
-    (cleaned ??= (async () => {
-      if (server !== null) {
-        await stopFixtureServer(server);
-      }
-      await app.dispose();
-    })());
+  // A signal skips the finally below, so it stops what is running and removes the clone first.
+  const cleanup = stopTimeCleanup<FixtureServer>({
+    stopServer: (server) => stopFixtureServer(server),
+    dispose: () => app.dispose(),
+  });
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
     process.once(signal, () => {
-      void cleanUp().finally(() => process.exit(code));
+      void cleanup.run().finally(() => process.exit(code));
     });
   }
   try {
-    server = await startFixtureServer(app, '/');
+    const server = await cleanup.startServer(() => startFixtureServer(app, '/'));
+    // A signal during the start: the cleanup stops this server, so the run goes no further.
+    cleanup.assertRunning();
     // The trusted branch: the demo as it ships, with its config pointed at this server.
     const config = loadFixtureConfig(app.cwd, server.baseUrl);
     const shipped = JSON.parse(await readFile(join(app.cwd, 'usabl.config.json'), 'utf8')) as Record<string, unknown>;
@@ -201,15 +231,16 @@ async function main(argv: string[]): Promise<number> {
     await git(app.cwd, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
 
     process.stdout.write(
-      `Stop time on the usabl demo app at ${server.baseUrl}. Budgets: Claude Code ${CLAUDE_DEFAULT_HOOK_TIMEOUT_S} s ` +
-        `(its default, since usabl writes no timeout), Cursor ${cursorTimeoutSeconds()} s.\n`,
+      `Stop time on the usabl demo app at ${server.baseUrl}. Budgets: Claude Code ${CLAUDE_STOP_TIMEOUT_SECONDS} s ` +
+        `(the timeout usabl install --claude writes), Cursor ${cursorTimeoutSeconds()} s. ` +
+        'usabl ends each stop by its own deadline, 30 seconds short of the budget.\n',
     );
     for (const n of requested) {
-      process.stdout.write(`${await measure(app, server, n, trusted)}\n`);
+      process.stdout.write(`${await measure(app, server, n, trusted, cleanup)}\n`);
     }
     return 0;
   } finally {
-    await cleanUp();
+    await cleanup.run();
   }
 }
 

@@ -42,6 +42,17 @@ import {
 } from './stop-hook-scope.js';
 import { frameUntrustedBlock } from './scrub.js';
 import {
+  ANSWER_FINISH_WAIT_MS,
+  BROWSER_CLOSE_WAIT_MS,
+  afterDeadlineWaitMs,
+  STOP_HOOK_TIMEOUT_ENV,
+  deadlineMessage,
+  hostLimit,
+  runnerDeadlineSeconds,
+  type StopHookDeadlinePort,
+  type StopTimer,
+} from './stop-hook-deadline.js';
+import {
   evaluateStopDecision,
   formatStoredReceiptAllow,
   type HookContext,
@@ -101,6 +112,9 @@ export interface StopHookRunnerPorts {
   // that are not committed, as it did before this was built.
   findStartingCommit?: () => Promise<StartingCommit>;
   evaluateDecision: (result: Result, ctx: HookContext, config?: UsablConfig) => { block: boolean; message: string };
+  // The hook's own deadline. See stop-hook-deadline.ts. The stop-hook command always sets it.
+  // Absent in ports a test builds: the stop then runs with no deadline, as it did before.
+  deadline?: StopHookDeadlinePort;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -665,6 +679,43 @@ export interface StopHookRunnerPortOptions {
   // The folder the hook starts in. Absent means the process working directory. The hook works in
   // the repository root above it. CLAUDE_PROJECT_DIR, when it names a folder, comes first.
   startDir?: string;
+  // True for the stop-hook command, which runs in a process of its own. The deadline counts from
+  // the start of the process, so ports built inside a long-lived process, such as a test worker,
+  // leave it off.
+  deadline?: boolean;
+}
+
+function startRealTimer(ms: number): StopTimer {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<void>((resolve) => {
+    handle = setTimeout(resolve, ms);
+  });
+  return {
+    expired,
+    cancel: () => {
+      clearTimeout(handle);
+    },
+  };
+}
+
+// Resolves once everything written to the stream before it has been handed to the system, so an
+// exit right after does not cut the answer short on a pipe.
+function drained(stream: NodeJS.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    stream.write('', () => resolve());
+  });
+}
+
+function realDeadline(env: Record<string, string | undefined>): StopHookDeadlinePort {
+  return {
+    timeoutSetting: env[STOP_HOOK_TIMEOUT_ENV],
+    elapsedMs: () => process.uptime() * 1000,
+    startTimer: startRealTimer,
+    endProcess: async () => {
+      await Promise.all([drained(process.stdout), drained(process.stderr)]);
+      process.exit(0);
+    },
+  };
 }
 
 /**
@@ -713,6 +764,7 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
     findStartingCommit: async () =>
       inRepository ? findStartingCommit(scopeGit(root)) : { kind: 'no-trusted-branch' as const },
     evaluateDecision: evaluateStopDecision,
+    ...(options.deadline === true ? { deadline: realDeadline(env) } : {}),
   };
 }
 
@@ -894,15 +946,207 @@ async function readDocsManifest(fs: StopHookRunnerFs): Promise<string | null> {
   }
 }
 
+/** What the checks share with runStopHook, which closes the browser and words a timed-out stop. */
+interface StopRunState {
+  deps: Deps | null;
+  // The check the advice names. It stays usabl check until the stop finds a starting commit.
+  checkCommand: CheckCommand;
+}
+
+/**
+ * Who writes the answer of a stop that has a deadline. Only one answer may reach the host: two
+ * JSON objects on stdout are no answer the host can read, and a deadline message that says no
+ * receipt was saved must not sit next to a receipt the checks saved. The first to claim it keeps it.
+ */
+interface AnswerClaim {
+  owner: 'none' | 'checks' | 'deadline';
+}
+
+// True when the checks hold the answer, claiming it first when nobody holds it yet.
+function checksHoldAnswer(claim: AnswerClaim): boolean {
+  if (claim.owner === 'none') {
+    claim.owner = 'checks';
+  }
+  return claim.owner === 'checks';
+}
+
+/**
+ * Ports for checks that race the deadline. The checks write only their answer: the receipt (and
+ * the bypass file they remove) and the output. The first such write claims the answer for them.
+ * Once the deadline holds it, nothing the checks still produce reaches the output, the receipt,
+ * or the pins, because the answer then says the check was not finished. Reads pass through.
+ */
+function claimedPorts(ports: StopHookRunnerPorts, claim: AnswerClaim): StopHookRunnerPorts {
+  const refused = { status: 'refused', reason: 'the stop ran out of time', fix: 'stop again.' } as const;
+  const { deadline: _deadline, ...rest } = ports;
+  return {
+    ...rest,
+    fs: {
+      readFile: (path) => ports.fs.readFile(path),
+      writeFile: async (path, contents) => {
+        if (checksHoldAnswer(claim)) {
+          await ports.fs.writeFile(path, contents);
+        }
+      },
+      mkdir: async (path) => {
+        if (checksHoldAnswer(claim)) {
+          await ports.fs.mkdir(path);
+        }
+      },
+      unlink: async (path) => {
+        if (checksHoldAnswer(claim)) {
+          await ports.fs.unlink(path);
+        }
+      },
+    },
+    // Pins are written before the scan, not as part of the answer, so they claim nothing.
+    pins: {
+      read: (name) => ports.pins.read(name),
+      locate: (name) => ports.pins.locate(name),
+      create: async (name, contents) => (claim.owner === 'deadline' ? refused : ports.pins.create(name, contents)),
+      replace: async (name, contents) => (claim.owner === 'deadline' ? refused : ports.pins.replace(name, contents)),
+    },
+    stdoutWrite: async (text) => {
+      if (checksHoldAnswer(claim)) {
+        await ports.stdoutWrite(text);
+      }
+    },
+    stderrWrite: async (text) => {
+      if (checksHoldAnswer(claim)) {
+        await ports.stderrWrite(text);
+      }
+    },
+  };
+}
+
+// Waits for `step`, but for no longer than `ms`. A step that fails counts as ended.
+async function boundedWait(deadline: StopHookDeadlinePort, step: Promise<unknown>, ms: number): Promise<void> {
+  const wait = deadline.startTimer(ms);
+  try {
+    await Promise.race([step.then(noop, noop), wait.expired]);
+  } finally {
+    wait.cancel();
+  }
+}
+
+function noop(): void {}
+
+async function closeBrowser(state: StopRunState): Promise<void> {
+  if (state.deps !== null) {
+    await state.deps.browser.close();
+  }
+}
+
+/**
+ * Runs one stop. With a deadline port, the checks race the runner's own deadline, which is shorter
+ * than the host's limit (see stop-hook-deadline.ts). When the deadline comes before the checks
+ * start their answer, the stop blocks once with the out-of-time message, or lets an active
+ * continuation through once with it, as the drift and older-pins blocks do. The browser is closed,
+ * which stops the scan, no receipt is saved, and the process ends so the host reads the answer in
+ * time. When the deadline comes while the checks are writing their answer, that answer stands: the
+ * runner waits a short time for it, then closes the browser and ends the process. Every wait after
+ * the deadline is bounded by a third of the time left before the host's limit (see
+ * afterDeadlineWaitMs), so the process ends inside the limit as long as npm starting the hook
+ * took less than the last third. Limit: for a host limit of a few seconds, starting npm and node
+ * alone can take longer than that, and nothing usabl does can end inside it.
+ */
 export async function runStopHook(
   input: StopHookInput,
   ports: StopHookRunnerPorts,
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
-  let deps: Deps | null = null;
+  const state: StopRunState = { deps: null, checkCommand: 'usabl check' };
+  const deadline = ports.deadline;
+  if (deadline === undefined) {
+    try {
+      return await runStopChecks(input, ports, options, state);
+    } finally {
+      await closeBrowser(state);
+    }
+  }
+
+  const limit = hostLimit(deadline.timeoutSetting, options.cursorMode);
+  const timer = deadline.startTimer(Math.max(0, runnerDeadlineSeconds(limit.seconds) * 1000 - deadline.elapsedMs()));
+  const claim: AnswerClaim = { owner: 'none' };
+  // The deadline takes the answer as the timer fires, before anything else hears of it, unless
+  // the checks already hold it.
+  const reached = timer.expired.then(() => {
+    if (claim.owner === 'none') {
+      claim.owner = 'deadline';
+    }
+    return { kind: claim.owner === 'deadline' ? ('deadline' as const) : ('answering' as const) };
+  });
+
+  // After the checks answered, the browser closes before the deadline or is not waited for: the
+  // answer is written, and the process ends so the host reads it in time.
+  const closeAfterAnswer = async (): Promise<void> => {
+    const closing = closeBrowser(state).then(() => 'closed' as const);
+    closing.catch(noop);
+    const ended = await Promise.race([closing, timer.expired.then(() => 'late' as const)]);
+    timer.cancel();
+    if (ended === 'late') {
+      await deadline.endProcess();
+    }
+  };
+
+  const work = runStopChecks(input, claimedPorts(ports, claim), options, state);
+  let outcome: { kind: 'done'; code: number } | Awaited<typeof reached>;
+  try {
+    outcome = await Promise.race([work.then((code) => ({ kind: 'done' as const, code })), reached]);
+  } catch (err) {
+    // The checks failed before the deadline. The timer still runs and the browser is open.
+    await closeAfterAnswer().catch(noop);
+    throw err;
+  }
+  if (outcome.kind === 'done') {
+    await closeAfterAnswer();
+    return outcome.code;
+  }
+
+  // The checks may still settle later. Nothing they write after this point is used.
+  work.catch(noop);
+  if (outcome.kind === 'answering') {
+    // The checks were writing their answer when the deadline came. That answer stands, and the
+    // deadline writes none of its own.
+    try {
+      await boundedWait(deadline, work, afterDeadlineWaitMs(limit.seconds, ANSWER_FINISH_WAIT_MS));
+      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
+    } finally {
+      await deadline.endProcess();
+    }
+    return 0;
+  }
+  const message = deadlineMessage({
+    limit,
+    cursorMode: options.cursorMode,
+    continuation: input.stopHookActive,
+    checkCommand: state.checkCommand,
+  });
+  try {
+    if (input.stopHookActive) {
+      await emitProtocolAllow(ports, { message }, options);
+    } else {
+      await emitProtocolBlock(ports, message, options);
+    }
+  } finally {
+    // Closing the browser stops the scan. A close that hangs is not waited for past a short limit,
+    // because the process ends next anyway.
+    try {
+      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
+    } finally {
+      await deadline.endProcess();
+    }
+  }
+  return 0;
+}
+
+async function runStopChecks(
+  input: StopHookInput,
+  ports: StopHookRunnerPorts,
+  options: StopHookOptions,
+  state: StopRunState,
+): Promise<number> {
   let pinNotice: PinNotice | null = null;
-  // The check the advice names. It stays usabl check until the stop finds a starting commit.
-  let checkCommand: CheckCommand = 'usabl check';
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
@@ -962,7 +1206,7 @@ export async function runStopHook(
     let dirtyGuardedPaths: string[];
     try {
       const built = await ports.buildDeps(config);
-      deps = built;
+      state.deps = built;
       guardDeps = built;
       dirtyGuardedPaths = await guarded(() => checkGuard(built));
     } catch (err) {
@@ -1065,7 +1309,8 @@ export async function runStopHook(
       }
       return 0;
     }
-    checkCommand = checkCommandFor(scope.baseRevision);
+    state.checkCommand = checkCommandFor(scope.baseRevision);
+    const checkCommand = state.checkCommand;
     // The session pins and the guard above compare with the last commit, so a policy change
     // committed on the branch before the first stop passes both. CI compares policy with the base
     // of the pull request, so the stop also compares it with the starting commit. A file found
@@ -1162,7 +1407,7 @@ export async function runStopHook(
           [
             'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
               'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-            `Next: run ${checkCommand}, or check the change by hand, before you call this change accessible.`,
+            `Next: run ${state.checkCommand}, or check the change by hand, before you call this change accessible.`,
           ],
           [`error: ${message}`],
         ),
@@ -1171,10 +1416,6 @@ export async function runStopHook(
       options,
     );
     return 0;
-  } finally {
-    if (deps !== null) {
-      await deps.browser.close();
-    }
   }
 }
 
@@ -1187,7 +1428,8 @@ const INVALID_INPUT_MESSAGE =
 
 export async function runStopHookFromStdin(
   stdinText: string,
-  ports: StopHookRunnerPorts = makeStopHookRunnerPorts(),
+  // The default is the stop-hook command's own ports, with the deadline on.
+  ports: StopHookRunnerPorts = makeStopHookRunnerPorts({ deadline: true }),
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
   try {
@@ -1211,5 +1453,5 @@ async function readStdin(): Promise<string> {
 
 export async function main(): Promise<number> {
   const cursorMode = process.argv.includes('--cursor');
-  return runStopHookFromStdin(await readStdin(), makeStopHookRunnerPorts(), { cursorMode });
+  return runStopHookFromStdin(await readStdin(), makeStopHookRunnerPorts({ deadline: true }), { cursorMode });
 }

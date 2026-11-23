@@ -8,6 +8,7 @@
  * engine version, so the generator refuses rather than clobber it.
  */
 import { parseUsablConfig } from '../intake/config.js';
+import { CURSOR_STOP_TIMEOUT_SECONDS, STOP_HOOK_TIMEOUT_ENV } from '../surfaces/stop-hook-deadline.js';
 import type { InstallFs, InstallResult } from './index.js';
 import { LEGACY_USABL_RUN, USABL_MISSING_GUIDANCE, USABL_NOT_INSTALLED_LINE, USABL_RUN } from './usabl-command.js';
 
@@ -28,7 +29,36 @@ const STOP_LOOP_LIMIT = 3;
 // protocol. npm's own error output is silenced, so when usabl cannot run the only stderr line is
 // the plain one. The exit code is then 1, never 2, because Cursor reads 2 as a block.
 // All gate logic stays inside the engine's stop-hook runner; this script is a thin adapter.
-export const CURSOR_STOP_SCRIPT = `#!/usr/bin/env bash
+// The script passes the stop entry's own timeout to usabl in USABL_STOP_HOOK_TIMEOUT, so usabl
+// plans its deadline to the limit Cursor enforces, and a value in the environment Cursor runs in
+// cannot put the deadline past it (see stop-hook-deadline.ts).
+export function cursorStopScript(seconds: number): string {
+  return `#!/usr/bin/env bash
+# Cursor stop hook adapter for usabl.
+# Pipes Cursor's stdin through the engine and emits followup_message to loop on block.
+# It runs the usabl installed in this project with npm exec --no, which never downloads a package.
+# When usabl cannot run, it prints one line on stderr and exits 1. Cursor treats an exit other
+# than 0 and 2 as a failed hook and lets the agent finish. Nothing was checked on that stop.
+# USABL_STOP_HOOK_TIMEOUT is the usabl stop hook's timeout in .cursor/hooks.json, so usabl answers
+# before Cursor ends the hook. "usabl install --cursor" keeps the two the same.
+# This script is managed by "usabl install --cursor". Manual edits will be detected.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if ! cat | ${STOP_HOOK_TIMEOUT_ENV}=${seconds} npm_config_loglevel=silent ${USABL_RUN} stop-hook --cursor; then
+  echo "${USABL_NOT_INSTALLED_LINE}" >&2
+  exit 1
+fi
+`;
+}
+
+export const CURSOR_STOP_SCRIPT = cursorStopScript(CURSOR_STOP_TIMEOUT_SECONDS);
+
+// The script the previous release wrote, byte for byte. It passed no limit to usabl, so usabl
+// planned to 300 seconds whatever hooks.json said, and a value in the environment could win. It is
+// usabl's own, so a reinstall rewrites it, and doctor reports it as drifted.
+export const PREVIOUS_CURSOR_STOP_SCRIPT = `#!/usr/bin/env bash
 # Cursor stop hook adapter for usabl.
 # Pipes Cursor's stdin through the engine and emits followup_message to loop on block.
 # It runs the usabl installed in this project with npm exec --no, which never downloads a package.
@@ -45,12 +75,27 @@ if ! cat | npm_config_loglevel=silent ${USABL_RUN} stop-hook --cursor; then
 fi
 `;
 
+/**
+ * The limit a script of the form cursorStopScript writes passes to usabl, or null when the script
+ * is not of that form. The whole script must match, so no edit can sit beside the number.
+ */
+export function cursorStopScriptLimit(script: string): number | null {
+  const found = new RegExp(`${STOP_HOOK_TIMEOUT_ENV}=([1-9][0-9]{0,5}) `).exec(script);
+  if (found === null) {
+    return null;
+  }
+  const seconds = Number(found[1]);
+  return script === cursorStopScript(seconds) ? seconds : null;
+}
+
 // The hooks.json content. Written as a string so byte-identical comparison works for
 // idempotence, the same way the other install drafts work.
+// The timeout is Cursor's limit for the hook. The adapter script passes the same number to the
+// runner, which plans its own deadline to it (see stop-hook-deadline.ts).
 export function buildCursorHooksJson(existingHooks: Record<string, unknown> | null): string {
   const stopEntry = {
     command: '.cursor/hooks/usabl-stop.sh',
-    timeout: 300,
+    timeout: CURSOR_STOP_TIMEOUT_SECONDS,
     loop_limit: STOP_LOOP_LIMIT,
   };
 
@@ -220,9 +265,41 @@ function simpleFiles(uiFileGlobs: string[]) {
   ] as const;
 }
 
+/**
+ * Why usabl cannot plan its deadline to the limit Cursor enforces for the usabl stop hook.
+ *   missing: the stop entry has no timeout that is a number.
+ *   below-limit: the stop entry's timeout is below 300 seconds.
+ *   script-no-limit: the adapter script passes no limit to usabl (the previous release's script).
+ *   script-mismatch: the adapter script passes a limit other than the stop entry's timeout.
+ */
+export type CursorTimeoutProblem = 'missing' | 'below-limit' | 'script-no-limit' | 'script-mismatch';
+
+function cursorTimeoutProblem(entry: unknown): 'missing' | 'below-limit' | null {
+  const timeout = isRecord(entry) ? entry['timeout'] : undefined;
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout)) {
+    return 'missing';
+  }
+  return timeout < CURSOR_STOP_TIMEOUT_SECONDS ? 'below-limit' : null;
+}
+
+// The largest limit usabl reads from USABL_STOP_HOOK_TIMEOUT: six digits of whole seconds.
+const MAX_LIMIT_SECONDS = 999_999;
+
+// The limit the adapter script passes for a stop entry timeout of at least 300 seconds: the
+// timeout in whole seconds, never more than it and never more than usabl reads.
+function scriptLimitFor(timeout: number): number {
+  return Math.min(Math.floor(timeout), MAX_LIMIT_SECONDS);
+}
+
 // `rewrites` names the files written over an old npx form, which doctor reports as a security drift.
+// `timeoutProblem` is set when hooks.json or the adapter script is written again to fix a limit.
 export type CursorPlan =
-  | { action: 'write'; files: Array<{ path: string; draft: string }>; rewrites: string[] }
+  | {
+      action: 'write';
+      files: Array<{ path: string; draft: string }>;
+      rewrites: string[];
+      timeoutProblem?: CursorTimeoutProblem;
+    }
   | { action: 'already-wired'; paths: string[] }
   | { action: 'refuse'; path: string; reason: string };
 
@@ -231,13 +308,15 @@ export type CursorPlan =
 async function planHooksJson(
   fs: InstallFs,
 ): Promise<
-  | { ok: true; action: 'write'; draft: string }
-  | { ok: true; action: 'already-wired' }
+  // `scriptLimit` is the limit the adapter script passes: the usabl stop entry's timeout as the
+  // file will hold it.
+  | { ok: true; action: 'write'; draft: string; scriptLimit: number; timeoutProblem?: CursorTimeoutProblem }
+  | { ok: true; action: 'already-wired'; scriptLimit: number }
   | { ok: false; reason: string }
 > {
   const existing = await fs.readFile(CURSOR_HOOKS_JSON_PATH);
   if (existing === null) {
-    return { ok: true, action: 'write', draft: buildCursorHooksJson(null) };
+    return { ok: true, action: 'write', draft: buildCursorHooksJson(null), scriptLimit: CURSOR_STOP_TIMEOUT_SECONDS };
   }
 
   let parsed: unknown;
@@ -280,13 +359,34 @@ async function planHooksJson(
       };
     }
     if (usablCount > 0) {
-      return { ok: true, action: 'already-wired' };
+      // Every entry is usabl's own. One whose timeout is missing or below 300 seconds gets a
+      // timeout of 300, and nothing else in the file changes: other keys of the entry (such as
+      // loop_limit), other events, and other top-level keys stay as the person wrote them. A
+      // higher timeout is kept, and the adapter script passes it to usabl.
+      const updated = structuredClone(parsed);
+      const updatedStop = (updated['hooks'] as Record<string, unknown>)['stop'] as unknown[];
+      let problem: 'missing' | 'below-limit' | null = null;
+      for (const entry of updatedStop) {
+        const found = cursorTimeoutProblem(entry);
+        if (found !== null && isRecord(entry)) {
+          problem ??= found;
+          entry['timeout'] = CURSOR_STOP_TIMEOUT_SECONDS;
+        }
+      }
+      // Several usabl entries keep the smallest limit, so usabl ends before each of them.
+      const scriptLimit = Math.min(
+        ...updatedStop.map((entry) => scriptLimitFor((entry as Record<string, unknown>)['timeout'] as number)),
+      );
+      if (problem === null) {
+        return { ok: true, action: 'already-wired', scriptLimit };
+      }
+      return { ok: true, action: 'write', draft: `${JSON.stringify(updated, null, 2)}\n`, scriptLimit, timeoutProblem: problem };
     }
   }
 
   // Merge the stop hook into existing hooks, preserving everything else.
   const existingHooks = isRecord(hooks) ? (hooks as Record<string, unknown>) : {};
-  return { ok: true, action: 'write', draft: buildCursorHooksJson(existingHooks) };
+  return { ok: true, action: 'write', draft: buildCursorHooksJson(existingHooks), scriptLimit: CURSOR_STOP_TIMEOUT_SECONDS };
 }
 
 export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<CursorPlan> {
@@ -297,8 +397,18 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
   }
 
   const existingScript = await fs.readFile(CURSOR_STOP_SCRIPT_PATH);
+  const scriptDraft = cursorStopScript(hooksPlan.scriptLimit);
   const scriptIsLegacy = existingScript === LEGACY_CURSOR_STOP_SCRIPT;
-  if (existingScript !== null && existingScript !== CURSOR_STOP_SCRIPT && !scriptIsLegacy) {
+  const scriptIsPrevious = existingScript === PREVIOUS_CURSOR_STOP_SCRIPT;
+  const scriptLimit = existingScript === null ? null : cursorStopScriptLimit(existingScript);
+  // A script of the current form whose limit differs from the stop entry's timeout is usabl's
+  // own, so a reinstall makes it match.
+  const scriptProblem: CursorTimeoutProblem | undefined = scriptIsPrevious
+    ? 'script-no-limit'
+    : scriptLimit !== null && scriptLimit !== hooksPlan.scriptLimit
+      ? 'script-mismatch'
+      : undefined;
+  if (existingScript !== null && scriptLimit === null && !scriptIsLegacy && !scriptIsPrevious) {
     return {
       action: 'refuse',
       path: CURSOR_STOP_SCRIPT_PATH,
@@ -333,8 +443,8 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
   if (hooksPlan.action === 'write') {
     toWrite.push({ path: CURSOR_HOOKS_JSON_PATH, draft: hooksPlan.draft });
   }
-  if (existingScript === null || scriptIsLegacy) {
-    toWrite.push({ path: CURSOR_STOP_SCRIPT_PATH, draft: CURSOR_STOP_SCRIPT });
+  if (existingScript !== scriptDraft) {
+    toWrite.push({ path: CURSOR_STOP_SCRIPT_PATH, draft: scriptDraft });
     if (scriptIsLegacy) {
       rewrites.push(CURSOR_STOP_SCRIPT_PATH);
     }
@@ -353,8 +463,27 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
     return { action: 'already-wired', paths: allPaths };
   }
 
-  return { action: 'write', files: toWrite, rewrites };
+  const timeoutProblem = (hooksPlan.action === 'write' ? hooksPlan.timeoutProblem : undefined) ?? scriptProblem;
+  return { action: 'write', files: toWrite, rewrites, ...(timeoutProblem === undefined ? {} : { timeoutProblem }) };
 }
+
+// What a reinstall changed to fix a limit, in the words its message ends with.
+const CURSOR_TIMEOUT_NOTES: Record<CursorTimeoutProblem, string> = {
+  missing:
+    `Set the usabl stop hook's timeout in ${CURSOR_HOOKS_JSON_PATH} to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, ` +
+    `and ${CURSOR_STOP_SCRIPT_PATH} passes the same limit to usabl, so usabl answers before Cursor ends the hook. ` +
+    `Only the timeout changed in ${CURSOR_HOOKS_JSON_PATH}.`,
+  'below-limit':
+    `Raised the usabl stop hook's timeout in ${CURSOR_HOOKS_JSON_PATH} to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, ` +
+    `and ${CURSOR_STOP_SCRIPT_PATH} passes the same limit to usabl, so usabl answers before Cursor ends the hook. ` +
+    `Only the timeout changed in ${CURSOR_HOOKS_JSON_PATH}.`,
+  'script-no-limit':
+    `Rewrote ${CURSOR_STOP_SCRIPT_PATH} to pass the usabl stop hook's timeout in ${CURSOR_HOOKS_JSON_PATH} to usabl. ` +
+    'The old script passed none, so a value in the environment Cursor runs in could put usabl\'s deadline past Cursor\'s limit.',
+  'script-mismatch':
+    `Rewrote ${CURSOR_STOP_SCRIPT_PATH} to pass the usabl stop hook's timeout in ${CURSOR_HOOKS_JSON_PATH} to usabl, ` +
+    'so usabl plans its deadline to the limit Cursor enforces.',
+};
 
 function cursorRefusalMessage(path: string): string {
   return [
@@ -379,11 +508,12 @@ export async function writeCursor(fs: InstallFs, plan: CursorPlan): Promise<Inst
         ? ''
         : `\nRewrote ${plan.rewrites.join(', ')}: the old files ran "${LEGACY_USABL_RUN}", which downloads a package when usabl is not installed. ` +
           `They now run "${USABL_RUN}", which never downloads.`;
+    const timeoutNote = plan.timeoutProblem === undefined ? '' : `\n${CURSOR_TIMEOUT_NOTES[plan.timeoutProblem]}`;
     return {
       exitCode: 0,
       action: 'written',
       path: plan.files[0]?.path ?? CURSOR_HOOKS_JSON_PATH,
-      message: `Wrote ${paths}. Review these drafts before you merge them.${rewriteNote}${chmodHint}`,
+      message: `Wrote ${paths}. Review these drafts before you merge them.${rewriteNote}${timeoutNote}${chmodHint}`,
     };
   }
   if (plan.action === 'already-wired') {

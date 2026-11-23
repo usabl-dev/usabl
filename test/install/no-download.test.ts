@@ -122,8 +122,9 @@ When changing user interface code:
 - Prefer fixing source over query-parameter previews or disabling checks.
 `;
 
-function settingsWith(command: string): string {
-  return `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }, null, 2)}\n`;
+function settingsWith(command: string, timeout?: number): string {
+  const hook = timeout === undefined ? { type: 'command', command } : { type: 'command', command, timeout };
+  return `${JSON.stringify({ hooks: { Stop: [{ hooks: [hook] }] } }, null, 2)}\n`;
 }
 
 function memoryFs(files: Record<string, string>): InstallFs & { store: Record<string, string> } {
@@ -268,6 +269,26 @@ describe('the generated hooks with usabl missing, and with usabl installed', { t
     expect(ran.status).toBe(0);
     expect(ran.stdout).toBe('local usabl stop-hook --cursor {"loop_count":0}');
   });
+
+  it('the Cursor stop script passes its own limit to usabl, over a value the environment holds', async () => {
+    await installFakeUsabl();
+    // This fake usabl prints the limit it was given instead of its input.
+    await writeFile(
+      join(dir, 'node_modules', 'usabl', 'bin', 'usabl.js'),
+      "#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on('end', () => { process.stdout.write(`limit ${process.env.USABL_STOP_HOOK_TIMEOUT}`); });\n",
+    );
+    const script = join(dir, 'usabl-stop.sh');
+    await writeFile(script, CURSOR_STOP_SCRIPT);
+    const ran = spawnSync('bash', [script], {
+      cwd: dir,
+      env: { ...env(), USABL_STOP_HOOK_TIMEOUT: '900' },
+      input: '{"loop_count":0}',
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(ran.status).toBe(0);
+    expect(ran.stdout).toBe('limit 300');
+  });
 });
 
 describe('the installers rewrite an old npx usabl file as their own', () => {
@@ -278,7 +299,7 @@ describe('the installers rewrite an old npx usabl file as their own', () => {
     expect(plan).toMatchObject({ action: 'update', reason: 'remove-download' });
     const result = await writeClaude(fs, plan);
     expect(result.exitCode).toBe(0);
-    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(settingsWith(STOP_HOOK_COMMAND));
+    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(settingsWith(STOP_HOOK_COMMAND, 600));
     expect(result.message).toContain('never downloads');
   });
 
@@ -401,7 +422,7 @@ describe('usabl doctor reports an old npx usabl file as a security drift', () =>
 
   it('still reports the current files as wired', async () => {
     const byId = await report({
-      [CLAUDE_SETTINGS_PATH]: settingsWith(STOP_HOOK_COMMAND),
+      [CLAUDE_SETTINGS_PATH]: settingsWith(STOP_HOOK_COMMAND, 600),
       [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
     });
     expect(byId('stop-hook').state).toBe('wired');

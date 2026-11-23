@@ -1,11 +1,13 @@
 /**
  * Claude settings install generator for `usabl install --claude`.
- * It wires a Stop hook that runs `npm exec --no -- usabl stop-hook`. settings.json is
+ * It wires a Stop hook that runs `npm exec --no -- usabl stop-hook`, with a `timeout` and the
+ * same limit passed to the runner, so usabl answers before Claude Code ends the hook. settings.json is
  * JSON, so this parses and merges: it adds the usabl Stop hook, preserves unrelated
  * hooks, and updates a usabl-owned hook still wired to the retired raw dist path. It
  * refuses when the file is unparseable or when a Stop hook it cannot recognize is
  * present, rather than risk a double-run or clobbering an operator's own hook.
  */
+import { CLAUDE_STOP_TIMEOUT_SECONDS, MIN_HOST_TIMEOUT_SECONDS, parseTimeoutSeconds, STOP_HOOK_TIMEOUT_ENV } from '../surfaces/stop-hook-deadline.js';
 import type { InstallFs, InstallResult } from './index.js';
 import { LEGACY_USABL_RUN, USABL_NOT_INSTALLED_LINE, USABL_RUN } from './usabl-command.js';
 
@@ -14,14 +16,31 @@ export const CLAUDE_SETTINGS_PATH = '.claude/settings.json';
 // The command in the words a person reads in a message. The hook itself is STOP_HOOK_COMMAND.
 export const STOP_HOOK_DISPLAY = `${USABL_RUN} stop-hook`;
 
-// The Stop hook command. Claude Code runs it with sh -c. npm exec --no runs the usabl installed in
-// the project (package.json bin: usabl -> dist/cli.js), or a global one, and never downloads a
-// package. npm's own error output is silenced, so when usabl cannot run, the first and only line
-// on stderr is the plain one below, and the exit code is 1. Claude Code treats exit 1 as a hook
-// error that does not block: the stop goes on and the user sees that line. Exit 2 would block,
-// and a person could not clear it without installing usabl. usabl's own stop-hook command always
-// exits 0, so the fallback runs only when usabl did not run.
-export const STOP_HOOK_COMMAND = `npm_config_loglevel=silent ${STOP_HOOK_DISPLAY} || { echo "${USABL_NOT_INSTALLED_LINE}" >&2; exit 1; }`;
+// Everything in the Stop hook command after the time limit. Claude Code runs it with sh -c. npm
+// exec --no runs the usabl installed in the project (package.json bin: usabl -> dist/cli.js), or a
+// global one, and never downloads a package. npm's own error output is silenced, so when usabl
+// cannot run, the first and only line on stderr is the plain one below, and the exit code is 1.
+// Claude Code treats exit 1 as a hook error that does not block: the stop goes on and the user
+// sees that line. Exit 2 would block, and a person could not clear it without installing usabl.
+// usabl's own stop-hook command always exits 0, so the fallback runs only when usabl did not run.
+const STOP_HOOK_RUN = `npm_config_loglevel=silent ${STOP_HOOK_DISPLAY} || { echo "${USABL_NOT_INSTALLED_LINE}" >&2; exit 1; }`;
+
+/**
+ * The Stop hook command for a time limit in seconds. The command sets USABL_STOP_HOOK_TIMEOUT to
+ * the same number as the hook's `timeout`, and the runner plans its own deadline to it (see
+ * stop-hook-deadline.ts). An environment variable, not a flag, so a usabl older than the command
+ * ignores it instead of refusing an unknown flag.
+ */
+export function stopHookCommand(seconds: number): string {
+  return `${STOP_HOOK_TIMEOUT_ENV}=${seconds} ${STOP_HOOK_RUN}`;
+}
+
+// The Stop hook command usabl writes.
+export const STOP_HOOK_COMMAND = stopHookCommand(CLAUDE_STOP_TIMEOUT_SECONDS);
+
+// The command the previous release wrote. It sets no limit, and its hook had no timeout, so the
+// runner cannot know Claude Code's limit. It is usabl's own, so a reinstall rewrites it.
+export const PREVIOUS_STOP_HOOK_COMMAND = STOP_HOOK_RUN;
 
 // The command earlier releases wrote. It is usabl's own, so a reinstall rewrites it, and doctor
 // reports it as a security drift: npx downloads whatever holds the name usabl when it is missing.
@@ -34,14 +53,24 @@ export const LEGACY_STOP_HOOK_COMMAND = `${LEGACY_USABL_RUN} stop-hook`;
 // surface). writeClaude does not branch on this; it exists so recognition of the two cases
 // stays here, next to classifyStop, rather than being re-derived inside doctor. remove-download is
 // the normalize case where the usabl hook is the old npx form, which doctor reports as a security
-// drift.
-export type UpdateReason = 'add-missing' | 'normalize' | 'remove-download';
+// drift. timeout is a usabl hook whose time limit usabl cannot plan to; timeoutProblem says why.
+export type UpdateReason = 'add-missing' | 'normalize' | 'remove-download' | 'timeout';
+
+/**
+ * Why usabl cannot plan to a usabl Stop hook's time limit.
+ *   missing: the hook has no `timeout` that is a number.
+ *   below-minimum: the timeout, or the limit in the command, is below the runner's minimum.
+ *   unmatchable: the timeout is above 999999 seconds or not whole seconds, so no limit usabl reads
+ *     can match it. usabl keeps it as the person wrote it and refuses to change the file.
+ *   mismatch: the command sets no limit, or one that differs from the timeout.
+ */
+export type TimeoutProblem = 'missing' | 'below-minimum' | 'unmatchable' | 'mismatch';
 
 export type ClaudePlan =
   | { action: 'write'; path: string; contents: string }
-  | { action: 'update'; path: string; contents: string; reason: UpdateReason }
+  | { action: 'update'; path: string; contents: string; reason: UpdateReason; timeoutProblem?: TimeoutProblem }
   | { action: 'already-wired'; path: string }
-  | { action: 'refuse'; path: string; reason: string };
+  | { action: 'refuse'; path: string; reason: string; timeoutProblem?: 'unmatchable' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -54,7 +83,12 @@ export function isUsablStopCommand(command: string): boolean {
   // args, or a foreign command that mentions it as data) is an operator customization we
   // must not silently rewrite, so it falls through to the refusal path instead.
   const trimmed = command.trim();
-  if (trimmed === STOP_HOOK_COMMAND || trimmed === LEGACY_STOP_HOOK_COMMAND || trimmed === 'usabl stop-hook') {
+  if (
+    stopHookCommandLimit(trimmed) !== null ||
+    trimmed === PREVIOUS_STOP_HOOK_COMMAND ||
+    trimmed === LEGACY_STOP_HOOK_COMMAND ||
+    trimmed === 'usabl stop-hook'
+  ) {
     return true;
   }
   // A plain node invocation of the retired dist runner and nothing else: no wrappers, env
@@ -80,8 +114,82 @@ export function isUsablStopCommand(command: string): boolean {
   return /^node[ \t]+(?!-)([A-Za-z0-9._@+/-]*\/)?usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
 }
 
-function canonicalStopEntry(): { hooks: Array<{ type: string; command: string }> } {
-  return { hooks: [{ type: 'command', command: STOP_HOOK_COMMAND }] };
+/**
+ * The limit a Stop hook command of the form stopHookCommand writes sets, or null when the command
+ * is not of that form. The number must be whole seconds as stopHookCommand prints them, so no shell
+ * syntax can sit in its place.
+ */
+export function stopHookCommandLimit(command: string): number | null {
+  const prefix = `${STOP_HOOK_TIMEOUT_ENV}=`;
+  if (!command.startsWith(prefix)) {
+    return null;
+  }
+  const rest = command.slice(prefix.length);
+  const space = rest.indexOf(' ');
+  if (space < 0 || rest.slice(space + 1) !== STOP_HOOK_RUN) {
+    return null;
+  }
+  const text = rest.slice(0, space);
+  const seconds = parseTimeoutSeconds(text);
+  return seconds !== null && String(seconds) === text ? seconds : null;
+}
+
+/** Why usabl cannot plan to this usabl Stop hook's limit, or null when it can. */
+export function stopHookTimeoutProblem(hook: Record<string, unknown>): TimeoutProblem | null {
+  const command = typeof hook['command'] === 'string' ? hook['command'].trim() : '';
+  const timeout = hook['timeout'];
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout)) {
+    return 'missing';
+  }
+  const commandLimit = stopHookCommandLimit(command);
+  if (timeout < MIN_HOST_TIMEOUT_SECONDS || (commandLimit !== null && commandLimit < MIN_HOST_TIMEOUT_SECONDS)) {
+    return 'below-minimum';
+  }
+  if (isUnmatchableTimeout(timeout)) {
+    return 'unmatchable';
+  }
+  return commandLimit === timeout ? null : 'mismatch';
+}
+
+// A timeout at or above the minimum that no limit usabl reads can equal: not whole seconds, or
+// more than six digits. Rewriting it would change a limit the person chose, so usabl keeps it.
+function isUnmatchableTimeout(timeout: unknown): timeout is number {
+  return (
+    typeof timeout === 'number' &&
+    Number.isFinite(timeout) &&
+    timeout >= MIN_HOST_TIMEOUT_SECONDS &&
+    parseTimeoutSeconds(String(timeout)) === null
+  );
+}
+
+// True for a limit usabl can write in both places: whole seconds the runner reads, at or above
+// the minimum.
+function usableLimit(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_HOST_TIMEOUT_SECONDS &&
+    parseTimeoutSeconds(String(value)) !== null
+  );
+}
+
+/**
+ * The limit a rewrite gives a usabl hook. The hook's `timeout` is the limit Claude Code enforces,
+ * so a usable one is kept, lower or higher than the default, and the command is made to match it.
+ * Without one, a usable limit in the command is kept. Otherwise the default.
+ */
+function rewriteLimit(hook: Record<string, unknown>): number {
+  const timeout = hook['timeout'];
+  if (usableLimit(timeout)) {
+    return timeout;
+  }
+  const command = typeof hook['command'] === 'string' ? hook['command'].trim() : '';
+  const commandLimit = stopHookCommandLimit(command);
+  return usableLimit(commandLimit) ? commandLimit : CLAUDE_STOP_TIMEOUT_SECONDS;
+}
+
+function canonicalStopEntry(): { hooks: Array<{ type: string; command: string; timeout: number }> } {
+  return { hooks: [{ type: 'command', command: STOP_HOOK_COMMAND, timeout: CLAUDE_STOP_TIMEOUT_SECONDS }] };
 }
 
 function canonicalSettings(): { hooks: { Stop: Array<ReturnType<typeof canonicalStopEntry>> } } {
@@ -95,7 +203,7 @@ function draftContents(): string {
 function manualStep(): string {
   return [
     'Add this Stop hook to the file by hand:',
-    `  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": ${JSON.stringify(STOP_HOOK_COMMAND)} } ] } ] }`,
+    `  "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": ${JSON.stringify(STOP_HOOK_COMMAND)}, "timeout": ${CLAUDE_STOP_TIMEOUT_SECONDS} } ] } ] }`,
   ].join('\n');
 }
 
@@ -147,19 +255,37 @@ function classifyStop(stop: unknown[]): { usabl: number; other: number } | null 
   return { usabl, other };
 }
 
-// Rewrite every usabl-owned Stop command in place to the stable command, leaving all
-// other keys, matchers, and hook entries exactly as they were.
-function rewriteUsablCommands(stop: unknown[]): void {
+// The usabl-owned Stop hooks, in order.
+function usablHooks(stop: unknown[]): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
   for (const entry of stop) {
     if (!isRecord(entry) || !Array.isArray(entry['hooks'])) {
       continue;
     }
     for (const hook of entry['hooks']) {
       if (isRecord(hook) && hook['type'] === 'command' && typeof hook['command'] === 'string' && isUsablStopCommand(hook['command'])) {
-        hook['command'] = STOP_HOOK_COMMAND;
+        found.push(hook);
       }
     }
   }
+  return found;
+}
+
+// Rewrite every usabl-owned Stop hook in place to the stable command and a matching timeout,
+// leaving all other keys, matchers, and hook entries exactly as they were.
+function rewriteUsablCommands(stop: unknown[]): void {
+  for (const hook of usablHooks(stop)) {
+    const seconds = rewriteLimit(hook);
+    hook['command'] = stopHookCommand(seconds);
+    hook['timeout'] = seconds;
+  }
+}
+
+// True when a usabl hook runs a command of the current form or the previous one, so the only
+// thing to change is its time limit.
+function isCurrentOrPreviousCommand(hook: Record<string, unknown>): boolean {
+  const command = typeof hook['command'] === 'string' ? hook['command'].trim() : '';
+  return stopHookCommandLimit(command) !== null || command === PREVIOUS_STOP_HOOK_COMMAND;
 }
 
 export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
@@ -204,6 +330,15 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
       `Refusing to change ${CLAUDE_SETTINGS_PATH}: it has more than one usabl Stop hook, and two would both run. Reconcile them to a single usabl Stop hook by hand.`,
     );
   }
+  const ownedTimeout = Array.isArray(stop) ? usablHooks(stop)[0]?.['timeout'] : undefined;
+  if (isUnmatchableTimeout(ownedTimeout)) {
+    // The number is the person's own setting from this file, not page text.
+    const reason =
+      `Refusing to change ${CLAUDE_SETTINGS_PATH}: the usabl Stop hook's "timeout" is ${ownedTimeout}, which is not a whole ` +
+      `number of seconds from ${MIN_HOST_TIMEOUT_SECONDS} to 999999, so usabl cannot pass the same limit to its own deadline. ` +
+      'usabl left the file as it is. Set "timeout" to whole seconds, then run usabl install --claude again.';
+    return { action: 'refuse', path: CLAUDE_SETTINGS_PATH, reason: `${reason}\n${manualStep()}`, timeoutProblem: 'unmatchable' };
+  }
 
   // Build the merged object without touching the original, so a refusal path never leaves
   // a half-written file. Only non-Stop content and usabl-owned commands are affected.
@@ -215,8 +350,16 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
   // A usabl hook already present means the only change is to normalize its command. No usabl
   // hook present means we are adding the missing hook. Capture that here, before the mutation,
   // so an update carries an honest reason for read-only callers.
+  const owned = usablHooks(updatedStop)[0];
+  const timeoutProblem = owned !== undefined && isCurrentOrPreviousCommand(owned) ? stopHookTimeoutProblem(owned) : null;
   const reason: UpdateReason =
-    counts.usabl === 0 ? 'add-missing' : hasLegacyCommand(updatedStop) ? 'remove-download' : 'normalize';
+    counts.usabl === 0
+      ? 'add-missing'
+      : hasLegacyCommand(updatedStop)
+        ? 'remove-download'
+        : timeoutProblem !== null
+          ? 'timeout'
+          : 'normalize';
   if (counts.usabl > 0) {
     rewriteUsablCommands(updatedStop);
   } else {
@@ -227,7 +370,32 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
   if (JSON.stringify(updated) === JSON.stringify(parsed)) {
     return { action: 'already-wired', path: CLAUDE_SETTINGS_PATH };
   }
-  return { action: 'update', path: CLAUDE_SETTINGS_PATH, contents: `${JSON.stringify(updated, null, 2)}\n`, reason };
+  return {
+    action: 'update',
+    path: CLAUDE_SETTINGS_PATH,
+    contents: `${JSON.stringify(updated, null, 2)}\n`,
+    reason,
+    ...(reason === 'timeout' && timeoutProblem !== null ? { timeoutProblem } : {}),
+  };
+}
+
+// What the hook's time limit is for, in the words an install message ends with.
+function limitNote(contents: string): string {
+  let seconds = CLAUDE_STOP_TIMEOUT_SECONDS;
+  try {
+    const parsed: unknown = JSON.parse(contents);
+    const stop = isRecord(parsed) && isRecord(parsed['hooks']) ? parsed['hooks']['Stop'] : undefined;
+    const hook = Array.isArray(stop) ? usablHooks(stop)[0] : undefined;
+    if (hook !== undefined && typeof hook['timeout'] === 'number') {
+      seconds = hook['timeout'];
+    }
+  } catch {
+    // The plan wrote these contents, so they parse. The default is the fallback all the same.
+  }
+  return (
+    ` The hook's timeout is ${seconds} seconds, and ${STOP_HOOK_TIMEOUT_ENV} in its command matches it, ` +
+    'so usabl answers before Claude Code ends the hook.'
+  );
 }
 
 export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<InstallResult> {
@@ -238,7 +406,7 @@ export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<Inst
       exitCode: 0,
       action: 'written',
       path: plan.path,
-      message: `Wrote ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}). Review this file before you commit it.`,
+      message: `Wrote ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}).${limitNote(plan.contents)} Review this file before you commit it.`,
     };
   }
   if (plan.action === 'update') {
@@ -253,7 +421,7 @@ export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<Inst
       exitCode: 0,
       action: 'written',
       path: plan.path,
-      message: `Updated the live ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}).${why} Review the diff before you commit it.`,
+      message: `Updated the live ${plan.path} to run the usabl Stop hook (${STOP_HOOK_DISPLAY}).${why}${limitNote(plan.contents)} Review the diff before you commit it.`,
     };
   }
   if (plan.action === 'already-wired') {

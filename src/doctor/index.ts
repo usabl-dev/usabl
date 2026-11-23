@@ -12,9 +12,16 @@
  */
 import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
-import { planClaude } from '../install/claude.js';
+import { planClaude, type TimeoutProblem } from '../install/claude.js';
+import {
+  CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS,
+  CLAUDE_STOP_TIMEOUT_SECONDS,
+  CURSOR_STOP_TIMEOUT_SECONDS,
+  MIN_HOST_TIMEOUT_SECONDS,
+  STOP_HOOK_TIMEOUT_ENV,
+} from '../surfaces/stop-hook-deadline.js';
 import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../install/claude-skill.js';
-import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
+import { CURSOR_HOOKS_JSON_PATH, CURSOR_STOP_SCRIPT_PATH, planCursor, readCursorUiFileGlobs, type CursorTimeoutProblem } from '../install/cursor.js';
 import { legacyDownloadDrift } from '../install/usabl-command.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
@@ -556,6 +563,51 @@ async function collectOverlay(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+// What a Stop hook usabl cannot plan its deadline to costs, and the fix, for each reason. A hook the
+// assistant ends at its limit lets the stop go on, so none of these is ever wired.
+const ENDED_STOP_GOES_ON = 'When the assistant ends the hook, the stop goes on with nothing checked.';
+const CLAUDE_TIMEOUT_STEPS: Record<TimeoutProblem, string> = {
+  missing:
+    'The usabl Stop hook in .claude/settings.json sets no timeout, so usabl cannot know when Claude Code ends it. ' +
+    `${ENDED_STOP_GOES_ON} Run "usabl install --claude" to set a timeout of ${CLAUDE_STOP_TIMEOUT_SECONDS} seconds ` +
+    `and ${STOP_HOOK_TIMEOUT_ENV} in the command to match.`,
+  'below-minimum':
+    `The usabl Stop hook in .claude/settings.json has a time limit below ${MIN_HOST_TIMEOUT_SECONDS} seconds, which leaves ` +
+    'usabl too little time to check a change and answer before Claude Code ends the hook. ' +
+    `Run "usabl install --claude" to set it to ${CLAUDE_STOP_TIMEOUT_SECONDS} seconds, or set the timeout and ` +
+    `${STOP_HOOK_TIMEOUT_ENV} in the command to the same number of at least ${MIN_HOST_TIMEOUT_SECONDS}.`,
+  unmatchable:
+    'The usabl Stop hook in .claude/settings.json has a timeout usabl cannot match: it is not a whole number of seconds ' +
+    `from ${MIN_HOST_TIMEOUT_SECONDS} to 999999, the limits ${STOP_HOOK_TIMEOUT_ENV} can carry, so usabl plans its own deadline ` +
+    'to a different limit than the one Claude Code uses. usabl install --claude leaves such a timeout as it is. ' +
+    'Set "timeout" to whole seconds, then run "usabl install --claude" to make the command match it.',
+  mismatch:
+    `The timeout of the usabl Stop hook in .claude/settings.json does not match ${STOP_HOOK_TIMEOUT_ENV} in its command, ` +
+    'or the command sets none, so usabl plans its own deadline to a different limit than the one Claude Code uses. ' +
+    `A command that sets none makes usabl plan to ${CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS} seconds, Claude Code's default, not to the timeout. ` +
+    'A larger number than the timeout lets Claude Code end the hook first, and then the stop goes on with nothing checked. ' +
+    'Run "usabl install --claude" to make the command match the timeout.',
+};
+
+const CURSOR_TIMEOUT_STEPS: Record<CursorTimeoutProblem, string> = {
+  missing:
+    `The usabl stop hook in ${CURSOR_HOOKS_JSON_PATH} sets no timeout, so usabl cannot know when Cursor ends it. ` +
+    `${ENDED_STOP_GOES_ON} Run "usabl install --cursor" to set it to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds.`,
+  'below-limit':
+    `The usabl stop hook in ${CURSOR_HOOKS_JSON_PATH} has a timeout below ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, the ` +
+    `smallest limit usabl writes, which leaves usabl too little time to check a change. ${ENDED_STOP_GOES_ON} ` +
+    `Run "usabl install --cursor" to set it to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds.`,
+  'script-no-limit':
+    `The usabl stop script ${CURSOR_STOP_SCRIPT_PATH} passes no time limit to usabl, so usabl plans to ` +
+    `${CURSOR_STOP_TIMEOUT_SECONDS} seconds whatever ${CURSOR_HOOKS_JSON_PATH} says, and a ${STOP_HOOK_TIMEOUT_ENV} value in the ` +
+    `environment Cursor runs in can put usabl's deadline past Cursor's limit. ${ENDED_STOP_GOES_ON} ` +
+    `Run "usabl install --cursor" to write the script with the timeout from ${CURSOR_HOOKS_JSON_PATH}.`,
+  'script-mismatch':
+    `The time limit ${CURSOR_STOP_SCRIPT_PATH} passes to usabl does not match the usabl stop hook's timeout in ` +
+    `${CURSOR_HOOKS_JSON_PATH}, so usabl plans its deadline to a different limit than the one Cursor enforces. ` +
+    `Run "usabl install --cursor" to make the script match the timeout.`,
+};
+
 async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
   // planClaude answers "write, update, no-op, or refuse?"; doctor needs the finer question of
   // WHY an update is needed, which the plan's reason discriminator now carries.
@@ -590,6 +642,14 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
         nextStep: legacyDownloadDrift('the usabl Stop hook in .claude/settings.json', 'usabl install --claude'),
       };
     }
+    if (plan.reason === 'timeout') {
+      return {
+        id: 'stop-hook',
+        label: STOP_HOOK_LABEL,
+        state: 'drifted',
+        nextStep: CLAUDE_TIMEOUT_STEPS[plan.timeoutProblem ?? 'missing'],
+      };
+    }
     return {
       id: 'stop-hook',
       label: STOP_HOOK_LABEL,
@@ -605,6 +665,9 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
       state: 'missing',
       nextStep: 'No .claude/settings.json. Run "usabl install --claude" to wire the usabl Stop hook.',
     };
+  }
+  if (plan.timeoutProblem === 'unmatchable') {
+    return { id: 'stop-hook', label: STOP_HOOK_LABEL, state: 'drifted', nextStep: CLAUDE_TIMEOUT_STEPS.unmatchable };
   }
   return {
     id: 'stop-hook',
@@ -668,6 +731,9 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
       state: 'drifted',
       nextStep: legacyDownloadDrift(`the usabl Cursor wiring in ${plan.rewrites.join(', ')}`, 'usabl install --cursor'),
     };
+  }
+  if (plan.action === 'write' && plan.timeoutProblem !== undefined) {
+    return { id: 'cursor', label: CURSOR_LABEL, state: 'drifted', nextStep: CURSOR_TIMEOUT_STEPS[plan.timeoutProblem] };
   }
   if (plan.action === 'refuse') {
     return {
