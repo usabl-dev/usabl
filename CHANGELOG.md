@@ -459,7 +459,7 @@
   stays invisible, as it does for the tree. A `--ci` run still binds no local files. The docs now
   say that a team's own CI job that runs `usabl check` should pass `--ci`. Guarded path:
   `src/run.ts`, lines 36 and 43 (imports), 117 to 121 (the first read), 208 to 211 (the second
-  read), 221 to 222 (the gap), 324 to 326 (the receipt binds the first read), and 460 to 463 (the
+  read), 221 to 222 (the gap), 324 to 326 (the receipt binds the first read), and 448 to 451 (the
   reader helper). The change only adds a read and a gap, so it can make a run not verified, never
   verified.
 - A Stop hook stop with a starting commit, and `usabl check --branch-scope`, read policy at that
