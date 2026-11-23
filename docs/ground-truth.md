@@ -4344,9 +4344,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     and stop again, or run usabl check by hand, or raise the limit in the hook settings." and
     how to raise it for that assistant: for Claude Code, set the hook's `timeout` and the number
     in its command; for Cursor, set the stop entry's `timeout`, then run
-    `usabl install --cursor` again so the adapter script passes it. When a Claude Code hook command set no
-    limit, the message ends with "Run usabl install --claude again so the hook states its time
-    limit." The check named is `usabl check --branch-scope` once the stop found a starting
+    `usabl install --cursor` again so the adapter script passes it. When a Claude Code hook
+    command set no limit, the message ends with "Run usabl install --claude again so the hook
+    states its time limit." The check named is `usabl check --branch-scope` once the stop found a starting
     commit. On an active continuation it lets the stop through once with the same notice and
     "usabl let this stop through without blocking again (continuation already active).", as the
     drift and older-pins blocks do, so a slow app cannot loop the agent. Pins the check would
@@ -4399,7 +4399,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   and with none of those it makes one registry request and fails. The generated Claude command is
   a POSIX shell line (`USABL_STOP_HOOK_TIMEOUT=600 npm_config_loglevel=silent npm exec --no --
   usabl stop-hook || { ...; exit 1; }`), and the hook beside it has `"timeout": 600` (see Stop
-  time). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
+  time). On Windows it needs Git Bash, which is the shell Claude Code uses there by default.
+  When usabl cannot run, the hook prints one line, "NOT verified - the
   usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
   it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
   block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets

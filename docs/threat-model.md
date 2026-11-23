@@ -390,8 +390,8 @@ passing bundle from another run.
   costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
   every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
   on. usabl's own deadline now blocks such a stop (the timeout rule above), but every stop would
-  still block. So each bound file has a size cap, read from the file's size before any byte: 1 MiB for a
-  `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
+  still block. So each bound file has a size cap, read from the file's size before any byte: 1
+  MiB for a `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
   one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
   the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
   cost of a large bound file is its hash time on every stop: about a tenth of a second at the
