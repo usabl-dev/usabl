@@ -31,7 +31,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { loadConfig, parseConfigText } from './intake/load-config.js';
+import { loadConfig, loadConfigWithText, parseConfigText } from './intake/load-config.js';
 import {
   branchScopeRefusal,
   ciRefusal,
@@ -78,6 +78,7 @@ import {
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
 import { withoutLocalFileBinding } from './evidence/local-files.js';
+import { noReceiptMessage, receiptConfigCheck } from './evidence/planned-config.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
@@ -282,6 +283,16 @@ function unnormalizedFrom(cwd: string, path: string): string {
 async function isRootConfig(configPath: string): Promise<boolean> {
   const named = realPathOrNull(unnormalizedFrom(process.cwd(), configPath));
   return named !== null && named === realPathOrNull(join(await repositoryRoot(), ROOT_CONFIG));
+}
+
+// The text of usabl.config.json at the repository root now, the file the run bound into the
+// receipt and the Stop hook reads, or null when it cannot be read.
+async function readRootConfigText(): Promise<string | null> {
+  try {
+    return await readFile(join(await repositoryRoot(), ROOT_CONFIG), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 // What a check says when it saves no receipt because it planned with another config.
@@ -978,10 +989,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // cannot stop the judge before it scans; the guard still compares its bytes and reports it.
   // Without a readable trusted config the head's copy plans the run, with its runtime settings
   // taken out, and no origin is allowed, so every screen it plans is a coverage gap.
-  const config =
-    judge === null || opts.trustedRef === null
-      ? await loadConfig(opts.configPath)
-      : (judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath)));
+  // The text a run plans from is kept, so the receipt is saved only while the root config still
+  // holds that text. See planned-config.ts.
+  let config: UsablConfig;
+  let plannedText: string | null = null;
+  if (judge === null || opts.trustedRef === null) {
+    const loaded = await loadConfigWithText(opts.configPath);
+    config = loaded.config;
+    plannedText = loaded.text;
+  } else {
+    config = judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath));
+  }
   const built = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],
@@ -1029,8 +1047,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // A run planned with another config, or with the trusted ref's config through the judge, saves
     // none: its receipt would answer a stop planned with a config it did not read.
     const receipt = receiptToSave(result, { ci: opts.ci });
+    // The root config is read once more just before the save. A second process that swapped it
+    // while the check ran leaves bytes the check did not plan with, or a receipt bound to them.
+    const configCheck =
+      receipt === null || plannedText === null || !plannedWithRootConfig || judge !== null
+        ? null
+        : await receiptConfigCheck({
+            deps: (await realpath(process.cwd())) === (await repositoryRoot()) ? deps : null,
+            config,
+            receipt,
+            plannedText,
+            currentText: await readRootConfigText(),
+          });
     if (receipt !== null && (!plannedWithRootConfig || judge !== null)) {
       process.stderr.write(`usabl: ${NO_RECEIPT_OTHER_CONFIG}\n`);
+    } else if (configCheck !== null && configCheck !== 'bound') {
+      process.stderr.write(`usabl: ${noReceiptMessage(configCheck)}\n`);
     } else if (receipt !== null) {
       const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt, checkCommandFor(baseRevision));
       if (saved.status === 'refused') {

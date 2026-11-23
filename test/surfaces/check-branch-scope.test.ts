@@ -19,7 +19,13 @@ import { makeGitReader } from '../../src/deps/git.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 // What the fake check runner records, and the drafts it reports for each screen id.
-const state = vi.hoisted(() => ({ scanned: [] as string[], drafts: {} as Record<string, unknown[]> }));
+// onBuild runs once, inside the next buildDeps, where a real check launches the browser. It stands
+// in for a second process that writes while the check runs.
+const state = vi.hoisted(() => ({
+  scanned: [] as string[],
+  drafts: {} as Record<string, unknown[]>,
+  onBuild: null as null | (() => Promise<void>),
+}));
 
 vi.mock('../../src/deps/build.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/deps/build.js')>();
@@ -27,6 +33,11 @@ vi.mock('../../src/deps/build.js', async (importOriginal) => {
     ...original,
     buildDeps: async (_config: UsablConfig, options: { cwd?: string } = {}): Promise<Deps> => {
       const cwd = options.cwd ?? process.cwd();
+      if (state.onBuild !== null) {
+        const onBuild = state.onBuild;
+        state.onBuild = null;
+        await onBuild();
+      }
       const fake = makeFakeDeps();
       return {
         ...fake,
@@ -94,12 +105,21 @@ async function check(...args: string[]): Promise<{ code: number; stdout: string;
   return { code, stdout: stdout.join(''), stderr: stderr.join(''), scanned: [...state.scanned] };
 }
 
-async function stop(): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
+type RealPorts = ReturnType<typeof makeStopHookRunnerPorts>;
+type ConfigBytesRead = Awaited<ReturnType<RealPorts['readConfigBytes']>>;
+
+// overrides.readConfigBytes wraps the real read, so a test can change what one read returns.
+async function stop(
+  overrides: { readConfigBytes?: (real: () => Promise<ConfigBytesRead>) => Promise<ConfigBytesRead> } = {},
+): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
   const out: string[] = [];
   const said: string[] = [];
   state.scanned = [];
+  const real = makeStopHookRunnerPorts({ startDir: repo, env: {} });
+  const wrap = overrides.readConfigBytes;
   const ports = {
-    ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
+    ...real,
+    ...(wrap === undefined ? {} : { readConfigBytes: () => wrap(() => real.readConfigBytes()) }),
     pins: memoryPinStore(),
     stdoutWrite: async (text: string) => {
       said.push(text);
@@ -126,6 +146,7 @@ function blockReason(stopped: { stdout: string }): string | null {
 
 beforeEach(async () => {
   state.drafts = {};
+  state.onBuild = null;
   originalCwd = process.cwd();
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-branch-scope-')));
   git('init', '-q', '-b', 'main');
@@ -636,5 +657,96 @@ describe('a check planned with another config leaves no receipt a stop can use',
       expect(next.scanned, args.join(' ')).toEqual([]);
       expect(next.stderr).toContain('not re-scanned');
     }
+  });
+});
+
+// The check reads the config before it builds deps, and the run binds the root config's bytes into
+// the receipt when it starts. A second process that puts the committed config back in between
+// makes the check plan from weak bytes and mint a receipt bound to the committed bytes. The tree is
+// then clean, so the next stop would answer from that receipt.
+describe('a config swapped while usabl checks leaves no receipt', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const committedText = JSON.stringify(config, null, 2) + '\n';
+  const weakText =
+    JSON.stringify(
+      {
+        ...config,
+        surfaces: [
+          { id: 'home', url: 'http://127.0.0.1:5173/', files: ['src/Other.tsx'] },
+          { id: 'other', url: 'http://127.0.0.1:5173/other', files: ['src/App.tsx'] },
+        ],
+      },
+      null,
+      2,
+    ) + '\n';
+
+  async function expectSwapLeavesNoReceipt(args: string[]): Promise<void> {
+    state.drafts = { home: [homeBarrier] };
+    await writeFile(join(repo, 'usabl.config.json'), weakText);
+    state.onBuild = async () => {
+      await writeFile(join(repo, 'usabl.config.json'), committedText);
+    };
+
+    const ran = await check(...args);
+    expect(ran.scanned).toEqual(['other']);
+    expect(ran.stderr).toContain('usabl: saved no receipt for this run');
+    expect(ran.stderr).toContain('usabl.config.json at the repository root changed while usabl was checking');
+    await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+    expect(git('status', '--porcelain', '--', 'usabl.config.json')).toBe('');
+
+    const next = await stop();
+    expect(next.scanned).toEqual(['home']);
+    expect(next.stderr).not.toContain('not re-scanned');
+    expect(blockReason(next)).not.toBeNull();
+  }
+
+  it('on a --branch-scope check with a trusted branch', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    await expectSwapLeavesNoReceipt(['--branch-scope']);
+  });
+
+  it('on a plain check with no trusted branch', async () => {
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await expectSwapLeavesNoReceipt([]);
+  });
+
+  it('still saves a receipt when nothing changes the config during the check', async () => {
+    state.drafts = {};
+    await write('src/App.tsx', 'export const App = 2;\n');
+    state.onBuild = async () => {
+      await writeFile(join(repo, 'usabl.config.json'), committedText);
+    };
+    const ran = await check();
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).not.toContain('saved no receipt');
+    const next = await stop();
+    expect(next.scanned).toEqual([]);
+    expect(next.stderr).toContain('not re-scanned');
+  });
+
+  // The stop plans from the bytes it read and compared with the last commit. It reads the file once
+  // more before it saves its receipt, and saves none when the file holds other bytes by then.
+  it('a stop whose config changes while it checks saves no receipt, and the next stop checks again', async () => {
+    state.drafts = {};
+    await write('src/App.tsx', 'export const App = 2;\n');
+    let reads = 0;
+    const first = await stop({
+      readConfigBytes: async (real) => {
+        reads += 1;
+        const bytes = await real();
+        return reads === 1 || bytes.working.status !== 'found' ? bytes : { ...bytes, working: { status: 'found', text: weakText } };
+      },
+    });
+    expect(reads).toBe(2);
+    expect(first.scanned).toEqual(['home']);
+    expect(first.stderr).toContain('saved no receipt for this run');
+    expect(first.stderr).toContain('usabl.config.json at the repository root changed while usabl was checking');
+    await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+
+    const next = await stop();
+    expect(next.scanned).toEqual(['home']);
+    expect(next.stderr).not.toContain('not re-scanned');
   });
 });

@@ -55,6 +55,20 @@ export async function loadConfig(
   },
   options: LoadConfigOptions = {},
 ): Promise<UsablConfig> {
+  return (await loadConfigWithText(path, warn, options)).config;
+}
+
+/**
+ * The config and the exact text it was parsed from. A check that saves a receipt compares this text
+ * with the file again before it saves, so the receipt never binds bytes other than the planned ones.
+ */
+export async function loadConfigWithText(
+  path = DEFAULT_CONFIG_PATH,
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+  options: LoadConfigOptions = {},
+): Promise<{ config: UsablConfig; text: string }> {
   const docsManifestPath = options.docsManifestPath ?? 'usabl.docs.json';
   // Targets come from config so the same engine can run in local, CI, and preview environments.
   let raw: string;
@@ -72,7 +86,7 @@ export async function loadConfig(
   if (refusal !== null) {
     throw new Error(refusal);
   }
-  return config;
+  return { config, text: raw };
 }
 
 // A manifest usabl cannot read is not proof of a documentation-only repository, so any read

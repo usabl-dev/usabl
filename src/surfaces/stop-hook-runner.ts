@@ -60,6 +60,7 @@ import {
   type StoredReceiptPinState,
 } from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, makeReceiptFs, receiptToSave, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import { noReceiptMessage, receiptConfigCheck } from '../evidence/planned-config.js';
 import {
   currentUid,
   deletePinFileFix,
@@ -506,6 +507,17 @@ type ConfigStep =
  * is not one of the block cases either, so it stays an internal error and fails open with
  * disclosure. A folder outside any work tree has no repository to look at, and says so.
  */
+// The working config's text now, or null when it is missing or cannot be read. A read that fails
+// is never the planned text, so no receipt is saved.
+async function currentConfigText(ports: StopHookRunnerPorts): Promise<string | null> {
+  try {
+    const { working } = await ports.readConfigBytes();
+    return working.status === 'found' ? working.text : null;
+  } catch {
+    return null;
+  }
+}
+
 function configStep(bytes: ConfigBytes): ConfigStep {
   const { working, head } = bytes;
   if (head.status === 'no-work-tree') {
@@ -1348,7 +1360,22 @@ async function runStopChecks(
     const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
-    if (receipt !== null) {
+    // The run binds the root config's bytes when it starts, after this stop read them to plan. The
+    // file is read once more here, and the receipt is saved only while it holds the planned text
+    // and the receipt binds that text. See planned-config.ts.
+    const configCheck =
+      receipt === null
+        ? null
+        : await receiptConfigCheck({
+            deps: guardDeps,
+            config,
+            receipt,
+            plannedText: step.text,
+            currentText: await currentConfigText(ports),
+          });
+    if (configCheck !== null && configCheck !== 'bound') {
+      receiptNotice = `usabl: ${noReceiptMessage(configCheck)}`;
+    } else if (receipt !== null) {
       const saved = await saveReceipt(ports.fs, receipt, checkCommand);
       // A refused save changes no verdict. It is said after the decision, so the decision line
       // still comes first.
