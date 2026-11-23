@@ -803,6 +803,12 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
+- Known limit: a glob with many wildcards can take seconds to match a long file name, and the
+  Stop hook deadline still ends the stop inside the host's limit. The size bounds on each policy
+  glob list do not bound this: `src/` then `*a` twelve times then `*b`, 30 characters, took 2.4
+  seconds against one file name of 34 characters, because the regular expression engine tries
+  each way the wildcards can split the name. The glob is committed policy, and a stop that hits
+  the deadline blocks once with "NOT verified - usabl ran out of time" and saves no receipt.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
