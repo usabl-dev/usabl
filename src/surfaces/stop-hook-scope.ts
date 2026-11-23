@@ -31,13 +31,27 @@ export type StartingCommitProblem =
   | 'git-failed';
 
 /**
+ * Where a check with a starting commit reads policy, chosen by where usabl.config.json is.
+ *
+ * `starting-commit`: the starting commit holds a config, so policy is read and guarded there, as
+ * CI reads it at the base of the pull request. `branch-sets-usabl-up`: neither the starting commit
+ * nor the tip of the trusted branch holds one, so this branch is the one that sets usabl up, and
+ * its own policy is the only policy there is. The check reads it, and says it is not approved yet.
+ * `branch-older-than-setup`: the trusted branch holds a config but the starting commit does not,
+ * so the branch left the trusted branch before usabl was set up there, and checks nothing until it
+ * is updated.
+ */
+export type PolicySource = 'starting-commit' | 'branch-sets-usabl-up' | 'branch-older-than-setup';
+
+/**
  * What the hook found. `found` carries the trusted branch as git names it (for example
- * origin/main) and the full commit id where HEAD left it. `no-trusted-branch` means git records no
- * default branch for origin. `not-found` means a trusted branch is named and its starting commit
- * could not be found or used; `detail` is git's first line for a git failure.
+ * origin/main), the full commit id where HEAD left it, where policy is read, and whether the tip of
+ * the trusted branch holds a config. `no-trusted-branch`
+ * means git records no default branch for origin. `not-found` means a trusted branch is named and
+ * its starting commit could not be found or used; `detail` is git's first line for a git failure.
  */
 export type StartingCommit =
-  | { kind: 'found'; branch: string; commit: string }
+  | { kind: 'found'; branch: string; commit: string; policy: PolicySource; configOnTrustedBranch: boolean }
   | { kind: 'no-trusted-branch' }
   | { kind: 'not-found'; branch: string; problem: StartingCommitProblem; detail: string | null };
 
@@ -149,7 +163,54 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
   if (ancestor.code !== 0) {
     return gitFailed(branch, ancestor);
   }
-  return { kind: 'found', branch, commit };
+
+  // Where policy is read. Both commits are asked, and a lookup that fails is a git failure, never
+  // "no config".
+  const atStart = await holdsConfig(git, commit);
+  if ('failed' in atStart) {
+    return gitFailed(branch, atStart.failed);
+  }
+  const atTip = await holdsConfig(git, tipCommit);
+  if ('failed' in atTip) {
+    return gitFailed(branch, atTip.failed);
+  }
+  const policy: PolicySource = atStart.held
+    ? 'starting-commit'
+    : atTip.held
+      ? 'branch-older-than-setup'
+      : 'branch-sets-usabl-up';
+  return { kind: 'found', branch, commit, policy, configOnTrustedBranch: atTip.held };
+}
+
+/** The config file whose place decides where policy is read. */
+const CONFIG_FILE = 'usabl.config.json';
+
+/**
+ * Whether a commit holds usabl.config.json at the repository root.
+ *
+ * The commit's tree must be readable first: `git cat-file -e` fails for a missing or broken tree,
+ * where a lookup of a path in it would answer the same as for a path that is not there. Then
+ * `git ls-tree` lists that one root entry; `--full-tree` reads the path from the root wherever git
+ * runs. A listing that names the file means held, an empty listing with exit 0 means absent, and
+ * every other answer is a git failure, never "no config". Anything at that path, a file, a link, a
+ * folder, or a submodule, counts as held, so a strange entry keeps the strict reading.
+ */
+async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boolean } | { failed: ScopeGitResult }> {
+  const tree = await git(['cat-file', '-e', `${commit}^{tree}`]);
+  if (tree.code !== 0) {
+    return { failed: tree };
+  }
+  const listed = await git(['ls-tree', '--full-tree', '--name-only', '-z', commit, '--', CONFIG_FILE]);
+  if (listed.code !== 0) {
+    return { failed: listed };
+  }
+  if (listed.stdout.length === 0) {
+    return { held: false };
+  }
+  if (listed.stdout.split('\0').includes(CONFIG_FILE)) {
+    return { held: true };
+  }
+  return { failed: { ...listed, stderr: `git listed an unexpected entry for ${CONFIG_FILE}` } };
 }
 
 /** Why a check could not tell which committed changes to check. */
@@ -158,12 +219,65 @@ export type ScopeProblem = StartingCommitProblem | 'listing-failed';
 /**
  * What a check with the Stop hook's scope checks. `scan` carries the changed list (absent means
  * the changes that are not committed, which run() lists itself), the commit it was taken from or
- * null, and the note to print, or null. `gap` means the check cannot tell which changes CI will
- * check, so it checks nothing.
+ * null, the commit policy is read and guarded at or null for the working tree compared with the
+ * last commit, whether that policy is the branch's own because the branch sets usabl up, and the
+ * note to print, or null. `gap` means the check cannot tell which changes CI will check, so it
+ * checks nothing. `older-than-setup` means the branch left the trusted branch before usabl was set
+ * up there, so it checks nothing until the branch is updated.
  */
 export type BranchScope =
-  | { kind: 'scan'; changedFiles?: string[]; baseRevision: string | null; note: string | null }
-  | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null };
+  | {
+      kind: 'scan';
+      changedFiles?: string[];
+      baseRevision: string | null;
+      policyRef: string | null;
+      policyFromBranch: boolean;
+      note: string | null;
+    }
+  | { kind: 'gap'; problem: ScopeProblem; branch: string; detail: string | null }
+  | { kind: 'older-than-setup'; branch: string };
+
+/**
+ * The note on the verdict line of a check that read the branch's own policy, because the branch
+ * sets usabl up. It goes inside the brackets after the exit code, so a reader of the verdict
+ * alone still sees it.
+ */
+export const POLICY_FROM_BRANCH_VERDICT_NOTE = 'policy from this branch, not approved yet';
+
+/**
+ * The note for a check on a branch that sets usabl up. Neither the trusted branch nor the commit
+ * where this branch left it has a config, so there is no trusted policy to read. The check reads
+ * the branch's own, and says that CI still asks for approval. It is usabl's own text.
+ */
+export const POLICY_FROM_BRANCH_NOTE =
+  'Note: this branch sets usabl up. The trusted branch and the commit where this branch left it have no usabl.config.json, ' +
+  'so usabl read policy from this branch: its config and the guarded files the config names, such as the routes, the waivers, and the evidence floor. ' +
+  'That policy is not approved yet: a code owner must approve it in CI before it counts, and the policy check on the pull request asks for that approval.';
+
+/**
+ * The lines for a branch that left the trusted branch before usabl was set up there. The trusted
+ * branch's name comes from the repository, so the caller prints it inside the untrusted frame.
+ * `checked` says what was not checked (nothing, or nothing on this stop). `then` says what to do
+ * after the update: stop again, or run the check again.
+ */
+export function olderThanSetupLines(checked: string, then: string): { head: string; next: string } {
+  return {
+    head:
+      'usabl is set up on the trusted branch but not on this branch (the trusted branch is named under "trusted branch" in the untrusted text below): ' +
+      `the commit where this branch left the trusted branch has no usabl.config.json, so this branch has no policy usabl can trust, and usabl checked ${checked}.`,
+    next: `Next: update this branch from the trusted branch (merge it or rebase onto it), then ${then}.`,
+  };
+}
+
+/** What `usabl check --branch-scope` prints for a branch older than the setup. */
+export function olderThanSetupText(scope: Extract<BranchScope, { kind: 'older-than-setup' }>): string {
+  const lines = olderThanSetupLines('nothing', 'run usabl check --branch-scope again');
+  return [
+    `usabl: NOT verified - ${lines.head}`,
+    lines.next,
+    frameUntrustedBlock([boundField(`trusted branch: ${scope.branch}`, 'gapReason')]),
+  ].join('\n');
+}
 
 /**
  * The note for a check in a repository with no trusted branch to compare with. The check keeps
@@ -253,6 +367,10 @@ function errorText(err: unknown): string {
  * A starting commit that cannot be found or used, a lookup that throws, and a listing that fails
  * are a gap. The check never falls back to the uncommitted changes, to the whole history, or to
  * nothing to check. With no trusted branch at all it keeps the uncommitted scope, with the note.
+ *
+ * Policy is read at the starting commit when that commit holds a config. On a branch that sets
+ * usabl up it is read from the branch, with the note that says so. A branch older than the setup
+ * on the trusted branch checks nothing. See PolicySource.
  */
 export async function resolveBranchScope(
   find: () => Promise<StartingCommit>,
@@ -266,7 +384,10 @@ export async function resolveBranchScope(
     return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
   }
   if (start.kind === 'no-trusted-branch') {
-    return { kind: 'scan', baseRevision: null, note: NO_TRUSTED_BRANCH_NOTE };
+    return { kind: 'scan', baseRevision: null, policyRef: null, policyFromBranch: false, note: NO_TRUSTED_BRANCH_NOTE };
+  }
+  if (start.policy === 'branch-older-than-setup') {
+    return { kind: 'older-than-setup', branch: start.branch };
   }
   let changedFiles: string[];
   try {
@@ -274,5 +395,15 @@ export async function resolveBranchScope(
   } catch (err) {
     return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: errorText(err) };
   }
-  return { kind: 'scan', changedFiles, baseRevision: start.commit, note: null };
+  if (start.policy === 'branch-sets-usabl-up') {
+    return {
+      kind: 'scan',
+      changedFiles,
+      baseRevision: start.commit,
+      policyRef: null,
+      policyFromBranch: true,
+      note: POLICY_FROM_BRANCH_NOTE,
+    };
+  }
+  return { kind: 'scan', changedFiles, baseRevision: start.commit, policyRef: start.commit, policyFromBranch: false, note: null };
 }

@@ -74,6 +74,11 @@ npx usabl check
 Review and commit each drafted file before you run the next step, because usabl does
 not trust policy files with uncommitted changes.
 
+A team that sets usabl up on a branch can use the Stop hook there: once the config is
+committed, each stop checks the branch with the branch's own policy, its verdict line
+says that policy is not approved yet, and CI asks a code owner to approve it on the pull
+request.
+
 Then set up the other places usabl runs, one per command:
 
 ```bash

@@ -76,7 +76,7 @@ afterEach(async () => {
 // The starting commit lookup is stubbed, so a stop here does not read the git refs of the checkout
 // the tests run in. CI's checkout has no refs/remotes/origin/HEAD and a developer's usually does,
 // and the no trusted branch note would otherwise come and go with the machine.
-const FOUND: StartingCommit = { kind: 'found', branch: 'origin/main', commit: 'a'.repeat(40) };
+const FOUND: StartingCommit = { kind: 'found', branch: 'origin/main', commit: 'a'.repeat(40), policy: 'starting-commit', configOnTrustedBranch: true };
 
 async function stop(
   sessionId: string,

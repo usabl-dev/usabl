@@ -4171,7 +4171,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - The repository root, then the config, before anything is parsed. The hook finds the
   repository root with `git rev-parse --show-toplevel` from the folder it starts in, because
   that folder follows the assistant when it changes directory. When `CLAUDE_PROJECT_DIR` is set
-  and names a folder, the hook starts there; Claude Code sets it to the project root. The
+  and names a folder inside a git work tree, the hook starts there; Claude Code sets it to the
+  project root. When it names a folder in no work tree, for example a parent folder the session
+  was started in, and the hook's own folder is in one, the hook uses its own folder's work tree.
+  That folder follows the assistant, so it may not be the repository the session changed, and
+  every decision says so: each verdict line from a run, the stored receipt line included, carries
+  "checked the repository the assistant stopped in" in its brackets, and every decision, blocks
+  and the lines that open "NOT verified -" included, is followed by "Note: the project folder
+  (CLAUDE_PROJECT_DIR) is outside any git repository, so usabl checked the repository the
+  assistant was in when it stopped ... If the work was in another repository, run usabl check
+  there.", with the top-level folder name of that repository under "repository checked" inside
+  the untrusted frame. After a block that note is on stderr, as the other notes are.
+  When neither is in a work tree, the hook gives the outside-work-tree note below, naming
+  `CLAUDE_PROJECT_DIR`. The rule is the same in Cursor mode. The
   config, the receipt, the bypass file, the scan, and the session pin key all use the root. The
   hook then compares the raw bytes of
   `usabl.config.json` in the working tree with HEAD:
@@ -4181,8 +4193,25 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     copy. The reason opens "NOT verified - approval required:", says what happened and that
     nothing was checked, tells the model not to edit the file to clear it, says what clears it,
     and names `usabl bypass`. Read and parse errors go inside the untrusted frame.
-  - Neither HEAD nor the working tree has the config: allow with "NOT verified - usabl is not
-    configured here: ..." and the step to run `usabl init`. Nothing runs.
+  - Neither HEAD nor the working tree has the config, and no session pins for this root (below):
+    the hook asks the trusted branch, as a stop with a starting commit does (see "What a stop
+    checks"). Nothing runs in any of these cases.
+    - The starting commit holds `usabl.config.json`: this branch removed it, which CI reads as a
+      policy change. Block as approval required: "NOT verified - approval required:
+      usabl.config.json is in the commit where this branch left the trusted branch, but it is
+      missing from the working tree and from the last commit ...", with the next step to restore
+      the file as it is at that commit, or to have a code owner approve the removal on the pull
+      request. This holds at the first stop of any session, whatever the session id. When the tip
+      of the trusted branch has no config either (usabl was dropped there too), the next step
+      adds: "The trusted branch has no usabl.config.json either. If usabl was removed there,
+      update this branch from the trusted branch (merge it or rebase onto it), then stop again."
+    - Only the tip of the trusted branch holds it: the branch is older than the setup, the block
+      under "A branch made before usabl was set up" below.
+    - Neither holds it: allow with "NOT verified - usabl is not configured here: ..." and the step
+      to run `usabl init`.
+    - The hook found no starting commit (no trusted branch, or one it cannot use) or the lookup
+      failed: the same allow, and the note adds that usabl could not tell whether the trusted
+      branch has a `usabl.config.json` that this branch removed.
   - The working tree has the config and HEAD does not, but HEAD exists (a new, uncommitted
     setup): the guard reports `usabl.config.json` as a changed guarded file, as it does for any
     new guarded file, so the run goes on and ends `approval_required`, which blocks. A new
@@ -4207,7 +4236,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     with "NOT verified - the stop hook ran in a folder outside any git work tree, or git could
     not run there ... so it could not find the repository and checked nothing on this stop.",
     the folder inside the untrusted frame, and the step to run `usabl check` from the project
-    root. "usabl is not configured here" is only for a real repository with no config.
+    root. "usabl is not configured here" is only for a work tree with no config in the working
+    tree or the last commit, and none at the starting commit or on the trusted branch, or no
+    starting commit to ask (then the note says so).
   Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
   `loop_count` above 0), marked NOT verified, as every other block does. A continuation that
   goes through tells the model not to edit the file to make a later stop pass; only a block
@@ -4242,8 +4273,32 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     policy as before: compared with HEAD by the guard and the session pins, with the floor and
     the waivers read from the working tree. A policy change committed before the first stop is
     then taken as policy on that stop, and only CI sees it.
-  - A branch that sets usabl up, so the starting commit holds no `usabl.config.json`, is a
-    guarded change on every stop until the config reaches the trusted branch, as it is in CI.
+  - Where policy is read depends on where `usabl.config.json` is. The hook asks git whether the
+    starting commit and the tip of the trusted branch each hold it. For each commit it first runs
+    `git cat-file -e <commit>^{tree}`, so a missing or broken tree object is a git failure, then
+    `git ls-tree --full-tree --name-only -z <commit> -- usabl.config.json`: the name in the listing
+    means held, an empty listing with exit 0 means absent, and any other answer is a git failure.
+    A git failure is the not-covered gap below, never "no config". A starting commit that holds
+    anything at that path reads policy there, as above.
+  - A branch that sets usabl up: neither the starting commit nor the tip of the trusted branch
+    holds `usabl.config.json`. There is no trusted policy to read, so the stop checks the same
+    changes (every change since the starting commit, and the receipt binds that commit), reads the
+    branch's own policy, and guards it against HEAD only, as a stop with no trusted branch does.
+    The verdict line says so in its brackets, "VERIFIED (exit 0, policy from this branch, not
+    approved yet)" (the stored receipt line and an idle line too), and every decision is followed
+    by "Note: this branch sets usabl up. ... That policy is not approved yet: a code owner must
+    approve it in CI before it counts ...". CI is unchanged: the policy check still asks a code
+    owner to approve the new config. Before the config is committed, the guard reports it against
+    HEAD, so the stop reads approval required until the commit. Before, every stop on such a
+    branch read approval required until the branch merged.
+  - A branch made before usabl was set up: the tip of the trusted branch holds
+    `usabl.config.json` but the starting commit does not, whether or not this branch has a config
+    of its own. The stop checks nothing and blocks once with "NOT verified - usabl is set up on
+    the trusted branch but not on this branch ...", the branch name inside the untrusted frame,
+    and "Next: update this branch from the trusted branch (merge it or rebase onto it), then stop
+    again." It lets one continuation through with the same text, as the drift block does. A
+    stored receipt is not used, because this is decided before the fast path. After the update the
+    starting commit holds the config, and the stop reads policy there.
   - A detached HEAD, a rebased branch, and a branch that changed since an earlier stop all have a
     merge base, so each stop checks every change since that commit. After a rebase that is the
     rebased commits; the changes the branch took in from the trusted branch are not rechecked.
@@ -4276,6 +4331,16 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     the stop's scope to the uncommitted changes, and usabl cannot tell this from a fetch. CI,
     which checks the pull request against its real base, is the backstop. Pointing `origin/HEAD`
     at a ref outside `refs/remotes/origin/` is the gap above, so that form does not shrink it.
+    Moving it, or the branch it names, to a commit from before usabl was set up makes a
+    configured branch read as a branch that sets usabl up: the stop then reads the branch's own
+    policy, and its verdict line says "policy from this branch, not approved yet". Rebuilding the
+    branch on such a commit while the trusted branch keeps its config is the older-branch block
+    above. Moving the ref to a commit the session made, one that holds a weakened config, waiver,
+    or floor, also chooses the policy the stop reads: the guard against that commit is clean, and
+    the stop can read a plain VERIFIED on weakened policy. Moving it to a commit from before the
+    setup on a branch that removed its config turns the approval-required block back into the
+    "not configured" allow. Only CI, which reads policy at the real base of the pull request, is
+    authoritative.
 - `usabl check --branch-scope` is the way to finish a check a stop could not finish, for example a
   stop that ran out of time. It finds the starting commit and lists the changes with
   `resolveBranchScope`, the function the hook calls, so it checks the same changes and passes the
@@ -4294,6 +4359,17 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   with a starting commit.
   - No trusted branch: it checks the uncommitted changes and prints the same note as the hook on
     stderr, with the `git remote set-head origin --auto` step.
+  - A branch that sets usabl up: it checks the same changes with the branch's own policy, as the
+    stop does. The verdict line of the text output says "policy from this branch, not approved
+    yet" in its brackets, and stderr gets the hook's "Note: this branch sets usabl up. ..." line.
+    The exit code is the run's. Known limit: the JSON output is unchanged and has no field that
+    says where policy came from, so with `--json` a setup branch whose run verified reads
+    `"verdict": "verified"` with exit 0, the same as a check under approved policy. The policy
+    note is only on the text verdict line and on stderr.
+  - A branch made before usabl was set up on the trusted branch: it scans nothing, saves no
+    receipt, prints "usabl: NOT verified - usabl is set up on the trusted branch but not on this
+    branch ..." with the branch name inside the untrusted frame and the step to update the branch
+    and run it again, and exits 4.
   - A starting commit it cannot find or use: it scans nothing and saves no receipt. It prints the
     hook's reason on stderr, "usabl: NOT verified - not covered: usabl could not find where this
     branch left the trusted branch ...", with the branch name and git's error inside the untrusted
