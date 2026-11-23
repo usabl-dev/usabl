@@ -45,12 +45,13 @@ export type PolicySource = 'starting-commit' | 'branch-sets-usabl-up' | 'branch-
 
 /**
  * What the hook found. `found` carries the trusted branch as git names it (for example
- * origin/main), the full commit id where HEAD left it, and where policy is read. `no-trusted-branch`
+ * origin/main), the full commit id where HEAD left it, where policy is read, and whether the tip of
+ * the trusted branch holds a config. `no-trusted-branch`
  * means git records no default branch for origin. `not-found` means a trusted branch is named and
  * its starting commit could not be found or used; `detail` is git's first line for a git failure.
  */
 export type StartingCommit =
-  | { kind: 'found'; branch: string; commit: string; policy: PolicySource }
+  | { kind: 'found'; branch: string; commit: string; policy: PolicySource; configOnTrustedBranch: boolean }
   | { kind: 'no-trusted-branch' }
   | { kind: 'not-found'; branch: string; problem: StartingCommitProblem; detail: string | null };
 
@@ -163,40 +164,53 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
     return gitFailed(branch, ancestor);
   }
 
-  // Where policy is read. The tip is read only when the starting commit has no config, and a
-  // lookup that fails is a git failure, never "no config".
+  // Where policy is read. Both commits are asked, and a lookup that fails is a git failure, never
+  // "no config".
   const atStart = await holdsConfig(git, commit);
   if ('failed' in atStart) {
     return gitFailed(branch, atStart.failed);
-  }
-  if (atStart.held) {
-    return { kind: 'found', branch, commit, policy: 'starting-commit' };
   }
   const atTip = await holdsConfig(git, tipCommit);
   if ('failed' in atTip) {
     return gitFailed(branch, atTip.failed);
   }
-  return { kind: 'found', branch, commit, policy: atTip.held ? 'branch-older-than-setup' : 'branch-sets-usabl-up' };
+  const policy: PolicySource = atStart.held
+    ? 'starting-commit'
+    : atTip.held
+      ? 'branch-older-than-setup'
+      : 'branch-sets-usabl-up';
+  return { kind: 'found', branch, commit, policy, configOnTrustedBranch: atTip.held };
 }
 
 /** The config file whose place decides where policy is read. */
 const CONFIG_FILE = 'usabl.config.json';
 
 /**
- * Whether a commit holds usabl.config.json at the repository root. `<commit>:<path>` names the
- * path from the root wherever git runs. Exit 1 is git's answer "no such object"; any other failure
- * is a git failure. Anything at that path, a file, a link, or a folder, counts as held, so a strange
- * entry keeps the strict reading at the starting commit.
+ * Whether a commit holds usabl.config.json at the repository root.
+ *
+ * The commit's tree must be readable first: `git cat-file -e` fails for a missing or broken tree,
+ * where a lookup of a path in it would answer the same as for a path that is not there. Then
+ * `git ls-tree` lists that one root entry; `--full-tree` reads the path from the root wherever git
+ * runs. A listing that names the file means held, an empty listing with exit 0 means absent, and
+ * every other answer is a git failure, never "no config". Anything at that path, a file, a link, a
+ * folder, or a submodule, counts as held, so a strange entry keeps the strict reading.
  */
 async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boolean } | { failed: ScopeGitResult }> {
-  const result = await git(['rev-parse', '--verify', '--quiet', `${commit}:${CONFIG_FILE}`]);
-  if (result.code === 0) {
-    return { held: true };
+  const tree = await git(['cat-file', '-e', `${commit}^{tree}`]);
+  if (tree.code !== 0) {
+    return { failed: tree };
   }
-  if (result.code === 1) {
+  const listed = await git(['ls-tree', '--full-tree', '--name-only', '-z', commit, '--', CONFIG_FILE]);
+  if (listed.code !== 0) {
+    return { failed: listed };
+  }
+  if (listed.stdout.length === 0) {
     return { held: false };
   }
-  return { failed: result };
+  if (listed.stdout.split('\0').includes(CONFIG_FILE)) {
+    return { held: true };
+  }
+  return { failed: { ...listed, stderr: `git listed an unexpected entry for ${CONFIG_FILE}` } };
 }
 
 /** Why a check could not tell which committed changes to check. */

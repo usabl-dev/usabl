@@ -14,7 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
@@ -116,6 +116,10 @@ export interface StopHookRunnerPorts {
   // The hook's own deadline. See stop-hook-deadline.ts. The stop-hook command always sets it.
   // Absent in ports a test builds: the stop then runs with no deadline, as it did before.
   deadline?: StopHookDeadlinePort;
+  // True when CLAUDE_PROJECT_DIR named a folder outside any work tree and the hook used the work
+  // tree of its own folder instead, which follows the assistant. Every decision then says which
+  // repository it checked. See hookRepository and ownRepositoryNote.
+  repositoryFromOwnFolder?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -347,16 +351,20 @@ function olderPinsMessage(pinPath: string, continuation: boolean): string {
 const CONFIG_FILE = 'usabl.config.json';
 
 /** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
-type ConfigProblem = 'differs' | 'missing' | 'removed' | 'unreadable' | 'unparseable' | 'no-ui-globs';
+// `removed-on-both` is a removal on a branch whose trusted branch has no config any more either.
+type ConfigProblem = 'differs' | 'missing' | 'removed' | 'removed-on-both' | 'unreadable' | 'unparseable' | 'no-ui-globs';
+
+const REMOVED_LINE =
+  'usabl.config.json is in the commit where this branch left the trusted branch, but it is missing from the working tree and from the last commit, ' +
+  'so this branch removes usabl.config.json. CI reads that as a policy change, and usabl checked nothing on this stop.';
 
 const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
   differs:
     'usabl.config.json in the working tree differs from the last commit, so usabl did not parse it and checked nothing on this stop.',
   missing:
     'usabl.config.json is in the last commit but missing from the working tree, so usabl checked nothing on this stop.',
-  removed:
-    'usabl.config.json is in the commit where this branch left the trusted branch, but it is missing from the working tree and from the last commit, ' +
-    'so this branch removes usabl.config.json. CI reads that as a policy change, and usabl checked nothing on this stop.',
+  removed: REMOVED_LINE,
+  'removed-on-both': REMOVED_LINE,
   unreadable:
     'usabl.config.json in the working tree cannot be read (the error is under "error" in the untrusted text below), so usabl checked nothing on this stop.',
   unparseable:
@@ -377,6 +385,9 @@ const CHANGED_NEXT = 'Next: tell the user that usabl.config.json changed and nee
 const REMOVED_NEXT =
   'Next: tell the user that this branch removes usabl.config.json. To keep usabl, restore usabl.config.json as it is at that commit. ' +
   'To remove usabl, a code owner approves the removal on the pull request.';
+// When the trusted branch dropped usabl too, the branch only needs the update to clear this.
+const REMOVED_ON_BOTH_NEXT =
+  'The trusted branch has no usabl.config.json either. If usabl was removed there, update this branch from the trusted branch (merge it or rebase onto it), then stop again.';
 // A config with no UI globs parses, so it has its own next step: the list needs filling in.
 const NO_UI_GLOBS_NEXT = 'Next: tell the user that uiFileGlobs in usabl.config.json is empty and needs the files that render the UI.';
 const NO_UI_GLOBS_CLEARS =
@@ -426,6 +437,8 @@ function configBlockMessage(
     lines.push(`${NO_UI_GLOBS_NEXT} ${doNotEdit}`, NO_UI_GLOBS_CLEARS);
   } else if (problem === 'removed') {
     lines.push(REMOVED_NEXT, APPROVAL_REQUIRED_HOW_IT_CLEARS);
+  } else if (problem === 'removed-on-both') {
+    lines.push(REMOVED_NEXT, REMOVED_ON_BOTH_NEXT, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   } else {
     lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
@@ -609,14 +622,18 @@ async function earlierSessionPins(
 
 /**
  * What a stop with no config in the working tree or the last commit finds on the trusted branch.
- * `removed`: the starting commit holds a config, so this branch removed it. `older-than-setup`:
- * only the tip of the trusted branch holds one. `not-configured`: neither holds one, so usabl is
- * not set up here. `uncompared`: the hook found no starting commit, or the lookup failed, so it
- * could not tell. Ports a test builds without the lookup read as `not-configured`, as before.
+ * `removed`: the starting commit holds a config, so this branch removed it; `removed-on-both` is
+ * the same when the tip of the trusted branch has none either, so an update may clear it.
+ * `older-than-setup`: only the tip of the trusted branch holds one. `not-configured`: neither
+ * holds one, so usabl is not set up here. `uncompared`: the hook found no starting commit, or the
+ * lookup failed, so it could not tell. Ports a test builds without the lookup read as
+ * `not-configured`, as before.
  */
 async function notConfiguredStep(
   ports: StopHookRunnerPorts,
-): Promise<{ kind: 'removed' | 'not-configured' | 'uncompared' } | { kind: 'older-than-setup'; branch: string }> {
+): Promise<
+  { kind: 'removed' | 'removed-on-both' | 'not-configured' | 'uncompared' } | { kind: 'older-than-setup'; branch: string }
+> {
   if (ports.findStartingCommit === undefined) {
     return { kind: 'not-configured' };
   }
@@ -625,7 +642,7 @@ async function notConfiguredStep(
     return { kind: 'uncompared' };
   }
   if (start.policy === 'starting-commit') {
-    return { kind: 'removed' };
+    return { kind: start.configOnTrustedBranch ? 'removed' : 'removed-on-both' };
   }
   if (start.policy === 'branch-older-than-setup') {
     return { kind: 'older-than-setup', branch: start.branch };
@@ -819,28 +836,34 @@ function claudeProjectDir(env: Record<string, string | undefined>): string | nul
 /**
  * The repository the hook works in. CLAUDE_PROJECT_DIR comes first when it is inside a work tree.
  * A session started in a parent folder that is not a repository sets it there, so when it is in
- * no work tree and the hook's own folder is in one, the hook uses its own folder's work tree. When
- * neither is in a work tree, the hook says so, naming CLAUDE_PROJECT_DIR when it was set, as
- * before. The rule is the same for both protocols.
+ * no work tree and the hook's own folder is in one, the hook uses its own folder's work tree, and
+ * `ownFolderInstead` is true so every decision says which repository it checked: the hook's folder
+ * follows the assistant, so that may not be the repository the session changed. When neither is in
+ * a work tree, the hook says so, naming CLAUDE_PROJECT_DIR when it was set, as before. The rule is
+ * the same for both protocols.
  */
-function hookRepository(projectDir: string | null, ownDir: string): { root: string; inRepository: boolean } {
+function hookRepository(
+  projectDir: string | null,
+  ownDir: string,
+): { root: string; inRepository: boolean; ownFolderInstead: boolean } {
   if (projectDir === null) {
-    return findRepositoryRoot(ownDir);
+    return { ...findRepositoryRoot(ownDir), ownFolderInstead: false };
   }
   const fromProject = findRepositoryRoot(projectDir);
   if (fromProject.inRepository) {
-    return fromProject;
+    return { ...fromProject, ownFolderInstead: false };
   }
   const fromOwn = findRepositoryRoot(ownDir);
-  return fromOwn.inRepository ? fromOwn : fromProject;
+  return fromOwn.inRepository ? { ...fromOwn, ownFolderInstead: true } : { ...fromProject, ownFolderInstead: false };
 }
 
 export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {}): StopHookRunnerPorts {
   const uid = options.uid === undefined ? currentUid() : options.uid;
   const env = options.env ?? process.env;
   const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
-  const { root, inRepository } = hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
+  const { root, inRepository, ownFolderInstead } = hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
   return {
+    ...(ownFolderInstead ? { repositoryFromOwnFolder: true } : {}),
     fs: defaultFs(root),
     pins: makeFsSessionPinStore({ dir, uid }),
     cwd: () => root,
@@ -879,6 +902,32 @@ async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, opt
   } else {
     await emitBlock(ports, reason);
   }
+  // Which repository was checked follows a block the way every other note does.
+  const note = ownRepositoryNote(ports);
+  if (note !== null) {
+    await writeStderr(ports, note);
+  }
+}
+
+/**
+ * The note for a stop that checked the repository the assistant stopped in, because
+ * CLAUDE_PROJECT_DIR named a folder outside any repository, or null for any other stop. The
+ * assistant's folder follows it when it changes directory, so this repository may not be the one
+ * the session changed. Its top-level folder name comes from the file system, so it is printed only
+ * inside the frame.
+ */
+function ownRepositoryNote(ports: StopHookRunnerPorts): string | null {
+  if (ports.repositoryFromOwnFolder !== true) {
+    return null;
+  }
+  return framedMessage(
+    [
+      'Note: the project folder (CLAUDE_PROJECT_DIR) is outside any git repository, so usabl checked the repository ' +
+        'the assistant was in when it stopped (named under "repository checked" in the untrusted text below). ' +
+        'If the work was in another repository, run usabl check there.',
+    ],
+    [`repository checked: ${basename(ports.cwd())}`],
+  );
 }
 
 /** What an allow says, in the order it is written. */
@@ -919,7 +968,8 @@ function isQuietDecision(result: Result, message: string): boolean {
  * The text is the same text stderr gets, so its carried values are already scrubbed and framed.
  */
 async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, options: StopHookOptions): Promise<void> {
-  const lines = [text.message, ...(text.notices ?? [])];
+  const note = ownRepositoryNote(ports);
+  const lines = [text.message, ...(note === null ? [] : [note]), ...(text.notices ?? [])];
   for (const line of lines) {
     await writeStderr(ports, line);
   }
@@ -1301,8 +1351,8 @@ async function runStopChecks(
       // approval required. A config only on the trusted branch means the branch is older than the
       // setup. See notConfiguredStep.
       const known = await notConfiguredStep(ports);
-      if (known.kind === 'removed') {
-        await emitConfigBlock(ports, input, options, 'removed', null);
+      if (known.kind === 'removed' || known.kind === 'removed-on-both') {
+        await emitConfigBlock(ports, input, options, known.kind, null);
         return 0;
       }
       if (known.kind === 'older-than-setup') {
@@ -1465,6 +1515,7 @@ async function runStopChecks(
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
         ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
+        ...(ports.repositoryFromOwnFolder === true ? { repositoryFromOwnFolder: true } : {}),
       }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
@@ -1495,6 +1546,7 @@ async function runStopChecks(
       checkCommand,
       ...(startingCommit === null ? {} : { policyFromStartingCommit: true }),
       ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
+      ...(ports.repositoryFromOwnFolder === true ? { repositoryFromOwnFolder: true } : {}),
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);

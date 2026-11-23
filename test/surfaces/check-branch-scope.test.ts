@@ -511,6 +511,8 @@ const SETUP_NOTE = 'Note: this branch sets usabl up.';
 const OLD_BRANCH = 'usabl is set up on the trusted branch but not on this branch';
 const OLD_BRANCH_NEXT = 'Next: update this branch from the trusted branch (merge it or rebase onto it), then';
 const REMOVED = 'this branch removes usabl.config.json';
+const UPDATE_AFTER_DROP =
+  'The trusted branch has no usabl.config.json either. If usabl was removed there, update this branch from the trusted branch (merge it or rebase onto it), then stop again.';
 
 function stopInput(options: { active?: boolean; session?: string } = {}): string {
   return JSON.stringify({
@@ -755,6 +757,153 @@ describe('a config removed on the branch', { timeout: REAL_PROCESS_BUDGET_MS }, 
       const stopped = await stop(input);
       expect(blockReason(stopped)).toContain(REMOVED);
       expect(stopped.stderr).not.toContain('usabl is not configured here');
+    }
+  });
+
+  it('does not suggest an update from the trusted branch while the trusted branch still has a config', async () => {
+    await removeOnBranch();
+    expect(blockReason(await stop())).not.toContain(UPDATE_AFTER_DROP);
+  });
+
+  // The trusted branch dropped usabl too, so updating the branch from it clears the block.
+  it('also suggests the update when the trusted branch removed its config too', async () => {
+    git('switch', '-q', '-c', 'feature');
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'remove usabl on the branch');
+    git('switch', '-q', 'main');
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'remove usabl on main');
+    recordTrustedBranch();
+    git('switch', '-q', 'feature');
+
+    const reason = blockReason(await stop());
+    expect(reason?.startsWith('NOT verified - approval required')).toBe(true);
+    expect(reason).toContain(REMOVED);
+    expect(reason).toContain(UPDATE_AFTER_DROP);
+  });
+
+  // A tree object the starting commit needs is gone, so git cannot say whether it holds a config.
+  // That is never read as plain "not configured".
+  it('says it could not tell when the starting commit tree cannot be read', async () => {
+    await removeOnBranch();
+    const tree = git('rev-parse', 'main^{tree}').trim();
+    await rm(join(repo, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.stderr).toContain('usabl is not configured here');
+    expect(stopped.stderr).toContain('could not tell whether the trusted branch has a usabl.config.json');
+  });
+});
+
+// A session started in a parent folder that is not a repository sets CLAUDE_PROJECT_DIR there.
+// The hook then checks the repository it runs in, which follows the assistant, so every decision
+// says which repository it checked.
+describe('a project folder outside any repository', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const OWN_REPOSITORY_VERDICT = 'checked the repository the assistant stopped in';
+  const OWN_REPOSITORY_NOTE = 'Note: the project folder (CLAUDE_PROJECT_DIR) is outside any git repository';
+
+  let parent = '';
+
+  function gitIn(cwd: string, ...args: string[]): string {
+    return execFileSync('git', ['-c', 'user.name=usabl test', '-c', 'user.email=test@example.invalid', ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  }
+
+  async function makeRepository(name: string): Promise<string> {
+    const folder = join(parent, name);
+    await mkdir(join(folder, 'src'), { recursive: true });
+    gitIn(folder, 'init', '-q', '-b', 'main');
+    await writeFile(join(folder, '.gitignore'), '.usabl/\n');
+    await writeFile(join(folder, 'usabl.config.json'), JSON.stringify(config, null, 2) + '\n');
+    await writeFile(join(folder, 'src', 'App.tsx'), 'export const App = 1;\n');
+    await writeFile(join(folder, 'src', 'Other.tsx'), 'export const Other = 1;\n');
+    gitIn(folder, 'add', '-A');
+    gitIn(folder, 'commit', '-q', '-m', 'init');
+    return folder;
+  }
+
+  async function stopIn(folder: string, projectDir: string | null): Promise<{ stderr: string; stdout: string; scanned: string[] }> {
+    const out: string[] = [];
+    const said: string[] = [];
+    state.scanned = [];
+    const ports = {
+      ...makeStopHookRunnerPorts({ startDir: folder, env: projectDir === null ? {} : { CLAUDE_PROJECT_DIR: projectDir } }),
+      pins: memoryPinStore(),
+      stdoutWrite: async (text: string) => {
+        said.push(text);
+      },
+      stderrWrite: async (text: string) => {
+        out.push(text);
+      },
+    };
+    await runStopHookFromStdin(stopInput({ session: 'session-one' }), ports);
+    return { stderr: out.join(''), stdout: said.join(''), scanned: [...state.scanned] };
+  }
+
+  function expectNamed(text: string, name: string): void {
+    const frameStart = text.indexOf('[BEGIN UNTRUSTED TEXT', text.indexOf(OWN_REPOSITORY_NOTE));
+    expect(frameStart).toBeGreaterThan(0);
+    expect(text.indexOf(`repository checked: ${name}`)).toBeGreaterThan(frameStart);
+    expect(text).toContain('If the work was in another repository, run usabl check there.');
+  }
+
+  beforeEach(async () => {
+    parent = await realpath(await mkdtemp(join(tmpdir(), 'usabl-parent-')));
+  });
+
+  afterEach(async () => {
+    await rm(parent, { recursive: true, force: true });
+  });
+
+  it('an idle stop in a clean sibling repository names it and does not read as a plain idle line', async () => {
+    const app = await makeRepository('app');
+    const other = await makeRepository('other');
+    state.drafts = { home: [homeBarrier] };
+    await writeFile(join(app, 'src', 'App.tsx'), 'export const App = 2;\n');
+
+    const stopped = await stopIn(other, parent);
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.scanned).toEqual([]);
+    expect(stopped.stderr.startsWith(`NO VERDICT: IDLE (exit 0, ${OWN_REPOSITORY_VERDICT})`)).toBe(true);
+    expect(stopped.stderr).toContain(OWN_REPOSITORY_NOTE);
+    expectNamed(stopped.stderr, 'other');
+    // The person sees it too: an allow with a note is sent as a systemMessage.
+    expect(stopped.stdout).toContain(OWN_REPOSITORY_NOTE);
+  });
+
+  it('a block, a verified stop, and a stored receipt stop each carry the note', async () => {
+    const app = await makeRepository('app');
+    await writeFile(join(app, 'src', 'App.tsx'), 'export const App = 2;\n');
+
+    state.drafts = { home: [homeBarrier] };
+    const blocked = await stopIn(app, parent);
+    const reason = blockReason(blocked) ?? '';
+    expect(reason.startsWith(`REGRESSION (exit 1, ${OWN_REPOSITORY_VERDICT})`)).toBe(true);
+    expect(blocked.stderr).toContain(OWN_REPOSITORY_NOTE);
+    expectNamed(blocked.stderr, 'app');
+
+    state.drafts = {};
+    const verified = await stopIn(app, parent);
+    expect(verified.stderr.startsWith(`VERIFIED (exit 0, ${OWN_REPOSITORY_VERDICT})`)).toBe(true);
+    expectNamed(verified.stderr, 'app');
+
+    const stored = await stopIn(app, parent);
+    expect(stored.scanned).toEqual([]);
+    expect(stored.stderr.startsWith(`VERIFIED (exit 0, stored receipt, not re-scanned, ${OWN_REPOSITORY_VERDICT})`)).toBe(true);
+    expectNamed(stored.stderr, 'app');
+  });
+
+  it('adds nothing when CLAUDE_PROJECT_DIR is the repository or is not set', async () => {
+    const app = await makeRepository('app');
+    await writeFile(join(app, 'src', 'App.tsx'), 'export const App = 2;\n');
+    for (const projectDir of [app, null]) {
+      const stopped = await stopIn(join(app, 'src'), projectDir);
+      expect(stopped.stderr).not.toContain(OWN_REPOSITORY_VERDICT);
+      expect(stopped.stderr).not.toContain(OWN_REPOSITORY_NOTE);
     }
   });
 });

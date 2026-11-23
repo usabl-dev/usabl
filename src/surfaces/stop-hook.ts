@@ -42,15 +42,35 @@ export interface HookContext {
   // trusted branch nor the starting commit has a config. A VERIFIED or idle line then says so in
   // its brackets, so the line alone never reads as a pass under approved policy.
   policyFromBranch?: boolean;
+  // True when CLAUDE_PROJECT_DIR named a folder outside any repository and the hook checked the
+  // repository the assistant stopped in instead. Every verdict line then says so in its brackets,
+  // because that repository may not be the one the session changed.
+  repositoryFromOwnFolder?: boolean;
 }
 
+/**
+ * The note a verdict line carries when the hook checked the repository the assistant stopped in,
+ * because CLAUDE_PROJECT_DIR named a folder outside any repository.
+ */
+export const OWN_REPOSITORY_VERDICT_NOTE = 'checked the repository the assistant stopped in';
+
 /** The notes a VERIFIED or idle line carries in its brackets, joined, or undefined for none. */
-function passNotes(notes: { sessionDriftChecked?: boolean; policyFromBranch?: boolean }): string | undefined {
+function passNotes(notes: {
+  sessionDriftChecked?: boolean;
+  policyFromBranch?: boolean;
+  repositoryFromOwnFolder?: boolean;
+}): string | undefined {
   const parts = [
     ...(notes.sessionDriftChecked === false ? [DRIFT_NOT_CHECKED] : []),
     ...(notes.policyFromBranch === true ? [POLICY_FROM_BRANCH_VERDICT_NOTE] : []),
+    ...(notes.repositoryFromOwnFolder === true ? [OWN_REPOSITORY_VERDICT_NOTE] : []),
   ];
   return parts.length === 0 ? undefined : parts.join(', ');
+}
+
+/** The note every other verdict line carries in its brackets, or undefined for none. */
+function decisionNote(ctx: HookContext): string | undefined {
+  return ctx.repositoryFromOwnFolder === true ? OWN_REPOSITORY_VERDICT_NOTE : undefined;
 }
 
 /**
@@ -221,9 +241,9 @@ function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
  * means for the change. Every part is an engine constant chosen by the verdict, or the exit code
  * once it is checked to be a whole number, so it is trusted scaffold and never framed.
  */
-function verdictLine(result: Result, meaningPrefix: string): string {
+function verdictLine(result: Result, meaningPrefix: string, note?: string): string {
   const verdict = describeVerdict(result);
-  return `${formatVerdictWord(verdict)}: ${meaningPrefix}${verdict.meaning}`;
+  return `${formatVerdictWord(verdict, note)}: ${meaningPrefix}${verdict.meaning}`;
 }
 
 /**
@@ -266,7 +286,7 @@ function summaryPiece(result: Result): string {
  * block of untrusted text.
  */
 function buildBlockMessage(result: Result, ctx: HookContext, config?: UsablConfig): string {
-  const scaffold = [verdictLine(result, 'NOT verified. ')];
+  const scaffold = [verdictLine(result, 'NOT verified. ', decisionNote(ctx))];
   const budget = resolveNoiseBudgetDefault(config);
   // The barriers this block is about are the ones the gate blocks on, by the gate's own rule.
   const gating = result.findings.filter(isBlockingBarrier);
@@ -330,6 +350,9 @@ export interface StoredReceiptPinState {
   // True when the stop read the branch's own policy because the branch sets usabl up. The line
   // then says so, as a full run's line does. Absent means false.
   policyFromBranch?: boolean;
+  // True when the hook checked the repository the assistant stopped in, because CLAUDE_PROJECT_DIR
+  // named a folder outside any repository. The line then says so. Absent means false.
+  repositoryFromOwnFolder?: boolean;
 }
 
 // A receipt records no known limits, so a run verified with known limits would read on the fast
@@ -400,7 +423,7 @@ function divergedPolicyDecision(result: Result, diverged: string[], ctx: HookCon
   const continuation = ctx.stopHookActive;
   const verdict = describeVerdict(result);
   const opening =
-    `${formatVerdictWord(verdict)}: NOT verified. ` +
+    `${formatVerdictWord(verdict, decisionNote(ctx))}: NOT verified. ` +
     (continuation ? 'usabl let this stop through without blocking again (continuation already active). ' : '') +
     `Guarded policy files changed, so this change needs approval whatever the run found. The run said: ${verdict.meaning}`;
   // approvalOnly names no check, so the check this wording set takes does not matter here.
@@ -477,7 +500,7 @@ export function evaluateStopDecision(
       block: false,
       message: assembleBoundedMessage({
         scaffold: [
-          `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
+          `${formatVerdictWord(verdict, decisionNote(ctx))}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
           `Next: run ${check} again, or check the change by hand, before you call this change accessible.`,
         ],
         keep: 2,
@@ -549,6 +572,7 @@ export function evaluateStopDecision(
       verdictLine(
         safe,
         'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
+        decisionNote(ctx),
       ),
     ];
     const step = chooseNextStep(safe, continuationSteps(check));
