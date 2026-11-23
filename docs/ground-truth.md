@@ -4299,15 +4299,54 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   hook could not read, and the scope gap itself. Which stops block and which allow does not
   change.
 - Stop time. A wider scope scans more screens on a long branch. A stored receipt still answers
-  a stop of an unchanged tree with the same starting commit without a scan. Nothing in the hook
-  bounds its own time: the generated Claude Code hook sets no `timeout`, so Claude Code's
-  default applies, and the Cursor hook sets `timeout: 300`. When the assistant ends a hook at its
-  timeout, usabl has written no answer, no pass, and no receipt, because it answers only after
-  the run ends. The assistant then lets the stop go on with a hook error, so a stop that runs out
-  of time is not a block. `npm run measure:stop-time -- 1 5 20` measures a cold and a warm stop
-  on the demo app for each number of changed screens, beside both budgets. It needs a built
-  engine, the demo app (`USABL_FIXTURE_APP_CWD`), and Chromium, so it runs by hand on a quiet
-  machine and is not part of `npm run check`.
+  a stop of an unchanged tree with the same starting commit without a scan. When an assistant
+  ends a hook at its time limit, it reads no answer from it and lets the stop go on, so a stop
+  that ran past the host's limit would not be a block. So the hook keeps a deadline of its own,
+  shorter than the host's limit (`src/surfaces/stop-hook-deadline.ts`):
+  - The host's limit. The Claude Code hook `usabl install --claude` writes has `"timeout": 600`,
+    and its command sets `USABL_STOP_HOOK_TIMEOUT=600` in front of `npm exec`, so the runner
+    reads the same number from its environment. An environment variable, not a flag, so a usabl
+    older than the command ignores it instead of refusing an unknown flag. The Cursor hook keeps
+    `"timeout": 300` in `.cursor/hooks.json`, and in Cursor mode the runner plans to 300 seconds
+    when the variable is unset. A Claude Code hook command that sets no variable, such as the
+    one earlier releases wrote, makes the runner plan to 60 seconds: Claude Code's hooks
+    documentation gives 600 seconds as the default for a command hook with no `timeout`, older
+    releases used 60, and usabl cannot tell which release runs the hook. A value that is not
+    whole seconds of at most six digits counts as unset.
+  - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
+    Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
+    10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
+    exit. Below a host limit of 60 seconds the runner keeps half the limit instead. The clock
+    counts from the start of the hook process, and the timer is injected, so tests never wait.
+  - When the deadline comes before the check starts its answer, the runner closes the browser,
+    which stops the scan, saves no receipt, and blocks once: "NOT verified - usabl ran out of
+    time: this stop took longer than usabl's own limit of 570 seconds, so usabl stopped the check
+    before it could check the change. Nothing is proven about this change, and no receipt was
+    saved.", then the limit it used and where it came from, then "Next: narrow the change and
+    stop again, or run usabl check by hand, or raise the limit in the hook settings." and how to
+    raise it for that assistant. The check named is `usabl check --branch-scope` once the stop
+    found a starting commit. On an active continuation it lets the stop through once with the
+    same notice and "usabl let this stop through without blocking again (continuation already
+    active).", as the drift and older-pins blocks do, so a slow app cannot loop the agent. Pins
+    the check would still write after the deadline are not written. Then the process ends, so
+    the assistant reads the answer inside its limit.
+  - Only one answer reaches the host. The check claims the answer with its first write of it
+    (saving the receipt, removing the bypass file, or a line of output), and the deadline claims
+    it when it comes first. When the deadline comes after the check claimed it, the check's
+    answer stands, receipt included, and the deadline writes nothing. The runner waits up to 10
+    seconds for that answer, then closes the browser and ends the process. After a check
+    answered, a browser close still running at the deadline is not waited for.
+  - Limit: an answer still unfinished 10 seconds after the deadline is cut short when the
+    process ends. Claude Code then reads only what was written by then. The answer is a few
+    small writes, so this needs a write that hangs.
+  - `usabl doctor` reports a hook usabl cannot plan to (section 11.9).
+  - `npm run measure:stop-time -- 1 5 20` measures a cold and a warm stop on the demo app for each
+    number of changed screens, beside usabl's deadline for each assistant. It runs the generated
+    Claude Code command, so the Claude Code deadline applies to it. It needs a built engine, the
+    demo app (`USABL_FIXTURE_APP_CWD`), and Chromium, so it runs by hand on a quiet machine and
+    is not part of `npm run check`. A signal while its fixture server is still starting stops
+    that server once the start ends, and a signal while a stop runs stops the stop's whole
+    process group.
 - Input that is not JSON: allow with "NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop.", then the step to check the hook command in `.claude/settings.json` or `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check` before calling the change accessible.
 - An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
@@ -4336,8 +4375,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - usabl not installed: the generated hooks run `npm exec --no -- usabl stop-hook`, which never
   downloads a package. It runs a local or global install, or a copy already in npm's own cache,
   and with none of those it makes one registry request and fails. The generated Claude command is
-  a POSIX shell line (`npm_config_loglevel=silent npm exec --no -- usabl stop-hook || { ...; exit
-  1; }`). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
+  a POSIX shell line (`USABL_STOP_HOOK_TIMEOUT=600 npm_config_loglevel=silent npm exec --no --
+  usabl stop-hook || { ...; exit 1; }`), and the hook beside it has `"timeout": 600` (see Stop
+  time). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
   usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
   it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
   block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets
@@ -5118,7 +5158,15 @@ reads the same expiry rule `usabl check` refuses on, so the two surfaces cannot 
 one file. Doctor reports whether a session is set and never prints the variable's path or the
 file contents. The saved file's fixed path is printed, because usabl chose it. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
-sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
+sentinel), or `drifted` (any other shape). The stop-hook surface is drifted when the usabl Stop hook
+in `.claude/settings.json` has no `timeout` that is a number, when the timeout or the
+`USABL_STOP_HOOK_TIMEOUT` value in its command is below 60 seconds, or when the command sets no
+value or one that differs from the timeout. The cursor surface is drifted when the usabl stop entry
+in `.cursor/hooks.json` has no `timeout` that is a number, or one below 300 seconds. Each next
+step says the stop goes on with nothing checked when the assistant ends the hook, and names the
+install command, which writes the timeout and the matching value. A reinstall keeps a Claude Code
+timeout of 60 seconds or more and makes the command match it. A higher Cursor timeout is left as
+it is, because the runner still plans to 300 seconds and ends first. Doctor never mints a verdict or a receipt.
 
 After the surfaces, doctor prints an `optional engines` section (section 7.7). It opens with the line
 "Tested against the vendor's documented result format. Not yet run on a licensed SDK. Engine findings
@@ -5143,7 +5191,8 @@ Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
 exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npm exec --no -- usabl
-stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
+stop-hook` in `.claude/settings.json`, with a `timeout` of 600 seconds that its command also
+passes to the runner; see section 11.2, Stop time), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch requires the `usabl-required`
 status check and review from code owners, which prints the setting and the `CODEOWNERS` lines
 for `.github/workflows/` and the guarded paths). `init` does not wire CI or overlays, and `install` does not
@@ -5526,7 +5575,8 @@ list of nodes is not read as a tree with no nodes: it is unreadable, and each ch
 is needs review with a reason that says so. A read that never returns is bounded by nothing in
 usabl. In CI, the job's own time limit ends it (a workflow that `usabl install --ci` writes sets
 none, so GitHub's default applies), and the job is cancelled, so the required check is not green.
-In the Stop hook, the agent's hook timeout ends it with no verdict. It never reads as a pass.
+In the Stop hook, usabl's own deadline ends it before the agent's hook timeout, and the stop
+blocks once as out of time (section 11.2, Stop time). It never reads as a pass.
 Measured in Chromium,
 the largest fixture page returns 172 nodes, and the `usabl-app` screens measured for the silent
 change rule return 179 to 300. The read keeps the same nodes as the silent change rule's read but
