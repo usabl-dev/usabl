@@ -715,6 +715,28 @@ describe('checkPage after the checks, with and without a reachedWhen selector', 
       expect(result.gaps[1]?.reason).toContain('declare a reachedWhen selector');
     });
 
+    // A response-only signal holds no selector, so nothing measured after the checks tells a plain
+    // fragment route apart, and the whole fragment rule applies.
+    it(`is not covered with a response-only reachedWhen when ${name}`, async () => {
+      const page = movesOnTab(from, to);
+      page.apiResponses = async () => [
+        { url: 'http://127.0.0.1:5173/api/clusters', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      ];
+      adopted.page = page;
+      const result = await checkPage(pwPage(), {
+        screenId: 'clusters',
+        projectRoot: await project({ response: '/api/clusters' }),
+        tabCap: 10,
+        expectedUrl: from,
+      });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+      expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+      expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+    });
+
     it(`is not covered with a screen id the config does not name when ${name}`, async () => {
       adopted.page = movesOnTab(from, to);
       const result = await checkPage(pwPage(), {
