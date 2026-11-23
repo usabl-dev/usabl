@@ -449,14 +449,17 @@
   64 MiB read in all. A file over its cap, or one that grows while it is read, never matches, so a
   sparse file of any size cannot make a stop run past its timeout. A `usabl check --ci` run binds
   no local files, so a CI Result carries no hash of a secret in `.env`.
-- A local file the receipt binds that changes during the scan no longer mints a receipt. The run
+- The receipt binds the local files as the run read them before the scan, not after it. The run
   read these files once, when it minted the receipt after the scan, so an edit to `.env` while the
   browser was on the page was bound as if the scan had seen it. The run now reads the local files
   hash before it plans and again at its second tree read, with the same config. If the two differ,
   the run carries a not-covered gap (ref `local files`) that names no path, and mints no receipt.
-  The receipt binds the first read, and minting no longer reads the files. Gate effect: such a run
-  reads `not_covered` (exit 3) where it read `verified`. An edit undone before the second read
-  stays invisible, as it does for the tree. A `--ci` run still binds no local files. The docs now
+  The receipt binds the first read, and the mint in `run()` no longer reads the files. Gate
+  effect: such a run reads `not_covered` (exit 3) where it read `verified`. When the files cannot
+  be read at both reads (a link, a file over its cap, a total past the cap, or more than 256
+  paths), the receipt never matches a later stop, but a change during the scan is not seen and
+  the run can still read `verified`. An edit undone before the second read stays invisible, as it
+  does for the tree. A `--ci` run still binds no local files. The docs now
   say that a team's own CI job that runs `usabl check` should pass `--ci`. Guarded path:
   `src/run.ts`, lines 36 and 43 (imports), 117 to 121 (the first read), 208 to 211 (the second
   read), 221 to 222 (the gap), 324 to 326 (the receipt binds the first read), and 448 to 451 (the
