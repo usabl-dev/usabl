@@ -677,7 +677,8 @@ export interface StopHookRunnerPortOptions {
   // so a host setting never moves the pins they inspect.
   env?: Record<string, string | undefined>;
   // The folder the hook starts in. Absent means the process working directory. The hook works in
-  // the repository root above it. CLAUDE_PROJECT_DIR, when it names a folder, comes first.
+  // the repository root above it. CLAUDE_PROJECT_DIR, when it names a folder inside a work tree,
+  // comes first. See hookRepository.
   startDir?: string;
   // True for the stop-hook command, which runs in a process of its own. The deadline counts from
   // the start of the process, so ports built inside a long-lived process, such as a test worker,
@@ -721,7 +722,8 @@ function realDeadline(env: Record<string, string | undefined>): StopHookDeadline
 /**
  * The folder CLAUDE_PROJECT_DIR names, or null. Claude Code sets it to the project root, so the
  * hook starts there and does not follow the assistant into a folder outside the work tree. A value
- * that is empty, or that names no folder, is ignored.
+ * that is empty, or that names no folder, is ignored. A folder outside every work tree does not
+ * win over a hook folder inside one: see hookRepository.
  */
 function claudeProjectDir(env: Record<string, string | undefined>): string | null {
   const value = env['CLAUDE_PROJECT_DIR'];
@@ -736,12 +738,30 @@ function claudeProjectDir(env: Record<string, string | undefined>): string | nul
   }
 }
 
+/**
+ * The repository the hook works in. CLAUDE_PROJECT_DIR comes first when it is inside a work tree.
+ * A session started in a parent folder that is not a repository sets it there, so when it is in
+ * no work tree and the hook's own folder is in one, the hook uses its own folder's work tree. When
+ * neither is in a work tree, the hook says so, naming CLAUDE_PROJECT_DIR when it was set, as
+ * before. The rule is the same for both protocols.
+ */
+function hookRepository(projectDir: string | null, ownDir: string): { root: string; inRepository: boolean } {
+  if (projectDir === null) {
+    return findRepositoryRoot(ownDir);
+  }
+  const fromProject = findRepositoryRoot(projectDir);
+  if (fromProject.inRepository) {
+    return fromProject;
+  }
+  const fromOwn = findRepositoryRoot(ownDir);
+  return fromOwn.inRepository ? fromOwn : fromProject;
+}
+
 export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {}): StopHookRunnerPorts {
   const uid = options.uid === undefined ? currentUid() : options.uid;
   const env = options.env ?? process.env;
   const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
-  const startDir = claudeProjectDir(env) ?? options.startDir ?? process.cwd();
-  const { root, inRepository } = findRepositoryRoot(startDir);
+  const { root, inRepository } = hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
   return {
     fs: defaultFs(root),
     pins: makeFsSessionPinStore({ dir, uid }),
