@@ -449,6 +449,19 @@
   64 MiB read in all. A file over its cap, or one that grows while it is read, never matches, so a
   sparse file of any size cannot make a stop run past its timeout. A `usabl check --ci` run binds
   no local files, so a CI Result carries no hash of a secret in `.env`.
+- A local file the receipt binds that changes during the scan no longer mints a receipt. The run
+  read these files once, when it minted the receipt after the scan, so an edit to `.env` while the
+  browser was on the page was bound as if the scan had seen it. The run now reads the local files
+  hash before it plans and again at its second tree read, with the same config. If the two differ,
+  the run carries a not-covered gap (ref `local files`) that names no path, and mints no receipt.
+  The receipt binds the first read, and minting no longer reads the files. Gate effect: such a run
+  reads `not_covered` (exit 3) where it read `verified`. An edit undone before the second read
+  stays invisible, as it does for the tree. A `--ci` run still binds no local files. The docs now
+  say that a team's own CI job that runs `usabl check` should pass `--ci`. Guarded path:
+  `src/run.ts`, lines 36 and 43 (imports), 117 to 121 (the first read), 208 to 211 (the second
+  read), 221 to 222 (the gap), 324 to 326 (the receipt binds the first read), and 460 to 463 (the
+  reader helper). The change only adds a read and a gap, so it can make a run not verified, never
+  verified.
 - A Stop hook stop with a starting commit, and `usabl check --branch-scope`, read policy at that
   commit, as CI reads it at the base of the pull request. The stop runs the guard against HEAD and
   against the starting commit, before the receipt fast path, and both pass the starting commit to
