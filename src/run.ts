@@ -33,12 +33,14 @@ import { enrichAppFindings } from './app/source-map.js';
 import { gate, renderEvidenceOf } from './gate/index.js';
 import {
   earliestAppliedWaiverExpiry,
+  localFilesChangedDuringCheckGap,
   mintReceipt,
   scannerVersionGaps,
   summarizeApplicability,
   treeChangedDuringCheckGap,
 } from './evidence/receipt.js';
 import { EMPTY_FLOOR, EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from './evidence/floor.js';
+import { computeLocalFilesHash } from './evidence/local-files.js';
 import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
@@ -112,6 +114,11 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // The tree this run plans from. It is read again after the scan, and the receipt binds it, so a
     // file written while the check runs can never be bound into a receipt that did not see it.
     const treeBeforePlanning = await deps.git.writeTree();
+    // The same for the files the app reads that git does not see (.env files, localFiles, and the
+    // config bytes). The tree reads cannot see an edit to one, so they are read here and again at
+    // the second tree read, and the receipt binds this first value. Null when the run binds no
+    // local files, as a --ci run does.
+    const localFilesBeforePlanning = await readLocalFilesHash(deps, config);
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, opts.trustedRef ?? 'HEAD');
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
@@ -198,6 +205,10 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // is a not-covered gap the gate weighs, never a verified result. An idle run plans nothing and
     // scans nothing, so it is left as it is.
     const treeChangedDuringCheck = !nothingToCheck && (await deps.git.writeTree()) !== treeBeforePlanning;
+    // The second read of the local files, with the same config as the first. Two unreadable reads
+    // are equal, and the receipt then binds the unreadable value, which never matches.
+    const localFilesChangedDuringCheck =
+      !nothingToCheck && (await readLocalFilesHash(deps, config)) !== localFilesBeforePlanning;
 
     const coverage: Coverage = {
       ...discoveredCoverage,
@@ -207,6 +218,8 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
       gaps: [
         // First, because it explains why nothing this run measured can be bound to one tree.
         ...(treeChangedDuringCheck ? [treeChangedDuringCheckGap()] : []),
+        // Next, for the same reason: what the scan measured cannot be bound to these files.
+        ...(localFilesChangedDuringCheck ? [localFilesChangedDuringCheckGap()] : []),
         // A scanner version usabl cannot read cannot be bound, so no receipt could stand for this
         // run. The gap makes that not covered, never verified. An idle run binds nothing.
         ...(nothingToCheck ? [] : scannerVersionGaps(deps.scannerVersions)),
@@ -308,6 +321,9 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             // The tree read before planning, which the read after the scan matched. A later edit
             // moves the tree, so this receipt does not stand for it.
             sourceTree: treeBeforePlanning,
+            // The local files read before planning, which the second read matched, so mint never
+            // binds an edit made after the scan.
+            localFilesHash: localFilesBeforePlanning,
             baseRevision: opts.changedFiles === undefined ? null : (opts.baseRevision ?? null),
             historyHead: debt.read.head,
           })
@@ -441,6 +457,11 @@ function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGa
  * so that if the guard's read succeeded and this one fails, that later failure is also returned
  * as the gap rather than a crash.
  */
+// The local files hash, or null when deps has no local file reader (a --ci run binds none).
+async function readLocalFilesHash(deps: Deps, config: UsablConfig): Promise<string | null> {
+  return deps.fs.readLocalFile === undefined ? null : computeLocalFilesHash(deps, config);
+}
+
 async function scanConfigForCoverage(
   deps: Deps,
   config: UsablConfig,
