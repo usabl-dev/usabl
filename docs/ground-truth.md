@@ -4315,15 +4315,22 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - It is refused with exit 2 next to `--config` naming any file other than `usabl.config.json`
     at the project root (`--config usabl.config.json` and `--config ./usabl.config.json` run),
     because the hook plans from that file and the receipt answers the hook. The message says to
-    drop `--config`. The path is resolved against the folder the command runs in and compared,
-    without following links, with `usabl.config.json` at the repository root (git's top level).
-    So from a subfolder, `--config ../usabl.config.json` names the root file and runs, and a
-    file outside the repository is still refused. A check from a subfolder runs at the
-    repository root, as the hook does, so it reads the same guarded files and saves its receipt
-    where the next stop looks. From a subfolder with no `--config`, the default name means a file
-    in that folder, so it is refused with exit 2 and the message says to run from the project
-    root or pass `--config` with the path to the root file. The receipt does not bind the config
-    bytes.
+    drop `--config`. The path is resolved against the folder the command runs in and must match
+    `usabl.config.json` at the repository root (git's top level) twice: as written, without
+    following links, and by the real path the operating system opens, which follows a link
+    before the `..` after it. So from a subfolder, `--config ../usabl.config.json` names the
+    root file and runs. A path that opens any other file is refused: a link elsewhere that points
+    at the root file, a file outside the repository, and a spelling such as
+    `x/../usabl.config.json` where `x` is a link out of the repository, which matches on paper
+    and opens a file outside. A run that passes then reads the root file by its plain name. A
+    check from a subfolder runs at the repository root, as the hook does, so it reads the same
+    guarded files and saves its receipt where the next stop looks. From a subfolder with no
+    `--config`, the default name means a file in that folder, so it is refused with exit 2 and
+    the message says to run from the project root or pass `--config` with the path to the root
+    file. The receipt does not bind the config bytes, so any `usabl check` saves a receipt only
+    when the config it planned with is the root `usabl.config.json` by real path. A plain check
+    with `--config` naming another file, and a run through `--isolated-browser`, save none and
+    say so on stderr, so no stop answers from a scan planned with a config it does not read.
 - Advice names that check. On a stop with a starting commit, each hook message that tells the
   reader to run a check says `usabl check --branch-scope`: the step after a verdict usabl does not
   recognize (block and continuation), the continuation steps for a regression and for gaps, a run

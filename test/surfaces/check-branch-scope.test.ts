@@ -8,7 +8,7 @@
  * use: buildDeps is replaced so no browser starts, and the check runner records what it scanned.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -547,5 +547,94 @@ describe('policy changed on the branch since the starting commit', { timeout: RE
     expect(blockReason(stopped)).toBeNull();
     expect(stopped.stderr.startsWith('VERIFIED')).toBe(true);
     expect(stopped.stderr).toContain('Note: usabl found no trusted branch to compare this branch with');
+  });
+});
+
+// The receipt binds the bytes of usabl.config.json at the root, the file the Stop hook plans
+// from, and not the bytes of the config the check planned with. So a check planned with any other
+// config must leave no receipt a stop could answer from, or the stop would trust a scan of other
+// screens.
+describe('a check planned with another config leaves no receipt a stop can use', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  // A config that maps the changed file to the other screen, so a check planned with it never
+  // scans home, where the barrier is.
+  const elsewhere = {
+    ...config,
+    surfaces: [
+      { id: 'home', url: 'http://127.0.0.1:5173/', files: ['src/Other.tsx'] },
+      { id: 'other', url: 'http://127.0.0.1:5173/other', files: ['src/App.tsx'] },
+    ],
+  };
+  let outside = '';
+
+  beforeEach(async () => {
+    outside = await realpath(await mkdtemp(join(tmpdir(), 'usabl-outside-config-')));
+    await mkdir(join(outside, 'sub'));
+    await writeFile(join(outside, 'usabl.config.json'), JSON.stringify(elsewhere, null, 2) + '\n');
+    // x/../usabl.config.json names the root file on paper, and the outside file once x is followed.
+    await symlink(join(outside, 'sub'), join(repo, 'x'));
+    state.drafts = { home: [homeBarrier] };
+  });
+
+  afterEach(async () => {
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  async function expectStopChecksHome(): Promise<void> {
+    const next = await stop();
+    expect(next.scanned).toEqual(['home']);
+    expect(next.stderr).not.toContain('not re-scanned');
+    expect(blockReason(next)).not.toBeNull();
+  }
+
+  for (const [where, path] of [
+    ['the project root', 'x/../usabl.config.json'],
+    ['a subfolder', '../x/../usabl.config.json'],
+  ] as const) {
+    it(`refuses --branch-scope with --config ${path} from ${where}, when x links outside the repository`, async () => {
+      recordTrustedBranch();
+      git('switch', '-q', '-c', 'feature');
+      await write('src/App.tsx', 'export const App = 2;\n');
+      git('commit', '-q', '-am', 'change the app');
+      if (where === 'a subfolder') process.chdir(join(repo, 'src'));
+
+      const ran = await check('--branch-scope', '--config', path);
+      expect(ran.code).toBe(2);
+      expect(ran.scanned).toEqual([]);
+      expect(ran.stderr).toContain('--branch-scope cannot be combined with --config');
+      await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+      await expectStopChecksHome();
+    });
+  }
+
+  // With no trusted branch a stop has no starting commit, and a plain check's receipt records
+  // none either, so before this rule such a receipt answered the stop.
+  for (const path of ['other.json', 'x/../usabl.config.json']) {
+    it(`saves no receipt from a plain check with --config ${path}, so the next stop checks home`, async () => {
+      await writeFile(join(repo, 'other.json'), JSON.stringify(elsewhere, null, 2) + '\n');
+      await write('src/App.tsx', 'export const App = 2;\n');
+
+      const ran = await check('--config', path);
+      expect(ran.code).toBe(0);
+      expect(ran.scanned).toEqual(['other']);
+      expect(ran.stderr).toContain('usabl: saved no receipt for this run');
+      await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+      await expectStopChecksHome();
+    });
+  }
+
+  it('still saves a receipt the stop answers from when the check reads the root config', async () => {
+    state.drafts = {};
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    for (const args of [[], ['--config', 'usabl.config.json'], ['--config', join(repo, 'usabl.config.json')]]) {
+      await rm(join(repo, '.usabl'), { recursive: true, force: true });
+      const ran = await check(...args);
+      expect(ran.code, args.join(' ')).toBe(0);
+      expect(ran.scanned).toEqual(['home']);
+      expect(ran.stderr).not.toContain('saved no receipt');
+      const next = await stop();
+      expect(next.scanned, args.join(' ')).toEqual([]);
+      expect(next.stderr).toContain('not re-scanned');
+    }
   });
 });

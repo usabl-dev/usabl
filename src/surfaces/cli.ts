@@ -3,7 +3,7 @@
  * This module formats output only.
  * It must never run checks, decide a verdict, or mutate the Result.
  */
-import { relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { GitReader, Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubPublishedResult } from './scrub.js';
@@ -473,13 +473,16 @@ export const ROOT_CONFIG = 'usabl.config.json';
  * trusted ref have their own scope and policy reads, so a combination is refused, never merged.
  *
  * `root` is the repository root, so a check from a subfolder can name the root config by a path
- * such as ../usabl.config.json. Both paths are compared as written, without following links, so a
- * link elsewhere that points at the root file is still another file.
+ * such as ../usabl.config.json. The two paths must match as written, without following links, so
+ * a link elsewhere that points at the root file is still another file. With `realOf`, the real
+ * paths, with every link followed, must match too, so `x/../usabl.config.json` with `x` a link out
+ * of the repository, which matches on paper and opens a file outside, is refused as well.
  */
 export function branchScopeRefusal(
   opts: CliOptions,
   cwd: string,
   root: string = cwd,
+  realOf?: (path: string) => string | null,
 ): { exitCode: 2; message: string } | null {
   if (!opts.branchScope) {
     return null;
@@ -497,7 +500,10 @@ export function branchScopeRefusal(
         `--config ${relative(cwd, rootConfig)}.`,
     };
   }
-  if (resolve(cwd, opts.configPath) !== rootConfig) {
+  // The real path is read from the path as typed: resolve() would drop `x/..` as text, while
+  // opening the file follows `x` first.
+  const asTyped = isAbsolute(opts.configPath) ? opts.configPath : `${cwd}${sep}${opts.configPath}`;
+  if (resolve(cwd, opts.configPath) !== rootConfig || (realOf !== undefined && realOf(asTyped) !== realOf(rootConfig))) {
     return {
       exitCode: 2,
       message:

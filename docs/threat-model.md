@@ -466,17 +466,21 @@ passing bundle from another run.
   exported. The bindings stop a receipt lifted from another run, not one written on purpose on
   this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
   re-scanned)" and says usabl did not scan the change again on that stop.
-- A receipt does not bind the config file a `usabl check --config <other file>` run used. It binds the committed policy files and
-  the bytes of `usabl.config.json` at the root, the file the Stop hook reads, never the file
-  `--config` names. So a plain `usabl check --config <other
-  file>`, which plans from that other file (for example one with narrower `uiFileGlobs`), saves a
-  receipt the hook checks against the root config. As built, that receipt records no starting
-  commit, because a plain check passes no changed list. It answers only a stop that has no
-  starting commit either: a stop in a repository where git records no trusted branch, which
-  checks the uncommitted changes and says that committed work was not checked. On a stop with a
-  starting commit it does not verify, and the stop runs the full check. `usabl check
-  --branch-scope` refuses `--config` naming any file other than the root `usabl.config.json`.
-  Binding the bytes of the file `--config` names is not built.
+- A receipt does not bind the config file a check planned with. It binds the committed policy
+  files and the bytes of `usabl.config.json` at the root, the file the Stop hook reads, never the
+  file `--config` names. Before, a plain `usabl check --config <other file>`, which plans from
+  that other file (for example one with narrower `uiFileGlobs`), saved a receipt that answered a
+  stop with no starting commit (a repository where git records no trusted branch). So now `usabl
+  check` saves a receipt only when the config it planned with is `usabl.config.json` at the
+  repository root once every link is followed (the operating system's own real path, which
+  follows a link before the `..` after it, as opening the file does). Any other config, a spelling
+  such as `x/../usabl.config.json` with `x` a link out of the repository included, saves no
+  receipt, and the check says so. A run through `--isolated-browser`, which plans with the trusted
+  ref's config, saves none either. `usabl check --branch-scope` refuses `--config` naming any file
+  other than the root `usabl.config.json`, compared as written and by real path, and then reads
+  the root file by its plain name from the root. The Stop hook plans from the root file itself.
+  Binding the bytes of the file `--config` names is not built; the rule above makes it unneeded
+  for a receipt a stop can use.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
