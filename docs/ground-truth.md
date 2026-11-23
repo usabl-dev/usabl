@@ -4494,6 +4494,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   usabl did not save the receipt ..." after the decision line, and the next stop runs the full
   check. For an error, the first line of the error follows inside the untrusted frame under
   `reason:`.
+- The config a receipt binds is the config the run planned with. `usabl check` and the Stop hook
+  keep the text of `usabl.config.json` they planned from and read the root file again just
+  before the save. They save the receipt only when the text is the same and the receipt's local
+  files hash is the hash of the planned bytes, with the other bound files read as they are now.
+  Otherwise they save none and print "usabl: saved no receipt for this run." with the reason:
+  "usabl.config.json at the repository root changed while usabl was checking", or that the files
+  the receipt binds changed. The verdict of the run is not changed, and the next stop runs its own
+  check. A check from a subfolder compares the text only: its receipt binds that folder's files
+  and is saved there, where no stop reads it.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new accessibility barrier blocks this change. It can proceed." and the stop hook allows with

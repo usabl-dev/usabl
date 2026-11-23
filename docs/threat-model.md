@@ -481,6 +481,15 @@ passing bundle from another run.
   the root file by its plain name from the root. The Stop hook plans from the root file itself.
   Binding the bytes of the file `--config` names is not built; the rule above makes it unneeded
   for a receipt a stop can use.
+- A check reads the root config to plan before it builds its deps, and the run reads it again
+  when it binds the local files into the receipt. Before, a second process that put the committed
+  config back in between made the check plan from weaker bytes and save a receipt bound to the
+  committed ones, and the next stop, with a clean tree, answered from it without a scan. So
+  `usabl check` and the Stop hook keep the text they planned with, read the root
+  `usabl.config.json` again just before the save, and save a receipt only when the text is the
+  same and the receipt's local files hash is the hash of the planned bytes with the other bound
+  files as they are now. Otherwise they save none and say "saved no receipt for this run" with the
+  reason. The second test catches a file put back to the planned bytes just before the save.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
