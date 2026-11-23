@@ -428,6 +428,27 @@
 
 ### Fixed
 
+- A branch that sets usabl up is no longer blocked at every stop. When neither the commit where
+  the branch left the trusted branch nor the tip of the trusted branch has `usabl.config.json`,
+  a Stop hook stop and `usabl check --branch-scope` check every change since that commit with the
+  branch's own policy, and say so: the verdict line reads, for example,
+  `VERIFIED (exit 0, policy from this branch, not approved yet)`, the stored receipt line and the
+  idle line carry the same words, and a note says that a code owner must approve that policy in CI
+  before it counts. Before, every stop on such a branch read approval required until the merge.
+  A branch made before usabl was set up on the trusted branch (the trusted branch has a config,
+  the starting commit does not) checks nothing: the stop blocks once with the step to update the
+  branch from the trusted branch and lets the continuation through once, and the check exits 4.
+  A config at the starting commit that the branch removed and committed now blocks as approval
+  required at the first stop of any session, with the step to restore it or have the removal
+  approved; before, unless the same session had recorded pins, the stop allowed with "usabl is
+  not configured here". When the hook finds no starting commit, that note now says it could not
+  tell whether the trusted branch has a config. When `CLAUDE_PROJECT_DIR` names a folder in no git
+  work tree, such as a parent folder a session was started in, the hook now uses the work tree it
+  runs in instead of checking nothing, in Claude Code and in Cursor. Gate effect: CI is unchanged
+  and still asks a code owner to approve a new config. A stop on a setup branch can now read
+  VERIFIED, always with "policy from this branch, not approved yet" on its verdict line. A stop
+  whose session moves `origin/HEAD`, or the branch it names, to a commit from before the setup
+  reads the same way, never as a plain VERIFIED.
 - A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook
   at its limit lets the stop go on, so a slow stop let an agent stop without the accessibility
   work. `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command
