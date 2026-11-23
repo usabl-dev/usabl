@@ -731,9 +731,11 @@ function pathHasSegmentStart(file: string, start: string): boolean {
  * Whether an import usabl could not follow may load a file. A glob or a dynamic import may load
  * every file its patterns or its fixed start cover, and any file when usabl could not read them.
  * A baseUrl import may load each file it resolves to. Any other unresolved import may load a file
- * whose name its last segment names, so `@/tests/Dashboard` names `src/tests/Dashboard.tsx`.
+ * whose name its last segment names, so `@/tests/Dashboard` names `src/tests/Dashboard.tsx` (see
+ * importNames). It may also load any file below a folder of that name in `manifestFolders`, the
+ * folders the caller found a package.json in.
  */
-export function importMayLoad(entry: UnresolvableImport, file: string): boolean {
+export function importMayLoad(entry: UnresolvableImport, file: string, manifestFolders: ReadonlySet<string> = new Set()): boolean {
   if (entry.kind === 'glob-import') {
     if (entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file))) return true;
     const below = entry.underEveryFolder ?? [];
@@ -752,27 +754,79 @@ export function importMayLoad(entry: UnresolvableImport, file: string): boolean 
   if (entry.kind === 'package-subpath') {
     return entry.packageDir === null || file.startsWith(`${entry.packageDir}/`);
   }
-  return importLastSegments(entry.specifier).includes(importName(file));
+  const names = importNames(entry.importer, entry.specifier);
+  // An import whose path names no file by name, such as '@/', may load any file.
+  if (names === null || names.includes(importName(file).toLowerCase())) return true;
+  // An import of a folder that holds a package.json loads the file its main field names, which can
+  // be any file in that folder, such as Dashboard/view.tsx for '@/tests/Dashboard'.
+  return foldersAbove(file).some((dir) => manifestFolders.has(dir) && names.includes(path.basename(dir).toLowerCase()));
+}
+
+/**
+ * Whether an import usabl could not follow may load a file by name: an import that did not resolve,
+ * or a bare import no package explains. The other kinds name the files they may load by path.
+ */
+export function namesFilesByName(entry: UnresolvableImport): boolean {
+  return !['glob-import', 'dynamic-import', 'base-url', 'package-subpath'].includes(entry.kind);
+}
+
+/** Every folder that holds a file, nearest first, without the repository root. */
+export function foldersAbove(file: string): string[] {
+  const folders: string[] = [];
+  for (let dir = path.dirname(file); dir !== '.' && dir !== '' && dir !== '/'; dir = path.dirname(dir)) folders.push(dir);
+  return folders;
 }
 
 // The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`.
+// an index file, since `./Dashboard` loads `Dashboard/index.tsx`. Index.tsx counts as an index file
+// too, because a disk that ignores letter case loads it for `./Dashboard`.
 function importName(file: string): string {
   const segments = file.split('/');
   const base = segments[segments.length - 1] ?? '';
   const stem = base.replace(/\.[^.]*$/u, '');
-  if (stem === 'index' && segments.length > 1) {
+  if (stem.toLowerCase() === 'index' && segments.length > 1) {
     return segments[segments.length - 2] ?? stem;
   }
   return stem;
 }
 
-// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
-// `@/tests/Dashboard.js` both name a file called Dashboard.
-function importLastSegments(specifier: string): string[] {
+// Whether an extension is one the resolver adds or maps, such as .tsx or .js (see resolveFileAtPath).
+function isModuleExtension(extension: string): boolean {
+  return EXTENSIONS.includes(extension) || extension in TYPESCRIPT_NAMES;
+}
+
+// The segments that name no file: an empty one, a dot segment, and an alias or imports prefix on its
+// own. An import whose path ends in one of them names a folder usabl cannot read by name.
+const UNNAMED_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..', '@', '~', '#']);
+
+/**
+ * The names an import that did not resolve may use for a file, in lower case, or null when its path
+ * names no file usabl can read by name. Each way to write the same path gives the same name. The
+ * query and hash are taken off, and so are `.` and `..` segments, a trailing slash, a module
+ * extension, and a trailing `/index`. So `@/tests/Dashboard`, `@/tests/Dashboard/`,
+ * `@/tests/Dashboard/index`, and `@/tests/Dashboard/index.tsx` all name Dashboard. The last segment
+ * as written, with and without any extension, counts too. Letter case is ignored, because a disk
+ * that ignores it loads Dashboard.tsx for an import of dashboard. A relative path is read from the
+ * importer's folder. One whose path ends with no name, such as the alias root `@/` or a relative
+ * path to the repository root or above it, or that is a whole imports key such as `#dashboard`,
+ * names no file by name, so it may load any file.
+ */
+function importNames(importer: string, specifier: string): string[] | null {
   // A query or hash is not part of the name, so @/tests/Widget?raw names Widget.
-  const last = withoutQueryOrHash(specifier).split('/').pop() ?? '';
-  return [last, last.replace(/\.[^.]*$/u, '')];
+  const written = withoutQueryOrHash(specifier);
+  // A # specifier with no slash, such as #dashboard, is a whole key of a package.json imports map,
+  // which can map it to any file.
+  if (written.startsWith('#') && !written.includes('/')) return null;
+  const writtenLast = written.split('/').pop() ?? '';
+  const joined = isRelativeSpecifier(written) ? path.join(path.dirname(importer), written) : path.normalize(written);
+  const segments = joined.replace(/\/+$/u, '').split('/');
+  let last = segments.pop() ?? '';
+  const extension = path.extname(last);
+  if (extension !== '' && isModuleExtension(extension)) last = last.slice(0, -extension.length);
+  if (last.toLowerCase() === 'index' && segments.length > 0) last = segments.pop() ?? '';
+  // A relative path that ends at the repository root reads as '.', and one that ends above it as '..'.
+  if (UNNAMED_SEGMENTS.has(last)) return null;
+  return [...new Set([writtenLast, writtenLast.replace(/\.[^.]*$/u, ''), last].map((name) => name.toLowerCase()))];
 }
 
 /**

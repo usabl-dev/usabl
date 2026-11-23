@@ -1817,10 +1817,23 @@ in this order:
    a fixture is itself a test file, so it does not make the fixture a UI file.
 2. **It is an `unresolved` gap** when a load usabl cannot follow, in any file the wider graph
    followed, may load it:
-   - an import usabl could not resolve whose last path segment, with or without its extension,
-     equals the file's name without its extension (or its folder name, for an `index` file). For
-     example, `src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
-     `src/tests/Dashboard.tsx` is a gap;
+   - an import usabl could not resolve whose name equals the file's name without its extension
+     (or its folder name, for an `index` file). For example, `src/pages/Home.tsx` imports
+     `@/tests/Dashboard` with no alias config, so a change to `src/tests/Dashboard.tsx` is a gap.
+     Every way to write the same path gives the same name: usabl takes off the query and hash, `.`
+     and `..` segments, a trailing slash, a module extension the resolver knows (such as `.tsx` or
+     `.js`), and a trailing `/index`. So `@/tests/Dashboard/`, `@/tests/Dashboard/index`, and
+     `@/tests/Dashboard/index.tsx` all name `src/tests/Dashboard/index.tsx`. The last segment as
+     written, with or without any extension, counts too. A relative import is read from the
+     importer's folder. Letter case is ignored, since a disk that ignores it loads `Dashboard.tsx`
+     for `dashboard`, and `Index.tsx` counts as an index file. An import whose path ends with no
+     name, such as the alias root `@/` or a relative path to the repository root, and a `#`
+     specifier with no slash, which is a whole key of a package.json `imports` map, may load any
+     file. Such an import also names each file below a folder of its name that holds a
+     `package.json`, because a bundler loads the file that the folder's `main` field names. A bare
+     alias key that names a file directly, such as a Vite alias `dashboard` for
+     `src/tests/Dashboard.tsx`, is read by its name like any other import, so usabl does not see
+     that load when the alias config is one it cannot read;
    - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A string
      with a backslash escape is read as the string it is. Brace groups are expanded first, and each
      alternative is resolved on its own, so `./{../tests,x}/*.tsx` covers `../tests/*.tsx` and

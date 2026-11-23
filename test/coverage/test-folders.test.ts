@@ -171,6 +171,116 @@ describe('a changed file under a test folder that an unresolved import may reach
     expect(coverage.excludedFiles ?? []).toEqual([]);
   });
 
+  // An import can name an index file in more than one way. Each form below loads the same file, so
+  // each is read the same way: the file is a gap, and a run is not covered, never nothing to check.
+  const indexFile = 'src/tests/Dashboard/index.tsx';
+  const indexForms = [
+    '@/tests/Dashboard',
+    '@/tests/Dashboard/index',
+    '@/tests/Dashboard/index.tsx',
+    '@/tests/Dashboard/',
+    '@/tests/Dashboard/index.js',
+    '@/tests/Dashboard/index?raw',
+    '@/tests/Dashboard//',
+    '@/tests/Dashboard/./index',
+    '@/tests/Dashboard/view/..',
+    '../tests/Dashboard/',
+    '#tests/Dashboard/index',
+  ];
+  for (const form of indexForms) {
+    it(`is a gap for an index file imported as '${form}', and a run is not covered`, async () => {
+      const home = `import { Dashboard } from '${form}'\nexport function Home() { return <Dashboard /> }\n`;
+      const tree = treeWith(home, { [indexFile]: 'export function Dashboard() { return <main /> }\n' });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [indexFile]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([indexFile]);
+      expect(coverage.excludedFiles ?? []).toEqual([]);
+      const result = await run(depsOf(tree), config, { changedFiles: [indexFile] });
+      expect(result.coverage.nothingToCheck).toBe(false);
+      expect(result.verdict).toBe('not_covered');
+    });
+  }
+
+  // A disk that ignores letter case, as on macOS and Windows, loads Dashboard.tsx for an import of
+  // dashboard. usabl cannot tell which disk the build uses, so the file is a gap.
+  it('is a gap when the import names the file in other letter case', async () => {
+    const home = "import { Dashboard } from '@/tests/dashboard'\nexport function Home() { return <Dashboard /> }\n";
+    const tree = treeWith(home, { [SCREEN_IN_TESTS]: 'export function Dashboard() { return <main /> }\n' });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [SCREEN_IN_TESTS]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.unresolvedFiles).toEqual([SCREEN_IN_TESTS]);
+  });
+
+  for (const form of ['@/tests/Dashboard', '@/tests/Dashboard/Index']) {
+    it(`is a gap for an index file named in other letter case, imported as '${form}'`, async () => {
+      const upperIndex = 'src/tests/Dashboard/Index.tsx';
+      const home = `import { Dashboard } from '${form}'\nexport function Home() { return <Dashboard /> }\n`;
+      const tree = treeWith(home, { [upperIndex]: 'export function Dashboard() { return <main /> }\n' });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [upperIndex]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([upperIndex]);
+    });
+  }
+
+  // An import of an alias root, such as '@/', names a folder usabl cannot read by name. It may load
+  // any file, so a file in a test folder is a gap while it stands.
+  for (const form of ['@/', '~/', '@/index']) {
+    it(`is a gap when an unresolved import names only the alias root '${form}'`, async () => {
+      const home = `import { Dashboard } from '${form}'\nexport function Home() { return <Dashboard /> }\n`;
+      const tree = treeWith(home, { [SCREEN_IN_TESTS]: 'export function Dashboard() { return <main /> }\n' });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [SCREEN_IN_TESTS]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([SCREEN_IN_TESTS]);
+    });
+  }
+
+  // A # specifier with no slash is a whole key of a package.json imports map, which can map it to
+  // any file, so its name says nothing about the file it loads.
+  it('is a gap when an unresolved import is a whole imports key', async () => {
+    const home = "import { Dashboard } from '#dash'\nexport function Home() { return <Dashboard /> }\n";
+    const tree = treeWith(home, { [SCREEN_IN_TESTS]: 'export function Dashboard() { return <main /> }\n' });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [SCREEN_IN_TESTS]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.unresolvedFiles).toEqual([SCREEN_IN_TESTS]);
+  });
+
+  // A bundler loads a folder through the main field of a package.json in it, and that field can name
+  // any file in the folder. So an import that names the folder may load each file below it.
+  for (const form of ['@/tests/Dashboard', '../tests/Dashboard']) {
+    it(`is a gap for a file in a folder with a package.json that '${form}' names`, async () => {
+      const viewFile = 'src/tests/Dashboard/view.tsx';
+      const home = `import { Dashboard } from '${form}'\nexport function Home() { return <Dashboard /> }\n`;
+      const tree = treeWith(home, {
+        [viewFile]: 'export function Dashboard() { return <main /> }\n',
+        'src/tests/Dashboard/package.json': '{"main":"view.tsx"}\n',
+      });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [viewFile]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([viewFile]);
+      expect(coverage.excludedFiles ?? []).toEqual([]);
+    });
+  }
+
+  it('keeps a file excluded in a folder of that name with no package.json', async () => {
+    const viewFile = 'src/tests/Dashboard/view.tsx';
+    const tree = treeWith(aliasHome, { [viewFile]: 'export function Dashboard() { return <main /> }\n' });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [viewFile]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([viewFile]);
+  });
+
+  it('keeps a helper no import names excluded beside an unresolved import of an index file', async () => {
+    const home = "import { Dashboard } from '@/tests/Dashboard/index'\nexport function Home() { return <Dashboard /> }\n";
+    const tree = treeWith(home, {
+      [indexFile]: 'export function Dashboard() { return <main /> }\n',
+      'src/test/setup.ts': "import '@testing-library/jest-dom'\n",
+    });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, ['src/test/setup.ts']);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect(coverage.gaps).toEqual([]);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual(['src/test/setup.ts']);
+  });
+
   it('stays excluded when the unresolved import names another file', async () => {
     const home = "import { Card } from '@/widgets/Card'\nexport function Home() { return <Card /> }\n";
     const tree = treeWith(home, { 'src/test/setup.ts': "import '@testing-library/jest-dom'\n" });

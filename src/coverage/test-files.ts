@@ -25,7 +25,14 @@ import type { AliasConfig } from './alias-config.js';
 import { loadBaseUrlDirs } from './alias-config.js';
 import { declaredPackageNames, workspacePackages } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
-import { buildImportGraph, importMayLoad, type ImportGraphView, type UnresolvableImport } from './import-graph.js';
+import {
+  buildImportGraph,
+  foldersAbove,
+  importMayLoad,
+  type ImportGraphView,
+  namesFilesByName,
+  type UnresolvableImport,
+} from './import-graph.js';
 
 // The test file set. These are the files test tools load: tests, stories, test setup files, mocks,
 // and test helpers. Each one follows the same rule as any other test file. The names: a file
@@ -305,9 +312,24 @@ export async function placeTestFiles(
   let loads = [...loaded.unresolvable];
   let starts: string[] = [];
   let maybe: ImportGraphView | null = null;
+  // The folders above the files that hold a package.json. An import that names such a folder may
+  // load any file in it (see importMayLoad). Read only while a load names files by name.
+  const manifestFolders = new Set<string>();
+  const folderRead = new Set<string>();
+  const readManifestFolders = async (): Promise<void> => {
+    if (!loads.some(namesFilesByName)) return;
+    for (const dir of sortedUnique(universe.flatMap(foldersAbove))) {
+      if (folderRead.has(dir)) continue;
+      folderRead.add(dir);
+      if ((await fs.readFile(`${dir}/package.json`)) !== null) manifestFolders.add(dir);
+    }
+  };
   for (;;) {
     const known = new Set(starts);
-    const found = universe.filter((file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => importMayLoad(entry, file)));
+    await readManifestFolders();
+    const found = universe.filter(
+      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => importMayLoad(entry, file, manifestFolders)),
+    );
     if (found.length === 0) break;
     starts = sortedUnique([...starts, ...found]);
     maybe = await buildImportGraph(fs, starts, aliases, options);
@@ -321,7 +343,7 @@ export async function placeTestFiles(
   const reachedBy = new Map<string, Set<string>>();
   if (maybe !== null) {
     for (const entry of loads) {
-      const named = universe.filter((file) => !loaded.visited.has(file) && importMayLoad(entry, file));
+      const named = universe.filter((file) => !loaded.visited.has(file) && importMayLoad(entry, file, manifestFolders));
       reachedBy.set(entryKey(entry), reachable(maybe, named));
     }
   }
