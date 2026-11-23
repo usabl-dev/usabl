@@ -347,17 +347,21 @@ passing bundle from another run.
   If the two reads differ, a bound file changed while the check ran, so the scan may have seen
   settings the app no longer has. The run then carries a not-covered gap (ref `local files`)
   that says a local file the receipt binds changed and names no path, is never verified, and
-  mints no receipt. The receipt binds the first read, and minting reads no bound file, so an edit
-  after the second read moves the files away from the bound value and the next stop checks
-  again. A read that gives `unreadable` at either moment leaves no receipt that matches: two
+  mints no receipt. The receipt binds the first read, and the mint in `run()` reads no bound
+  file, so an edit after the second read moves the files away from the bound value and the next
+  stop checks again. A library caller of the exported `mintReceipt` that passes no hash still
+  makes mint read the files itself, at mint time. A read that gives `unreadable` at either moment leaves no receipt that matches: two
   `unreadable` reads are equal and bind `unreadable`, and one alone is a change. An idle run is
   left idle, as it is for the tree.
 - Known limits of the two local files reads. They see the files only at those two moments, so an
   edit made during the scan and undone before the second read leaves both reads equal, and the
-  run is verified with a receipt that binds files the scan did not see as they were. The Stop
-  hook reads and parses `usabl.config.json` before the run's first read, so an edit to the config
-  in that short window is bound as if the run had parsed it. Neither case can be closed by
-  comparing reads.
+  run is verified with a receipt that binds files the scan did not see as they were. When the
+  binding is `unreadable` at both reads (a link, a file over its cap, a total past the cap, or
+  more than 256 paths), the two reads are equal and cannot be compared, so an edit to such a file
+  during the scan is not seen and the run can read verified. Its receipt binds `unreadable` and
+  never matches a later stop, but the change during the scan is not seen. A config edit after the
+  Stop hook parsed `usabl.config.json` is caught by the guard, because the config is a guarded
+  path, so that run reads `approval_required` and mints no receipt.
 - Each stop reads every bound file whole, on the fast path too, and a sparse file of any size
   costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
   every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
@@ -365,8 +369,10 @@ passing bundle from another run.
   `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
   one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
   the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
-  cost of a large bound file is its hash time on every stop: about a tenth of a second at the
-  16 MiB cap.
+  cost of a large bound file is its hash time, paid more than once per stop: a stop that runs the
+  full check hashes the local files three times (the fast-path verify, then the two reads in the
+  run), and an idle run pays one read. One hash at the 64 MiB total takes about half a second,
+  so the worst case is about 1.5 seconds per stop at the caps.
 - A `usabl check --ci` run binds no local files, and its receipt has no `localFilesHash`. CI has
   no ignored files to bind, and a hash with no key of a short secret in `.env`, in a Result
   artifact that others read, could be guessed offline. A local stop never matches such a
