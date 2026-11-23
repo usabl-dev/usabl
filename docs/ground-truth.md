@@ -3941,8 +3941,17 @@ Six bindings are compared on re-verification, plus the waiver end below:
   server loads. A `usabl check --ci` run binds no local files: CI has no ignored files, and its
   Result is an artifact that others read, where a hash with no key of a short secret in `.env`
   could be guessed offline. Its receipt has no `localFilesHash`, so a local stop never matches it.
-  The run reads the bound files when it mints the receipt, after the scan, so an edit to one
-  during the scan is bound as if the scan had seen it.
+  A team's own CI job that runs `usabl check` should pass `--ci` for the same reason: without it
+  the Result carries the hash with no key.
+  The run reads this hash before it plans and again at the second tree read, with the same config
+  both times. If the two differ, a bound file changed during the check: the run carries a
+  not-covered gap (ref `local files`) that names no path, is never verified, and mints no
+  receipt. The receipt binds the first read, and minting reads no bound file, so an edit after
+  the second read moves the files away from it. `unreadable` at either read leaves no receipt
+  that matches. An idle run is left idle. Known limits: an edit made during the scan and undone
+  before the second read leaves the reads equal, so the run is verified. The Stop hook parses
+  `usabl.config.json` before the run's first read, so a config edit in that short window is bound
+  as if the run had parsed it.
 
 A source-tree change or committed policy change invalidates the receipt, and so does a
 different starting commit, an engine or scanner change, a move of the history branch, the
