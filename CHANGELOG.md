@@ -461,6 +461,23 @@
   split it or use a wildcard. The entry is never cut to fewer patterns. The planner now builds
   each entry's matcher once per run. Gate effect: a config past a bound no longer loads; split or
   shorten the entry.
+- `discovery.wideBlastGlobs` and `guardedPaths` in `usabl.config.json`, and `sharedGlobs` in
+  `usabl.docs.json`, have the same bounds as `uiFileGlobs`: 256 brace expansions for each entry,
+  1024 characters for each pattern, 4096 patterns and 262,144 characters across the list, and a
+  build at load. Before, a `wideBlastGlobs` entry with 20 brace groups loaded, and matching one
+  changed file against it took 25 seconds and 750 MB. The refusal names the list and the entry. A
+  long `guardedPaths` entry also loads faster: its form check took time that grew with the square
+  of its length. Gate effect: a config or docs manifest past a bound no longer loads; split or
+  shorten the entry.
+- `usabl check` and the Stop hook save a receipt only when it binds the config they planned with.
+  A check read `usabl.config.json` to plan and the run read it again when it bound the root config
+  into the receipt. Before, a second process that put the committed config back in between made the
+  check plan from weaker bytes and save a receipt bound to the committed bytes, and the next stop,
+  with a clean tree, answered from it, VERIFIED without a scan. Both now keep the text they planned
+  with, read the root config again before the save, and save only when the text is the same and the
+  receipt's local files hash is the hash of the planned bytes. Otherwise they save none and say
+  "saved no receipt for this run" with the reason; the verdict stands. Gate effect: a stop no
+  longer answers from a scan planned with config bytes it does not find.
 - A long config path in the missing-file and empty `uiFileGlobs` messages keeps its file name.
   It is shortened from the middle, so the start of the path and the file name both stay readable,
   where before it was cut at the end.
