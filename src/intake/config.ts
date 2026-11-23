@@ -76,6 +76,20 @@ function expectGlobArray(value: unknown, label: string): string[] {
   return patterns;
 }
 
+// The matcher builds one pattern for each brace expansion of a uiFileGlobs entry, and the count
+// grows as a product of the groups, so a short entry can take a long time or exhaust memory on
+// every file it tests. Past the guard's cap the entry is refused, never cut to fewer patterns. The
+// count is taken before anything is expanded.
+function expectUiFileGlobs(value: unknown): string[] {
+  const globs = expectGlobArray(value, 'uiFileGlobs');
+  for (const glob of globs) {
+    if ((countBraceExpansions(glob) ?? 0) > MAX_BRACE_EXPANSIONS) {
+      throw configError`uiFileGlobs entry "${glob}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} patterns, more than usabl matches one by one. Split it into several entries, or use a wildcard for the part that varies.`;
+    }
+  }
+  return globs;
+}
+
 // A guarded entry with white space at the start or end names a path no file has, so it would
 // guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen.
 function expectGuardedPaths(value: unknown): string[] {
@@ -559,7 +573,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
-    uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
+    uiFileGlobs: expectUiFileGlobs(Reflect.get(root, 'uiFileGlobs')),
     discovery: {
       // routerFile is an exact path read with fs.readFile, never matched by matchGlob, so it
       // is not glob-validated. surfaces[].files are compared with exact string equality in the

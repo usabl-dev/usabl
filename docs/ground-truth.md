@@ -3628,6 +3628,13 @@ loaded before and no longer does; split it into several entries. An older config
 ref's config, can hold a refused form, and the guard reads it wide as above. An empty entry is the
 whole tree.
 
+The same cap holds for `uiFileGlobs`. The matcher builds one pattern for each brace expansion of
+an entry and tests every file against each, so a short entry with many brace groups can take a long
+time or exhaust memory. Config load refuses a `uiFileGlobs` entry with more than 256 brace
+expansions, names the entry, and says to split it or use a wildcard for the part that varies. The
+entry is never cut to fewer patterns, so no UI file it names drops out of the check. The count is
+taken before anything is expanded.
+
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
 glob rule applies to them. A `guardedPaths` entry with the same text as `requirements` is read both

@@ -685,6 +685,43 @@ describe('parseUsablConfig glob syntax', () => {
     });
   });
 
+  // The matcher builds one pattern for each expansion of a uiFileGlobs entry, so a short entry with
+  // many brace groups can take a long time or run out of memory. The same cap as guardedPaths holds.
+  describe('a uiFileGlobs entry with many brace expansions', () => {
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(glob: string): string {
+      try {
+        parseUsablConfig(configJson({ uiFileGlobs: [glob] }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    it('loads an entry at the cap of 256 expansions', () => {
+      for (const glob of [`src/{${alternatives(256)}}/**/*.tsx`, 'src/' + '{a,b}'.repeat(8) + '/**/*.tsx']) {
+        expect(refusal(glob), glob).toBe('');
+        expect(parseUsablConfig(configJson({ uiFileGlobs: [glob] })).uiFileGlobs, glob).toEqual([glob]);
+      }
+    });
+
+    it('refuses an entry one past the cap, says so, and keeps no part of it', () => {
+      const message = refusal(`src/{${alternatives(257)}}/**/*.tsx`);
+      expect(message).toContain('uiFileGlobs entry "src/{f0,f1');
+      expect(message).toContain('more than 256');
+    });
+
+    it('refuses an entry far past the cap quickly, without building its expansions', () => {
+      const glob = 'src/' + '{a,b}'.repeat(64) + '/*.tsx';
+      const started = performance.now();
+      const message = refusal(glob);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(message).toContain('uiFileGlobs entry');
+      expect(message).toContain('more than 256');
+    });
+  });
+
   it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
     // The guard reads such an expansion as the whole repository, which the entry does not say.
     for (const entry of ['{,}', '.{,}', '{,policy}']) {
