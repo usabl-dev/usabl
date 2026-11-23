@@ -239,6 +239,29 @@ re-baseline to green.
   stop idle. Pointing it at a branch of origin that sits on HEAD still does, whether the session
   made that branch with `git update-ref` or pushed it and ran `git remote set-head`. That is the
   limit stated above.
+- A branch that sets usabl up. When neither the starting commit nor the tip of the trusted
+  branch holds `usabl.config.json`, there is no trusted policy to read at that commit. Before,
+  every stop on such a branch read approval required until the branch merged, so a team could
+  not use usabl while it set usabl up. Now the stop checks the same changes, reads the branch's
+  own policy, guards it against HEAD as a stop with no trusted branch does, and puts "policy from
+  this branch, not approved yet" inside the brackets of its verdict line, the stored receipt line
+  and the idle line included, with a note that a code owner must approve that policy in CI before
+  it counts. CI is unchanged: the policy check still asks a code owner to approve the new config,
+  so nothing the branch's own policy says reaches the merge without that approval. The receipt
+  binds the starting commit, and whether that commit holds a config does not change, so a
+  receipt minted under the branch's own policy never answers a stop that reads policy at the
+  starting commit. A branch whose starting commit has no config while the trusted branch has one
+  left the trusted branch before usabl was set up there. That stop checks nothing and blocks once
+  with the step to update the branch from the trusted branch, and lets one continuation through,
+  before any receipt fast path. A session that moves `origin/HEAD`, or the branch it names, to a
+  commit from before the setup turns a configured branch into a setup branch on the stop (the
+  limit above), so the stop reads its own policy, but its verdict line still says so. It never
+  reads as a plain VERIFIED, and CI checks the pull request against its real base. A config at the
+  starting commit that is gone from the working tree and the last commit is a removal, which CI
+  reads as a policy change, so the stop blocks as approval required at the first stop of any
+  session, not only after session pins were recorded. Before, such a removal committed before the
+  first stop read "usabl is not configured here". With no starting commit to ask, the not
+  configured note says it could not tell.
 - The timeout rule. A hook the assistant ends at its time limit is not a block: the assistant
   reads no answer and the stop goes on. An agent that can make a stop slow (a slow app, a large
   change, a file that is slow to read) could then stop without the accessibility work. So every
@@ -1609,8 +1632,10 @@ notice only in its hook output log, not in the chat.
 block. Diverged guarded policy still blocks, on exit 4 too. Exit 4 still cannot mint `verified`. A
 verdict the hook does not recognize, on any exit code, and a null verdict on a run that was neither
 idle nor exit 4, block: they are not a crash the operator needs to escape, and allowing them would
-read an unknown answer as a pass. A repository with no usabl config in the working tree or at HEAD
-is not set up for usabl: the hook allows with a plain "usabl is not configured here" note.
+read an unknown answer as a pass. A repository with no usabl config in the working tree or at HEAD,
+and none at the starting commit or on the trusted branch, is not set up for usabl: the hook allows
+with a plain "usabl is not configured here" note. A config at the starting commit that this branch
+removed blocks as approval required instead (Threat 1, "A branch that sets usabl up").
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 
