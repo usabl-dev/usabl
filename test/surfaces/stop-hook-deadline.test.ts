@@ -269,7 +269,7 @@ describe('the Stop hook deadline', () => {
     expect(followup).toContain('.cursor/hooks.json');
   });
 
-  it("plans to Claude Code's default limit when the hook command sets none, and says so", async () => {
+  it("plans to Claude Code's default of 600 seconds when the hook command sets no limit, and says to reinstall", async () => {
     const deadline = fakeDeadline(undefined);
     const h = harness(deadline);
     h.ports.runEngine = async () => {
@@ -280,10 +280,44 @@ describe('the Stop hook deadline', () => {
     expect(await runStopHookFromStdin('{}', h.ports)).toBe(0);
     await settle();
 
-    expect(deadline.state.requestedMs[0]).toBe((60 - 30) * 1000);
+    expect(deadline.state.requestedMs[0]).toBe((600 - 30) * 1000);
     const reason = String(stdoutObjects(h.stdout)[0]?.['reason']);
+    expect(reason).toContain('570 seconds');
     expect(reason).toContain("Claude Code's default");
     expect(reason).toContain(STOP_HOOK_TIMEOUT_ENV);
+    expect(reason).toContain('Run usabl install --claude again so the hook states its time limit.');
+  });
+
+  it('does not name the reinstall step when the hook command sets a limit, or in Cursor mode', async () => {
+    for (const [setting, cursorMode] of [
+      ['600', false],
+      [undefined, true],
+    ] as const) {
+      const deadline = fakeDeadline(setting);
+      const h = harness(deadline);
+      h.ports.runEngine = async () => {
+        deadline.fire();
+        return verifiedResult(null);
+      };
+      expect(await runStopHookFromStdin('{}', h.ports, { cursorMode })).toBe(0);
+      await settle();
+      const answer = stdoutObjects(h.stdout)[0] ?? {};
+      const text = String(answer['reason'] ?? answer['followup_message']);
+      expect(text.startsWith('NOT verified - usabl ran out of time')).toBe(true);
+      expect(text).not.toContain('install --claude again');
+    }
+  });
+
+  it('keeps a limit the hook command sets, and the half-limit rule below 60 seconds', async () => {
+    for (const [setting, expectedMs] of [
+      ['900', 870_000],
+      ['120', 90_000],
+      ['45', 22_000],
+    ] as const) {
+      const deadline = fakeDeadline(setting);
+      expect(await runStopHookFromStdin('{}', harness(deadline).ports)).toBe(0);
+      expect(deadline.state.requestedMs[0]).toBe(expectedMs);
+    }
   });
 
   it('counts the time the hook process already ran before the runner started', async () => {
@@ -403,7 +437,7 @@ describe('the host limit and the runner deadline', () => {
   it('states the numbers', () => {
     expect(CLAUDE_STOP_TIMEOUT_SECONDS).toBe(600);
     expect(CURSOR_STOP_TIMEOUT_SECONDS).toBe(300);
-    expect(CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS).toBe(60);
+    expect(CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS).toBe(600);
     expect(ANSWER_MARGIN_SECONDS).toBe(30);
     expect(MIN_HOST_TIMEOUT_SECONDS).toBe(60);
   });
@@ -411,10 +445,10 @@ describe('the host limit and the runner deadline', () => {
   it('takes the limit the hook sets, or the host default when it sets none or an unusable value', () => {
     expect(hostLimit('600', false)).toEqual({ seconds: 600, source: 'hook' });
     expect(hostLimit(' 1200 ', true)).toEqual({ seconds: 1200, source: 'hook' });
-    expect(hostLimit(undefined, false)).toEqual({ seconds: 60, source: 'claude-default' });
+    expect(hostLimit(undefined, false)).toEqual({ seconds: 600, source: 'claude-default' });
     expect(hostLimit(undefined, true)).toEqual({ seconds: 300, source: 'cursor-install' });
     for (const bad of ['', 'abc', '0', '-5', '1.5', '1e3', '9999999']) {
-      expect(hostLimit(bad, false)).toEqual({ seconds: 60, source: 'claude-default' });
+      expect(hostLimit(bad, false)).toEqual({ seconds: 600, source: 'claude-default' });
     }
   });
 

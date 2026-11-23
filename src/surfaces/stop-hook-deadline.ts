@@ -29,10 +29,11 @@ export const CURSOR_STOP_TIMEOUT_SECONDS = 300;
 /**
  * The limit the runner plans to for a Claude Code hook command that sets no limit, in seconds. The
  * hook an older usabl wrote is one. Claude Code's hooks documentation gives 600 seconds as the
- * default for a command hook with no `timeout` field, and older Claude Code releases used 60. usabl
- * cannot tell which release runs the hook, so it plans to the shorter one.
+ * default for a command hook with no `timeout` field, and the Stop event keeps that default.
+ * Limit: an older Claude Code release whose default was 60 seconds can end such a hook before usabl
+ * answers, as it could before usabl kept a deadline, until usabl install --claude runs again.
  */
-export const CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS = 60;
+export const CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS = 600;
 
 /**
  * The time left between the runner's deadline and the host's limit, in seconds. It covers npm
@@ -166,5 +167,9 @@ export function deadlineMessage(input: DeadlineMessageInput): string {
     `Next: narrow the change and stop again, or run ${input.checkCommand} by hand, or raise the limit in the hook settings. ` +
       raiseStep(input.cursorMode),
   );
+  if (input.limit.source === 'claude-default') {
+    // The hook states no limit, so usabl planned to Claude Code's default.
+    lines.push('Run usabl install --claude again so the hook states its time limit.');
+  }
   return lines.join('\n');
 }

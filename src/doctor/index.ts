@@ -579,7 +579,7 @@ const CLAUDE_TIMEOUT_STEPS: Record<TimeoutProblem, string> = {
   mismatch:
     `The timeout of the usabl Stop hook in .claude/settings.json does not match ${STOP_HOOK_TIMEOUT_ENV} in its command, ` +
     'or the command sets none, so usabl plans its own deadline to a different limit than the one Claude Code uses. ' +
-    `A command that sets none makes usabl plan to ${CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS} seconds, the shortest Claude Code default. ` +
+    `A command that sets none makes usabl plan to ${CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS} seconds, Claude Code's default, not to the timeout. ` +
     'A larger number than the timeout lets Claude Code end the hook first, and then the stop goes on with nothing checked. ' +
     'Run "usabl install --claude" to make the command match the timeout.',
 };
