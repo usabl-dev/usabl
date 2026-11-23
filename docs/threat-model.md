@@ -238,7 +238,10 @@ re-baseline to green.
   origin --auto`. So pointing `origin/HEAD` at a local branch or a tag on HEAD no longer makes a
   stop idle. Pointing it at a branch of origin that sits on HEAD still does, whether the session
   made that branch with `git update-ref` or pushed it and ran `git remote set-head`. That is the
-  limit stated above.
+  limit stated above. Moving `origin/HEAD` or `origin/main` to a commit the session made can also
+  choose the policy a local stop reads: when that commit holds a weakened config, waiver, or
+  floor, the guard against it is clean, so a local VERIFIED can rest on weakened policy. CI reads
+  policy at the real base of the pull request, so only CI is authoritative there.
 - A branch that sets usabl up. When neither the starting commit nor the tip of the trusted
   branch holds `usabl.config.json`, there is no trusted policy to read at that commit. Before,
   every stop on such a branch read approval required until the branch merged, so a team could
@@ -247,21 +250,40 @@ re-baseline to green.
   this branch, not approved yet" inside the brackets of its verdict line, the stored receipt line
   and the idle line included, with a note that a code owner must approve that policy in CI before
   it counts. CI is unchanged: the policy check still asks a code owner to approve the new config,
-  so nothing the branch's own policy says reaches the merge without that approval. The receipt
-  binds the starting commit, and whether that commit holds a config does not change, so a
-  receipt minted under the branch's own policy never answers a stop that reads policy at the
-  starting commit. A branch whose starting commit has no config while the trusted branch has one
+  so nothing the branch's own policy says reaches the merge without that approval. A receipt
+  minted under the branch's own policy cannot carry weaker policy into a stop that reads policy
+  at the starting commit: that stop runs the guard against the starting commit before any receipt
+  is used, so a receipt answers it only when the policy in the working tree equals the policy at
+  that commit. This matters because `git replace` or a deleted object can change what the same
+  commit appears to hold. usabl asks git for the commit's tree first, so a missing or broken tree
+  is a git failure and a gap, never "no config", but a replacement object reads as the commit's
+  own. A branch whose starting commit has no config while the trusted branch has one
   left the trusted branch before usabl was set up there. That stop checks nothing and blocks once
   with the step to update the branch from the trusted branch, and lets one continuation through,
   before any receipt fast path. A session that moves `origin/HEAD`, or the branch it names, to a
   commit from before the setup turns a configured branch into a setup branch on the stop (the
-  limit above), so the stop reads its own policy, but its verdict line still says so. It never
-  reads as a plain VERIFIED, and CI checks the pull request against its real base. A config at the
+  limit above), so the stop reads its own policy, and its verdict line says so. A ref moved to a
+  commit the session made is the limit above, and there the line can read plain VERIFIED. CI
+  checks the pull request against its real base in every case. A config at the
   starting commit that is gone from the working tree and the last commit is a removal, which CI
   reads as a policy change, so the stop blocks as approval required at the first stop of any
   session, not only after session pins were recorded. Before, such a removal committed before the
   first stop read "usabl is not configured here". With no starting commit to ask, the not
-  configured note says it could not tell.
+  configured note says it could not tell. When the trusted branch dropped its config too, the
+  next step also says to update the branch from it. The same ref-move limit applies: moving
+  `origin/main` to a commit from before the setup turns a committed removal back into the "not
+  configured" allow, which is NOT verified, and CI still reads the config at the real base. The
+  JSON output of `usabl check --branch-scope` on a setup branch has no field that says the policy
+  came from the branch, so a verified run there reads `"verdict": "verified"` with exit 0 to a
+  script; the policy note is only on the text verdict line and on stderr. This is a known limit.
+- A project folder outside any repository. When `CLAUDE_PROJECT_DIR` names a folder in no git
+  work tree, for example a parent folder a session was started in, the Stop hook checks the work
+  tree of its own folder, which follows the assistant when it changes directory. So a stop can
+  check a different repository than the one the session changed. Every decision then says so:
+  each verdict line carries "checked the repository the assistant stopped in" in its brackets,
+  and a note names the repository checked (its top-level folder name, inside the untrusted frame)
+  and says to run usabl check in the other repository if the work was there. CI checks each pull
+  request in its own repository.
 - The timeout rule. A hook the assistant ends at its time limit is not a block: the assistant
   reads no answer and the stop goes on. An agent that can make a stop slow (a slow app, a large
   change, a file that is slow to read) could then stop without the accessibility work. So every
