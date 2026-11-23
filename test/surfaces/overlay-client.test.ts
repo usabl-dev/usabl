@@ -3748,8 +3748,8 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     ).toBe(true);
 
     // Work above debt, never the other way round.
-    expect(await groupHeadings(page)).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
-    expect(await rowTitlesUnder(page, 'Accessibility barriers that block this run')).toEqual(['New focus barrier.']);
+    expect(await groupHeadings(page)).toEqual(['Findings that block this run', 'Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Findings that block this run')).toEqual(['New focus barrier.']);
     expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual([
       'Carried contrast debt.',
       'Waived link name.',
@@ -3768,6 +3768,159 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
 
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  // A finding usabl could not decide blocks the run, but it is not an accessibility barrier
+  // found. The panel used to count it and name it as one. The header and the group count now
+  // split the blocking findings in the gate's words.
+  async function blockingCountText(page: Page): Promise<string> {
+    return page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      const group = Array.from(root?.querySelectorAll('.current-screen .finding-group') ?? []).find(
+        (candidate) => (candidate.querySelector('h4')?.textContent ?? '') === 'Findings that block this run',
+      );
+      return group?.querySelector('.section-count')?.textContent ?? '';
+    });
+  }
+
+  it('names an undecided check on its own as one, not as an accessibility barrier', async () => {
+    // The run is a regression because of a failure on another screen. This screen holds only a
+    // check usabl could not decide, so its header and its count must not call it a barrier found.
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 accessibility barrier found, 1 check undecided, needs a person to review',
+          findings: [
+            finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' }),
+            finding({ screenId: 'jobs', whatUserExperiences: 'Jobs failure.', elementKey: 'jobs|pf-focus-into-dialog|name:view-cluster-details' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('On this screen: 1 check undecided, needs a person to review. Review it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await groupHeadings(page)).toEqual(['Findings that block this run']);
+    expect(await blockingCountText(page)).toBe('1 check undecided, needs a person to review');
+    expect(await panel.locator('.current-screen').getByText('accessibility barrier found', { exact: false }).count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('names a failing finding and an undecided check apart when a screen has both', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 accessibility barrier found, 2 checks undecided, need a person to review',
+          findings: [
+            finding({ whatUserExperiences: 'Failing focus.' }),
+            finding({ rule: 'color-contrast', layer: 'axe', confidence: 'unverified', whatUserExperiences: 'Undecided one.', elementKey: 'clusters|color-contrast|a' }),
+            finding({ rule: 'link-name', layer: 'axe', confidence: 'unverified', whatUserExperiences: 'Undecided two.', elementKey: 'clusters|link-name|b' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'On this screen: 1 accessibility barrier found, 2 checks undecided, need a person to review. Fix the accessibility barrier and review the checks first.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(await blockingCountText(page)).toBe(
+      '1 accessibility barrier found, 2 checks undecided, need a person to review',
+    );
+
+    await page.context().close();
+  });
+
+  // A not_covered run held back only by an undecided check checked every screen. The panel used to
+  // say it could not check the affected screens, which told a developer the run never looked.
+  it('says a not_covered run was checked when the only cause is an undecided check', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'not_covered',
+          exitCode: 3,
+          summary: 'not_covered: 1 check undecided, needs a person to review',
+          findings: [finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('On this screen: 1 check undecided, needs a person to review. Review it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('could not check', { exact: false }).count()).toBe(0);
+    expect(await rowTitlesUnder(page, 'Findings that block this run')).toEqual(['Undecided contrast.']);
+    // The row names its own state, so the reader knows which item needs a person.
+    expect(
+      await panel.locator('.current-screen .finding-confidence').allTextContents(),
+    ).toEqual(['Check undecided, needs a person to review']);
+
+    await page.context().close();
+  });
+
+  it('says both causes when coverage failed and a check could not decide', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'not_covered',
+          exitCode: 3,
+          summary: 'not_covered: 1 check undecided, needs a person to review, 1 gap(s)',
+          findings: [finding({ confidence: 'unverified', whatUserExperiences: 'Undecided contrast.' })],
+          coverage: {
+            ...result({}).coverage,
+            gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: 'never opened' }],
+          },
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'usabl could not check all of the affected screens, and some checks could not decide, so nothing here is proven.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('keeps the plain sentence and names the count when every blocking finding fails', async () => {
+    const page = await mount(
+      projectOverlay(result({ summary: 'regression: 1 accessibility barrier found', findings: [finding()] })),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText('usabl found 1 accessibility barrier on this screen. Fix it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(await blockingCountText(page)).toBe('1 accessibility barrier found');
+    // A failing row needs no state label; only an undecided check carries one.
+    expect(await panel.locator('.current-screen .finding-confidence').count()).toBe(0);
 
     await page.context().close();
   });
@@ -3845,7 +3998,7 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       };
     });
 
-    expect(readable.headings).toEqual(['Accessibility barriers that block this run', 'Recorded, not blocking']);
+    expect(readable.headings).toEqual(['Findings that block this run', 'Recorded, not blocking']);
     expect(readable.severities).toEqual(['Serious', 'Serious']);
     expect(readable.note).toContain('do not block this run');
     // The coloured dot beside each severity word is hidden from assistive technology, so the word

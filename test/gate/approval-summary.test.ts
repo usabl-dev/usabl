@@ -88,7 +88,7 @@ describe('approval_required keeps the accessibility disclosure', () => {
     const undiverged = gate({ ...shared, guardDivergedPaths: [] });
     const diverged = gate({ ...shared, guardDivergedPaths: DIVERGED });
 
-    expect(undiverged.summary).toBe('regression: 1 blocking finding(s), 1 gap(s)');
+    expect(undiverged.summary).toBe('regression: 1 accessibility barrier found, 1 gap(s)');
     expect(diverged.summary).toBe(
       `approval required: 1 guarded path(s) changed; accessibility ${undiverged.summary}`,
     );
@@ -132,7 +132,7 @@ describe('approval_required keeps the accessibility disclosure', () => {
       drafts: [d({ confidence: 'unverified' })],
     });
 
-    expect(out.summary).toContain('accessibility not_covered: 1 blocking finding(s)');
+    expect(out.summary).toContain('accessibility not_covered: 1 check undecided, needs a person to review');
     expect(out.summary).not.toContain('gap(s)');
   });
 

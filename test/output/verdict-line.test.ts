@@ -181,3 +181,72 @@ describe('describeVerdict', () => {
     }
   });
 });
+
+/**
+ * not_covered has two causes, and the meaning says which one held the run.
+ *
+ * The gate calls a run not_covered when coverage failed (a gap or an unmapped file) or when a new
+ * finding could not be decided. The meaning used to say "could not check all of this change" for
+ * both, so a run that checked every screen and held one undecided check read as unchecked. The
+ * verdict is not chosen here; only the sentence for the verdict the gate wrote.
+ */
+describe('describeVerdict names what held a not_covered run', () => {
+  const undecided: Result['findings'][number] = {
+    rule: 'color-contrast',
+    layer: 'axe',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: 'clusters',
+    elementPath: 'button',
+    elementName: 'Save',
+    role: 'button',
+    whatUserExperiences: '',
+    why: '',
+    fix: '',
+    evidence: {},
+    confidence: 'unverified',
+    elementKey: 'k',
+    identityBasis: 'name',
+    status: 'new',
+  };
+  const gapCoverage = {
+    ...baseResult({}).coverage,
+    gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered' as const, reason: 'never opened' }],
+  };
+  const notCovered = (over: Partial<Result>): Result => baseResult({ verdict: 'not_covered', exitCode: 3, ...over });
+
+  it('keeps the coverage sentence when coverage failed', () => {
+    expect(describeVerdict(notCovered({ coverage: gapCoverage })).meaning).toBe(
+      'usabl could not check all of this change, so it is blocked as unproven.',
+    );
+  });
+
+  it('says the change was checked when the only cause is an undecided check', () => {
+    const line = describeVerdict(notCovered({ findings: [undecided] }));
+
+    expect(line.meaning).toBe('Checked, but some checks could not decide. A person must review them to pass.');
+    expect(line.meaning).not.toContain('could not check');
+    expect(line.meaning.length).toBeLessThanOrEqual(78);
+  });
+
+  it('says both when coverage failed and a check could not decide', () => {
+    const line = describeVerdict(notCovered({ coverage: gapCoverage, findings: [undecided] }));
+
+    expect(line.meaning).toBe('usabl could not check all of this change, and some checks could not decide.');
+    expect(line.meaning.length).toBeLessThanOrEqual(78);
+  });
+
+  it('keeps the coverage sentence when an undecided check is already recorded debt', () => {
+    // Carried uncertainty does not block, so it is not the cause and the sentence does not name it.
+    const carried = { ...undecided, status: 'carried' as const };
+    expect(describeVerdict(notCovered({ coverage: gapCoverage, findings: [carried] })).meaning).toBe(
+      'usabl could not check all of this change, so it is blocked as unproven.',
+    );
+  });
+
+  it('keeps the coverage sentence when it cannot see either cause', () => {
+    expect(describeVerdict(notCovered({})).meaning).toBe(
+      'usabl could not check all of this change, so it is blocked as unproven.',
+    );
+  });
+});

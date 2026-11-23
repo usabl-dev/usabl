@@ -476,6 +476,7 @@ export interface Receipt {
   baseRevision: string | null;    // the commit the changed list was taken from, or null
   historyHead: string | null;     // the debt history commit the run read
   policyHash: string;
+  localFilesHash?: string;        // the .env*, localFiles, and config bytes; absent on older receipts
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string; engines?: Record<string, string> };
   surfaces: string[];
@@ -2861,6 +2862,29 @@ their own.
    the residual section under Evidence floor. The floor
    stores how many barriers it accepted at an identity, and more than that comes back as
    `new` and blocks.
+7. **Summary line.** The summary opens with the verdict word and then the blocking count,
+   split by confidence. A new failing finding is counted as `N accessibility barrier(s)
+   found`. A new finding usabl could not decide, such as an axe incomplete result, is counted
+   as `1 check undecided, needs a person to review`, or `N checks undecided, need a person to
+   review` for more than one. Each part is printed only when its count is above zero,
+   failures first, with the plural written out (`1 check`, `2 checks`).
+   When neither has a finding the clause is `nothing blocking`. So a run held back only by a
+   check axe could not decide reads `not_covered: 1 check undecided, needs a person to
+   review`, not as one accessibility barrier found. The split changes words only: the verdict
+   is still decided from the whole blocking set. The recorded, floor and coverage clauses
+   follow as before. The terminal report and the overlay print the blocking count with the
+   same words, and the terminal lists each blocking finding under the part it belongs to,
+   under a `blocking this run:` heading for each part. The overlay marks each undecided row
+   "Check undecided, needs a person to review".
+
+   The verdict line says which cause held a `not_covered` run. When coverage failed (a gap or
+   an unmapped file) it keeps "usabl could not check all of this change, so it is blocked as
+   unproven." When the only cause is a new undecided check it says "Checked, but some checks
+   could not decide. A person must review them to pass." When both hold it says "usabl could
+   not check all of this change, and some checks could not decide." The overlay follows the
+   same rule: it says it could not check the affected screens only when coverage failed, and
+   otherwise names the undecided checks on the screen. A Result that shows neither cause keeps
+   the coverage sentence. Neither surface chooses the verdict.
 
 ### Identity
 
@@ -3884,10 +3908,45 @@ Six bindings are compared on re-verification, plus the waiver end below:
   binds no time, or binds a value that is not an ISO-8601 UTC time, does not verify. A receipt
   minted before this field existed has none; it verifies only when it counted no waived finding.
   The schema version stays 2, because that absent value is read safely.
+- `localFilesHash`: a hash over the files the app reads that git does not see. `sourceTree` comes
+  from git, which skips ignored files, so before this an edit to `.env.local` (Vite loads it, and
+  the Vite templates ignore it) changed neither the tree nor the status, and a stored receipt kept
+  answering the stop. The hash covers, sorted by path: every file in the root and in each app
+  folder whose name, in lower case, starts with `.env`, whatever its case on disk, so `.ENV.local`
+  and `.Env` count (each app folder is a folder that holds one of the app's `package.json` files, from the folder of
+  the router file, of each `uiFileGlobs` pattern, and of each surface file, up to the root, as
+  section 8 finds them for dependency changes), every path in config `localFiles` (section 22),
+  and the bytes of `usabl.config.json` at the root, the file the Stop hook reads. The root is the
+  folder usabl runs from: the repository root for the Stop hook, and the current folder for
+  `usabl check`. Each entry is the path, its kind (missing, file, or other), and the sha256 of
+  its bytes, never the bytes, and the receipt holds only the hash over the entries, never a path
+  or a value. A listed path that is missing is an entry too, so a file that appears or
+  disappears changes the hash. A path usabl cannot read as a file of the repository (a symbolic
+  link, wherever it points, a folder, a path below a link, or a file it may not open) makes the
+  whole value `unreadable`, and `unreadable` never matches, on either side: such a stop checks
+  again every time, and the reason it prints says so. A config byte change that parses to the
+  same policy, such as white space, changes the hash too. A receipt minted before this binding
+  has no `localFilesHash` and does not verify, so every stored receipt costs one full check
+  once. The schema version stays 2, because the absent value never verifies.
+  Every stop reads each bound file whole, on the fast path too, so each file has a size cap: 1 MiB
+  for a `.env` file, and 16 MiB for a path in `localFiles` and for `usabl.config.json`. The size is
+  read before any byte, so a sparse file of any size is refused at once. A file over its cap, or
+  one that gives more bytes than its size said (it grew while usabl read it), is `other`, so the
+  value is `unreadable` and the stop runs the full check. Across all bound files usabl reads at
+  most 64 MiB, and a file that would pass that total makes the value `unreadable` too. Hashing
+  takes about 5.5 seconds per GiB here, so a file at the 16 MiB cap adds about a tenth of a
+  second to every stop, and the 64 MiB total about a third of a second.
+  A `.env` file outside the root and the app folders is bound only when it is listed in
+  `localFiles`, for example one in a folder that Vite's `envDir` names, or a `config/.env` a
+  server loads. A `usabl check --ci` run binds no local files: CI has no ignored files, and its
+  Result is an artifact that others read, where a hash with no key of a short secret in `.env`
+  could be guessed offline. Its receipt has no `localFilesHash`, so a local stop never matches it.
+  The run reads the bound files when it mints the receipt, after the scan, so an edit to one
+  during the scan is bound as if the scan had seen it.
 
 A source-tree change or committed policy change invalidates the receipt, and so does a
-different starting commit, an engine or scanner change, a move of the history branch, or the
-end of a waiver it applied.
+different starting commit, an engine or scanner change, a move of the history branch, the
+end of a waiver it applied, or a change to a local file it binds.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
@@ -4333,6 +4392,21 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
+- The next step names the work that is there. A new check usabl could not decide is a
+  person's call: the step says "Each check undecided below needs a person to review it, so tell
+  the user. Do not change code to make an undecided check pass, and do not mark one as reviewed
+  yourself, for example by adding a waiver or recording it in the evidence floor." (during an
+  active continuation, "Tell the user that each check usabl could not decide needs a person to
+  review it." and the same prohibitions). On a regression with such checks the barrier step
+  reads "fix each accessibility barrier below" and the review sentence follows. On
+  `not_covered` held only by such checks the verdict line already says the change was checked,
+  so the step is the action alone: "Next: tell the user that each check undecided below needs a
+  person to review it." and the prohibitions. It never points at Not evaluated, which is empty
+  then. In the collapsed pull request view, a blocking group of such checks is headed
+  "check undecided, needs a person to review:", so it reads apart from a failing group on the
+  same rule. When coverage gaps also hold the run, the coverage step comes
+  first and the review sentence follows. The same rule holds for the accessibility half of
+  `approval_required`. A run with no undecided check keeps the steps as before.
 - A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
   null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
@@ -4361,7 +4435,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   `accessibility barrier 1: axe/color-contrast`, `screen (1): ...`, `experience (1): ...`,
   `fix (1): ...`. One reads `Accessibility barrier: [new serious] (×3)` with
   `accessibility barrier: <layer>/<rule>` and `screen: <id>` inside, then its experience and
-  fix. When guarded files changed,
+  fix. A group of new findings usabl could not decide is not an accessibility barrier found:
+  its headline reads `- check undecided 2, needs a person to review: [new serious]` (or
+  `Check undecided, needs a person to review: [new serious]` alone), and its rule piece
+  `check undecided 2: axe/color-contrast`. A group never mixes a failing finding with an
+  undecided one, and failing groups are listed first. The heading names what the list holds:
+  `Accessibility barriers:`, `Checks undecided, need a person to review:`, or
+  `Findings that block this run:` when it holds both. When guarded files changed,
   the scaffold line gives their count, for example `Guarded files changed: 2, named under
   "guarded files" in the untrusted text below`, and the piece `guarded files: <paths>`
   follows the gate's summary and is never dropped when the message is shortened. A field
@@ -4374,7 +4454,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   nowhere in the message. Coverage gap lines go only after every barrier is gone. The note
   says how many lines and how many barriers were left out, in the form "[shortened to fit
   the message budget, N line(s) omitted (K accessibility barrier(s) left out); run usabl check --json for
-  the full list]", and the show-all hint counts only the barriers still shown.
+  the full list]", and the show-all hint counts only the barriers still shown. Left-out groups of
+  checks usabl could not decide are counted as `undecided check(s)`, never as barriers, and when
+  both kinds go the note reads `(K accessibility barrier(s) and M undecided check(s) left out)`.
 - A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."
 
@@ -4453,15 +4535,16 @@ receipt (`_No receipt: run was not verified._` when none), then `### Conformance
 then `### Accessibility debt` when the floor holds debt or the change fixed some, for example
 "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1 is
 intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
-then the finding sections `### New accessibility barriers`, `### Known (recorded debt)`, and
-`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
+then the finding sections `### New accessibility barriers` (new failing findings),
+`### New checks that need a person to review` (new findings usabl could not decide),
+`### Known (recorded debt)`, and `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps`, then
 `### Disclosed, does not block` when any screen carries a provider note, and
 `### Announcements (current run)`. The notes section is disclosure only and never changes
 the verdict. The terminal summary, the self-check, and the Stop hook print the same notes
 after the gaps under `disclosed, does not block`. The known section lists carried and waived deterministic
 findings, each with its status, the same recorded debt the terminal and the overlay list. A
-collapsed group holds findings of one status, and names its screen id and rule once, in its
+collapsed group holds findings of one status and one confidence, failing groups first, and names its screen id and rule once, in its
 headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. The sticky comment
 step updates only a comment that GitHub Actions wrote (`github-actions[bot]`) and that starts with
 `<!-- usabl-report -->`, which the renderer always writes as the first line. The token can edit
@@ -6241,6 +6324,24 @@ bounds, and an option wins over the config for that call. These settings are in 
 config, so a pull request that changes them needs approval, and in CI they are read from the
 trusted ref. With a trusted ref that has no readable config they are left out, and the judge
 leaves them out of the head copy it plans from.
+
+`localFiles` is optional. It lists files the app reads that git does not see, such as a
+git-ignored generated file or a `.env` file outside the app folders, so the receipt binds them
+(section 10, Receipt binding):
+
+```json
+"localFiles": ["public/generated-theme.js", "config/.env.shared"]
+```
+
+Each entry is an exact path from the repository root to one file, at most 512 characters, and the
+list holds at most 64 entries. A glob, an empty entry, white space at either end, a leading `/`, a
+drive letter, a backslash, a control character, a `.` or `..` segment, and an empty segment (a
+doubled or trailing slash) are refused when the config is read, and the message names the field.
+The `.env` files of the root and the app folders are bound without being listed, whatever the
+case of their names. A listed file over 16 MiB binds nothing that matches, so every stop runs the
+full check while it is that large. Listing a tracked file does
+no harm: it is bound twice, once by the tree and once by its hash. `localFiles` can only make a
+stored receipt stop matching, never make one match, so it is not a trusted-only field.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.

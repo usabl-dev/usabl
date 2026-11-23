@@ -149,7 +149,8 @@ describe('formatSummary groups gradient contrast results per screen', () => {
       ),
     );
 
-    expect(out).toContain('accessibility barriers that block this run: 1 finding(s)');
+    // The new gradient result is one axe could not decide, so it is named as a check to review.
+    expect(out).toContain('blocking this run: 1 check undecided, needs a person to review');
     expect(out).toContain('[new] clusters · axe/color-contrast (serious): Needs review: axe could not measure the color contrast of 1 element');
     expect(out).toContain('[carried] clusters · axe/color-contrast (serious): Needs review: axe could not measure the color contrast of 2 elements');
   });

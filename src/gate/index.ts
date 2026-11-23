@@ -121,7 +121,8 @@ function accessibilityOutcome(input: GateInput): {
     floorUnconfirmed,
     summary: verdictSummary(
       verdict,
-      blocking.length,
+      blocking.filter((f) => f.confidence === 'fail').length,
+      blocking.filter((f) => f.confidence === 'unverified').length,
       findings.filter(RECORDED).length,
       staleIdentities.length,
       floorUnconfirmed.reduce((total, screen) => total + screen.barriers, 0),
@@ -751,6 +752,16 @@ function approvalSummary(
  * own sentence, so it was the one that got believed. The count is now the blocking set, the same
  * set the verdict was decided from, and accepted debt is named separately as recorded.
  *
+ * The blocking count is printed in two parts, because the two kinds of blocking finding mean
+ * different things to a person. A new failing finding is "N accessibility barrier(s) found". A new
+ * finding usabl could not decide, such as an axe incomplete result, is "1 check undecided, needs a
+ * person to review" or "N checks undecided, need a person to review". Both used to print as one "N
+ * blocking finding(s)", so a run held back only by a check axe could not decide read as one
+ * accessibility barrier found. Each part is printed only when its count is above zero. The split
+ * changes words only: the verdict is still decided from the whole blocking set. The surfaces print
+ * the same words through `formatBlockingSplit` in `src/output/disclosure.ts`, pinned against this
+ * line by a test that drives the gate.
+ *
  * "nothing blocking" rather than "0 blocking finding(s)". A zero is the answer on most runs, and
  * a line that opens with one trains the reader to skip the number on the runs where it is not
  * zero. It also cannot be misread as a verdict: the verdict word is already the first token, and
@@ -777,14 +788,24 @@ function approvalSummary(
  */
 function verdictSummary(
   verdict: AccessibilityVerdict,
-  blocking: number,
+  found: number,
+  undecided: number,
   recorded: number,
   headroom: number,
   unconfirmed: number,
   coverage: Coverage,
 ): string {
   const notEvaluated = notEvaluatedCounts(coverage);
-  const clauses = [blocking === 0 ? 'nothing blocking' : `${blocking} blocking finding(s)`];
+  const clauses: string[] = [];
+  if (found > 0) {
+    clauses.push(`${found} accessibility barrier${found === 1 ? '' : 's'} found`);
+  }
+  if (undecided > 0) {
+    clauses.push(undecided === 1 ? '1 check undecided, needs a person to review' : `${undecided} checks undecided, need a person to review`);
+  }
+  if (clauses.length === 0) {
+    clauses.push('nothing blocking');
+  }
 
   if (recorded > 0) {
     clauses.push(`${recorded} recorded`);
