@@ -101,6 +101,13 @@ CI runs all of these, plus gitleaks, pre-commit, and Semgrep. Its jobs are `chec
 `engine-pin` (the self gate's engine pin is a commit on main, checked with trusted code),
 `integration-chromium`, and `sensitivity-chromium`.
 
+Code scanning runs in its own workflow, `.github/workflows/codeql.yml`. It runs GitHub
+CodeQL with the default query suite on the JavaScript and TypeScript code, on every pull
+request to main, on every push to main, and once a week. It skips `dist/`, `node_modules/`,
+and `fixtures/`. Results show up in the repository's Security tab under Code scanning. On a
+pull request, new alerts show up as a CodeQL check and on the changed lines. It is not a
+required check.
+
 ## 5. Trust-critical paths
 
 These paths are listed in `.github/CODEOWNERS`. A change to any of them can weaken the
