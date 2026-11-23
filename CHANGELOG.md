@@ -4,6 +4,11 @@
 
 ### Added
 
+- `usabl doctor` reports the git version, as `git (<version>; usabl needs 2.30 or later)`. usabl
+  needs git 2.30 or later, because it runs `git rev-parse --end-of-options`, which git learned in
+  2.30, so a ref that starts with a dash is never read as an option. An older git is reported as
+  drifted with its version, why it fails, and the step to install 2.30 or later. No git is
+  missing, and output usabl cannot read is unknown. Doctor mints no verdict.
 - A keyboard walk budget for each screen, in `usabl.config.json`:
   `keyboardWalk.perSurface.<id>.tabCap` (1 to 2000 presses of Tab, default 200) and `.wallClockMs`
   (1 to 300000 ms, default 15000). `checkPage` takes `tabCap` and `wallClockMs` options with the
@@ -428,6 +433,37 @@
 
 ### Fixed
 
+- `usabl check --branch-scope` from a subfolder accepts `--config ../usabl.config.json`. The path
+  is compared with `usabl.config.json` at the repository root, without following links, so the
+  root file named by its relative path runs, and a file outside the repository is still refused
+  with exit 2. A check from a subfolder runs at the repository root, as the Stop hook does, so it
+  reads the same guarded files and saves its receipt where the next stop looks. From a subfolder
+  with no `--config`, the default name means a file in that folder, so the check is refused with
+  exit 2 and says to run from the project root or pass `--config` with the path to the root file.
+  Gate effect: none. The check still reads the root config the hook reads.
+- A `uiFileGlobs` entry whose brace groups expand to more than 256 patterns is refused when the
+  config is read, the same cap `guardedPaths` has. The matcher builds one pattern for each
+  expansion, so a short entry could stall a run or exhaust memory. The message names the entry
+  and says to split it or use a wildcard. The entry is never cut to fewer patterns. Gate effect:
+  a config with such an entry no longer loads; split the entry.
+- A long config path in the missing-file and empty `uiFileGlobs` messages keeps its file name.
+  It is shortened from the middle, so the start of the path and the file name both stay readable,
+  where before it was cut at the end.
+- With no trusted branch (`refs/remotes/origin/HEAD` not set), the Stop hook's allow line says so
+  inside its parentheses: "VERIFIED (exit 0, no trusted branch found to compare policy with; see
+  the note below)". The stored receipt line and the idle line carry the same words. The note after
+  the decision, with its `git remote set-head origin --auto` step, is unchanged. Gate effect: none.
+- A Stop hook block or continuation for a regression that also has coverage gaps names the gaps
+  in its next step, the way a `not_covered` stop does: fix each accessibility barrier, and resolve
+  every reason under Not evaluated. The same holds behind guarded files. Before, the step named
+  only the accessibility barriers, so the gaps showed up only on the next stop. Gate effect: none.
+- A first `usabl install --cursor` into an existing `.cursor/hooks.json` with no usabl stop entry
+  keeps every other top-level key, every other event's hooks, and the key order. Before, it
+  rewrote the file with only `version` and `hooks`.
+- The axe world compare summary script records the usabl, axe-core, and Playwright versions in the
+  sweep part it builds, and `--sweep-from` refuses a kept sweep from other versions, or one that
+  holds an unstable comparison, and writes nothing. A sweep from before this change is checked
+  against its summary's header, and the output says its usabl version was not checked.
 - A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook
   at its limit lets the stop go on, so a slow stop let an agent stop without the accessibility
   work. `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command
@@ -2161,6 +2197,10 @@
   `dist/`, `node_modules/`, and `fixtures/`. The job reads the code and writes only code scanning
   results. Results show up in the Security tab under Code scanning. It is not a required check.
   Gate effect: none.
+- Development dependencies move to fixed versions inside their major version: `vite` 6.4.3 to
+  6.4.6 and `source-map-js` 1.2.1 to 1.2.4, which clears the `npm audit` advisories for them.
+  The advisories for `zod` (a runtime dependency), `vitest`, `tinypool`, and `uuid` need a major
+  version change and are still open. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
   repository GitHub reports as `admin` or `write`. It reads the permission once for each
