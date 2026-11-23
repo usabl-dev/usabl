@@ -176,33 +176,49 @@ describe('axe-compare-summary', () => {
     }, 60_000);
   }
 
-  it('refuses to keep a sweep with no versions of its own when its summary names other versions', async () => {
+  // A summary's header names the install that wrote the summary, which is not always the install
+  // that ran the sweep it kept, so a sweep with no versions of its own cannot be checked at all.
+  it('refuses to keep a sweep with no versions of its own, even under a header that names this install', async () => {
     const harness = join(dir, 'harness.json');
     await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
     const earlier = join(dir, 'earlier.json');
-    await writeFile(earlier, JSON.stringify({ axeCore: 'x', playwright: 'y', fixtures: {}, sweep: SWEEP }));
+    await writeFile(earlier, JSON.stringify({ ...INSTALLED, fixtures: {}, sweep: SWEEP }));
     const out = join(dir, 'summary.json');
 
     const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('not written');
+    expect(result.stderr).toContain('records no versions');
+    expect(result.stderr).toContain('--accept-unversioned-sweep');
     expect(await exists(out)).toBe(false);
   }, 60_000);
 
-  it('keeps a sweep with no versions of its own when its summary names this install, and says usabl was not checked', async () => {
+  it('keeps a sweep with no versions of its own with --accept-unversioned-sweep, and says its versions were not checked', async () => {
     const harness = join(dir, 'harness.json');
     await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
     const earlier = join(dir, 'earlier.json');
-    await writeFile(earlier, JSON.stringify({ axeCore: INSTALLED.axeCore, playwright: INSTALLED.playwright, fixtures: {}, sweep: SWEEP }));
+    await writeFile(earlier, JSON.stringify({ axeCore: 'x', playwright: 'y', fixtures: {}, sweep: SWEEP }));
     const out = join(dir, 'summary.json');
 
-    const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+    const result = await runSummary(['--out', out, '--sweep-from', earlier, '--accept-unversioned-sweep', harness]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('records no usabl version');
+    expect(result.stdout).toContain('records no versions, so they were not checked');
     const summary = JSON.parse(await readFile(out, 'utf8')) as { sweep: unknown };
     expect(summary.sweep).toEqual(SWEEP);
+  }, 60_000);
+
+  it('refuses --accept-unversioned-sweep without --sweep-from', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--accept-unversioned-sweep', harness]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('--accept-unversioned-sweep');
+    expect(await exists(out)).toBe(false);
   }, 60_000);
 
   it('refuses to keep a sweep that holds an unstable comparison', async () => {

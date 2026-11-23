@@ -11,7 +11,9 @@
  * earlier summary in place of `--sweep`, for when only the fixtures were measured again. A kept sweep
  * must come from the same usabl, axe-core, and Playwright versions as this install, and it does not
  * cover browser tests added since it was made. The script writes nothing when any page was unstable,
- * kept sweep included, or when a kept sweep came from other versions.
+ * kept sweep included, or when a kept sweep came from other versions. A kept sweep that records no
+ * versions, from before the sweep part recorded them, is refused unless `--accept-unversioned-sweep`
+ * is passed, and then the output says its versions were not checked.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -55,20 +57,27 @@ interface KeptSweep {
   withDifferences?: Array<{ file: string; test: string; unstable?: boolean }>;
 }
 interface EarlierSummary {
-  axeCore?: string;
-  playwright?: string;
   sweep?: KeptSweep;
 }
 
-function parseArgs(argv: string[]): { out: string; sweep: string | null; sweepFrom: string | null; harness: string[] } {
+function parseArgs(argv: string[]): {
+  out: string;
+  sweep: string | null;
+  sweepFrom: string | null;
+  acceptUnversioned: boolean;
+  harness: string[];
+} {
   let out = '';
   let sweep: string | null = null;
   let sweepFrom: string | null = null;
+  let acceptUnversioned = false;
   const harness: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
     if (arg === '--') continue;
-    if (arg === '--out') {
+    if (arg === '--accept-unversioned-sweep') {
+      acceptUnversioned = true;
+    } else if (arg === '--out') {
       out = argv[++index] ?? '';
     } else if (arg === '--sweep') {
       sweep = argv[++index] ?? null;
@@ -84,7 +93,10 @@ function parseArgs(argv: string[]): { out: string; sweep: string | null; sweepFr
   if (sweep !== null && sweepFrom !== null) {
     throw new Error('axe-compare-summary: pass --sweep or --sweep-from, not both. --sweep-from keeps the sweep part of an earlier summary.');
   }
-  return { out, sweep, sweepFrom, harness };
+  if (acceptUnversioned && sweepFrom === null) {
+    throw new Error('axe-compare-summary: --accept-unversioned-sweep goes with --sweep-from, the sweep it accepts.');
+  }
+  return { out, sweep, sweepFrom, acceptUnversioned, harness };
 }
 
 // The origin is the only part of a frame address that reaches the summary, and test servers listen
@@ -101,7 +113,7 @@ function total(rows: Array<Record<string, number> | undefined>): Record<string, 
   return sum;
 }
 
-const { out, sweep, sweepFrom, harness } = parseArgs(process.argv.slice(2));
+const { out, sweep, sweepFrom, acceptUnversioned, harness } = parseArgs(process.argv.slice(2));
 // One outcome per fixture. A fixture in a later harness file replaces the same fixture from an
 // earlier one, so a page run again on its own, with USABL_AXE_COMPARE_GROUPS, takes the place of
 // its result in the full run.
@@ -136,21 +148,28 @@ if (sweepFrom !== null && earlierSweep === null) {
   process.exit(1);
 }
 // A kept sweep must come from this install, or the header of the new summary would name versions
-// the sweep did not run with. A sweep built before the sweep part recorded its versions is checked
-// against the header of its own summary, which named the versions of the install that built it.
-// That header has no usabl version, so the usabl version of such a sweep is not checked.
+// the sweep did not run with. A sweep built before the sweep part recorded its versions cannot be
+// checked: the header of its summary names the install that wrote the summary, which kept an
+// earlier sweep as it was, so the header can be newer than the sweep. Such a sweep is refused
+// unless --accept-unversioned-sweep says to keep it anyway, and the output then says so.
 let keptNote = '';
-if (sweepFrom !== null && earlier !== null && earlierSweep !== null) {
+if (sweepFrom !== null && earlierSweep !== null) {
   const recorded = earlierSweep.versions;
-  const kept: { [key in keyof Versions]?: string | undefined } = recorded ?? {
-    axeCore: earlier.axeCore,
-    playwright: earlier.playwright,
-  };
+  if (recorded === undefined && !acceptUnversioned) {
+    process.stderr.write(
+      `axe-compare-summary: not written. The sweep in ${sweepFrom} records no versions, so usabl cannot tell ` +
+        'whether it ran on this install. Run the sweep again on this install and pass its log with --sweep, or pass ' +
+        '--accept-unversioned-sweep to keep it with its versions unchecked.\n',
+    );
+    process.exit(1);
+  }
   const names: Record<keyof Versions, string> = { usabl: 'usabl', axeCore: 'axe-core', playwright: 'Playwright' };
-  const differ = (Object.keys(names) as Array<keyof Versions>)
-    .filter((key) => recorded !== undefined || key !== 'usabl')
-    .filter((key) => kept[key] !== installed[key])
-    .map((key) => `${names[key]} ${String(kept[key] ?? 'not recorded')} there, ${installed[key]} here`);
+  const differ =
+    recorded === undefined
+      ? []
+      : (Object.keys(names) as Array<keyof Versions>)
+          .filter((key) => recorded[key] !== installed[key])
+          .map((key) => `${names[key]} ${recorded[key]} there, ${installed[key]} here`);
   if (differ.length > 0) {
     process.stderr.write(
       `axe-compare-summary: not written. The sweep in ${sweepFrom} was made with other versions than this install ` +
@@ -171,7 +190,7 @@ if (sweepFrom !== null && earlier !== null && earlierSweep !== null) {
     process.exit(1);
   }
   if (recorded === undefined) {
-    keptNote = ' (it records no usabl version, so that was not checked)';
+    keptNote = ' (it records no versions, so they were not checked)';
   }
 }
 
