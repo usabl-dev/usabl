@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises';
 import type { UsablConfig } from '../contracts/index.js';
 import { configUrlWarningsByUrl, parseUsablConfig } from './config.js';
-import { operatorText } from './config-error.js';
+import { operatorPathText } from './config-error.js';
 import { uiFileGlobsRefusal } from './ui-file-globs.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
@@ -38,14 +38,14 @@ export interface LoadConfigOptions {
 function missingConfigMessage(path: string, caller: 'cli' | 'dev-server'): string {
   if (caller === 'dev-server') {
     return (
-      `${operatorText(path)} not found. The usabl dev server plugin reads its config from that path, which it ` +
+      `${operatorPathText(path)} not found. The usabl dev server plugin reads its config from that path, which it ` +
       'builds from its cwd and configPath options. Run "usabl init" in that folder to draft it, or set cwd or ' +
       'configPath in the plugin options to where the config is.'
     );
   }
   return path === DEFAULT_CONFIG_PATH
     ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
-    : `${operatorText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`;
+    : `${operatorPathText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`;
 }
 
 export async function loadConfig(

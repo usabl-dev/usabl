@@ -3,13 +3,13 @@
  * so the readiness budget is operator config. A bad value has to be refused while parsing, which
  * is before the run builds deps or opens a browser.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/cli.js';
 import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
-import { operatorText } from '../../src/intake/config-error.js';
+import { operatorPathText } from '../../src/intake/config-error.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
@@ -1062,11 +1062,41 @@ describe('loadConfig', () => {
     const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
     const path = join(dir, 'other.json');
     const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
-    // The message quotes the path as operatorText prints it, which caps a long path. So the check
-    // holds for a temp folder of any length.
-    expect(message).toContain(`${operatorText(path)} not found`);
+    // The message quotes the path as operatorPathText prints it, which shortens a long path from the
+    // middle. So the check holds for a temp folder of any length.
+    expect(message).toContain(`${operatorPathText(path)} not found`);
     expect(message).toContain('Check the path given to --config');
     expect(message).not.toContain('or pass --config <path>');
+  });
+
+  // A long --config path was cut at the end, so the message lost the file name. It now keeps the
+  // start of the path and the file name, and marks where it was shortened.
+  describe('a long --config path', () => {
+    const longFolder = 'f'.repeat(150);
+
+    it('keeps the start and the file name when the file is missing', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+      const path = join(dir, longFolder, 'team-config.json');
+      const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
+      expect(message).toContain(`${operatorPathText(path)} not found`);
+      expect(message).toContain(`${path.slice(0, 10)}`);
+      expect(message).toContain('team-config.json not found');
+      expect(message).toContain('...');
+      expect(message).not.toContain('(truncated)');
+    });
+
+    it('keeps the start and the file name when uiFileGlobs is empty', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+      await mkdir(join(dir, longFolder));
+      const path = join(dir, longFolder, 'team-config.json');
+      await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+      const message = await loadConfig(path, () => {}, { docsManifestPath: join(dir, 'usabl.docs.json') }).catch(
+        (err: Error) => err.message,
+      );
+      expect(message).toContain('team-config.json has an empty uiFileGlobs list');
+      expect(message).toContain(`${path.slice(0, 10)}`);
+      expect(message).not.toContain('(truncated)');
+    });
   });
 
   // A config with no UI globs reads no change as a UI change, so every run said nothing to check
@@ -1078,7 +1108,7 @@ describe('loadConfig', () => {
     const docsManifest = join(dir, 'usabl.docs.json');
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/uiFileGlobs/);
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(
-      `${operatorText(path)} has an empty uiFileGlobs list`,
+      `${operatorPathText(path)} has an empty uiFileGlobs list`,
     );
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/usabl\.docs\.json/);
   });
