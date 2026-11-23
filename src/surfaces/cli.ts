@@ -615,13 +615,18 @@ export function localApprovalNextSteps(
   return lines;
 }
 
-export function projectCli(result: Result): { exitCode: number; text: string; json: string } {
+export function projectCli(
+  result: Result,
+  // A note for the verdict line's brackets, in usabl's own words, such as the one for a check
+  // that read the branch's own policy. It changes the text only, never the verdict or the JSON.
+  options: { verdictNote?: string } = {},
+): { exitCode: number; text: string; json: string } {
   // Scrub before any egress so page text and credential-shaped values cannot hijack output. This
   // text and this JSON are what CI publishes, so URLs also lose their query and fragment.
   const safe = scrubPublishedResult(result);
   return {
     exitCode: safe.exitCode,
-    text: formatSummary(safe),
+    text: formatSummary(safe, options.verdictNote),
     json: JSON.stringify(safe, null, 2),
   };
 }

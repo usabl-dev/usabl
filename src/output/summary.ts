@@ -409,11 +409,14 @@ function renderFindingList(findings: Finding[], fixLabel: string): string[] {
  * Data lines (findings, gaps, paths) are printed whole rather than wrapped to 80 columns, so an
  * operator can grep the output for a rule, a URL, or a file and copy a line in one piece. The
  * lines usabl authors itself stay within 80 columns.
+ *
+ * `verdictNote` is usabl's own text for the verdict line's brackets, such as the note for a check
+ * that read the branch's own policy. It changes no verdict.
  */
-export function formatSummary(result: Result): string {
+export function formatSummary(result: Result, verdictNote?: string): string {
   const lines: string[] = [];
   const verdict = describeVerdict(result);
-  lines.push(`usabl: ${formatVerdictLine(verdict)}`);
+  lines.push(`usabl: ${formatVerdictLine(verdict, verdictNote)}`);
   lines.push(`  ${verdict.meaning}`);
   if (verdict.exitCode === 4) {
     lines.push('  next: run usabl check again, or check the change by hand.');

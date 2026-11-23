@@ -19,7 +19,7 @@ import {
   unrecognizedRunLine,
 } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
-import type { CheckCommand } from './stop-hook-scope.js';
+import { POLICY_FROM_BRANCH_VERDICT_NOTE, type CheckCommand } from './stop-hook-scope.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -38,6 +38,19 @@ export interface HookContext {
   // that a file committed on the branch still counts. Absent means the last commit was the
   // reference.
   policyFromStartingCommit?: boolean;
+  // True when the stop read the branch's own policy, because the branch sets usabl up: neither the
+  // trusted branch nor the starting commit has a config. A VERIFIED or idle line then says so in
+  // its brackets, so the line alone never reads as a pass under approved policy.
+  policyFromBranch?: boolean;
+}
+
+/** The notes a VERIFIED or idle line carries in its brackets, joined, or undefined for none. */
+function passNotes(notes: { sessionDriftChecked?: boolean; policyFromBranch?: boolean }): string | undefined {
+  const parts = [
+    ...(notes.sessionDriftChecked === false ? [DRIFT_NOT_CHECKED] : []),
+    ...(notes.policyFromBranch === true ? [POLICY_FROM_BRANCH_VERDICT_NOTE] : []),
+  ];
+  return parts.length === 0 ? undefined : parts.join(', ');
 }
 
 /**
@@ -314,6 +327,9 @@ export interface StoredReceiptPinState {
   // False when this stop did not compare pins it should have, for example because the pin store
   // refused. The line then carries the same note a full run's allow line does.
   sessionDriftChecked: boolean;
+  // True when the stop read the branch's own policy because the branch sets usabl up. The line
+  // then says so, as a full run's line does. Absent means false.
+  policyFromBranch?: boolean;
 }
 
 // A receipt records no known limits, so a run verified with known limits would read on the fast
@@ -339,7 +355,8 @@ export function formatStoredReceiptAllow(
   sourceTree: unknown,
   pins: StoredReceiptPinState = { pinsCompared: false, sessionDriftChecked: true },
 ): string {
-  const note = pins.sessionDriftChecked ? '' : `, ${DRIFT_NOT_CHECKED}`;
+  const notes = passNotes(pins);
+  const note = notes === undefined ? '' : `, ${notes}`;
   const pinClause = pins.pinsCompared ? ' Guarded policy files match the session pins.' : '';
   const line =
     `VERIFIED (exit 0, stored receipt, not re-scanned${note}): this result comes from a stored receipt. ` +
@@ -413,7 +430,7 @@ export function evaluateStopDecision(
   config?: UsablConfig,
 ): StopDecision {
   const safe = scrubResult(result);
-  const passNote = ctx.sessionDriftChecked === false ? DRIFT_NOT_CHECKED : undefined;
+  const passNote = passNotes(ctx);
   const check = ctx.checkCommand ?? 'usabl check';
 
   // Diverged guarded policy blocks whatever the exit code. The blocking verdicts carry it in their

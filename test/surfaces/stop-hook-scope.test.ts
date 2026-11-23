@@ -599,7 +599,61 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
       'merge-base': ok(COMMIT),
       'is-ancestor': { code: 0, stdout: '', stderr: '' },
     });
-    await expect(findStartingCommit(git)).resolves.toEqual({ kind: 'found', branch: 'origin/main', commit: COMMIT });
+    await expect(findStartingCommit(git)).resolves.toEqual({
+      kind: 'found',
+      branch: 'origin/main',
+      commit: COMMIT,
+      policy: 'starting-commit',
+    });
+  });
+
+  // Where the config is decides where policy is read. The config lookups are the rev-parse calls
+  // that name a path: exit 0 means the commit holds the file, exit 1 means it does not.
+  function withConfigAt(answers: { start: ScopeGitResult; tip: ScopeGitResult }): ScopeGit {
+    const TIP = 'd'.repeat(40);
+    return async (args) => {
+      if (args[0] === 'symbolic-ref') return ok('refs/remotes/origin/main');
+      if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { code: 0, stdout: '', stderr: '' } : ok(COMMIT);
+      const target = args.at(-1) ?? '';
+      if (target === `${COMMIT}:usabl.config.json`) return answers.start;
+      if (target === `${TIP}:usabl.config.json`) return answers.tip;
+      return ok(TIP);
+    };
+  }
+
+  it('reads policy from the branch when neither the starting commit nor the trusted branch holds a config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: no, tip: no }))).resolves.toMatchObject({
+      kind: 'found',
+      policy: 'branch-sets-usabl-up',
+    });
+  });
+
+  it('reads a branch older than the setup when only the trusted branch holds a config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: no, tip: ok('') }))).resolves.toMatchObject({
+      kind: 'found',
+      policy: 'branch-older-than-setup',
+    });
+  });
+
+  it('keeps the starting commit as the policy reference when it holds a config', async () => {
+    for (const tip of [ok(''), no]) {
+      await expect(findStartingCommit(withConfigAt({ start: ok(''), tip }))).resolves.toMatchObject({
+        kind: 'found',
+        policy: 'starting-commit',
+      });
+    }
+  });
+
+  it('reads a config lookup that fails as a git failure, never as no config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: broken, tip: no }))).resolves.toMatchObject({
+      kind: 'not-found',
+      problem: 'git-failed',
+      detail: 'fatal: unable to read refs',
+    });
+    await expect(findStartingCommit(withConfigAt({ start: no, tip: broken }))).resolves.toMatchObject({
+      kind: 'not-found',
+      problem: 'git-failed',
+    });
   });
 });
 

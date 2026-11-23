@@ -504,3 +504,372 @@ describe('policy changed on the branch since the starting commit', { timeout: RE
     expect(stopped.stderr).toContain('Note: usabl found no trusted branch to compare this branch with');
   });
 });
+
+// What the verdict line of a stop or a check carries when the policy came from the branch.
+const SETUP_VERDICT = 'policy from this branch, not approved yet';
+const SETUP_NOTE = 'Note: this branch sets usabl up.';
+const OLD_BRANCH = 'usabl is set up on the trusted branch but not on this branch';
+const OLD_BRANCH_NEXT = 'Next: update this branch from the trusted branch (merge it or rebase onto it), then';
+const REMOVED = 'this branch removes usabl.config.json';
+
+function stopInput(options: { active?: boolean; session?: string } = {}): string {
+  return JSON.stringify({
+    stop_hook_active: options.active === true,
+    ...(options.session === undefined ? {} : { session_id: options.session }),
+  });
+}
+
+// A stop with a session id, so the session pins are compared and the verdict line carries no
+// note about them. The tests below use it as their stop.
+function stopInSession(
+  input = stopInput({ session: 'session-one' }),
+  pins: ReturnType<typeof memoryPinStore> = memoryPinStore(),
+): ReturnType<typeof stop> {
+  return stop(input, pins);
+}
+
+// main with no usabl config, recorded as the trusted branch, and a branch that sets usabl up.
+async function setUpOnBranch(): Promise<void> {
+  git('rm', '-q', 'usabl.config.json');
+  git('commit', '-q', '-m', 'main has no usabl config yet');
+  recordTrustedBranch();
+  git('switch', '-q', '-c', 'feature');
+  await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+  await write('src/App.tsx', 'export const App = 2;\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'set usabl up');
+}
+
+// A branch made before usabl was set up on main. main sets usabl up after the branch left it.
+async function branchOlderThanSetup(options: { ownConfig: boolean }): Promise<void> {
+  git('rm', '-q', 'usabl.config.json');
+  git('commit', '-q', '-m', 'main has no usabl config yet');
+  git('switch', '-q', '-c', 'feature');
+  await write('src/App.tsx', 'export const App = 2;\n');
+  if (options.ownConfig) {
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+  }
+  git('add', '-A');
+  git('commit', '-q', '-m', 'change the app');
+  git('switch', '-q', 'main');
+  await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'set usabl up on main');
+  recordTrustedBranch();
+  git('switch', '-q', 'feature');
+}
+
+async function hasReceipt(): Promise<boolean> {
+  try {
+    await readFile(join(repo, '.usabl', 'receipt.json'), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('a branch that sets usabl up', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const stop = stopInSession;
+
+  it('is scanned at every stop, and the verdict line and a note say the policy is not approved yet', async () => {
+    await setUpOnBranch();
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.scanned).toEqual(['home']);
+    expect(stopped.stderr.startsWith(`VERIFIED (exit 0, ${SETUP_VERDICT}): the gate verified this change.`)).toBe(true);
+    expect(stopped.stderr).toContain(SETUP_NOTE);
+    expect(stopped.stderr).toContain('a code owner must approve it');
+    expect(stopped.stderr).not.toContain('APPROVAL REQUIRED');
+    // An allow with a note is shown to the person, so the note is never only on stderr.
+    expect(stopped.stdout).toContain(SETUP_VERDICT);
+    expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
+
+    // The next stop answers from the stored receipt, and its line carries the same words.
+    const next = await stop();
+    expect(next.scanned).toEqual([]);
+    expect(next.stderr.startsWith(`VERIFIED (exit 0, stored receipt, not re-scanned, ${SETUP_VERDICT})`)).toBe(true);
+    expect(next.stderr).toContain(SETUP_NOTE);
+  });
+
+  it('reads a barrier on the changed screen as a regression, not as approval required', async () => {
+    await setUpOnBranch();
+    state.drafts = { home: [homeBarrier] };
+
+    const stopped = await stop();
+    const reason = blockReason(stopped);
+    expect(reason).not.toBeNull();
+    expect(reason).toContain('REGRESSION');
+    expect(reason).not.toContain('APPROVAL REQUIRED');
+    expect(stopped.stderr).toContain(SETUP_NOTE);
+  });
+
+  it('is checked the same way by usabl check --branch-scope', async () => {
+    await setUpOnBranch();
+
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(0);
+    expect(ran.scanned).toEqual(['home']);
+    expect(ran.stdout.split('\n')[0]).toContain(`VERIFIED (exit 0, ${SETUP_VERDICT})`);
+    expect(ran.stderr).toContain(SETUP_NOTE);
+    expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
+  });
+
+  // Before the first commit of the config, the guard compares the working tree with the last
+  // commit, as it does with no trusted branch, so the new config waits for approval.
+  it('holds a config that is not committed yet for approval, as before', async () => {
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'main has no usabl config yet');
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    const stopped = await stop();
+    const reason = blockReason(stopped);
+    expect(reason).toContain('APPROVAL REQUIRED');
+    expect(reason).toContain('guarded files: usabl.config.json');
+    expect(stopped.stderr).toContain(SETUP_NOTE);
+  });
+
+  it('a branch with a config at the starting commit has no setup note', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+
+    const stopped = await stop();
+    expect(stopped.stderr.startsWith('VERIFIED (exit 0): the gate verified this change.')).toBe(true);
+    expect(stopped.stderr).not.toContain(SETUP_VERDICT);
+    expect(stopped.stderr).not.toContain(SETUP_NOTE);
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(0);
+    expect(ran.stdout).not.toContain(SETUP_VERDICT);
+    expect(ran.stderr).not.toContain(SETUP_NOTE);
+  });
+});
+
+describe('a branch made before usabl was set up on the trusted branch', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const stop = stopInSession;
+
+  for (const ownConfig of [false, true]) {
+    const label = ownConfig ? 'with a config of its own' : 'with no config';
+    it(`blocks once ${label}, then lets the continuation through with the same notice`, async () => {
+      await branchOlderThanSetup({ ownConfig });
+
+      const stopped = await stop();
+      const reason = blockReason(stopped);
+      expect(reason).not.toBeNull();
+      expect(reason?.startsWith('NOT verified')).toBe(true);
+      expect(reason).toContain(OLD_BRANCH);
+      expect(reason).toContain(`${OLD_BRANCH_NEXT} stop again.`);
+      expect(stopped.scanned).toEqual([]);
+      expect(stopped.stderr).not.toContain('usabl is not configured here');
+
+      const again = await stop(stopInput({ active: true }));
+      expect(blockReason(again)).toBeNull();
+      expect(again.stderr.startsWith('NOT verified')).toBe(true);
+      expect(again.stderr).toContain(OLD_BRANCH);
+      expect(again.stderr).toContain('continuation already active');
+      expect(again.scanned).toEqual([]);
+    });
+  }
+
+  it('usabl check --branch-scope checks nothing and exits 4', async () => {
+    await branchOlderThanSetup({ ownConfig: true });
+
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(4);
+    expect(ran.scanned).toEqual([]);
+    expect(ran.stdout).toBe('');
+    expect(ran.stderr).toContain(OLD_BRANCH);
+    expect(ran.stderr).toContain(`${OLD_BRANCH_NEXT} run usabl check --branch-scope again.`);
+    expect(await hasReceipt()).toBe(false);
+  });
+
+  it('is checked as usual once the branch is updated from the trusted branch', async () => {
+    await branchOlderThanSetup({ ownConfig: false });
+    git('merge', '-q', '--no-edit', 'main');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.scanned).toEqual(['home']);
+    expect(stopped.stderr.startsWith('VERIFIED (exit 0): the gate verified this change.')).toBe(true);
+  });
+
+  // A receipt from a stop on a setup branch binds the starting commit, which has no config. When
+  // the trusted branch gains one later, that receipt must not answer: the branch is now older than
+  // the setup.
+  it('a receipt from before the trusted branch was set up does not answer the stop', async () => {
+    await setUpOnBranch();
+    expect((await stop()).stderr.startsWith(`VERIFIED (exit 0, ${SETUP_VERDICT})`)).toBe(true);
+    git('switch', '-q', 'main');
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'set usabl up on main');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain(OLD_BRANCH);
+    expect(stopped.stderr).not.toContain('stored receipt');
+  });
+});
+
+// A config at the starting commit that is gone from the working tree and the last commit is a
+// policy change, as CI reads it, never a repository that does not use usabl.
+describe('a config removed on the branch', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const stop = stopInSession;
+
+  async function removeOnBranch(): Promise<void> {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    git('rm', '-q', 'usabl.config.json');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'remove usabl');
+  }
+
+  it('reads approval required at the first stop of a session, with a plain next step', async () => {
+    await removeOnBranch();
+
+    const stopped = await stop(stopInput({ session: 'session-one' }));
+    const reason = blockReason(stopped);
+    expect(reason).not.toBeNull();
+    expect(reason?.startsWith('NOT verified - approval required')).toBe(true);
+    expect(reason).toContain(REMOVED);
+    expect(reason).toContain('restore usabl.config.json as it is at that commit');
+    expect(reason).toContain('code owner');
+    expect(stopped.stderr).not.toContain('usabl is not configured here');
+    expect(stopped.scanned).toEqual([]);
+
+    const again = await stop(stopInput({ session: 'session-one', active: true }));
+    expect(blockReason(again)).toBeNull();
+    expect(again.stderr).toContain(REMOVED);
+    expect(again.stderr).toContain('continuation already active');
+  });
+
+  it('reads approval required in a new session, and with no session id', async () => {
+    await removeOnBranch();
+    for (const input of [stopInput({ session: 'session-two' }), stopInput()]) {
+      const stopped = await stop(input);
+      expect(blockReason(stopped)).toContain(REMOVED);
+      expect(stopped.stderr).not.toContain('usabl is not configured here');
+    }
+  });
+});
+
+// What a session could do to make a normal branch look like a branch that sets usabl up. None of
+// them reaches a VERIFIED line that does not say the policy came from the branch.
+describe('a session cannot make a configured branch read as a setup branch', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const stop = stopInSession;
+
+  // main: a commit with no config, then the config. The branch waives the barrier it adds.
+  async function configuredBranchWithWaiver(): Promise<string> {
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'before usabl');
+    const beforeSetup = git('rev-parse', 'HEAD').trim();
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'set usabl up');
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    state.drafts = { home: [homeBarrier] };
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the app and waive its barrier');
+    return beforeSetup;
+  }
+
+  it('blocks the waiver for approval when nothing is moved', async () => {
+    await configuredBranchWithWaiver();
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain('APPROVAL REQUIRED');
+    expect(stopped.stderr).not.toContain(SETUP_NOTE);
+  });
+
+  it('origin/HEAD pointed at an origin branch from before the setup gives the setup notice on the verdict line', async () => {
+    const beforeSetup = await configuredBranchWithWaiver();
+    git('update-ref', 'refs/remotes/origin/old', beforeSetup);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/old');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.stderr.startsWith(`VERIFIED (exit 0, ${SETUP_VERDICT})`)).toBe(true);
+    expect(stopped.stderr).toContain(SETUP_NOTE);
+  });
+
+  it('origin/main moved back to before the setup gives the setup notice on the verdict line', async () => {
+    const beforeSetup = await configuredBranchWithWaiver();
+    git('update-ref', 'refs/remotes/origin/main', beforeSetup);
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toBeNull();
+    expect(stopped.stderr.startsWith(`VERIFIED (exit 0, ${SETUP_VERDICT})`)).toBe(true);
+    expect(stopped.stderr).toContain(SETUP_NOTE);
+  });
+
+  it('origin/HEAD deleted keeps the no trusted branch path and its note', async () => {
+    await configuredBranchWithWaiver();
+    git('symbolic-ref', '-d', 'refs/remotes/origin/HEAD');
+
+    const stopped = await stop();
+    expect(stopped.stderr).not.toContain(SETUP_NOTE);
+    expect(stopped.stderr).not.toContain(SETUP_VERDICT);
+    expect(stopped.stderr).toContain('Note: usabl found no trusted branch to compare this branch with');
+  });
+
+  it('origin/HEAD pointed at a branch that does not exist is a gap', async () => {
+    await configuredBranchWithWaiver();
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain('usabl could not find where this branch left the trusted branch');
+    expect(stopped.scanned).toEqual([]);
+  });
+
+  it('a config deleted from the working tree only blocks', async () => {
+    await configuredBranchWithWaiver();
+    await rm(join(repo, 'usabl.config.json'));
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain('missing from the working tree');
+    expect(stopped.scanned).toEqual([]);
+  });
+
+  it('a config removed in a commit blocks for approval', async () => {
+    await configuredBranchWithWaiver();
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'remove usabl');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain(REMOVED);
+  });
+
+  it('a config removed in a commit with origin/HEAD deleted is never read as verified', async () => {
+    await configuredBranchWithWaiver();
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'remove usabl');
+    git('symbolic-ref', '-d', 'refs/remotes/origin/HEAD');
+
+    const stopped = await stop();
+    expect(stopped.stderr.startsWith('NOT verified')).toBe(true);
+    expect(stopped.stderr).not.toContain('VERIFIED (exit 0');
+    expect(stopped.scanned).toEqual([]);
+  });
+
+  it('a branch rebuilt on a commit from before the setup reads as older than the setup', async () => {
+    const beforeSetup = await configuredBranchWithWaiver();
+    git('switch', '-q', '-c', 'rebuilt', beforeSetup);
+    await write('src/App.tsx', 'export const App = 2;\n');
+    await write('usabl.config.json', JSON.stringify(config, null, 2) + '\n');
+    await write('.usabl-waivers.json', JSON.stringify({ version: 1, waivers: [homeWaiver] }, null, 2) + '\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'the same change on the old base');
+
+    const stopped = await stop();
+    expect(blockReason(stopped)).toContain(OLD_BRANCH);
+    expect(stopped.scanned).toEqual([]);
+  });
+});

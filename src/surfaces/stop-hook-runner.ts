@@ -32,6 +32,7 @@ import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import {
   checkCommandFor,
   findStartingCommit,
+  olderThanSetupLines,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
   scopeGapNextStep,
@@ -346,13 +347,16 @@ function olderPinsMessage(pinPath: string, continuation: boolean): string {
 const CONFIG_FILE = 'usabl.config.json';
 
 /** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
-type ConfigProblem = 'differs' | 'missing' | 'unreadable' | 'unparseable' | 'no-ui-globs';
+type ConfigProblem = 'differs' | 'missing' | 'removed' | 'unreadable' | 'unparseable' | 'no-ui-globs';
 
 const CONFIG_PROBLEM_LINES: Record<ConfigProblem, string> = {
   differs:
     'usabl.config.json in the working tree differs from the last commit, so usabl did not parse it and checked nothing on this stop.',
   missing:
     'usabl.config.json is in the last commit but missing from the working tree, so usabl checked nothing on this stop.',
+  removed:
+    'usabl.config.json is in the commit where this branch left the trusted branch, but it is missing from the working tree and from the last commit, ' +
+    'so this branch removes usabl.config.json. CI reads that as a policy change, and usabl checked nothing on this stop.',
   unreadable:
     'usabl.config.json in the working tree cannot be read (the error is under "error" in the untrusted text below), so usabl checked nothing on this stop.',
   unparseable:
@@ -369,6 +373,10 @@ const UNPARSEABLE_CLEARS =
   'This clears when usabl.config.json parses and matches the last commit. A committed config is fixed on a pull request that a code owner reviews. ' +
   'usabl init --force drafts a valid one, and it overwrites usabl.config.json and usabl.routes.json.';
 const CHANGED_NEXT = 'Next: tell the user that usabl.config.json changed and needs approval on the pull request.';
+// A config removed on the branch is cleared by putting it back, or by approval of the removal.
+const REMOVED_NEXT =
+  'Next: tell the user that this branch removes usabl.config.json. To keep usabl, restore usabl.config.json as it is at that commit. ' +
+  'To remove usabl, a code owner approves the removal on the pull request.';
 // A config with no UI globs parses, so it has its own next step: the list needs filling in.
 const NO_UI_GLOBS_NEXT = 'Next: tell the user that uiFileGlobs in usabl.config.json is empty and needs the files that render the UI.';
 const NO_UI_GLOBS_CLEARS =
@@ -416,6 +424,8 @@ function configBlockMessage(
     lines.push(`${UNPARSEABLE_NEXT} ${doNotEdit}`, UNPARSEABLE_CLEARS);
   } else if (problem === 'no-ui-globs') {
     lines.push(`${NO_UI_GLOBS_NEXT} ${doNotEdit}`, NO_UI_GLOBS_CLEARS);
+  } else if (problem === 'removed') {
+    lines.push(REMOVED_NEXT, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   } else {
     lines.push(`${CHANGED_NEXT} ${doNotEdit}`, APPROVAL_REQUIRED_HOW_IT_CLEARS);
   }
@@ -460,9 +470,49 @@ async function guarded<T>(step: () => Promise<T>): Promise<T> {
 }
 
 // The note for a repository that has no usabl config in the working tree or in the last commit.
-const NOT_CONFIGURED_MESSAGE =
-  'NOT verified - usabl is not configured here: this repository has no usabl.config.json in the working tree or in the last commit, so usabl checked nothing on this stop. ' +
+const NOT_CONFIGURED_HEAD =
+  'NOT verified - usabl is not configured here: this repository has no usabl.config.json in the working tree or in the last commit, so usabl checked nothing on this stop.';
+const NOT_CONFIGURED_NEXT =
   'Next: run usabl init to set usabl up in this repository, or ignore this note if the repository does not use usabl.';
+const NOT_CONFIGURED_MESSAGE = `${NOT_CONFIGURED_HEAD} ${NOT_CONFIGURED_NEXT}`;
+
+// What the not-configured note adds when the hook found no starting commit to compare with, so it
+// could not tell whether the trusted branch has a config this branch removed.
+const NOT_CONFIGURED_UNCOMPARED_MESSAGE =
+  `${NOT_CONFIGURED_HEAD} usabl found no starting commit on a trusted branch to compare with, so it could not tell whether ` +
+  `the trusted branch has a usabl.config.json that this branch removed. ${NOT_CONFIGURED_NEXT}`;
+
+/**
+ * The message for a branch that left the trusted branch before usabl was set up there. It blocks
+ * once, and lets one continuation through, as the drift block does. The branch name comes from the
+ * repository, so it goes inside the frame.
+ */
+function olderThanSetupMessage(branch: string, continuation: boolean): string {
+  const text = olderThanSetupLines('nothing on this stop', 'stop again');
+  const lines = [`NOT verified - ${text.head}`];
+  if (continuation) {
+    lines.push('usabl let this stop through without blocking again (continuation already active).');
+  }
+  lines.push(text.next, APPROVAL_REQUIRED_HUMAN_LEVER);
+  return framedMessage(lines, [`trusted branch: ${branch}`]);
+}
+
+async function emitOlderThanSetup(
+  ports: StopHookRunnerPorts,
+  input: StopHookInput,
+  options: StopHookOptions,
+  branch: string,
+  notices: string[] = [],
+): Promise<void> {
+  if (input.stopHookActive) {
+    await emitProtocolAllow(ports, { message: olderThanSetupMessage(branch, true), notices }, options);
+    return;
+  }
+  await emitProtocolBlock(ports, olderThanSetupMessage(branch, false), options);
+  for (const notice of notices) {
+    await writeStderr(ports, notice);
+  }
+}
 
 /**
  * The note for a stop that started in a folder outside any git work tree. The hook could not find
@@ -495,7 +545,9 @@ type ConfigStep =
  * byte for byte, or the stop blocks as approval required: a corrupt or edited config used to throw
  * at parse time and end in an allow with "stop hook error". When neither place holds a config,
  * usabl is not set up here, unless this session already recorded pins for this root: then the
- * config was removed and committed during the session, and runStopHook treats it as drift.
+ * config was removed and committed during the session, and runStopHook treats it as drift. With no
+ * such pins, runStopHook still asks the trusted branch, so a config removed and committed before
+ * the first stop is not read as "not configured" (see notConfiguredStep).
  *
  * A config only in the working tree goes on to the run. When HEAD exists, this is a new,
  * uncommitted setup: the guard reports the config as a changed guarded file, and the run ends
@@ -553,6 +605,32 @@ async function earlierSessionPins(
     return { status: 'refused', reason: stored.reason, fix: stored.fix };
   }
   return { status: stored.status };
+}
+
+/**
+ * What a stop with no config in the working tree or the last commit finds on the trusted branch.
+ * `removed`: the starting commit holds a config, so this branch removed it. `older-than-setup`:
+ * only the tip of the trusted branch holds one. `not-configured`: neither holds one, so usabl is
+ * not set up here. `uncompared`: the hook found no starting commit, or the lookup failed, so it
+ * could not tell. Ports a test builds without the lookup read as `not-configured`, as before.
+ */
+async function notConfiguredStep(
+  ports: StopHookRunnerPorts,
+): Promise<{ kind: 'removed' | 'not-configured' | 'uncompared' } | { kind: 'older-than-setup'; branch: string }> {
+  if (ports.findStartingCommit === undefined) {
+    return { kind: 'not-configured' };
+  }
+  const start = await ports.findStartingCommit().catch(() => null);
+  if (start === null || start.kind !== 'found') {
+    return { kind: 'uncompared' };
+  }
+  if (start.policy === 'starting-commit') {
+    return { kind: 'removed' };
+  }
+  if (start.policy === 'branch-older-than-setup') {
+    return { kind: 'older-than-setup', branch: start.branch };
+  }
+  return { kind: 'not-configured' };
 }
 
 async function verifyStoredReceipt(
@@ -893,8 +971,17 @@ async function emitConfigBlock(
  * check, so it checks nothing and blocks.
  */
 type StopScope =
-  | { kind: 'scan'; runOptions: RunOptions; baseRevision: string | null; note: string | null }
-  | Extract<BranchScope, { kind: 'gap' }>;
+  | {
+      kind: 'scan';
+      runOptions: RunOptions;
+      baseRevision: string | null;
+      // The commit policy is read and guarded at, or null for the working tree compared with the
+      // last commit.
+      policyRef: string | null;
+      policyFromBranch: boolean;
+      note: string | null;
+    }
+  | Extract<BranchScope, { kind: 'gap' } | { kind: 'older-than-setup' }>;
 
 /**
  * What this stop checks: what CI will check. The scope comes from resolveBranchScope, the same
@@ -905,22 +992,34 @@ type StopScope =
  * pull request: the guard compares the working tree with it, and the floor, the waivers, and a
  * changed config are read from it. A policy change committed on the branch is then a guarded
  * change, as it is in CI. Without one, the run keeps the last commit as the reference.
+ *
+ * On a branch that sets usabl up, neither the starting commit nor the trusted branch has a config,
+ * so there is no trusted policy to read. The run checks the same changes, reads the branch's own
+ * policy, and compares it with the last commit, as with no trusted branch, and the stop says on
+ * its verdict line that this policy is not approved yet. CI still asks a code owner to approve it.
  */
 async function stopScope(ports: StopHookRunnerPorts, deps: Deps): Promise<StopScope> {
   if (ports.findStartingCommit === undefined) {
-    return { kind: 'scan', runOptions: {}, baseRevision: null, note: null };
+    return { kind: 'scan', runOptions: {}, baseRevision: null, policyRef: null, policyFromBranch: false, note: null };
   }
   const scope = await resolveBranchScope(ports.findStartingCommit, deps.git);
-  if (scope.kind === 'gap') {
+  if (scope.kind !== 'scan') {
     return scope;
   }
+  const runOptions: RunOptions =
+    scope.changedFiles === undefined || scope.baseRevision === null
+      ? {}
+      : {
+          changedFiles: scope.changedFiles,
+          baseRevision: scope.baseRevision,
+          ...(scope.policyRef === null ? {} : { trustedRef: scope.policyRef }),
+        };
   return {
     kind: 'scan',
-    runOptions:
-      scope.changedFiles === undefined || scope.baseRevision === null
-        ? {}
-        : { changedFiles: scope.changedFiles, baseRevision: scope.baseRevision, trustedRef: scope.baseRevision },
+    runOptions,
     baseRevision: scope.baseRevision,
+    policyRef: scope.policyRef,
+    policyFromBranch: scope.policyFromBranch,
     note: scope.note,
   };
 }
@@ -1196,11 +1295,22 @@ async function runStopChecks(
         await emitProtocolBlock(ports, driftMessage([CONFIG_FILE], false), options);
         return 0;
       }
-      await emitProtocolAllow(
-        ports,
-        { message: NOT_CONFIGURED_MESSAGE, notices: earlier.status === 'refused' ? [pinsRefused(earlier).message] : [] },
-        options,
-      );
+      const pinNotes = earlier.status === 'refused' ? [pinsRefused(earlier).message] : [];
+      // Without pins, the trusted branch tells whether usabl is set up. A config at the starting
+      // commit that this branch no longer has is a policy change, as CI reads it, and blocks as
+      // approval required. A config only on the trusted branch means the branch is older than the
+      // setup. See notConfiguredStep.
+      const known = await notConfiguredStep(ports);
+      if (known.kind === 'removed') {
+        await emitConfigBlock(ports, input, options, 'removed', null);
+        return 0;
+      }
+      if (known.kind === 'older-than-setup') {
+        await emitOlderThanSetup(ports, input, options, known.branch, pinNotes);
+        return 0;
+      }
+      const message = known.kind === 'uncompared' ? NOT_CONFIGURED_UNCOMPARED_MESSAGE : NOT_CONFIGURED_MESSAGE;
+      await emitProtocolAllow(ports, { message, notices: pinNotes }, options);
       return 0;
     }
     if (step.kind === 'block') {
@@ -1329,13 +1439,18 @@ async function runStopChecks(
       }
       return 0;
     }
+    if (scope.kind === 'older-than-setup') {
+      await emitOlderThanSetup(ports, input, options, scope.branch, pinNotices(pinNotice));
+      return 0;
+    }
     state.checkCommand = checkCommandFor(scope.baseRevision);
     const checkCommand = state.checkCommand;
     // The session pins and the guard above compare with the last commit, so a policy change
     // committed on the branch before the first stop passes both. CI compares policy with the base
     // of the pull request, so the stop also compares it with the starting commit. A file found
-    // here is a guarded change: it skips the receipt fast path and blocks for approval.
-    const startingCommit = scope.baseRevision;
+    // here is a guarded change: it skips the receipt fast path and blocks for approval. On a
+    // branch that sets usabl up there is no policy at the starting commit to compare with.
+    const startingCommit = scope.policyRef;
     if (startingCommit !== null) {
       const sinceStart = await guarded(() => checkGuard(guardDeps, startingCommit));
       dirtyGuardedPaths = [...new Set([...dirtyGuardedPaths, ...sinceStart])].sort();
@@ -1349,6 +1464,7 @@ async function runStopChecks(
       const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
         pinsCompared,
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
+        ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
       }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
@@ -1378,6 +1494,7 @@ async function runStopChecks(
       guardDivergedPaths: dirtyGuardedPaths,
       checkCommand,
       ...(startingCommit === null ? {} : { policyFromStartingCommit: true }),
+      ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
