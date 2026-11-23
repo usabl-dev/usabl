@@ -302,6 +302,103 @@ describe('the Stop hook deadline', () => {
   });
 });
 
+describe('the Stop hook deadline and an answer already being written', () => {
+  it('keeps the receipt and the answer of a check that was saving its receipt when the deadline came', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    const receipt = await mintedReceipt(h.deps);
+    h.ports.runEngine = async () => verifiedResult(receipt);
+    // The deadline comes while the receipt is being written. The write lands, so the stop must not
+    // then say that no receipt was saved.
+    const write = h.fs.writeFile.bind(h.fs);
+    h.fs.writeFile = async (path: string, contents: string) => {
+      if (path === RECEIPT_PATH) {
+        deadline.fire();
+      }
+      await write(path, contents);
+    };
+
+    expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-4' }), h.ports)).toBe(0);
+    await settle();
+
+    expect(await h.fs.readFile(RECEIPT_PATH)).not.toBeNull();
+    expect(h.stderr.join('')).toContain('VERIFIED');
+    expect(h.stderr.join('')).not.toContain('ran out of time');
+    expect(h.stdout.join('')).not.toContain('ran out of time');
+  });
+
+  it('writes one answer when the deadline comes while the check is writing its own block', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    h.ports.evaluateDecision = () => ({ block: true, message: 'NOT verified - a check block.' });
+    const stdoutWrite = h.ports.stdoutWrite;
+    h.ports.stdoutWrite = async (text: string) => {
+      deadline.fire();
+      await stdoutWrite(text);
+    };
+
+    expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-5' }), h.ports)).toBe(0);
+    await settle();
+
+    const objects = stdoutObjects(h.stdout);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toEqual({ decision: 'block', reason: 'NOT verified - a check block.' });
+  });
+
+  it('ends the process in time when the check started its answer and never finished it', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    h.ports.evaluateDecision = () => ({ block: true, message: 'NOT verified - a check block.' });
+    const stdoutWrite = h.ports.stdoutWrite;
+    h.ports.stdoutWrite = async (text: string) => {
+      await stdoutWrite(text);
+      deadline.fire();
+      // The rest of the answer never gets written.
+      await new Promise<void>(() => {});
+    };
+
+    expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-6' }), h.ports)).toBe(0);
+    await settle();
+
+    expect(stdoutObjects(h.stdout)).toHaveLength(1);
+    expect(deadline.state.ended).toBe(1);
+    expect(h.browserClosed.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ends the process before the host limit when the browser does not close after the answer', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    h.ports.runEngine = async () => verifiedResult(await mintedReceipt(h.deps));
+    h.deps.browser.close = () => new Promise<void>(() => {});
+
+    const run = runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-7' }), h.ports);
+    await settle();
+    expect(h.stderr.join('')).toContain('VERIFIED');
+    expect(deadline.state.ended).toBe(0);
+
+    // The deadline comes while the browser is still closing. The answer is written, so the
+    // process ends and the host reads it.
+    deadline.fire();
+    await settle();
+    expect(deadline.state.ended).toBe(1);
+    expect(await run).toBe(0);
+    expect(h.stdout.join('')).not.toContain('ran out of time');
+  });
+
+  it('stops the deadline timer and closes the browser when the check fails outright', async () => {
+    const deadline = fakeDeadline('600');
+    const h = harness(deadline);
+    h.ports.stderrWrite = async () => {
+      throw new Error('stderr is closed');
+    };
+
+    await expect(runStopHookFromStdin(JSON.stringify({ session_id: 'deadline-8' }), h.ports)).rejects.toThrow('stderr is closed');
+
+    expect(deadline.state.cancelled).toBe(1);
+    expect(h.browserClosed.count).toBe(1);
+  });
+});
+
 describe('the host limit and the runner deadline', () => {
   it('states the numbers', () => {
     expect(CLAUDE_STOP_TIMEOUT_SECONDS).toBe(600);

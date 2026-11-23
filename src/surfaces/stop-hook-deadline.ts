@@ -6,6 +6,10 @@
  * therefore keeps a deadline of its own, shorter than the host's limit. When the deadline comes
  * first, the runner stops the check, saves no receipt, and blocks once with the message below.
  *
+ * Only one answer reaches the host. The checks claim the answer with their first write of it (the
+ * receipt, or a line of output), and the deadline claims it when it comes first. When the checks
+ * claimed it, the deadline waits a short time for them to finish it and writes nothing.
+ *
  * The host's limit reaches the runner through the USABL_STOP_HOOK_TIMEOUT environment variable,
  * which the generated Claude Code hook command sets to the same number as the hook's `timeout`.
  * When the variable is unset or unusable, the runner plans to the host's own default: the timeout
@@ -23,15 +27,17 @@ export const CLAUDE_STOP_TIMEOUT_SECONDS = 600;
 export const CURSOR_STOP_TIMEOUT_SECONDS = 300;
 
 /**
- * Claude Code's documented default for a command hook with no `timeout` field, in seconds. A hook
- * command an older usabl wrote sets no limit, so the runner plans to this, the shortest default.
+ * The limit the runner plans to for a Claude Code hook command that sets no limit, in seconds. The
+ * hook an older usabl wrote is one. Claude Code's hooks documentation gives 600 seconds as the
+ * default for a command hook with no `timeout` field, and older Claude Code releases used 60. usabl
+ * cannot tell which release runs the hook, so it plans to the shorter one.
  */
 export const CLAUDE_DEFAULT_HOOK_TIMEOUT_SECONDS = 60;
 
 /**
  * The time left between the runner's deadline and the host's limit, in seconds. It covers npm
- * starting the hook before the runner's clock starts, closing the browser, writing the answer, and
- * the process exit.
+ * starting the hook before the runner's clock starts, finishing or writing the answer
+ * (ANSWER_FINISH_WAIT_MS), closing the browser (BROWSER_CLOSE_WAIT_MS), and the process exit.
  */
 export const ANSWER_MARGIN_SECONDS = 30;
 
@@ -43,6 +49,13 @@ export const MIN_HOST_TIMEOUT_SECONDS = 60;
 
 /** How long the runner waits for the browser to close after the deadline, in milliseconds. */
 export const BROWSER_CLOSE_WAIT_MS = 10_000;
+
+/**
+ * How long the runner waits, after the deadline, for a check that had already started writing its
+ * own answer to finish it, in milliseconds. Only one answer may reach the host, so the deadline
+ * does not write a second one.
+ */
+export const ANSWER_FINISH_WAIT_MS = 10_000;
 
 // Whole seconds, at most six digits. A larger number is no limit usabl can plan to.
 const SECONDS_PATTERN = /^[1-9][0-9]{0,5}$/;
