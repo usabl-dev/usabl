@@ -5185,13 +5185,19 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox,
+reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox, git,
 route manifest, evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check
 and usabl-fix skills, cursor, ci, branch-rule, workflow owners, and policy scope, each with a state such as wired,
 missing, drifted, or unknown. The chromium sandbox surface starts Chromium with its sandbox the way
 a scan does, opens one blank page, and closes it. It is wired when that works, missing with the fix
 when Chromium reports that it cannot start its sandbox, and unknown when the launch failed for
-another reason, such as a missing Chromium. It writes nothing to the repository. The readiness signals surface is missing when a screen holds floored debt and
+another reason, such as a missing Chromium. It writes nothing to the repository. The git surface
+runs `git --version` and names the version in its label. usabl needs git 2.30 or later, because it
+runs `git rev-parse --verify --quiet --end-of-options <ref>` so a ref that starts with a dash is
+never read as an option, and git learned `--end-of-options` for rev-parse in 2.30. An older git is
+drifted, and the next step names its version, says those reads fail, and says to install 2.30 or
+later. No git is missing, and output usabl does not recognize is unknown and is never printed.
+The readiness signals surface is missing when a screen holds floored debt and
 declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
 does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
 that held is one way, and a matching element seen on the run is the other (section 9). A docs page

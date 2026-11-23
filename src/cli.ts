@@ -83,6 +83,7 @@ import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 import { readScannerVersions } from './deps/scanner-versions.js';
 import { probeChromiumSandbox } from './doctor/sandbox-probe.js';
+import { probeGitVersion } from './doctor/git-version.js';
 import { appendRecord } from './history/append.js';
 import { makeHistoryGit } from './history/git.js';
 import { serializeRecord } from './history/record.js';
@@ -815,6 +816,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // The same read "usabl check" binds into a receipt, so doctor reports what the run would see.
       readScannerVersions,
       probeChromiumSandbox: () => probeChromiumSandbox(),
+      // Read-only: git --version, so doctor can say when git is older than usabl needs.
+      probeGitVersion,
       // Read-only: a git listing of the last commit, so doctor can say a guarded entry names nothing.
       headFiles: (prefix) => makeGitReader().lsFilesUnder('HEAD', [prefix]),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
