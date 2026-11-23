@@ -199,3 +199,44 @@ describe('a --ci run', () => {
     expect(result.coverage.gaps.some((g) => g.ref === 'local files')).toBe(false);
   });
 });
+
+describe('an idle run', () => {
+  it('reads the local files once and adds no local files gap, even when one changes after that read', async () => {
+    const files = baseFiles();
+    // No UI file changed, so the run has nothing to check.
+    const plain = makeFakeDeps({
+      files,
+      headContents: { ...files },
+      writeTree: 'tree-steady',
+      changed: [{ code: 'M', path: 'README.md' }],
+    });
+    const read = plain.fs.readLocalFile!.bind(plain.fs);
+    // One hash reads each bound path once: usabl.config.json and .env.
+    const boundPaths = 2;
+    let reads = 0;
+    const deps: Deps = {
+      ...plain,
+      fs: {
+        ...plain.fs,
+        readLocalFile: async (path: string, maxBytes: number): Promise<LocalFileRead> => {
+          const found = await read(path, maxBytes);
+          reads += 1;
+          // The edit lands right after the first hash, so a second read would see a change.
+          if (reads === boundPaths) {
+            files['.env'] = `API_TOKEN=${SECRET}-changed\n`;
+          }
+          return found;
+        },
+      },
+    };
+
+    const result = await run(deps, config);
+
+    expect(result.coverage.nothingToCheck).toBe(true);
+    expect(result.verdict).toBeNull();
+    expect(result.exitCode).toBe(0);
+    expect(result.receipt).toBeNull();
+    expect(result.coverage.gaps.some((g) => g.ref === 'local files')).toBe(false);
+    expect(reads).toBe(boundPaths);
+  });
+});
