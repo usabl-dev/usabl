@@ -5,6 +5,7 @@
  */
 import { execFile } from 'node:child_process';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -40,6 +41,17 @@ function outcome(fixture: string, unstable: boolean) {
     unstable,
   };
 }
+
+const require = createRequire(import.meta.url);
+// The versions of this install, as the script reads them.
+const INSTALLED = {
+  usabl: (require('../../package.json') as { version: string }).version,
+  axeCore: (require('axe-core/package.json') as { version: string }).version,
+  playwright: (require('playwright/package.json') as { version: string }).version,
+};
+
+// A sweep part with no differences, as an earlier summary holds it.
+const SWEEP = { comparisons: 7, byFile: { 'test/a.test.ts': 7 }, comparedEntries: { pass: 70 }, withDifferences: [], withUncheckedFrames: [], errors: [] };
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -111,8 +123,8 @@ describe('axe-compare-summary', () => {
     const harness = join(dir, 'harness.json');
     await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
     const earlier = join(dir, 'earlier.json');
-    const sweep = { comparisons: 7, byFile: { 'test/a.test.ts': 7 }, comparedEntries: { pass: 70 }, withDifferences: [], withUncheckedFrames: [], errors: [] };
-    await writeFile(earlier, JSON.stringify({ axeCore: 'x', playwright: 'y', fixtures: {}, sweep }));
+    const sweep = { ...SWEEP, versions: INSTALLED };
+    await writeFile(earlier, JSON.stringify({ ...INSTALLED, fixtures: {}, sweep }));
     const out = join(dir, 'summary.json');
 
     const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
@@ -121,6 +133,95 @@ describe('axe-compare-summary', () => {
     const summary = JSON.parse(await readFile(out, 'utf8')) as { sweep: unknown; fixtures: { pages: number } };
     expect(summary.sweep).toEqual(sweep);
     expect(summary.fixtures.pages).toBe(1);
+  }, 60_000);
+
+  it('records the usabl, axe-core, and Playwright versions in the sweep part it builds', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const sweep = join(dir, 'sweep.jsonl');
+    await writeFile(sweep, `${JSON.stringify({ file: 'test/a.test.ts', test: 'a case', via: 'axe', page: '/a', counts: { pass: 1 } })}\n`);
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep', sweep, harness]);
+
+    expect(result.code).toBe(0);
+    const summary = JSON.parse(await readFile(out, 'utf8')) as { usabl: string; sweep: { versions: unknown } };
+    expect(summary.sweep.versions).toEqual(INSTALLED);
+    expect(summary.usabl).toBe(INSTALLED.usabl);
+  }, 60_000);
+
+  // The summary header names the versions of this install, so a sweep kept from another version
+  // would sit under a header that does not describe it.
+  for (const [name, changed] of [
+    ['axe-core', { axeCore: '4.0.0' }],
+    ['Playwright', { playwright: '1.0.0' }],
+    ['usabl', { usabl: '0.0.1' }],
+  ] as const) {
+    it(`refuses to keep a sweep made with another ${name} version, and names both versions`, async () => {
+      const harness = join(dir, 'harness.json');
+      await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+      const earlier = join(dir, 'earlier.json');
+      const versions = { ...INSTALLED, ...changed };
+      await writeFile(earlier, JSON.stringify({ ...INSTALLED, fixtures: {}, sweep: { ...SWEEP, versions } }));
+      const out = join(dir, 'summary.json');
+
+      const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('not written');
+      expect(result.stderr).toContain(name);
+      expect(result.stderr).toContain(Object.values(changed)[0]);
+      expect(result.stderr).toContain('--sweep');
+      expect(await exists(out)).toBe(false);
+    }, 60_000);
+  }
+
+  it('refuses to keep a sweep with no versions of its own when its summary names other versions', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const earlier = join(dir, 'earlier.json');
+    await writeFile(earlier, JSON.stringify({ axeCore: 'x', playwright: 'y', fixtures: {}, sweep: SWEEP }));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('not written');
+    expect(await exists(out)).toBe(false);
+  }, 60_000);
+
+  it('keeps a sweep with no versions of its own when its summary names this install, and says usabl was not checked', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const earlier = join(dir, 'earlier.json');
+    await writeFile(earlier, JSON.stringify({ axeCore: INSTALLED.axeCore, playwright: INSTALLED.playwright, fixtures: {}, sweep: SWEEP }));
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('records no usabl version');
+    const summary = JSON.parse(await readFile(out, 'utf8')) as { sweep: unknown };
+    expect(summary.sweep).toEqual(SWEEP);
+  }, 60_000);
+
+  it('refuses to keep a sweep that holds an unstable comparison', async () => {
+    const harness = join(dir, 'harness.json');
+    await writeFile(harness, JSON.stringify([outcome('cell: named', false)]));
+    const earlier = join(dir, 'earlier.json');
+    const unstableEntry = { file: 'test/b.test.ts', test: 'b case', page: '/b', unstable: true, differences: [] };
+    await writeFile(
+      earlier,
+      JSON.stringify({ ...INSTALLED, fixtures: {}, sweep: { ...SWEEP, versions: INSTALLED, withDifferences: [unstableEntry] } }),
+    );
+    const out = join(dir, 'summary.json');
+
+    const result = await runSummary(['--out', out, '--sweep-from', earlier, harness]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('unstable');
+    expect(result.stderr).toContain('test/b.test.ts');
+    expect(await exists(out)).toBe(false);
   }, 60_000);
 
   it('refuses both a sweep log and an earlier sweep part', async () => {
