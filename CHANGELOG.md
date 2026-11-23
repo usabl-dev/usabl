@@ -432,8 +432,10 @@
   its limit lets the stop go on, so a slow stop let an agent stop without the accessibility work.
   `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command sets
   `USABL_STOP_HOOK_TIMEOUT=600`, which the runner reads. The Cursor hook keeps `"timeout": 300`,
-  which the runner assumes in Cursor mode. A hook command that sets no limit, such as the one
-  earlier releases wrote, makes the runner plan to 60 seconds. The runner ends each stop 30
+  which the runner assumes in Cursor mode. A Claude Code hook command that sets no limit, such as
+  the one earlier releases wrote, makes the runner plan to Claude Code's default of 600 seconds,
+  and the out-of-time message for it adds the step to run `usabl install --claude` again. The
+  runner ends each stop 30
   seconds before the limit. A stop that reaches that deadline saves no receipt, stops the scan,
   and blocks once with "NOT verified - usabl ran out of time", what it means, and what to do:
   narrow the change, run `usabl check` by hand, or raise the limit in the hook settings. On an
@@ -443,7 +445,9 @@
   or a command whose limit differs from the timeout, and a Cursor stop entry with no timeout or one
   below 300 seconds. A reinstall keeps a Claude Code timeout of 60 seconds or more and makes the
   command match it. Effect: after an upgrade, the Stop hook earlier releases wrote reads as drifted
-  until `usabl install --claude` runs again, and until then its stops end after 30 seconds.
+  until `usabl install --claude` runs again, and until then usabl ends its stops after 570
+  seconds. On an older Claude Code release whose default was 60 seconds, Claude Code can still end
+  such a hook before usabl answers, and the stop goes on, as before, until the install runs again.
   `npm run measure:stop-time` reports each stop beside usabl's deadline, and a signal now stops a
   fixture server that is still starting and a running stop.
 - The receipt binds the files the app reads that git does not see. git skips ignored files, so an
