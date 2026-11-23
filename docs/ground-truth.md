@@ -4504,6 +4504,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   same rule. When coverage gaps also hold the run, the coverage step comes
   first and the review sentence follows. The same rule holds for the accessibility half of
   `approval_required`. A run with no undecided check keeps the steps as before.
+- A regression outranks a gap, so a run with both is a regression. Its step names the gaps the
+  way a `not_covered` step does: "Next: fix each accessibility barrier below, and resolve every
+  reason under Not evaluated below: make each unreachable screen reachable, ... Then stop
+  again." During an active continuation it reads "Next: fix each accessibility barrier usabl
+  reported and resolve every reason usabl reported under Not evaluated, then run ..." The same
+  holds when the accessibility half of `approval_required` is such a regression, and the
+  guarded-file step follows. An undecided check adds the review sentence after it.
 - A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
   null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
