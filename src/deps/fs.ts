@@ -22,8 +22,8 @@ function isMissingFile(err: unknown): boolean {
   // resolve to a directory, and reading it has no file bytes to disclose. Both fail
   // closed to null so the guard treats them as absent content, never a hard crash.
   // ENOTDIR is a read below a file, such as src/App.tsx/package.json. A file holds no files, so
-  // that path cannot exist: it is a missing file, the same as ENOENT. git show reads such a path
-  // at a ref as missing too, so the tree and the trusted side agree.
+  // that path cannot exist: it is a missing file, the same as ENOENT. The trusted read, git
+  // cat-file blob, reads such a path at a ref as missing too, so the tree and the trusted side agree.
   return code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR';
 }
 

@@ -16,7 +16,7 @@
  */
 import { posix as path } from 'node:path';
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
-import type { TrustedRead } from './workspace-packages.js';
+import { patternFolder, type TrustedRead } from './workspace-packages.js';
 
 const LOCKFILES: readonly string[] = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
 // The package.json fields that decide which version of a package is installed. Counting a field
@@ -35,20 +35,6 @@ export const EVERY_SCREEN =
 
 function manifestPath(dir: string): string {
   return dir === '' ? 'package.json' : `${dir}/package.json`;
-}
-
-// The folder every match of a uiFileGlobs pattern sits in. For a glob, that is the part before its
-// first segment with glob syntax, such as packages/admin/src for packages/admin/src/**/*.tsx. A
-// pattern with no glob syntax names one file, such as src/App.tsx, so it is the file's folder. A
-// file is never read as a folder: <file>/package.json cannot exist, and the disk refuses the read.
-// A pattern that ends with / names a folder, so it stays as written.
-function patternFolder(glob: string): string {
-  const segments: string[] = [];
-  for (const segment of glob.split('/')) {
-    if (/[*?[\]{}!]/u.test(segment)) return segments.join('/');
-    segments.push(segment);
-  }
-  return glob.endsWith('/') ? glob : path.dirname(glob);
 }
 
 // The folders that hold one of the app's package.json files: for each place the config points into
