@@ -2106,6 +2106,13 @@
 
 ### Security
 
+- Code scanning. A new workflow, `.github/workflows/codeql.yml` (a guarded path), runs GitHub
+  CodeQL with the default query suite on the JavaScript and TypeScript code, on each pull
+  request to main, on each push to main, and once a week. It needs no build step and skips
+  `dist/`, `node_modules/`, and `fixtures/`. The job reads the code and writes only code scanning
+  results. Results show up in the Security tab under Code scanning. It is not a required check.
+  Gate effect: none.
+
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
   repository GitHub reports as `admin` or `write`. It reads the permission once for each
   approving code owner. On a public repository anyone can submit an approving review, so a login
