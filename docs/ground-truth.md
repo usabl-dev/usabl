@@ -3642,6 +3642,15 @@ patterns of 1024 characters, each changed file took about 20 ms to match). Each 
 is built and run once at load, so one the engine cannot build is a config refusal, never a crash
 in a run. The planner builds each entry's matcher once per run, not once per changed file.
 
+Every other policy glob list is matched the same way and has the same bounds: the 256 cap on each
+entry, 1024 characters for each pattern, 4096 patterns and 262,144 characters in all, and the build
+at load. The lists are `discovery.wideBlastGlobs` and `guardedPaths` in `usabl.config.json`, and
+`sharedGlobs` in `usabl.docs.json`. Each refusal names the list and the entry, as
+`discovery.wideBlastGlobs entry "..." has brace groups that expand to more than 256 patterns`. A
+`guardedPaths` entry past the 256 cap keeps its own message, which says the guard would read it
+as a wider folder. No other list in either file is a glob: `surfaces[].files`, `localFiles`, and
+the docs page `sources` are exact paths.
+
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
 glob rule applies to them. A `guardedPaths` entry with the same text as `requirements` is read both

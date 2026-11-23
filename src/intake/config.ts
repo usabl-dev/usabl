@@ -15,7 +15,8 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { braceRangeIn, countBraceExpansions, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { checkGlobListBounds } from './glob-list-bounds.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
@@ -76,84 +77,32 @@ function expectGlobArray(value: unknown, label: string): string[] {
   return patterns;
 }
 
-// The matcher builds one pattern for each brace expansion of a uiFileGlobs entry, and the count
-// grows as a product of the groups, so a short entry can take a long time or exhaust memory on
-// every file it tests. Past the guard's cap the entry is refused, never cut to fewer patterns. The
-// count is taken before anything is expanded.
-//
-// The cost of matching also grows with the length of each pattern and with every entry together,
-// and one very long pattern makes the regular expression engine throw. So the list has three more
-// bounds, each far above what a real config holds:
-// - 1024 characters for each pattern an entry expands to. A real UI glob is a short path pattern,
-//   and a pattern this long stays far below the size the engine refuses (it refused one of about
-//   100,000 characters).
-// - 4096 patterns across the whole list: sixteen entries at the cap of 256 each. A real list names
-//   a few folders with a few file extensions each.
-// - 262,144 characters across every pattern of the list, the count of each entry times its
-//   length: 256 patterns of 1024 characters, or 4096 of 64. At 4096 patterns of 1024 characters
-//   each changed file took about 20 ms to match, so the bound keeps a large change quick.
-const MAX_UI_GLOB_LENGTH = 1024;
-const MAX_UI_GLOB_PATTERNS = 4096;
-const MAX_UI_GLOB_PATTERN_CHARACTERS = 262_144;
-
-// The length of the longest pattern an entry's brace groups expand to, counted without expanding
-// them: the text outside the groups plus the longest alternative of each group. A comma-less brace
-// is text, braces included. The entry's braces are already known to be well formed.
-function longestExpansionLength(glob: string): number {
-  let length = 0;
-  let i = 0;
-  while (i < glob.length) {
-    const close = glob.charAt(i) === '{' ? glob.indexOf('}', i) : -1;
-    const body = close === -1 ? '' : glob.slice(i + 1, close);
-    if (close !== -1 && body.includes(',')) {
-      length += Math.max(...body.split(',').map((alternative) => alternative.length));
-      i = close + 1;
-      continue;
+// The guard reads each expansion of a guarded entry on its own and lists the working tree once for
+// each, so it reads an entry past the cap as a wider folder. The count is taken before anything is
+// expanded, and before the general bounds, so the message says what the guard would do.
+function checkGuardedPathCounts(entries: readonly string[]): void {
+  for (const entry of entries) {
+    if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
+      throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
     }
-    length += 1;
-    i += 1;
   }
-  return length;
 }
 
-function expectUiFileGlobs(value: unknown): string[] {
-  const globs = expectGlobArray(value, 'uiFileGlobs');
-  let patterns = 0;
-  let characters = 0;
-  for (const glob of globs) {
-    const count = countBraceExpansions(glob) ?? 1;
-    if (count > MAX_BRACE_EXPANSIONS) {
-      throw configError`uiFileGlobs entry "${glob}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} patterns, more than usabl matches one by one. Split it into several entries, or use a wildcard for the part that varies.`;
-    }
-    const length = longestExpansionLength(glob);
-    if (length > MAX_UI_GLOB_LENGTH) {
-      throw configError`uiFileGlobs entry "${glob}" makes a pattern longer than ${String(MAX_UI_GLOB_LENGTH)} characters, longer than usabl matches. Shorten it, or use a wildcard for the part that varies.`;
-    }
-    patterns += count;
-    characters += count * length;
-  }
-  if (patterns > MAX_UI_GLOB_PATTERNS) {
-    throw configError`uiFileGlobs entries expand to ${String(patterns)} patterns in all, more than ${String(MAX_UI_GLOB_PATTERNS)}, more than usabl matches one by one. Use fewer entries or fewer brace alternatives, or use a wildcard for the part that varies.`;
-  }
-  if (characters > MAX_UI_GLOB_PATTERN_CHARACTERS) {
-    throw configError`uiFileGlobs entries expand to patterns of more than ${String(MAX_UI_GLOB_PATTERN_CHARACTERS)} characters in all, more than usabl matches quickly. Use fewer or shorter entries, or use a wildcard for the part that varies.`;
-  }
-  // Each pattern is built and run once here, so a pattern the engine cannot build is refused when
-  // the config is read, never a crash in the middle of a run. Inside the bounds above none fails.
-  for (const glob of globs) {
-    try {
-      globMatcher(glob)('');
-    } catch {
-      throw configError`uiFileGlobs entry "${glob}" makes a pattern usabl cannot build. Shorten it, or use a wildcard for the part that varies.`;
-    }
-  }
+// A glob list with the syntax checks above and the size bounds every policy glob list has. See
+// glob-list-bounds.ts.
+function expectBoundedGlobArray(value: unknown, label: string): string[] {
+  const globs = expectGlobArray(value, label);
+  checkGlobListBounds(globs, label);
   return globs;
 }
 
 // A guarded entry with white space at the start or end names a path no file has, so it would
-// guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen.
+// guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen. The
+// size bounds come first, so the form check below never reads an entry past them.
 function expectGuardedPaths(value: unknown): string[] {
   const entries = expectGlobArray(value, 'guardedPaths');
+  checkGuardedPathCounts(entries);
+  checkGlobListBounds(entries, 'guardedPaths');
   for (const entry of entries) {
     if (entry.trim() !== entry) {
       throw configError`guardedPaths entry "${entry}" starts or ends with white space, so it names no file and would guard nothing. Remove the white space.`;
@@ -179,7 +128,11 @@ function bracedSegments(entry: string): Array<Array<{ text: string; braced: bool
       i = close + 1;
       continue;
     }
-    expansions = expansions.map((prefix) => [...prefix, { char, braced: false }]);
+    // Each expansion is its own array, so the character is added in place. Copying every prefix
+    // for each character made a long entry take time that grew with the square of its length.
+    for (const expansion of expansions) {
+      expansion.push({ char, braced: false });
+    }
     i++;
   }
   return expansions.map((expansion) => {
@@ -206,11 +159,6 @@ function checkGuardedPathForm(entry: string): void {
   if (entry.startsWith('/')) {
     const fixed = entry.replace(/^\/+/, '') || '.';
     throw configError`guardedPaths entry "${entry}" starts with /, so it names no path from the repository root. Write it as a path from the repository root without the leading slash: "${fixed}".`;
-  }
-  // The guard reads each expansion on its own and lists the working tree once for each, so it reads
-  // an entry past the cap as a wider folder. The count is taken before anything is expanded.
-  if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
-    throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
   }
   const expansions = bracedSegments(entry);
   for (const segments of expansions) {
@@ -633,13 +581,13 @@ export function parseUsablConfig(raw: string): UsablConfig {
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
-    uiFileGlobs: expectUiFileGlobs(Reflect.get(root, 'uiFileGlobs')),
+    uiFileGlobs: expectBoundedGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
     discovery: {
       // routerFile is an exact path read with fs.readFile, never matched by matchGlob, so it
       // is not glob-validated. surfaces[].files are compared with exact string equality in the
       // planner, so they are exact paths too and stay plain string arrays.
       routerFile: expectString(Reflect.get(discovery, 'routerFile'), 'discovery.routerFile'),
-      wideBlastGlobs: expectGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
+      wideBlastGlobs: expectBoundedGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
     },
     surfaces,
     guardedPaths: expectGuardedPaths(Reflect.get(root, 'guardedPaths')),

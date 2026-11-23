@@ -769,6 +769,78 @@ describe('parseUsablConfig glob syntax', () => {
     });
   });
 
+  // Every glob list in the config is expanded and matched the same way, so each has the bounds of
+  // uiFileGlobs. A wideBlastGlobs entry with 20 brace groups took 25 seconds and 750 MB to match
+  // one file before.
+  describe('the size bounds of every config glob list', () => {
+    const lists: Array<[string, (globs: string[]) => Record<string, unknown>]> = [
+      ['uiFileGlobs', (globs) => ({ uiFileGlobs: globs })],
+      ['discovery.wideBlastGlobs', (globs) => ({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: globs } })],
+      ['guardedPaths', (globs) => ({ guardedPaths: globs })],
+    ];
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(shape: (globs: string[]) => Record<string, unknown>, globs: string[]): string {
+      try {
+        parseUsablConfig(configJson(shape(globs)));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    for (const [label, shape] of lists) {
+      describe(label, () => {
+        it('loads an entry at the cap of 256 expansions, and refuses one past it', () => {
+          expect(refusal(shape, [`src/{${alternatives(256)}}/x.css`])).toBe('');
+          const message = refusal(shape, [`src/{${alternatives(257)}}/x.css`]);
+          expect(message).toContain(`${label} entry "src/{f0,f1`);
+          expect(message).toContain('more than 256');
+        });
+
+        it('refuses an entry with 20 or 60 brace groups quickly, without building its expansions', () => {
+          for (const groups of [20, 60]) {
+            const started = performance.now();
+            const message = refusal(shape, ['src/' + '{a,b}'.repeat(groups) + '/x.css']);
+            expect(performance.now() - started, String(groups)).toBeLessThan(1000);
+            expect(message, String(groups)).toContain(`${label} entry`);
+            expect(message, String(groups)).toContain('more than 256');
+          }
+        });
+
+        it('loads a pattern of 1024 characters, and refuses one longer', () => {
+          const at = `src/${'x'.repeat(1024 - 'src/'.length - '.css'.length)}.css`;
+          expect(at).toHaveLength(1024);
+          expect(refusal(shape, [at])).toBe('');
+          const message = refusal(shape, [`${at}x`]);
+          expect(message).toContain(`${label} entry "src/xxx`);
+          expect(message).toContain('makes a pattern longer than 1024 characters');
+        });
+
+        it('loads 4096 patterns in all, and refuses one past it', () => {
+          const entries = Array.from({ length: 16 }, (_, i) => `src/p${i}/${'{a,b}'.repeat(8)}.css`);
+          expect(refusal(shape, entries)).toBe('');
+          const message = refusal(shape, [...entries, 'src/extra.css']);
+          expect(message).toContain(`${label} entries expand to 4097 patterns in all`);
+          expect(message).toContain('more than 4096');
+        });
+
+        it('refuses patterns of more than 262144 characters in all', () => {
+          const long = (i: number): string => `src/p${String(i).padStart(4, '0')}/${'x'.repeat(1000)}/x.css`;
+          expect(refusal(shape, Array.from({ length: 250 }, (_, i) => long(i)))).toBe('');
+          const message = refusal(shape, Array.from({ length: 300 }, (_, i) => long(i)));
+          expect(message).toContain(`${label} entries expand to patterns of more than 262144 characters in all`);
+        });
+
+        it('refuses a pattern too long to build as a plain config refusal, never a crash', () => {
+          const message = refusal(shape, [`src/${'{a,b}'.repeat(8)}/${'x'.repeat(100_000)}/x.css`]);
+          expect(message).toContain(`${label} entry`);
+          expect(message).not.toContain('Regular expression');
+        });
+      });
+    }
+  });
+
   it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
     // The guard reads such an expansion as the whole repository, which the entry does not say.
     for (const entry of ['{,}', '.{,}', '{,policy}']) {
