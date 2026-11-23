@@ -154,7 +154,7 @@ import { usablVitePluginFromConfig } from 'usabl/vite'
 export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })] })
 `;
 const WIRED_CLAUDE = `${JSON.stringify(
-  { hooks: { Stop: [{ hooks: [{ type: 'command', command: STOP_HOOK_COMMAND }] }] } },
+  { hooks: { Stop: [{ hooks: [{ type: 'command', command: STOP_HOOK_COMMAND, timeout: 600 }] }] } },
   null,
   2,
 )}\n`;

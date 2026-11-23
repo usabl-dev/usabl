@@ -122,8 +122,9 @@ When changing user interface code:
 - Prefer fixing source over query-parameter previews or disabling checks.
 `;
 
-function settingsWith(command: string): string {
-  return `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } }, null, 2)}\n`;
+function settingsWith(command: string, timeout?: number): string {
+  const hook = timeout === undefined ? { type: 'command', command } : { type: 'command', command, timeout };
+  return `${JSON.stringify({ hooks: { Stop: [{ hooks: [hook] }] } }, null, 2)}\n`;
 }
 
 function memoryFs(files: Record<string, string>): InstallFs & { store: Record<string, string> } {
@@ -278,7 +279,7 @@ describe('the installers rewrite an old npx usabl file as their own', () => {
     expect(plan).toMatchObject({ action: 'update', reason: 'remove-download' });
     const result = await writeClaude(fs, plan);
     expect(result.exitCode).toBe(0);
-    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(settingsWith(STOP_HOOK_COMMAND));
+    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(settingsWith(STOP_HOOK_COMMAND, 600));
     expect(result.message).toContain('never downloads');
   });
 
@@ -401,7 +402,7 @@ describe('usabl doctor reports an old npx usabl file as a security drift', () =>
 
   it('still reports the current files as wired', async () => {
     const byId = await report({
-      [CLAUDE_SETTINGS_PATH]: settingsWith(STOP_HOOK_COMMAND),
+      [CLAUDE_SETTINGS_PATH]: settingsWith(STOP_HOOK_COMMAND, 600),
       [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
     });
     expect(byId('stop-hook').state).toBe('wired');

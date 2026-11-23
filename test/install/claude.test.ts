@@ -45,7 +45,7 @@ function stopCommands(raw: string): string[] {
 
 describe('planClaude', () => {
   it('wires npm exec --no -- usabl stop-hook, which runs the installed bin and never downloads', async () => {
-    expect(STOP_HOOK_COMMAND.startsWith('npm_config_loglevel=silent npm exec --no -- usabl stop-hook || ')).toBe(true);
+    expect(STOP_HOOK_COMMAND.startsWith('USABL_STOP_HOOK_TIMEOUT=600 npm_config_loglevel=silent npm exec --no -- usabl stop-hook || ')).toBe(true);
     expect(STOP_HOOK_COMMAND).not.toContain('npx');
     const fs = memoryFs({});
     const result = await writeClaude(fs, await planClaude(fs));
