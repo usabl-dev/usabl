@@ -428,6 +428,24 @@
 
 ### Fixed
 
+- A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook at
+  its limit lets the stop go on, so a slow stop let an agent stop without the accessibility work.
+  `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command sets
+  `USABL_STOP_HOOK_TIMEOUT=600`, which the runner reads. The Cursor hook keeps `"timeout": 300`,
+  which the runner assumes in Cursor mode. A hook command that sets no limit, such as the one
+  earlier releases wrote, makes the runner plan to 60 seconds. The runner ends each stop 30
+  seconds before the limit. A stop that reaches that deadline saves no receipt, stops the scan,
+  and blocks once with "NOT verified - usabl ran out of time", what it means, and what to do:
+  narrow the change, run `usabl check` by hand, or raise the limit in the hook settings. On an
+  active continuation it lets the stop through once with the same notice. When the deadline comes
+  while a check is already writing its own answer, that answer stands and the deadline writes
+  none. `usabl doctor` reports a Claude Code Stop hook with no timeout, a limit below 60 seconds,
+  or a command whose limit differs from the timeout, and a Cursor stop entry with no timeout or one
+  below 300 seconds. A reinstall keeps a Claude Code timeout of 60 seconds or more and makes the
+  command match it. Effect: after an upgrade, the Stop hook earlier releases wrote reads as drifted
+  until `usabl install --claude` runs again, and until then its stops end after 30 seconds.
+  `npm run measure:stop-time` reports each stop beside usabl's deadline, and a signal now stops a
+  fixture server that is still starting and a running stop.
 - The receipt binds the files the app reads that git does not see. git skips ignored files, so an
   edit only to `.env.local`, which Vite loads, changed neither the tree nor the status, and a
   stored receipt kept answering the Stop hook with
