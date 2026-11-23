@@ -114,8 +114,8 @@ interface NextSteps {
   approvalWithRegression: string;
   approvalWithGaps: string;
   // A regression outranks a gap, so a run with both is a regression. These name the gaps the way
-  // the not covered step does, so a reader who fixes the barriers does not meet the gaps only on
-  // the next stop.
+  // the not covered step does, so a reader who fixes the accessibility barriers does not meet the
+  // gaps only on the next stop.
   regressionWithGaps: string;
   approvalWithRegressionAndGaps: string;
   // The steps for a run that also holds checks usabl could not decide. The barrier step names

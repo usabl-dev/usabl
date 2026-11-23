@@ -1274,8 +1274,9 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
     expect(next).not.toContain('rule-from-page');
   });
 
-  // A regression outranks a gap, so a run with both is a regression. Its step named the barriers
-  // and not the gaps, so a reader who fixed the barriers stopped again and met the gaps next.
+  // A regression outranks a gap, so a run with both is a regression. Its step named the
+  // accessibility barriers and not the gaps, so a reader who fixed them stopped again and met the
+  // gaps next.
   describe('a regression with coverage gaps', () => {
     // The words a not_covered stop uses for its gaps.
     const BLOCK_GAPS =
@@ -1283,7 +1284,7 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
     const ACTIVE_GAPS = 'resolve every reason usabl reported under Not evaluated';
     const unmapped: Result['coverage'] = { ...gaps, gaps: [], unresolvedFiles: ['src/Orphan.tsx'] };
 
-    it('names the barriers and the gaps on a blocked stop', () => {
+    it('names the accessibility barriers and the gaps on a blocked stop', () => {
       for (const coverage of [gaps, unmapped]) {
         const message = evaluateStopDecision(baseResult({ verdict: 'regression', exitCode: 1, findings: [failing], coverage }), {
           stopHookActive: false,
