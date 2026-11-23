@@ -339,12 +339,29 @@ passing bundle from another run.
   each file. CI is not affected, because ignored files are not in the pull request.
 - Limits of the local files binding. It makes a stored receipt stop matching, and it does not
   widen what the stop checks: the stop checks the screens its changed list reaches, so an edit
-  only to an ignored file on a branch with no other change is still nothing to check. The run
-  reads the bound files when it mints the receipt, after the scan, so an edit to one during the
-  scan is bound as if the scan had seen it; the tree is read before and after the scan, but
-  these files are not. Closing that needs a second read in `src/run.ts`, a guarded file, and is
-  not built. A `.env` file outside the root and the app folders, such as one in a folder Vite's
-  `envDir` names, is bound only when it is listed in `localFiles`.
+  only to an ignored file on a branch with no other change is still nothing to check. A `.env`
+  file outside the root and the app folders, such as one in a folder Vite's `envDir` names, is
+  bound only when it is listed in `localFiles`.
+- The run reads the local files hash twice, as it reads the tree: before it plans, and again at
+  the second tree read, after the scan and every policy read, with the same config both times.
+  If the two reads differ, a bound file changed while the check ran, so the scan may have seen
+  settings the app no longer has. The run then carries a not-covered gap (ref `local files`)
+  that says a local file the receipt binds changed and names no path, is never verified, and
+  mints no receipt. The receipt binds the first read, and the mint in `run()` reads no bound
+  file, so an edit after the second read moves the files away from the bound value and the next
+  stop checks again. A library caller of the exported `mintReceipt` that passes no hash still
+  makes mint read the files itself, at mint time. A read that gives `unreadable` at either moment leaves no receipt that matches: two
+  `unreadable` reads are equal and bind `unreadable`, and one alone is a change. An idle run is
+  left idle, as it is for the tree.
+- Known limits of the two local files reads. They see the files only at those two moments, so an
+  edit made during the scan and undone before the second read leaves both reads equal, and the
+  run is verified with a receipt that binds files the scan did not see as they were. When the
+  binding is `unreadable` at both reads (a link, a file over its cap, a total past the cap, or
+  more than 256 paths), the two reads are equal and cannot be compared, so an edit to such a file
+  during the scan is not seen and the run can read verified. Its receipt binds `unreadable` and
+  never matches a later stop, but the change during the scan is not seen. A config edit after the
+  Stop hook parsed `usabl.config.json` is caught by the guard, because the config is a guarded
+  path, so that run reads `approval_required` and mints no receipt.
 - Each stop reads every bound file whole, on the fast path too, and a sparse file of any size
   costs no disk to make. Without a cap, one command such as `truncate -s 60G .env.cache` made
   every stop run for minutes, past the assistant's hook timeout, and a stop that times out goes
@@ -352,12 +369,16 @@ passing bundle from another run.
   `.env` file, and 16 MiB for a listed path and for `usabl.config.json`. A file over its cap, or
   one that gives more bytes than its size said, makes the value `unreadable`, and the stop runs
   the full check. usabl reads at most 64 MiB across all bound files, and at most 256 paths. The
-  cost of a large bound file is its hash time on every stop: about a tenth of a second at the
-  16 MiB cap.
+  cost of a large bound file is its hash time, paid more than once per stop: a stop that runs the
+  full check hashes the local files three times (the fast-path verify, then the two reads in the
+  run), and an idle run pays one read. One hash at the 64 MiB total takes about half a second,
+  so the worst case is about 1.5 seconds per stop at the caps.
 - A `usabl check --ci` run binds no local files, and its receipt has no `localFilesHash`. CI has
   no ignored files to bind, and a hash with no key of a short secret in `.env`, in a Result
   artifact that others read, could be guessed offline. A local stop never matches such a
-  receipt.
+  receipt. A team's own CI job that runs `usabl check` should pass `--ci` too: without it the
+  Result carries the hash with no key, and a short secret the job writes into `.env` could be
+  guessed offline from it.
 - `sourceTree` is the tree the run read before it planned. The run reads the tree again after
   the scan and every policy read, before the gate. If the two reads differ, a file changed
   while the check ran, so the scan may have seen code that is neither the planned tree nor the

@@ -57,6 +57,11 @@ export interface ReceiptArgs {
   baseRevision?: string | null;
   // The debt history commit the run read, or null when it read none. See currentHistoryHead.
   historyHead?: string | null;
+  // The local files hash the run read before it planned, and read again unchanged at its second
+  // tree read, or null when the run bound no local files (a --ci run). run() always passes it, so
+  // mint does not read the files after the scan. When absent, mint reads them itself, which is
+  // right only for a caller that knows nothing changed since its check.
+  localFilesHash?: string | null;
 }
 
 /** The value a scanner version reader returns when it cannot read the version. */
@@ -347,7 +352,11 @@ export async function mintReceipt(
   const [sourceTree, policy, localFilesHash] = await Promise.all([
     args.sourceTree ?? deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
-    deps.fs.readLocalFile === undefined ? Promise.resolve(null) : computeLocalFilesHash(deps, config),
+    args.localFilesHash !== undefined
+      ? Promise.resolve(args.localFilesHash)
+      : deps.fs.readLocalFile === undefined
+        ? Promise.resolve(null)
+        : computeLocalFilesHash(deps, config),
   ]);
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
@@ -390,6 +399,23 @@ export function treeChangedDuringCheckGap(): CoverageGap {
       "The files in this repository changed while usabl was checking them, so the screens it scanned " +
       "may not show the code as it is now. This run cannot verify accessibility and mints no receipt. " +
       "Wait until no editor, build, or agent is writing files, then run usabl again.",
+  };
+}
+
+/**
+ * The gap owed when the local files hash read before planning differs from the one read at the
+ * second tree read. git does not see these files, so the tree reads cannot catch an edit to one.
+ * The gap names no path, because a bound path is a file such as `.env` and says nothing a reader
+ * needs. The gate ranks this gap as not_covered, and a run that is not verified mints no receipt.
+ */
+export function localFilesChangedDuringCheckGap(): CoverageGap {
+  return {
+    ref: "local files",
+    state: "not-covered",
+    reason:
+      "While usabl was checking, a local file the receipt binds changed. It is a file the app reads that git " +
+      "does not see, so the result may not match what the app now does. This run cannot verify accessibility " +
+      "and mints no receipt. Wait until no editor, build, or agent is writing files, then run usabl again.",
   };
 }
 
