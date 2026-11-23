@@ -445,6 +445,11 @@ function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGa
   };
 }
 
+// The local files hash, or null when deps has no local file reader (a --ci run binds none).
+async function readLocalFilesHash(deps: Deps, config: UsablConfig): Promise<string | null> {
+  return deps.fs.readLocalFile === undefined ? null : computeLocalFilesHash(deps, config);
+}
+
 /**
  * What this guarantees: a trusted configuration usabl cannot read never reads as idle or verified
  * and never mints a receipt. This resolver returns a missing, unparseable, or schema-invalid
@@ -457,11 +462,6 @@ function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGa
  * so that if the guard's read succeeded and this one fails, that later failure is also returned
  * as the gap rather than a crash.
  */
-// The local files hash, or null when deps has no local file reader (a --ci run binds none).
-async function readLocalFilesHash(deps: Deps, config: UsablConfig): Promise<string | null> {
-  return deps.fs.readLocalFile === undefined ? null : computeLocalFilesHash(deps, config);
-}
-
 async function scanConfigForCoverage(
   deps: Deps,
   config: UsablConfig,
