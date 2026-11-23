@@ -269,6 +269,26 @@ describe('the generated hooks with usabl missing, and with usabl installed', { t
     expect(ran.status).toBe(0);
     expect(ran.stdout).toBe('local usabl stop-hook --cursor {"loop_count":0}');
   });
+
+  it('the Cursor stop script passes its own limit to usabl, over a value the environment holds', async () => {
+    await installFakeUsabl();
+    // This fake usabl prints the limit it was given instead of its input.
+    await writeFile(
+      join(dir, 'node_modules', 'usabl', 'bin', 'usabl.js'),
+      "#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on('end', () => { process.stdout.write(`limit ${process.env.USABL_STOP_HOOK_TIMEOUT}`); });\n",
+    );
+    const script = join(dir, 'usabl-stop.sh');
+    await writeFile(script, CURSOR_STOP_SCRIPT);
+    const ran = spawnSync('bash', [script], {
+      cwd: dir,
+      env: { ...env(), USABL_STOP_HOOK_TIMEOUT: '900' },
+      input: '{"loop_count":0}',
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(ran.status).toBe(0);
+    expect(ran.stdout).toBe('limit 300');
+  });
 });
 
 describe('the installers rewrite an old npx usabl file as their own', () => {

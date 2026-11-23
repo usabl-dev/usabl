@@ -21,7 +21,7 @@ import {
   STOP_HOOK_TIMEOUT_ENV,
 } from '../surfaces/stop-hook-deadline.js';
 import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../install/claude-skill.js';
-import { CURSOR_HOOKS_JSON_PATH, planCursor, readCursorUiFileGlobs, type CursorTimeoutProblem } from '../install/cursor.js';
+import { CURSOR_HOOKS_JSON_PATH, CURSOR_STOP_SCRIPT_PATH, planCursor, readCursorUiFileGlobs, type CursorTimeoutProblem } from '../install/cursor.js';
 import { legacyDownloadDrift } from '../install/usabl-command.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
@@ -589,9 +589,18 @@ const CURSOR_TIMEOUT_STEPS: Record<CursorTimeoutProblem, string> = {
     `The usabl stop hook in ${CURSOR_HOOKS_JSON_PATH} sets no timeout, so usabl cannot know when Cursor ends it. ` +
     `${ENDED_STOP_GOES_ON} Run "usabl install --cursor" to set it to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds.`,
   'below-limit':
-    `The usabl stop hook in ${CURSOR_HOOKS_JSON_PATH} has a timeout below ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, the limit ` +
-    `usabl plans its own deadline to, so Cursor can end the hook first. ${ENDED_STOP_GOES_ON} ` +
+    `The usabl stop hook in ${CURSOR_HOOKS_JSON_PATH} has a timeout below ${CURSOR_STOP_TIMEOUT_SECONDS} seconds, the ` +
+    `smallest limit usabl writes, which leaves usabl too little time to check a change. ${ENDED_STOP_GOES_ON} ` +
     `Run "usabl install --cursor" to set it to ${CURSOR_STOP_TIMEOUT_SECONDS} seconds.`,
+  'script-no-limit':
+    `The usabl stop script ${CURSOR_STOP_SCRIPT_PATH} passes no time limit to usabl, so usabl plans to ` +
+    `${CURSOR_STOP_TIMEOUT_SECONDS} seconds whatever ${CURSOR_HOOKS_JSON_PATH} says, and a ${STOP_HOOK_TIMEOUT_ENV} value in the ` +
+    `environment Cursor runs in can put usabl's deadline past Cursor's limit. ${ENDED_STOP_GOES_ON} ` +
+    `Run "usabl install --cursor" to write the script with the timeout from ${CURSOR_HOOKS_JSON_PATH}.`,
+  'script-mismatch':
+    `The time limit ${CURSOR_STOP_SCRIPT_PATH} passes to usabl does not match the usabl stop hook's timeout in ` +
+    `${CURSOR_HOOKS_JSON_PATH}, so usabl plans its deadline to a different limit than the one Cursor enforces. ` +
+    `Run "usabl install --cursor" to make the script match the timeout.`,
 };
 
 async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {

@@ -9,6 +9,7 @@ import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader } from '../../src/install/branch-rule.js';
 import { CLAUDE_SETTINGS_PATH, PREVIOUS_STOP_HOOK_COMMAND, STOP_HOOK_COMMAND, stopHookCommand } from '../../src/install/claude.js';
 import {
+  buildCursorHooksJson,
   CURSOR_COMMAND_CONTENTS,
   CURSOR_COMMAND_PATH,
   CURSOR_HOOKS_JSON_PATH,
@@ -16,6 +17,7 @@ import {
   CURSOR_RULE_PATH,
   CURSOR_STOP_SCRIPT,
   CURSOR_STOP_SCRIPT_PATH,
+  PREVIOUS_CURSOR_STOP_SCRIPT,
 } from '../../src/install/cursor.js';
 import { collectDoctorReport, type DoctorDeps, type SurfaceReport } from '../../src/doctor/index.js';
 
@@ -120,5 +122,34 @@ describe('doctor and the Cursor stop hook time limit', () => {
     );
     expect(cursor.state).toBe('drifted');
     expect(cursor.nextStep).toContain('below 300 seconds');
+  });
+
+  it('reports the stop script the previous release wrote, which passes no limit, as drifted', async () => {
+    const cursor = await report(
+      {
+        ...others,
+        [CURSOR_STOP_SCRIPT_PATH]: PREVIOUS_CURSOR_STOP_SCRIPT,
+        ...hooksJson({ command: '.cursor/hooks/usabl-stop.sh', timeout: 300, loop_limit: 3 }),
+      },
+      'cursor',
+    );
+    expect(cursor.state).toBe('drifted');
+    expect(cursor.nextStep).toContain('passes no time limit to usabl');
+    expect(cursor.nextStep).toContain('environment');
+    expect(cursor.nextStep).toContain('usabl install --cursor');
+  });
+
+  it('reports a stop script whose limit differs from the hooks.json timeout as drifted', async () => {
+    const cursor = await report(
+      { ...others, ...hooksJson({ command: '.cursor/hooks/usabl-stop.sh', timeout: 900, loop_limit: 3 }) },
+      'cursor',
+    );
+    expect(cursor.state).toBe('drifted');
+    expect(cursor.nextStep).toContain('does not match');
+  });
+
+  it('reports the wiring usabl writes as wired', async () => {
+    const cursor = await report({ ...others, [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null) }, 'cursor');
+    expect(cursor.state).toBe('wired');
   });
 });

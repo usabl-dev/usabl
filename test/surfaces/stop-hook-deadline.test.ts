@@ -267,6 +267,10 @@ describe('the Stop hook deadline', () => {
     const followup = String(objects[0]?.['followup_message']);
     expect(followup.startsWith('NOT verified - usabl ran out of time')).toBe(true);
     expect(followup).toContain('.cursor/hooks.json');
+    // To raise the limit, the reinstall makes the adapter script pass the new timeout. The
+    // environment Cursor runs in is never the place to set it.
+    expect(followup).not.toContain('where Cursor runs the hook');
+    expect(followup).toContain('run usabl install --cursor again');
   });
 
   it("plans to Claude Code's default of 600 seconds when the hook command sets no limit, and says to reinstall", async () => {

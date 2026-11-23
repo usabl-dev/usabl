@@ -25,7 +25,9 @@ import {
   CURSOR_RULE_PATH,
   CURSOR_STOP_SCRIPT,
   CURSOR_STOP_SCRIPT_PATH,
+  cursorStopScript,
   DEFAULT_CURSOR_UI_FILE_GLOBS,
+  PREVIOUS_CURSOR_STOP_SCRIPT,
   planCursor,
   writeCursor,
 } from '../../src/install/cursor.js';
@@ -158,13 +160,71 @@ describe('the Cursor stop hook keeps its 300 second limit', () => {
       expect(plan).toMatchObject({ action: 'write', timeoutProblem: timeout === undefined ? 'missing' : 'below-limit' });
       const result = await writeCursor(fs, plan);
       expect(result.exitCode).toBe(0);
-      expect(fs.store[CURSOR_HOOKS_JSON_PATH]).toBe(buildCursorHooksJson({}));
+      expect(JSON.parse(fs.store[CURSOR_HOOKS_JSON_PATH] ?? '')).toEqual(JSON.parse(hooksJsonWith(300)));
       expect(result.message).toContain('300 seconds');
     }
   });
 
-  it('leaves a raised limit alone', async () => {
-    const fs = memoryFs({ ...others, [CURSOR_HOOKS_JSON_PATH]: hooksJsonWith(900) });
+  it('changes only the timeout of the usabl stop entry, and keeps every other key the person wrote', async () => {
+    const before = {
+      version: 1,
+      note: 'team setting',
+      hooks: {
+        afterFileEdit: [{ command: './format.sh' }],
+        stop: [{ command: '.cursor/hooks/usabl-stop.sh', timeout: 120, loop_limit: 10, owner: 'web team' }],
+      },
+    };
+    const fs = memoryFs({ ...others, [CURSOR_HOOKS_JSON_PATH]: `${JSON.stringify(before, null, 2)}\n` });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(0);
+
+    const after = JSON.parse(fs.store[CURSOR_HOOKS_JSON_PATH] ?? '') as typeof before;
+    expect(after).toEqual({
+      ...before,
+      hooks: { ...before.hooks, stop: [{ ...before.hooks.stop[0], timeout: 300 }] },
+    });
+    expect(result.message).toContain('Only the timeout changed');
+  });
+});
+
+describe('the Cursor stop script passes its own limit to usabl', () => {
+  const simple = {
+    [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+    [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
+  };
+
+  function hooksJsonWith(timeout: number): string {
+    const entry = { command: '.cursor/hooks/usabl-stop.sh', timeout, loop_limit: 3 };
+    return `${JSON.stringify({ version: 1, hooks: { stop: [entry] } }, null, 2)}\n`;
+  }
+
+  it('sets USABL_STOP_HOOK_TIMEOUT to the 300 second limit, so a value inherited from the environment cannot win', () => {
+    expect(CURSOR_STOP_SCRIPT).toContain('USABL_STOP_HOOK_TIMEOUT=300 npm_config_loglevel=silent npm exec --no -- usabl stop-hook --cursor');
+    expect(cursorStopScript(900)).toContain('USABL_STOP_HOOK_TIMEOUT=900 npm_config_loglevel=silent');
+  });
+
+  it('matches the script to a timeout a person raised in hooks.json', async () => {
+    const fs = memoryFs({ ...simple, [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT, [CURSOR_HOOKS_JSON_PATH]: hooksJsonWith(900) });
+    const plan = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(plan).toMatchObject({ action: 'write', timeoutProblem: 'script-mismatch' });
+    await writeCursor(fs, plan);
+    expect(fs.store[CURSOR_STOP_SCRIPT_PATH]).toBe(cursorStopScript(900));
+    expect(fs.store[CURSOR_HOOKS_JSON_PATH]).toBe(hooksJsonWith(900));
     expect((await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS)).action).toBe('already-wired');
+  });
+
+  it('rewrites the script the previous release wrote, which passed no limit', async () => {
+    const fs = memoryFs({ ...simple, [CURSOR_STOP_SCRIPT_PATH]: PREVIOUS_CURSOR_STOP_SCRIPT, [CURSOR_HOOKS_JSON_PATH]: hooksJsonWith(300) });
+    const plan = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(plan).toMatchObject({ action: 'write', timeoutProblem: 'script-no-limit' });
+    const result = await writeCursor(fs, plan);
+    expect(fs.store[CURSOR_STOP_SCRIPT_PATH]).toBe(CURSOR_STOP_SCRIPT);
+    expect(result.message).toContain(CURSOR_STOP_SCRIPT_PATH);
+  });
+
+  it('still refuses a script a person edited in any other way', async () => {
+    const edited = CURSOR_STOP_SCRIPT.replace('set -euo pipefail', 'set -eu');
+    const fs = memoryFs({ ...simple, [CURSOR_STOP_SCRIPT_PATH]: edited, [CURSOR_HOOKS_JSON_PATH]: hooksJsonWith(300) });
+    expect((await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS)).action).toBe('refuse');
   });
 });

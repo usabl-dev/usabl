@@ -129,8 +129,8 @@ function limitSource(limit: HostLimit): string {
 function raiseStep(cursorMode: boolean): string {
   if (cursorMode) {
     return (
-      'To raise the limit, set the usabl stop hook\'s "timeout" in .cursor/hooks.json, and set ' +
-      `${STOP_HOOK_TIMEOUT_ENV} to the same number of seconds where Cursor runs the hook.`
+      'To raise the limit, set the usabl stop hook\'s "timeout" in .cursor/hooks.json, then run usabl install --cursor again, ' +
+      'so .cursor/hooks/usabl-stop.sh passes the same number to usabl.'
     );
   }
   return (
