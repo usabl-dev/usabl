@@ -92,6 +92,8 @@ interface StopRun {
  * together.
  */
 async function runStop(cwd: string, cleanup: StopTimeCleanup<FixtureServer>): Promise<StopRun> {
+  // After a signal, the run starts no new stop.
+  cleanup.assertRunning();
   const started = performance.now();
   const child = spawn('sh', ['-c', STOP_HOOK_COMMAND], {
     cwd,
@@ -160,6 +162,7 @@ async function measure(
   cleanup: StopTimeCleanup<FixtureServer>,
 ): Promise<string> {
   const branch = `stop-time-${n}`;
+  cleanup.assertRunning();
   await git(app.cwd, ['switch', '--quiet', '--force', '-c', branch, trusted]);
   const screens = screensToChange(app, server.baseUrl, n);
   for (const screen of screens) {
@@ -211,6 +214,8 @@ async function main(argv: string[]): Promise<number> {
   }
   try {
     const server = await cleanup.startServer(() => startFixtureServer(app, '/'));
+    // A signal during the start: the cleanup stops this server, so the run goes no further.
+    cleanup.assertRunning();
     // The trusted branch: the demo as it ships, with its config pointed at this server.
     const config = loadFixtureConfig(app.cwd, server.baseUrl);
     const shipped = JSON.parse(await readFile(join(app.cwd, 'usabl.config.json'), 'utf8')) as Record<string, unknown>;

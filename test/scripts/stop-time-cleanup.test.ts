@@ -70,6 +70,45 @@ describe('the stop time cleanup', () => {
     expect(s.events).toEqual(['remove clone']);
   });
 
+  it('leaves no stop running when a signal comes during the first stop', async () => {
+    const s = steps();
+    const cleanup = stopTimeCleanup(s);
+    await cleanup.startServer(async () => 'demo');
+    const running = new Set<string>();
+    // The way the script runs a stop: it asks first, then tracks the child until it exits.
+    const startStop = (name: string): void => {
+      cleanup.assertRunning();
+      running.add(name);
+      cleanup.trackStop(() => running.delete(name));
+    };
+
+    startStop('cold');
+    const cleaned = cleanup.run();
+    // The cold stop's exit lets the measurement go on to the warm stop.
+    expect(() => startStop('warm')).toThrow('the run is stopping');
+    // A stop that was spawned anyway, just before the check, is stopped at once.
+    running.add('late');
+    cleanup.trackStop(() => running.delete('late'));
+    await cleaned;
+
+    expect(running.size).toBe(0);
+    expect(cleanup.stopping()).toBe(true);
+  });
+
+  it('starts no server once the cleanup began', async () => {
+    const s = steps();
+    const cleanup = stopTimeCleanup(s);
+    await cleanup.run();
+    let started = false;
+    await expect(
+      cleanup.startServer(async () => {
+        started = true;
+        return 'demo';
+      }),
+    ).rejects.toThrow('the run is stopping');
+    expect(started).toBe(false);
+  });
+
   it('runs once, however often a signal or the end of the run asks', async () => {
     const s = steps();
     const cleanup = stopTimeCleanup(s);
