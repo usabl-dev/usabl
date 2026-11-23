@@ -232,6 +232,41 @@ describe('planCursor', () => {
     expect(merged.hooks.stop).toHaveLength(1);
   });
 
+  // A first install rebuilt the file from version and hooks only, so other top-level keys were
+  // lost. It now adds the usabl stop entry to a copy of the file and keeps the rest as written.
+  it('keeps every other key of an existing hooks.json on a first install', async () => {
+    const before = {
+      version: 1,
+      note: 'team setting',
+      settings: { shell: 'bash' },
+      hooks: { afterFileEdit: [{ command: '.cursor/hooks/format.sh', timeout: 20 }], beforeShellExecution: [{ command: './audit.sh' }] },
+    };
+    const fs = memoryFs({ [CURSOR_HOOKS_JSON_PATH]: `${JSON.stringify(before, null, 2)}\n` });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(0);
+
+    const after = JSON.parse(fs.store[CURSOR_HOOKS_JSON_PATH] ?? '') as Record<string, unknown>;
+    const usablEntry = (JSON.parse(buildCursorHooksJson(null)) as { hooks: { stop: unknown[] } }).hooks.stop[0];
+    expect(after).toEqual({ ...before, hooks: { ...before.hooks, stop: [usablEntry] } });
+    // The keys stay in the order the person wrote them.
+    expect(Object.keys(after)).toEqual(['version', 'note', 'settings', 'hooks']);
+
+    // A second install finds the entry and changes nothing.
+    const again = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(again.action === 'write' ? again.files.map((file) => file.path) : []).not.toContain(CURSOR_HOOKS_JSON_PATH);
+  });
+
+  it('keeps an empty stop list and a file with no hooks key on a first install', async () => {
+    for (const before of [{ version: 1, note: 'x', hooks: { stop: [] } }, { version: 1, note: 'x' }]) {
+      const fs = memoryFs({ [CURSOR_HOOKS_JSON_PATH]: `${JSON.stringify(before, null, 2)}\n` });
+      await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+      const after = JSON.parse(fs.store[CURSOR_HOOKS_JSON_PATH] ?? '') as { note?: string; version?: number; hooks: { stop: unknown[] } };
+      expect(after.note).toBe('x');
+      expect(after.version).toBe(1);
+      expect(after.hooks.stop).toHaveLength(1);
+    }
+  });
+
   it('writes only missing files when some canonical files are already present', async () => {
     const fs = memoryFs({
       [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),

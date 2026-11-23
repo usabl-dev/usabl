@@ -5243,7 +5243,9 @@ A Claude Code reinstall keeps a timeout of 60 seconds or more and makes the comm
 timeout usabl cannot match is left as the person wrote it, and the reinstall refuses with the fix.
 A Cursor reinstall that fixes a missing or low timeout changes only that key in `.cursor/hooks.json`
 and keeps every other key, `loop_limit` included. A higher Cursor timeout is kept, and the
-reinstall makes the adapter script pass it. Doctor never mints a verdict or a receipt.
+reinstall makes the adapter script pass it. A first Cursor install into an existing
+`.cursor/hooks.json` with no usabl stop entry adds that entry and keeps every other top-level key,
+every other event's hooks, and the key order as written. Doctor never mints a verdict or a receipt.
 
 After the surfaces, doctor prints an `optional engines` section (section 7.7). It opens with the line
 "Tested against the vendor's documented result format. Not yet run on a licensed SDK. Engine findings

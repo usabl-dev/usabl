@@ -384,9 +384,14 @@ async function planHooksJson(
     }
   }
 
-  // Merge the stop hook into existing hooks, preserving everything else.
-  const existingHooks = isRecord(hooks) ? (hooks as Record<string, unknown>) : {};
-  return { ok: true, action: 'write', draft: buildCursorHooksJson(existingHooks), scriptLimit: CURSOR_STOP_TIMEOUT_SECONDS };
+  // No usabl stop entry yet. It is added to a copy of the parsed file, as the timeout fix above
+  // changes one, so every other top-level key, every other event, and the key order stay as the
+  // person wrote them. A file with no version gets the version usabl writes.
+  const merged = structuredClone(parsed);
+  const canonical = JSON.parse(buildCursorHooksJson(null)) as { version: unknown; hooks: { stop: unknown[] } };
+  merged['version'] ??= canonical.version;
+  merged['hooks'] = { ...(isRecord(hooks) ? hooks : {}), stop: canonical.hooks.stop };
+  return { ok: true, action: 'write', draft: `${JSON.stringify(merged, null, 2)}\n`, scriptLimit: CURSOR_STOP_TIMEOUT_SECONDS };
 }
 
 export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<CursorPlan> {
