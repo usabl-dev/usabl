@@ -244,10 +244,10 @@ re-baseline to green.
   change, a file that is slow to read) could then stop without the accessibility work. So every
   stop ends inside the host's limit. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
-  hook states `"timeout": 300`, which the runner assumes in Cursor mode. A hook command that
-  sets no number, such as the one earlier releases wrote, makes the runner plan to 60 seconds,
-  the shortest default Claude Code has used. The runner's own deadline is that limit less 30
-  seconds. A stop that reaches it saves no receipt, stops the scan, and blocks once with
+  hook states `"timeout": 300`, which the runner assumes in Cursor mode. A Claude Code hook
+  command that sets no number, such as the one earlier releases wrote, makes the runner plan to
+  600 seconds, the default Claude Code's hooks documentation gives for a command hook, so its
+  deadline is 570 seconds. The runner's own deadline is the limit less 30 seconds. A stop that reaches it saves no receipt, stops the scan, and blocks once with
   "NOT verified - usabl ran out of time", or lets an active continuation through once with the
   same notice, so a slow app cannot loop the agent. It never reads as a pass. Only one answer
   reaches the host: when the deadline comes after the check started its own answer, that
@@ -261,6 +261,11 @@ re-baseline to green.
   `.claude/settings.json` is not guarded unless a project lists it in `guardedPaths`. Doctor
   reports the mismatch. An answer the check started before the deadline
   and has not finished 10 seconds later is cut short when the process ends.
+- Limit, stated plainly: on an older Claude Code release whose default for a command hook was
+  60 seconds, a hook that states no limit can still be ended by Claude Code before usabl
+  answers, and the stop then goes on, as in earlier releases of usabl. This lasts until
+  `usabl install --claude` runs again and the hook states its limit. Doctor reports such a hook
+  as drifted, and a stop of it that runs out of usabl's time names the reinstall step.
 - On a Stop hook stop, the requirement providers and the commercial engines are still built from
   the working-tree `usabl.config.json`, and a change there is a guarded change, so the stop blocks
   for approval.

@@ -162,7 +162,11 @@ that, and what to do.
     seconds, and its command passes the same number to usabl in `USABL_STOP_HOOK_TIMEOUT`. usabl
     ends each stop 30 seconds before that limit: a stop that runs out of time blocks once and says
     nothing was proven, because a hook the assistant ends lets the stop go on. To give stops more
-    time, raise the timeout and run `usabl install --claude` again, which makes the command match. A stop checks what CI will
+    time, raise the timeout and run `usabl install --claude` again, which makes the command match.
+    A hook that states no limit, such as the one earlier releases wrote, gets Claude Code's default
+    of 600 seconds, so usabl ends its stops after 570 seconds. On an older Claude Code release whose
+    default was 60 seconds, Claude Code can still end such a hook before usabl answers, and the
+    stop goes on, until `usabl install --claude` runs again. A stop checks what CI will
     check: every file changed since the branch left the default branch git records for origin
     (`refs/remotes/origin/HEAD`), plus changes that are not committed, so work the assistant
     committed before it stopped is checked too. When git records no default branch, the stop

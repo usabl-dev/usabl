@@ -4309,10 +4309,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     older than the command ignores it instead of refusing an unknown flag. The Cursor hook keeps
     `"timeout": 300` in `.cursor/hooks.json`, and in Cursor mode the runner plans to 300 seconds
     when the variable is unset. A Claude Code hook command that sets no variable, such as the
-    one earlier releases wrote, makes the runner plan to 60 seconds: Claude Code's hooks
-    documentation gives 600 seconds as the default for a command hook with no `timeout`, older
-    releases used 60, and usabl cannot tell which release runs the hook. A value that is not
-    whole seconds of at most six digits counts as unset.
+    one earlier releases wrote, makes the runner plan to 600 seconds, the default Claude Code's
+    hooks documentation gives for a command hook with no `timeout` (the Stop event keeps it), so
+    its deadline is 570 seconds. A variable that is set always wins. A value that is not whole
+    seconds of at most six digits counts as unset.
+  - Limit: on an older Claude Code release whose default for a command hook was 60 seconds, a
+    hook that states no limit can still be ended by Claude Code before usabl answers, and the
+    stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
+    runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -4324,7 +4328,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     before it could check the change. Nothing is proven about this change, and no receipt was
     saved.", then the limit it used and where it came from, then "Next: narrow the change and
     stop again, or run usabl check by hand, or raise the limit in the hook settings." and how to
-    raise it for that assistant. The check named is `usabl check --branch-scope` once the stop
+    raise it for that assistant. When a Claude Code hook command set no limit, the message ends
+    with "Run usabl install --claude again so the hook states its time limit." The check named is `usabl check --branch-scope` once the stop
     found a starting commit. On an active continuation it lets the stop through once with the
     same notice and "usabl let this stop through without blocking again (continuation already
     active).", as the drift and older-pins blocks do, so a slow app cannot loop the agent. Pins
@@ -5161,7 +5166,8 @@ engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the
 sentinel), or `drifted` (any other shape). The stop-hook surface is drifted when the usabl Stop hook
 in `.claude/settings.json` has no `timeout` that is a number, when the timeout or the
 `USABL_STOP_HOOK_TIMEOUT` value in its command is below 60 seconds, or when the command sets no
-value or one that differs from the timeout. The cursor surface is drifted when the usabl stop entry
+value or one that differs from the timeout. A command that sets no value makes the runner plan to
+Claude Code's default of 600 seconds, not to the timeout. The cursor surface is drifted when the usabl stop entry
 in `.cursor/hooks.json` has no `timeout` that is a number, or one below 300 seconds. Each next
 step says the stop goes on with nothing checked when the assistant ends the hook, and names the
 install command, which writes the timeout and the matching value. A reinstall keeps a Claude Code
