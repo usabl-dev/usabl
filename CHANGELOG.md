@@ -428,6 +428,19 @@
 
 ### Fixed
 
+- A screen kept in a test folder is a gap for every way an unresolved import can name it. An
+  import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
+  `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
+  screen read as nothing to check and exited 0. usabl now reads every form of the same path the
+  same way: it takes off `.` and `..` segments, a trailing slash, a module extension the resolver
+  knows, and a trailing `/index`, and it reads a relative import from the importer's folder. Letter
+  case is ignored, and `Index.tsx` counts as an index file. An unresolved import whose path names
+  no file, such as `@/`, and a `#` specifier with no slash may load any file, and one that names a
+  folder holding a `package.json` may load any file in it. Gate effect: such a change is
+  `not_covered` with an `unresolved` gap, never nothing to check. A test helper that no import
+  names is still excluded.
+- The package name lookup for a `uiFileGlobs` entry that names one file, such as `src/App.tsx`,
+  starts at the file's folder and no longer asks for `src/App.tsx/package.json`. Gate effect: none.
 - A Stop hook stop always ends inside the assistant's time limit. An assistant that ends a hook
   at its limit lets the stop go on, so a slow stop let an agent stop without the accessibility
   work. `usabl install --claude` now writes `"timeout": 600` on the Stop hook, and its command
