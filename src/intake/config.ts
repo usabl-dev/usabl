@@ -15,7 +15,7 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
@@ -80,11 +80,71 @@ function expectGlobArray(value: unknown, label: string): string[] {
 // grows as a product of the groups, so a short entry can take a long time or exhaust memory on
 // every file it tests. Past the guard's cap the entry is refused, never cut to fewer patterns. The
 // count is taken before anything is expanded.
+//
+// The cost of matching also grows with the length of each pattern and with every entry together,
+// and one very long pattern makes the regular expression engine throw. So the list has three more
+// bounds, each far above what a real config holds:
+// - 1024 characters for each pattern an entry expands to. A real UI glob is a short path pattern,
+//   and a pattern this long stays far below the size the engine refuses (it refused one of about
+//   100,000 characters).
+// - 4096 patterns across the whole list: sixteen entries at the cap of 256 each. A real list names
+//   a few folders with a few file extensions each.
+// - 262,144 characters across every pattern of the list, the count of each entry times its
+//   length: 256 patterns of 1024 characters, or 4096 of 64. At 4096 patterns of 1024 characters
+//   each changed file took about 20 ms to match, so the bound keeps a large change quick.
+const MAX_UI_GLOB_LENGTH = 1024;
+const MAX_UI_GLOB_PATTERNS = 4096;
+const MAX_UI_GLOB_PATTERN_CHARACTERS = 262_144;
+
+// The length of the longest pattern an entry's brace groups expand to, counted without expanding
+// them: the text outside the groups plus the longest alternative of each group. A comma-less brace
+// is text, braces included. The entry's braces are already known to be well formed.
+function longestExpansionLength(glob: string): number {
+  let length = 0;
+  let i = 0;
+  while (i < glob.length) {
+    const close = glob.charAt(i) === '{' ? glob.indexOf('}', i) : -1;
+    const body = close === -1 ? '' : glob.slice(i + 1, close);
+    if (close !== -1 && body.includes(',')) {
+      length += Math.max(...body.split(',').map((alternative) => alternative.length));
+      i = close + 1;
+      continue;
+    }
+    length += 1;
+    i += 1;
+  }
+  return length;
+}
+
 function expectUiFileGlobs(value: unknown): string[] {
   const globs = expectGlobArray(value, 'uiFileGlobs');
+  let patterns = 0;
+  let characters = 0;
   for (const glob of globs) {
-    if ((countBraceExpansions(glob) ?? 0) > MAX_BRACE_EXPANSIONS) {
+    const count = countBraceExpansions(glob) ?? 1;
+    if (count > MAX_BRACE_EXPANSIONS) {
       throw configError`uiFileGlobs entry "${glob}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} patterns, more than usabl matches one by one. Split it into several entries, or use a wildcard for the part that varies.`;
+    }
+    const length = longestExpansionLength(glob);
+    if (length > MAX_UI_GLOB_LENGTH) {
+      throw configError`uiFileGlobs entry "${glob}" makes a pattern longer than ${String(MAX_UI_GLOB_LENGTH)} characters, longer than usabl matches. Shorten it, or use a wildcard for the part that varies.`;
+    }
+    patterns += count;
+    characters += count * length;
+  }
+  if (patterns > MAX_UI_GLOB_PATTERNS) {
+    throw configError`uiFileGlobs entries expand to ${String(patterns)} patterns in all, more than ${String(MAX_UI_GLOB_PATTERNS)}, more than usabl matches one by one. Use fewer entries or fewer brace alternatives, or use a wildcard for the part that varies.`;
+  }
+  if (characters > MAX_UI_GLOB_PATTERN_CHARACTERS) {
+    throw configError`uiFileGlobs entries expand to patterns of more than ${String(MAX_UI_GLOB_PATTERN_CHARACTERS)} characters in all, more than usabl matches quickly. Use fewer or shorter entries, or use a wildcard for the part that varies.`;
+  }
+  // Each pattern is built and run once here, so a pattern the engine cannot build is refused when
+  // the config is read, never a crash in the middle of a run. Inside the bounds above none fails.
+  for (const glob of globs) {
+    try {
+      globMatcher(glob)('');
+    } catch {
+      throw configError`uiFileGlobs entry "${glob}" makes a pattern usabl cannot build. Shorten it, or use a wildcard for the part that varies.`;
     }
   }
   return globs;

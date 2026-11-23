@@ -3633,7 +3633,14 @@ an entry and tests every file against each, so a short entry with many brace gro
 time or exhaust memory. Config load refuses a `uiFileGlobs` entry with more than 256 brace
 expansions, names the entry, and says to split it or use a wildcard for the part that varies. The
 entry is never cut to fewer patterns, so no UI file it names drops out of the check. The count is
-taken before anything is expanded.
+taken before anything is expanded. The cost of matching also grows with the length of each
+pattern and with every entry together, and a pattern of about 100,000 characters made the regular
+expression engine throw. So config load also refuses an entry that expands to a pattern longer
+than 1024 characters, a list whose entries expand to more than 4096 patterns in all (sixteen
+entries at the cap), and a list whose patterns hold more than 262,144 characters in all (at 4096
+patterns of 1024 characters, each changed file took about 20 ms to match). Each entry's pattern
+is built and run once at load, so one the engine cannot build is a config refusal, never a crash
+in a run. The planner builds each entry's matcher once per run, not once per changed file.
 
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no

@@ -720,6 +720,53 @@ describe('parseUsablConfig glob syntax', () => {
       expect(message).toContain('uiFileGlobs entry');
       expect(message).toContain('more than 256');
     });
+
+    // The cost of matching grows with the patterns of every entry and their length together, so
+    // the whole list is bounded too, not only each entry's count.
+    function listRefusal(globs: string[]): string {
+      try {
+        parseUsablConfig(configJson({ uiFileGlobs: globs }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+    const entries = (count: number, groups: number): string[] =>
+      Array.from({ length: count }, (_, i) => `src/p${i}/${'{a,b}'.repeat(groups)}.tsx`);
+
+    it('loads a list of 4096 patterns in all, and refuses one past it', () => {
+      expect(listRefusal(entries(16, 8))).toBe('');
+      const message = listRefusal([...entries(16, 8), 'src/extra.tsx']);
+      expect(message).toContain('uiFileGlobs entries expand to 4097 patterns in all');
+      expect(message).toContain('more than 4096');
+    });
+
+    it('loads an entry whose pattern is 1024 characters, and refuses one longer', () => {
+      const at = `src/${'x'.repeat(1024 - 'src/'.length - '.tsx'.length)}.tsx`;
+      expect(at).toHaveLength(1024);
+      expect(listRefusal([at])).toBe('');
+      const message = listRefusal([`${at}x`]);
+      expect(message).toContain('makes a pattern longer than 1024 characters');
+      expect(message).toContain('uiFileGlobs entry "src/xxx');
+    });
+
+    it('refuses a list whose patterns hold more than 262144 characters in all', () => {
+      const long = (i: number): string => `src/p${String(i).padStart(4, '0')}/${'x'.repeat(1000)}/*.tsx`;
+      const fits = Array.from({ length: 250 }, (_, i) => long(i));
+      expect(listRefusal(fits)).toBe('');
+      const message = listRefusal(Array.from({ length: 300 }, (_, i) => long(i)));
+      expect(message).toContain('more than 262144 characters in all');
+    });
+
+    // An entry this long made the regular expression engine throw "Regular expression too large",
+    // a crash instead of a plain refusal.
+    it('refuses an entry too long to match as a plain config refusal, quickly, never a crash', () => {
+      const started = performance.now();
+      const message = listRefusal([`src/${'{a,b}'.repeat(8)}/${'x'.repeat(100_000)}/*.tsx`]);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(message).toContain('uiFileGlobs entry');
+      expect(message).not.toContain('Regular expression');
+    });
   });
 
   it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
