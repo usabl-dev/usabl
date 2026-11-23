@@ -576,6 +576,11 @@ const CLAUDE_TIMEOUT_STEPS: Record<TimeoutProblem, string> = {
     'usabl too little time to check a change and answer before Claude Code ends the hook. ' +
     `Run "usabl install --claude" to set it to ${CLAUDE_STOP_TIMEOUT_SECONDS} seconds, or set the timeout and ` +
     `${STOP_HOOK_TIMEOUT_ENV} in the command to the same number of at least ${MIN_HOST_TIMEOUT_SECONDS}.`,
+  unmatchable:
+    'The usabl Stop hook in .claude/settings.json has a timeout usabl cannot match: it is not a whole number of seconds ' +
+    `from ${MIN_HOST_TIMEOUT_SECONDS} to 999999, the limits ${STOP_HOOK_TIMEOUT_ENV} can carry, so usabl plans its own deadline ` +
+    'to a different limit than the one Claude Code uses. usabl install --claude leaves such a timeout as it is. ' +
+    'Set "timeout" to whole seconds, then run "usabl install --claude" to make the command match it.',
   mismatch:
     `The timeout of the usabl Stop hook in .claude/settings.json does not match ${STOP_HOOK_TIMEOUT_ENV} in its command, ` +
     'or the command sets none, so usabl plans its own deadline to a different limit than the one Claude Code uses. ' +
@@ -660,6 +665,9 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
       state: 'missing',
       nextStep: 'No .claude/settings.json. Run "usabl install --claude" to wire the usabl Stop hook.',
     };
+  }
+  if (plan.timeoutProblem === 'unmatchable') {
+    return { id: 'stop-hook', label: STOP_HOOK_LABEL, state: 'drifted', nextStep: CLAUDE_TIMEOUT_STEPS.unmatchable };
   }
   return {
     id: 'stop-hook',

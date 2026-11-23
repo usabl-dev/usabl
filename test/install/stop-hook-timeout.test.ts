@@ -112,6 +112,24 @@ describe('the Claude Code Stop hook states its time limit', () => {
     expect(stopHooks(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual([{ type: 'command', command: stopHookCommand(900), timeout: 900 }]);
   });
 
+  it('keeps a timeout above 999999 seconds or a fractional one as it is, and refuses with the fix', async () => {
+    for (const [command, timeout] of [
+      [STOP_HOOK_COMMAND, 1_000_000],
+      [STOP_HOOK_COMMAND, 600.5],
+      [PREVIOUS_STOP_HOOK_COMMAND, 600.5],
+      ['npx usabl stop-hook', 1_000_000],
+    ] as const) {
+      const raw = settingsWith({ type: 'command', command, timeout });
+      const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: raw });
+      const plan = await planClaude(fs);
+      expect(plan).toMatchObject({ action: 'refuse', timeoutProblem: 'unmatchable' });
+      const result = await writeClaude(fs, plan);
+      expect(result.exitCode).toBe(2);
+      expect(result.message).toContain('not a whole number of seconds from 60 to 999999');
+      expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(raw);
+    }
+  });
+
   it('replaces a limit below the minimum with the default', async () => {
     const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: settingsWith({ type: 'command', command: stopHookCommand(20), timeout: 20 }) });
     const plan = await planClaude(fs);

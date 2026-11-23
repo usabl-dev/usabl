@@ -90,6 +90,15 @@ describe('doctor and the Claude Code Stop hook time limit', () => {
     expect(stop.nextStep).not.toContain('shortest');
   });
 
+  it('reports a timeout above 999999 seconds or a fractional one as a timeout usabl cannot match', async () => {
+    for (const timeout of [1_000_000, 600.5]) {
+      const stop = await report(claudeSettings({ type: 'command', command: STOP_HOOK_COMMAND, timeout }), 'stop-hook');
+      expect(stop.state).toBe('drifted');
+      expect(stop.nextStep).toContain('usabl cannot match');
+      expect(stop.nextStep).toContain('whole number of seconds from 60 to 999999');
+    }
+  });
+
   it('still reports a hook with no timeout as drifted', async () => {
     const stop = await report(claudeSettings({ type: 'command', command: STOP_HOOK_COMMAND }), 'stop-hook');
     expect(stop.state).toBe('drifted');

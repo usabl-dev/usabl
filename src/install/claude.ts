@@ -60,15 +60,17 @@ export type UpdateReason = 'add-missing' | 'normalize' | 'remove-download' | 'ti
  * Why usabl cannot plan to a usabl Stop hook's time limit.
  *   missing: the hook has no `timeout` that is a number.
  *   below-minimum: the timeout, or the limit in the command, is below the runner's minimum.
+ *   unmatchable: the timeout is above 999999 seconds or not whole seconds, so no limit usabl reads
+ *     can match it. usabl keeps it as the person wrote it and refuses to change the file.
  *   mismatch: the command sets no limit, or one that differs from the timeout.
  */
-export type TimeoutProblem = 'missing' | 'below-minimum' | 'mismatch';
+export type TimeoutProblem = 'missing' | 'below-minimum' | 'unmatchable' | 'mismatch';
 
 export type ClaudePlan =
   | { action: 'write'; path: string; contents: string }
   | { action: 'update'; path: string; contents: string; reason: UpdateReason; timeoutProblem?: TimeoutProblem }
   | { action: 'already-wired'; path: string }
-  | { action: 'refuse'; path: string; reason: string };
+  | { action: 'refuse'; path: string; reason: string; timeoutProblem?: 'unmatchable' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -143,7 +145,21 @@ export function stopHookTimeoutProblem(hook: Record<string, unknown>): TimeoutPr
   if (timeout < MIN_HOST_TIMEOUT_SECONDS || (commandLimit !== null && commandLimit < MIN_HOST_TIMEOUT_SECONDS)) {
     return 'below-minimum';
   }
+  if (isUnmatchableTimeout(timeout)) {
+    return 'unmatchable';
+  }
   return commandLimit === timeout ? null : 'mismatch';
+}
+
+// A timeout at or above the minimum that no limit usabl reads can equal: not whole seconds, or
+// more than six digits. Rewriting it would change a limit the person chose, so usabl keeps it.
+function isUnmatchableTimeout(timeout: unknown): timeout is number {
+  return (
+    typeof timeout === 'number' &&
+    Number.isFinite(timeout) &&
+    timeout >= MIN_HOST_TIMEOUT_SECONDS &&
+    parseTimeoutSeconds(String(timeout)) === null
+  );
 }
 
 // True for a limit usabl can write in both places: whole seconds the runner reads, at or above
@@ -313,6 +329,15 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
     return refuse(
       `Refusing to change ${CLAUDE_SETTINGS_PATH}: it has more than one usabl Stop hook, and two would both run. Reconcile them to a single usabl Stop hook by hand.`,
     );
+  }
+  const ownedTimeout = Array.isArray(stop) ? usablHooks(stop)[0]?.['timeout'] : undefined;
+  if (isUnmatchableTimeout(ownedTimeout)) {
+    // The number is the person's own setting from this file, not page text.
+    const reason =
+      `Refusing to change ${CLAUDE_SETTINGS_PATH}: the usabl Stop hook's "timeout" is ${ownedTimeout}, which is not a whole ` +
+      `number of seconds from ${MIN_HOST_TIMEOUT_SECONDS} to 999999, so usabl cannot pass the same limit to its own deadline. ` +
+      'usabl left the file as it is. Set "timeout" to whole seconds, then run usabl install --claude again.';
+    return { action: 'refuse', path: CLAUDE_SETTINGS_PATH, reason: `${reason}\n${manualStep()}`, timeoutProblem: 'unmatchable' };
   }
 
   // Build the merged object without touching the original, so a refusal path never leaves
