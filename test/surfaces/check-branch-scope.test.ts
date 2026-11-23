@@ -306,6 +306,59 @@ describe('usabl check --branch-scope', { timeout: REAL_PROCESS_BUDGET_MS }, () =
     });
   }
 
+  // From a subfolder, the root config is named by a path that climbs out of that folder. It is
+  // the root file, so the check runs at the repository root as the Stop hook does: it reads the
+  // same guarded files and leaves its receipt where the next stop looks.
+  it('runs from a subfolder with --config naming the root config by its relative path', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    process.chdir(join(repo, 'src'));
+    const ran = await check('--branch-scope', '--config', '../usabl.config.json');
+    expect(ran.stderr).not.toContain('--branch-scope cannot be combined with --config');
+    expect(ran.code).toBe(0);
+    expect(ran.scanned).toEqual(['home']);
+    expect(await storedBase()).toBe(git('rev-parse', 'main').trim());
+    const stopped = await stop();
+    expect(stopped.scanned).toEqual([]);
+    expect(blockReason(stopped)).toBeNull();
+  });
+
+  it('still refuses from a subfolder a --config file outside the repository', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    const weak = join(repo, '..', `${repo.split('/').at(-1) ?? 'repo'}-weak.json`);
+    await writeFile(weak, JSON.stringify({ ...config, uiFileGlobs: ['src/Other.tsx'] }, null, 2) + '\n');
+    try {
+      process.chdir(join(repo, 'src'));
+      const ran = await check('--branch-scope', '--config', `../../${weak.split('/').at(-1) ?? ''}`);
+      expect(ran.code).toBe(2);
+      expect(ran.scanned).toEqual([]);
+      expect(ran.stderr).toContain('--branch-scope cannot be combined with --config');
+    } finally {
+      await rm(weak, { force: true });
+    }
+  });
+
+  // Without --config, a check from a subfolder would read a usabl.config.json in that folder,
+  // which is not the file the Stop hook reads.
+  it('refuses from a subfolder without --config and says to run from the project root', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/usabl.config.json', JSON.stringify({ ...config, uiFileGlobs: ['src/Other.tsx'] }, null, 2) + '\n');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the app');
+    process.chdir(join(repo, 'src'));
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(2);
+    expect(ran.scanned).toEqual([]);
+    expect(ran.stderr).toContain('run it from the project root');
+  });
+
   it('is refused on a command other than check', async () => {
     stderr = [];
     const code = await main(['brief', '--branch-scope']);

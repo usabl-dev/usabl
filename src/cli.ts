@@ -40,6 +40,7 @@ import {
   localApprovalNextSteps,
   parseCliArgs,
   projectCli,
+  ROOT_CONFIG,
   type CliOptions,
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
@@ -446,7 +447,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  let opts;
+  let opts: CliOptions;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
@@ -886,10 +887,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  const refusal = branchScopeRefusal(opts, process.cwd()) ?? ciRefusal(opts);
+  // The root config is found at the repository root, the folder the Stop hook reads it from, so a
+  // check from a subfolder can name it by its relative path.
+  const scopeFolders = opts.branchScope ? { cwd: await realpath(process.cwd()), root: await repositoryRoot() } : null;
+  const refusal =
+    (scopeFolders === null ? null : branchScopeRefusal(opts, scopeFolders.cwd, scopeFolders.root)) ?? ciRefusal(opts);
   if (refusal !== null) {
     process.stderr.write(`usabl: ${refusal.message}\n`);
     return refusal.exitCode;
+  }
+  if (scopeFolders !== null && scopeFolders.cwd !== scopeFolders.root) {
+    // The Stop hook runs at the repository root. A branch check from a subfolder runs there too, so
+    // it reads the guarded files the hook reads and saves its receipt where the next stop looks.
+    // The refusal above has proved the config path names the root file.
+    process.chdir(scopeFolders.root);
+    opts = { ...opts, configPath: ROOT_CONFIG };
   }
 
   // The judge's browser. The origins it may reach come from the trusted ref, and the build digest
