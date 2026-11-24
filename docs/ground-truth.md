@@ -1842,10 +1842,30 @@ in this order:
    a fixture is itself a test file, so it does not make the fixture a UI file.
 2. **It is an `unresolved` gap** when a load usabl cannot follow, in any file the wider graph
    followed, may load it:
-   - an import usabl could not resolve whose last path segment, with or without its extension,
-     equals the file's name without its extension (or its folder name, for an `index` file). For
-     example, `src/pages/Home.tsx` imports `@/tests/Dashboard` with no alias config, so a change to
-     `src/tests/Dashboard.tsx` is a gap;
+   - an import usabl could not resolve whose name equals the file's name without its extension
+     (or its folder name, for an `index` file). For example, `src/pages/Home.tsx` imports
+     `@/tests/Dashboard` with no alias config, so a change to `src/tests/Dashboard.tsx` is a gap.
+     Every way to write the same path gives the same name: usabl takes off the query and hash, `.`
+     and `..` segments, a trailing slash, the extension, and a trailing `/index`. So
+     `@/tests/Dashboard/`, `@/tests/Dashboard/index`, `@/tests/Dashboard/index.tsx`, and
+     `@/tests/Dashboard/index.mdx` all name `src/tests/Dashboard/index.tsx`. The last segment as
+     written, with or without its extension, counts too, and so does each name without a leading
+     `@`, `~`, `$`, or `#`, since an alias key such as `@tests` often names the folder `tests`. A
+     relative import is read from the importer's folder. Names are compared in lower case, since a
+     disk that ignores letter case loads `Dashboard.tsx` for `dashboard` and `index.tsx` for
+     `INDEX`. An index file is named by its folder whatever the case of `index` and of its
+     extension, so `Index.tsx` and `index.TSX` are index files. `Index.tsx` also keeps its own name,
+     `Index`. An import whose path ends with no name, such as the alias root `@/` or `~/`, a lone
+     `#`, or a relative path to the repository root, may load any file. A `#` specifier with no
+     slash, such as `#app`, is a whole key of a package.json `imports` map. usabl does not read that
+     map, so it reads the key by its name without the `#`, as it reads a bare alias key: `#tests`
+     names `src/tests/index.tsx`, and `#app` names only a file or folder called `app`. Such an
+     import also names each file below a folder of its name that holds a `package.json`, and each
+     file that package.json's `main`, `module`, `browser`, or `exports` field names, inside the
+     folder or outside it, because a bundler loads the folder through those fields. A package.json
+     that is not a JSON object, or whose fields are nested more than 64 levels deep or hold more
+     than 100000 values, may make the folder load any file. Only folders above the files usabl
+     considers are read, and only those whose name an import names;
    - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A string
      with a backslash escape is read as the string it is. Brace groups are expanded first, and each
      alternative is resolved on its own, so `./{../tests,x}/*.tsx` covers `../tests/*.tsx` and
@@ -1993,6 +2013,20 @@ through one of them is excluded:
   place of the package. The package names are read from the working tree, which in CI is the pull
   request tree, so a name an earlier change declared can make a later import of an app folder by
   that name read as a package;
+- an alias key or an imports key that shares no name with the file it loads, in a config usabl
+  cannot read. Such an import is read only by its name. For example, a Vite alias
+  `dashboard-screen` for `src/tests/Dashboard.tsx`, a `#dash` imports key for the same file, or
+  `@dash/index` for `src/tests/Dashboard/index.tsx` where `@dash` maps to `src/tests/Dashboard`,
+  does not name the file.
+  Reading every such import as one that may load any file would make a test-only pull request a
+  gap in any repository with a virtual module, such as `#app` or `#imports` in a Nuxt app, or a
+  package it imports without declaring it;
+- a folder whose `package.json` names the file the folder loads, when no file usabl considers sits
+  in that folder, so usabl does not read that `package.json`. This happens when the folder holds
+  only the `package.json` and `uiFileGlobs` do not match it;
+- an import written with backslashes or with percent-encoded characters, such as
+  `@\tests\Dashboard` or `@/tests/Dash%62oard`, which usabl does not read as the path it may stand
+  for;
 - a Vite root above the repository root. usabl reads a glob that starts with `/` under every folder
   of the repository. With such a root, the pattern starts with folders above the repository, which
   usabl does not see, so it can miss a test file the pattern loads.

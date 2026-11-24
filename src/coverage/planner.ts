@@ -7,7 +7,7 @@
 import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
 import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
-import { buildImportGraph, inspectDirectImports } from './import-graph.js';
+import { buildImportGraph, inspectDirectImports, type PackageFolder, readPackageFolders } from './import-graph.js';
 import {
   excludedTestFileReason,
   isTestFile,
@@ -451,6 +451,8 @@ export async function computeCoverage(
   // Graph unresolvable entries are diagnostics about discovery fidelity.
   // They are not coverage gaps unless a changed UI file maps to no screen.
   const { graph, aliasConfig, closures: routeClosures } = await loadRouteGraph();
+  // What each folder's package.json says, read once for every unresolved file's discovery detail.
+  const packageFolderReads = new Map<string, PackageFolder | null>();
 
   for (const file of uiFiles) {
     const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
@@ -519,6 +521,8 @@ export async function computeCoverage(
       unresolvedFiles.push(file);
       const directDiagnostics = await inspectDirectImports(fs, file, aliasConfig);
       const combinedUnresolvable = [...graph.unresolvable, ...directDiagnostics];
+      const onPaths = combinedUnresolvable.filter((entry) => entry.importer !== file && graph.visited.has(entry.importer));
+      const packageFolders = await readPackageFolders(fs, [file], onPaths, packageFolderReads);
       gaps.push({
         ref: file,
         state: 'unresolved',
@@ -528,6 +532,7 @@ export async function computeCoverage(
           graph.visited,
           // A file this set leaves out only because of the story tool page gets the story tool note.
           loadedTestFileNotes.get(file) ?? (storyToolPage && isTestFile(file) ? storyToolNote(file) : undefined),
+          packageFolders,
         ),
       });
     }

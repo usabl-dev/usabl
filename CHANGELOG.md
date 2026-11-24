@@ -449,6 +449,23 @@
   `unverified` draft an alert gets in that state. Gate effect: a screen
   checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
   `not_covered`, unless the evidence floor or a waiver already holds that finding.
+- A screen kept in a test folder is a gap for every way an unresolved import can name it. An
+  import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
+  `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
+  screen read as nothing to check and exited 0. usabl now reads every form of the same path the
+  same way: it takes off `.` and `..` segments, a trailing slash, the extension, and a trailing
+  `/index`, and it reads a relative import from the importer's folder. Names are compared in lower
+  case, `Index.tsx` and `index.TSX` count as index files, and `Index.tsx` keeps its own name too.
+  Each name is also read without a leading `@`, `~`, `$`, or `#`, so an alias key such as `@tests`
+  names `src/tests/index.tsx`, and a `#` key such as `#app` is read by its name. Every file the
+  earlier rule named is still named. An unresolved import whose path names no file, such as `@/`,
+  may load any file. One that names a folder holding a `package.json` may load any file in it and
+  each file that its `main`, `module`, `browser`, or `exports` field names. The discovery detail
+  of a file usabl cannot place uses the same folder rule. Gate effect: such a change is
+  `not_covered` with an `unresolved` gap, never nothing to check. A test helper that no import
+  names is still excluded, also beside a `#app` or `#imports` import.
+- The package name lookup for a `uiFileGlobs` entry that names one file, such as `src/App.tsx`,
+  starts at the file's folder and no longer asks for `src/App.tsx/package.json`. Gate effect: none.
 - `usabl check` saves a receipt only when the config it planned with is `usabl.config.json` at
   the repository root, by the real path the operating system opens. A receipt binds the bytes of
   that root file, the one the Stop hook plans from, and not the config the check used. Before, a

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
+import { declaredPackageNames } from '../../src/coverage/workspace-packages.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { run } from '../../src/run.js';
@@ -410,5 +411,27 @@ describe('a run on a change that removes workspaces from the root package.json',
     const result = await run(deps, adminConfig, { changedFiles: ['package.json', 'packages/ui/src/Button.tsx'] });
     expect(result.coverage.nothingToCheck).toBe(false);
     expect(result.coverage.gaps.map((gap) => gap.ref)).toContain('packages/ui/src/Button.tsx');
+  });
+});
+
+// A uiFileGlobs entry with no glob character names one file. Its package.json sits in the file's
+// folder or above, never below the file, so the climb starts at that folder.
+describe('the package names an app whose config names a file can import', () => {
+  it('climbs from the folder of a named file and never reads below the file', async () => {
+    const tree = workspaceTree();
+    const disk = fsOf(tree);
+    const reads: string[] = [];
+    const recording: FsGlob = {
+      readFile: async (file) => {
+        reads.push(file);
+        return disk.readFile(file);
+      },
+      glob: (patterns) => disk.glob(patterns),
+    };
+    const config: UsablConfig = { ...adminConfig, uiFileGlobs: ['packages/admin/src/App.tsx'] };
+    const names = await declaredPackageNames(recording, config);
+    expect(names).toContain('@mono/admin');
+    expect(names).toContain('@mono/ui');
+    expect(reads.filter((file) => file.startsWith('packages/admin/src/App.tsx/'))).toEqual([]);
   });
 });

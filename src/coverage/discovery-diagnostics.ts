@@ -2,7 +2,7 @@
  * Formats import-graph unresolvable entries into human-readable discovery detail.
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
-import { importMayLoad, MAX_BRACE_ALTERNATIVES, type UnresolvableImport } from './import-graph.js';
+import { importMayLoad, MAX_BRACE_ALTERNATIVES, type PackageFolders, type UnresolvableImport } from './import-graph.js';
 
 const MAX_DETAIL_LINES = 3;
 
@@ -137,8 +137,13 @@ function aliasConflictText(entry: Extract<UnresolvableImport, { kind: 'alias-con
  * importMayLoad). Any of them may be the import that loads it, so "no screen reaches it" is a
  * guess while one stands.
  */
-export function unresolvedImportsNaming(file: string, unresolvable: readonly UnresolvableImport[]): UnresolvableImport[] {
-  return unresolvable.filter((entry) => importMayLoad(entry, file));
+export function unresolvedImportsNaming(
+  file: string,
+  unresolvable: readonly UnresolvableImport[],
+  // The folders that hold a package.json, which an import that names them may load through.
+  packageFolders: PackageFolders = new Map(),
+): UnresolvableImport[] {
+  return unresolvable.filter((entry) => importMayLoad(entry, file, packageFolders));
 }
 
 /**
@@ -153,9 +158,10 @@ export function selectDiscoveryDetails(
   file: string,
   unresolvable: UnresolvableImport[],
   visitedFiles: ReadonlySet<string>,
+  packageFolders: PackageFolders = new Map(),
 ): string[] {
   const onPaths = unresolvable.filter((entry) => entry.importer !== file && visitedFiles.has(entry.importer));
-  const naming = unresolvedImportsNaming(file, onPaths);
+  const naming = unresolvedImportsNaming(file, onPaths, packageFolders);
   const groups: Array<[string, UnresolvableImport[]]> = [
     ['imports that may load this file', naming],
     ['imports in this file', unresolvable.filter((entry) => entry.importer === file)],
@@ -193,10 +199,13 @@ export function buildUnresolvedReason(
   visitedFiles: ReadonlySet<string>,
   // Said in place of the usual fix, such as who imports a test file that counts as a UI file.
   note?: string,
+  // The folders that hold a package.json, so the detail names an import that loads the file
+  // through one, as the gap rule does (see importMayLoad).
+  packageFolders: PackageFolders = new Map(),
 ): string {
   // No "changed": baseline passes every UI file here, changed or not.
   const base = 'This UI file is not in any route closure, wide-blast glob, or manual surface mapping';
-  const details = selectDiscoveryDetails(file, unresolvable, visitedFiles);
+  const details = selectDiscoveryDetails(file, unresolvable, visitedFiles, packageFolders);
   const fix = note ?? UNPLACED_FILE_FIX;
   // The fix goes before the detail. Surfaces bound a printed reason, and the detail is the part
   // that can run long, so it is the part a bound may cut.
