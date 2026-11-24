@@ -227,6 +227,21 @@ function staticPrefix(glob: string): string {
   return segments.join('/');
 }
 
+// The folder every match of a uiFileGlobs pattern sits in. For a glob, that is the part before its
+// first segment with glob syntax, such as packages/admin/src for packages/admin/src/**/*.tsx. A
+// pattern with no glob syntax names one file, such as src/App.tsx, so it is the file's folder. A
+// file is never read as a folder: <file>/package.json cannot exist, and the disk refuses the read.
+// A pattern that ends with / names a folder, so it stays as written. Each climb to a package.json
+// starts here, so the climbs agree.
+export function patternFolder(glob: string): string {
+  const segments: string[] = [];
+  for (const segment of glob.split('/')) {
+    if (/[*?[\]{}!]/u.test(segment)) return segments.join('/');
+    segments.push(segment);
+  }
+  return glob.endsWith('/') ? glob : path.dirname(glob);
+}
+
 // The packages the config points into: the one the router file sits in, the ones the uiFileGlobs
 // folders sit in, and the ones that hold a surface's files. Those are the app being checked.
 function appPackages(config: UsablConfig, packages: readonly PackageManifest[]): PackageManifest[] {
@@ -372,7 +387,7 @@ export async function workspacePackageDirs(fs: FsGlob): Promise<string[]> {
 export async function declaredPackageNames(fs: FsGlob, config: UsablConfig): Promise<string[]> {
   const anchors = [
     path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
-    ...config.uiFileGlobs.map((glob) => staticPrefix(glob.replace(/^\/+/u, ''))),
+    ...config.uiFileGlobs.map((glob) => patternFolder(glob.replace(/^\/+/u, ''))),
     ...config.surfaces.flatMap((surface) => surface.files.map((file) => path.dirname(file.replace(/^\/+/u, '')))),
   ];
   const dirs = new Set<string>(['']);
