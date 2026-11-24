@@ -648,4 +648,29 @@ describe('pf-toast-live-region: a toast group hidden by an open modal dialog', (
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('fail');
   });
+
+  // The next cases carry no toast group class, so only the live region part of the rule can find
+  // them.
+  it('reports one undecided draft when the hidden body child is itself the live region, with no toast group class', async () => {
+    for (const live of [{ 'aria-live': 'polite', role: null }, { 'aria-live': null, role: 'status' }]) {
+      const chain = [ALERT_ENTRY, { ...live, 'aria-hidden': 'true' }, BODY, HTML];
+      const drafts = await toastDrafts(chain, true);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    }
+  });
+
+  it('reports one undecided draft when the body is live and the hidden body child sits inside it', async () => {
+    for (const liveTop of [
+      [{ 'aria-live': 'polite', role: null }, HTML],
+      [BODY, { 'aria-live': 'polite', role: null }],
+    ]) {
+      const chain = [ALERT_ENTRY, { 'aria-live': null, role: null, 'aria-hidden': 'true' }, ...liveTop];
+      const drafts = await toastDrafts(chain, true);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    }
+  });
 });
