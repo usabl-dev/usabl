@@ -1897,8 +1897,9 @@ in this order:
      expanded), and a call past the run's budget of 65,536 pattern characters, with every call
      after it (counted once for each call, after the braces are expanded and each pattern is
      resolved). Each pattern is built once for each graph that reads it, not once for each file,
-     and its matching charges the run's budget of glob matching steps; once that is spent, every
-     glob may load any file. A pattern read under every folder is matched in one read of the path.
+     and its matching charges a budget of glob matching steps (test-file placement has its own
+     1,000,000,000); once that is spent, every glob may load any file. A pattern read under every
+     folder is matched in one read of the path.
      The `base` option moves where the patterns
      start, and Vite evaluates the options as code, so a quoted key, a computed key, or a spread can
      set it. usabl reads the patterns only when the options are an object whose keys are `eager`,
@@ -4540,10 +4541,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     matcher does not backtrack, so one match takes at most the pattern's length times the path's
     length. Many matches can still add up: a list inside the policy bounds took about 24 seconds
     to rule out one changed path of 3999 characters. So the app planner and the docs planner each
-    carry a budget of 100,000,000 matching steps for the run, about 3 to 5 seconds of matching at
-    most on a loaded 8-core machine, and `import.meta.glob` patterns have a budget of 65,536
-    characters for the run. A changed file left untested when a budget runs out is a gap whose
-    reason names the budget, never nothing to check. The guard's own matching carries no budget: a
+    carry a budget of 100,000,000 matching steps for the changed files, test-file placement
+    carries 1,000,000,000 of its own (an app of 20,000 test files and 40 ordinary calls used 0.51
+    billion), and `import.meta.glob` patterns have a budget of 65,536 characters for the run. All
+    the step budgets together are at most about 60 seconds of matching on a loaded 8-core machine.
+    Each planner tests the changed files in one fixed order, sorted by UTF-16 code units, so the
+    same set of changed files gives the same gaps in any order. A changed file left untested when
+    a budget runs out is a gap whose reason names the budget, never nothing to check. The guard's own matching carries no budget: a
     `guardedPaths` list inside the bounds took 9.2 seconds against one committed path of 3999
     characters. Node's `fs.glob` can still take long too. usabl hands it each `guardedPaths` entry,
     to list new files on the working tree (the guard) and to sample the files under it (`usabl

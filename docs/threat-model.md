@@ -861,15 +861,22 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   dot rules, and a test compares the two on generated patterns and paths.
 - A bound on each match is not enough by itself: a list inside the policy bounds (256 entries of
   1024 characters) took about 24 seconds to rule out one changed path of 3999 characters, and
-  about 25 such paths pass the Stop hook deadline. So each planner run carries a budget of
-  100,000,000 matching steps, where a step is one pattern position tested at one path position.
-  The app planner and the docs planner each carry one. The worst shapes ran at 20 to 35 million
-  steps a second on a loaded 8-core machine, so a spent budget is about 3 to 5 seconds of matching;
-  a normal run uses far less (20,000 changed files against four common globs used about 3 million
-  steps). A changed file usabl could not test against `uiFileGlobs`, `discovery.wideBlastGlobs`,
-  or `sharedGlobs` before the budget ran out is a gap whose reason names the budget, so the run is
-  `not_covered`, never nothing to check. Once it is spent, every `import.meta.glob` call may load
-  any file, so a changed test file such a call could reach is a gap too.
+  about 25 such paths pass the Stop hook deadline. So a run carries budgets of matching steps,
+  where a step is one pattern position tested at one path position. The app planner and the docs
+  planner each carry 100,000,000 steps for the changed files; 20,000 changed files against four
+  common globs used about 3 million. Test-file placement, which tests every test file of the app
+  against every `import.meta.glob` pattern, carries 1,000,000,000 steps of its own: an app of
+  20,000 test files about 60 characters deep with 40 calls of three ordinary patterns used 0.51
+  billion, and one of 5000 test files used 0.13 billion. The worst shapes ran at 20 to 35 million
+  steps a second on a loaded 8-core machine, so all three budgets together, 1.2 billion steps, are
+  at most about 60 seconds of matching at the slowest rate measured; the worst placement shape
+  spent its budget in 38 seconds. Each planner tests the changed files in one fixed order, sorted
+  by UTF-16 code units, so the same set of changed files runs out at the same file whatever order
+  the caller lists them in. A changed file usabl could not test against `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, or `sharedGlobs` before the budget ran out is a gap whose reason names
+  the budget, so the run is `not_covered`, never nothing to check. Once the placement budget is
+  spent, every `import.meta.glob` call may load any file, so a changed test file such a call could
+  reach is a gap too.
 - `import.meta.glob` patterns come from source code the agent writes. They have the size bounds
   of the policy lists for each call, counted on the longest brace expansion of each pattern: a
   call with a pattern that expands to one longer than 1024 characters, or with more than 4096
