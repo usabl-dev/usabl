@@ -1861,9 +1861,12 @@ in this order:
      the folder above its first such segment, so `/src/pages/[id]/*.tsx` covers `src/pages/` and
      not a test folder beside it. Each of these may load any file, and the reason says which it
      was: a call whose argument is not a string or a list of strings, a pattern that starts with an
-     alias usabl cannot map, a call whose options may set `base`, and a pattern usabl cannot read
+     alias usabl cannot map, a call whose options may set `base`, a pattern usabl cannot read
      exactly (a nested or unbalanced brace, more than 64 brace alternatives, an escaped brace or
-     comma, or a `..` after a segment with glob syntax). The `base` option moves where the patterns
+     comma, or a `..` after a segment with glob syntax), and a call past the size bounds of the
+     policy glob lists (a pattern longer than 1024 characters, or more than 4096 patterns or
+     262,144 characters in the call, counted before the braces are expanded). Each pattern is
+     built once for the run, not once for each file. The `base` option moves where the patterns
      start, and Vite evaluates the options as code, so a quoted key, a computed key, or a spread can
      set it. usabl reads the patterns only when the options are an object whose keys are `eager`,
      `import`, `query`, `as`, or `exhaustive`, plain or quoted, and whose values are a plain string,
@@ -4500,11 +4503,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
     runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
   - Limit: the deadline is a timer in the same process, so it fires only between steps that wait,
-    such as a browser call. It cannot end work that runs without waiting. A committed glob with
-    many wildcards can take long enough to match a long changed file name that the host ends the
-    hook before usabl answers, and the stop then goes on with nothing checked (threat model,
-    Threat 8). Such a pattern must be in committed policy, which a code owner approves. A matcher
-    that does not backtrack is planned.
+    such as a browser call. It cannot end work that runs without waiting. usabl's own glob
+    matcher does not backtrack, so its time is at most the pattern's length times the path's
+    length, and a committed glob with many wildcards no longer outlasts the host's limit there.
+    Node's `fs.glob` still can: usabl hands it a `guardedPaths` entry to list new files on the
+    working tree, `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is placed,
+    and the `workspaces` patterns of a `package.json`. A pattern with many wildcards and a long
+    file name there can take long enough that the host ends the hook before usabl answers, and the
+    stop then goes on with nothing checked (threat model, Threat 8).
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the

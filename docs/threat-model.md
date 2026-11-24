@@ -848,16 +848,26 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
-- Known limit: a committed glob with many wildcards can take long enough to match a long changed
-  file name that the host ends the hook before usabl answers, and the stop then goes on with
-  nothing checked. The regular expression engine tries each way the wildcards can split the name,
-  and the time grows fast with the name's length: `src/` then `*a` twelve times then `*b`, 30
-  characters, took 2.4 seconds against a name of 34 characters, and a stop with a name of 38
-  letters took 81.7 seconds against a 30 second limit. usabl's own Stop hook deadline does not
-  help here: it is a timer in the same process, and no timer can fire while a match runs. The
-  size bounds on each policy glob list do not bound this either. Such a pattern must be in
-  committed policy, which a code owner approves; the file name is the agent's choice. A matcher
-  that does not backtrack is planned.
+- usabl's own glob matcher does not backtrack. It walks the path once and keeps the set of places
+  a match can be at, so the time to match one pattern is at most the pattern's length times the
+  path's length. It matches the policy lists (`uiFileGlobs`, `discovery.wideBlastGlobs`,
+  `guardedPaths` as the guard reads them from git listings, and `sharedGlobs`), the
+  `import.meta.glob` patterns, and `CODEOWNERS` patterns. Before, it built a regular expression,
+  and the engine tried each way the wildcards could split a name: `src/` then `*a` twelve times
+  then `*b` against a changed file name of 38 letters made a stop take 81.7 seconds against a 30
+  second limit, and the host could end the hook with nothing checked. Now that match takes well
+  under a millisecond. The answers are the same as before for both dot rules, and a test compares
+  the two on generated patterns and paths. `import.meta.glob` patterns, which come from source
+  code, have the same size bounds as the policy lists; a call past one may load any file, a gap.
+- Known limit: Node's `fs.glob` still turns a pattern into a regular expression that can
+  backtrack. usabl hands it a `guardedPaths` entry to list new files on the working tree,
+  `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is placed, the
+  `workspaces` patterns of a `package.json`, and `uiFileGlobs` in `usabl baseline` and the docs
+  output. The same pattern took Node 1.1 seconds against a file
+  name of 26 letters and 9.2 seconds against one of 30. usabl's Stop hook deadline is a timer in
+  the same process, so it cannot end such a match, and the host can end the hook before usabl
+  answers. A policy pattern must be in committed policy, which a code owner approves; a
+  `workspaces` pattern is in the working tree, and the file name is the agent's choice.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
