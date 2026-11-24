@@ -3,13 +3,13 @@
  * so the readiness budget is operator config. A bad value has to be refused while parsing, which
  * is before the run builds deps or opens a browser.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/cli.js';
 import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
-import { operatorText } from '../../src/intake/config-error.js';
+import { operatorPathText } from '../../src/intake/config-error.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
@@ -685,6 +685,162 @@ describe('parseUsablConfig glob syntax', () => {
     });
   });
 
+  // The matcher builds one pattern for each expansion of a uiFileGlobs entry, so a short entry with
+  // many brace groups can take a long time or run out of memory. The same cap as guardedPaths holds.
+  describe('a uiFileGlobs entry with many brace expansions', () => {
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(glob: string): string {
+      try {
+        parseUsablConfig(configJson({ uiFileGlobs: [glob] }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    it('loads an entry at the cap of 256 expansions', () => {
+      for (const glob of [`src/{${alternatives(256)}}/**/*.tsx`, 'src/' + '{a,b}'.repeat(8) + '/**/*.tsx']) {
+        expect(refusal(glob), glob).toBe('');
+        expect(parseUsablConfig(configJson({ uiFileGlobs: [glob] })).uiFileGlobs, glob).toEqual([glob]);
+      }
+    });
+
+    it('refuses an entry one past the cap, says so, and keeps no part of it', () => {
+      const message = refusal(`src/{${alternatives(257)}}/**/*.tsx`);
+      expect(message).toContain('uiFileGlobs entry "src/{f0,f1');
+      expect(message).toContain('more than 256');
+    });
+
+    it('refuses an entry far past the cap quickly, without building its expansions', () => {
+      const glob = 'src/' + '{a,b}'.repeat(64) + '/*.tsx';
+      const started = performance.now();
+      const message = refusal(glob);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(message).toContain('uiFileGlobs entry');
+      expect(message).toContain('more than 256');
+    });
+
+    // The cost of matching grows with the patterns of every entry and their length together, so
+    // the whole list is bounded too, not only each entry's count.
+    function listRefusal(globs: string[]): string {
+      try {
+        parseUsablConfig(configJson({ uiFileGlobs: globs }));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+    const entries = (count: number, groups: number): string[] =>
+      Array.from({ length: count }, (_, i) => `src/p${i}/${'{a,b}'.repeat(groups)}.tsx`);
+
+    it('loads a list of 4096 patterns in all, and refuses one past it', () => {
+      expect(listRefusal(entries(16, 8))).toBe('');
+      const message = listRefusal([...entries(16, 8), 'src/extra.tsx']);
+      expect(message).toContain('uiFileGlobs entries expand to 4097 patterns in all');
+      expect(message).toContain('more than 4096');
+    });
+
+    it('loads an entry whose pattern is 1024 characters, and refuses one longer', () => {
+      const at = `src/${'x'.repeat(1024 - 'src/'.length - '.tsx'.length)}.tsx`;
+      expect(at).toHaveLength(1024);
+      expect(listRefusal([at])).toBe('');
+      const message = listRefusal([`${at}x`]);
+      expect(message).toContain('makes a pattern longer than 1024 characters');
+      expect(message).toContain('uiFileGlobs entry "src/xxx');
+    });
+
+    it('refuses a list whose patterns hold more than 262144 characters in all', () => {
+      const long = (i: number): string => `src/p${String(i).padStart(4, '0')}/${'x'.repeat(1000)}/*.tsx`;
+      const fits = Array.from({ length: 250 }, (_, i) => long(i));
+      expect(listRefusal(fits)).toBe('');
+      const message = listRefusal(Array.from({ length: 300 }, (_, i) => long(i)));
+      expect(message).toContain('more than 262144 characters in all');
+    });
+
+    // An entry this long made the regular expression engine throw "Regular expression too large",
+    // a crash instead of a plain refusal.
+    it('refuses an entry too long to match as a plain config refusal, quickly, never a crash', () => {
+      const started = performance.now();
+      const message = listRefusal([`src/${'{a,b}'.repeat(8)}/${'x'.repeat(100_000)}/*.tsx`]);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(message).toContain('uiFileGlobs entry');
+      expect(message).not.toContain('Regular expression');
+    });
+  });
+
+  // Every glob list in the config is expanded and matched the same way, so each has the bounds of
+  // uiFileGlobs. A wideBlastGlobs entry with 20 brace groups took 25 seconds and 750 MB to match
+  // one file before.
+  describe('the size bounds of every config glob list', () => {
+    const lists: Array<[string, (globs: string[]) => Record<string, unknown>]> = [
+      ['uiFileGlobs', (globs) => ({ uiFileGlobs: globs })],
+      ['discovery.wideBlastGlobs', (globs) => ({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: globs } })],
+      ['guardedPaths', (globs) => ({ guardedPaths: globs })],
+    ];
+    const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+    function refusal(shape: (globs: string[]) => Record<string, unknown>, globs: string[]): string {
+      try {
+        parseUsablConfig(configJson(shape(globs)));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return '';
+    }
+
+    for (const [label, shape] of lists) {
+      describe(label, () => {
+        it('loads an entry at the cap of 256 expansions, and refuses one past it', () => {
+          expect(refusal(shape, [`src/{${alternatives(256)}}/x.css`])).toBe('');
+          const message = refusal(shape, [`src/{${alternatives(257)}}/x.css`]);
+          expect(message).toContain(`${label} entry "src/{f0,f1`);
+          expect(message).toContain('more than 256');
+        });
+
+        it('refuses an entry with 20 or 60 brace groups quickly, without building its expansions', () => {
+          for (const groups of [20, 60]) {
+            const started = performance.now();
+            const message = refusal(shape, ['src/' + '{a,b}'.repeat(groups) + '/x.css']);
+            expect(performance.now() - started, String(groups)).toBeLessThan(1000);
+            expect(message, String(groups)).toContain(`${label} entry`);
+            expect(message, String(groups)).toContain('more than 256');
+          }
+        });
+
+        it('loads a pattern of 1024 characters, and refuses one longer', () => {
+          const at = `src/${'x'.repeat(1024 - 'src/'.length - '.css'.length)}.css`;
+          expect(at).toHaveLength(1024);
+          expect(refusal(shape, [at])).toBe('');
+          const message = refusal(shape, [`${at}x`]);
+          expect(message).toContain(`${label} entry "src/xxx`);
+          expect(message).toContain('makes a pattern longer than 1024 characters');
+        });
+
+        it('loads 4096 patterns in all, and refuses one past it', () => {
+          const entries = Array.from({ length: 16 }, (_, i) => `src/p${i}/${'{a,b}'.repeat(8)}.css`);
+          expect(refusal(shape, entries)).toBe('');
+          const message = refusal(shape, [...entries, 'src/extra.css']);
+          expect(message).toContain(`${label} entries expand to 4097 patterns in all`);
+          expect(message).toContain('more than 4096');
+        });
+
+        it('refuses patterns of more than 262144 characters in all', () => {
+          const long = (i: number): string => `src/p${String(i).padStart(4, '0')}/${'x'.repeat(1000)}/x.css`;
+          expect(refusal(shape, Array.from({ length: 250 }, (_, i) => long(i)))).toBe('');
+          const message = refusal(shape, Array.from({ length: 300 }, (_, i) => long(i)));
+          expect(message).toContain(`${label} entries expand to patterns of more than 262144 characters in all`);
+        });
+
+        it('refuses a pattern too long to build as a plain config refusal, never a crash', () => {
+          const message = refusal(shape, [`src/${'{a,b}'.repeat(8)}/${'x'.repeat(100_000)}/x.css`]);
+          expect(message).toContain(`${label} entry`);
+          expect(message).not.toContain('Regular expression');
+        });
+      });
+    }
+  });
+
   it('refuses a guardedPaths entry with a brace expansion that leaves the path empty', () => {
     // The guard reads such an expansion as the whole repository, which the entry does not say.
     for (const entry of ['{,}', '.{,}', '{,policy}']) {
@@ -1025,11 +1181,41 @@ describe('loadConfig', () => {
     const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
     const path = join(dir, 'other.json');
     const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
-    // The message quotes the path as operatorText prints it, which caps a long path. So the check
-    // holds for a temp folder of any length.
-    expect(message).toContain(`${operatorText(path)} not found`);
+    // The message quotes the path as operatorPathText prints it, which shortens a long path from the
+    // middle. So the check holds for a temp folder of any length.
+    expect(message).toContain(`${operatorPathText(path)} not found`);
     expect(message).toContain('Check the path given to --config');
     expect(message).not.toContain('or pass --config <path>');
+  });
+
+  // A long --config path was cut at the end, so the message lost the file name. It now keeps the
+  // start of the path and the file name, and marks where it was shortened.
+  describe('a long --config path', () => {
+    const longFolder = 'f'.repeat(150);
+
+    it('keeps the start and the file name when the file is missing', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+      const path = join(dir, longFolder, 'team-config.json');
+      const message = await loadConfig(path, () => {}).catch((err: Error) => err.message);
+      expect(message).toContain(`${operatorPathText(path)} not found`);
+      expect(message).toContain(`${path.slice(0, 10)}`);
+      expect(message).toContain('team-config.json not found');
+      expect(message).toContain('...');
+      expect(message).not.toContain('(truncated)');
+    });
+
+    it('keeps the start and the file name when uiFileGlobs is empty', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+      await mkdir(join(dir, longFolder));
+      const path = join(dir, longFolder, 'team-config.json');
+      await writeFile(path, configJson({ uiFileGlobs: [] }), 'utf8');
+      const message = await loadConfig(path, () => {}, { docsManifestPath: join(dir, 'usabl.docs.json') }).catch(
+        (err: Error) => err.message,
+      );
+      expect(message).toContain('team-config.json has an empty uiFileGlobs list');
+      expect(message).toContain(`${path.slice(0, 10)}`);
+      expect(message).not.toContain('(truncated)');
+    });
   });
 
   // A config with no UI globs reads no change as a UI change, so every run said nothing to check
@@ -1041,7 +1227,7 @@ describe('loadConfig', () => {
     const docsManifest = join(dir, 'usabl.docs.json');
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/uiFileGlobs/);
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(
-      `${operatorText(path)} has an empty uiFileGlobs list`,
+      `${operatorPathText(path)} has an empty uiFileGlobs list`,
     );
     await expect(loadConfig(path, () => {}, { docsManifestPath: docsManifest })).rejects.toThrow(/usabl\.docs\.json/);
   });

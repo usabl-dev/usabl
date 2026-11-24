@@ -32,6 +32,7 @@ import { GUARDED_FILES_LABEL } from './model-pieces.js';
 import {
   checkCommandFor,
   findStartingCommit,
+  NO_TRUSTED_BRANCH_NOTE,
   olderThanSetupLines,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
@@ -60,6 +61,7 @@ import {
   type StoredReceiptPinState,
 } from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, makeReceiptFs, receiptToSave, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import { noReceiptMessage, receiptConfigCheck } from '../evidence/planned-config.js';
 import {
   currentUid,
   deletePinFileFix,
@@ -77,8 +79,16 @@ export interface StopHookRunnerFs extends ReceiptFs {
   unlink(path: string): Promise<void>;
 }
 
-/** What a read of one file found: its text, nothing at the path, or an error that stopped the read. */
-export type FileBytes = { status: 'found'; text: string } | { status: 'missing' } | { status: 'unreadable'; reason: string };
+/**
+ * What a read of one file found: its text, nothing at the path, or an error that stopped the read.
+ * A read of the working config also keeps the raw bytes the text was decoded from, so the receipt
+ * check compares and hashes the file as it is on disk. Without them, the text encoded as UTF-8
+ * stands in.
+ */
+export type FileBytes =
+  | { status: 'found'; text: string; bytes?: Uint8Array }
+  | { status: 'missing' }
+  | { status: 'unreadable'; reason: string };
 
 /**
  * What the hook found at the last commit. `no-work-tree` means the hook found no git work tree from
@@ -544,8 +554,25 @@ function outsideWorkTreeMessage(folder: string): string {
   );
 }
 
+// The raw bytes of a file read, or its text encoded as UTF-8 when the read kept no bytes.
+function rawBytesOf(found: { text: string; bytes?: Uint8Array }): Uint8Array {
+  return found.bytes ?? Buffer.from(found.text, 'utf8');
+}
+
+// The working config's bytes now, or null when it is missing or cannot be read. A read that fails
+// is never the planned bytes, so no receipt is saved.
+async function currentConfigBytes(ports: StopHookRunnerPorts): Promise<Uint8Array | null> {
+  try {
+    const { working } = await ports.readConfigBytes();
+    return working.status === 'found' ? rawBytesOf(working) : null;
+  } catch {
+    return null;
+  }
+}
+
+// `bytes` are the raw bytes the text was decoded from, which the receipt check compares and hashes.
 type ConfigStep =
-  | { kind: 'parse'; text: string }
+  | { kind: 'parse'; text: string; bytes: Uint8Array }
   | { kind: 'outside-work-tree' }
   | { kind: 'not-configured' }
   | { kind: 'block'; problem: ConfigProblem; error: string | null }
@@ -585,7 +612,7 @@ function configStep(bytes: ConfigBytes): ConfigStep {
     if (working.status === 'unreadable') {
       return { kind: 'error', reason: `${CONFIG_FILE} could not be read: ${working.reason}` };
     }
-    return { kind: 'parse', text: working.text };
+    return { kind: 'parse', text: working.text, bytes: rawBytesOf(working) };
   }
   if (working.status === 'missing') {
     return { kind: 'block', problem: 'missing', error: null };
@@ -596,7 +623,7 @@ function configStep(bytes: ConfigBytes): ConfigStep {
   if (working.text !== head.text) {
     return { kind: 'block', problem: 'differs', error: null };
   }
-  return { kind: 'parse', text: working.text };
+  return { kind: 'parse', text: working.text, bytes: rawBytesOf(working) };
 }
 
 /**
@@ -721,7 +748,8 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
 
 async function readWorkingConfig(root: string): Promise<FileBytes> {
   try {
-    return { status: 'found', text: await readFile(resolve(root, CONFIG_FILE), 'utf8') };
+    const bytes = await readFile(resolve(root, CONFIG_FILE));
+    return { status: 'found', text: bytes.toString('utf8'), bytes };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { status: 'missing' };
@@ -1495,6 +1523,8 @@ async function runStopChecks(
     }
     state.checkCommand = checkCommandFor(scope.baseRevision);
     const checkCommand = state.checkCommand;
+    // With no trusted branch the allow line itself says so, not only the note after it.
+    const noTrustedBranch = scope.note === NO_TRUSTED_BRANCH_NOTE;
     // The session pins and the guard above compare with the last commit, so a policy change
     // committed on the branch before the first stop passes both. CI compares policy with the base
     // of the pull request, so the stop also compares it with the starting commit. A file found
@@ -1516,6 +1546,7 @@ async function runStopChecks(
         sessionDriftChecked: pinNotice?.driftChecked ?? true,
         ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
         ...(ports.repositoryFromOwnFolder === true ? { repositoryFromOwnFolder: true } : {}),
+        ...(noTrustedBranch ? { noTrustedBranch: true } : {}),
       }, scope.baseRevision).catch(() => ({ verified: false, details: 'the stored receipt could not be checked', notice: null }));
       receiptNotUsed = receiptCheck.notice;
       if (receiptCheck.verified) {
@@ -1531,7 +1562,22 @@ async function runStopChecks(
     const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
     const receipt = receiptToSave(result, { ci: false });
-    if (receipt !== null) {
+    // The run binds the root config's bytes when it starts, after this stop read them to plan. The
+    // file is read once more here, and the receipt is saved only while it holds the planned bytes
+    // and the receipt binds those bytes. See planned-config.ts.
+    const configCheck =
+      receipt === null
+        ? null
+        : await receiptConfigCheck({
+            deps: guardDeps,
+            config,
+            receipt,
+            plannedBytes: step.bytes,
+            currentBytes: await currentConfigBytes(ports),
+          });
+    if (configCheck !== null && configCheck !== 'bound') {
+      receiptNotice = `usabl: ${noReceiptMessage(configCheck)}`;
+    } else if (receipt !== null) {
       const saved = await saveReceipt(ports.fs, receipt, checkCommand);
       // A refused save changes no verdict. It is said after the decision, so the decision line
       // still comes first.
@@ -1548,6 +1594,7 @@ async function runStopChecks(
       ...(scope.policyFromBranch ? { policyFromBranch: true } : {}),
       ...(ports.repositoryFromOwnFolder === true ? { repositoryFromOwnFolder: true } : {}),
       ...(pinNotice === null ? {} : { sessionDriftChecked: pinNotice.driftChecked }),
+      ...(noTrustedBranch ? { noTrustedBranch: true } : {}),
     };
     const decision = ports.evaluateDecision(result, ctx, config);
     const notices = [

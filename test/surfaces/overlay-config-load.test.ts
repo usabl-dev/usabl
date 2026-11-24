@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SharedBrowser } from '../../src/deps/real.js';
-import { operatorText } from '../../src/intake/config-error.js';
+import { operatorPathText } from '../../src/intake/config-error.js';
 import { makeConfigBackedOverlayRun } from '../../src/surfaces/overlay-host.js';
 import { testConfig } from '../helpers.js';
 
@@ -29,9 +29,9 @@ describe('the config-backed overlay run with no config file', () => {
       () => '',
       (err: Error) => err.message,
     );
-    // The message quotes the path as operatorText prints it, which caps a long path. So the check
-    // holds for a temp folder of any length.
-    expect(message).toContain(`${operatorText(join(dir, 'usabl.config.json'))} not found.`);
+    // The message quotes the path as operatorPathText prints it, which shortens a long path from the
+    // middle. So the check holds for a temp folder of any length.
+    expect(message).toContain(`${operatorPathText(join(dir, 'usabl.config.json'))} not found.`);
     expect(message).toContain('configPath');
     expect(message).toContain('usabl init');
     expect(message).not.toContain('--config');

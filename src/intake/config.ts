@@ -16,6 +16,7 @@ import type {
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { checkGlobListBounds } from './glob-list-bounds.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
@@ -76,10 +77,32 @@ function expectGlobArray(value: unknown, label: string): string[] {
   return patterns;
 }
 
+// The guard reads each expansion of a guarded entry on its own and lists the working tree once for
+// each, so it reads an entry past the cap as a wider folder. The count is taken before anything is
+// expanded, and before the general bounds, so the message says what the guard would do.
+function checkGuardedPathCounts(entries: readonly string[]): void {
+  for (const entry of entries) {
+    if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
+      throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
+    }
+  }
+}
+
+// A glob list with the syntax checks above and the size bounds every policy glob list has. See
+// glob-list-bounds.ts.
+function expectBoundedGlobArray(value: unknown, label: string): string[] {
+  const globs = expectGlobArray(value, label);
+  checkGlobListBounds(globs, label);
+  return globs;
+}
+
 // A guarded entry with white space at the start or end names a path no file has, so it would
-// guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen.
+// guard nothing, in CI and locally. The entry is shown in quotes so the space can be seen. The
+// size bounds come first, so the form check below never reads an entry past them.
 function expectGuardedPaths(value: unknown): string[] {
   const entries = expectGlobArray(value, 'guardedPaths');
+  checkGuardedPathCounts(entries);
+  checkGlobListBounds(entries, 'guardedPaths');
   for (const entry of entries) {
     if (entry.trim() !== entry) {
       throw configError`guardedPaths entry "${entry}" starts or ends with white space, so it names no file and would guard nothing. Remove the white space.`;
@@ -105,7 +128,11 @@ function bracedSegments(entry: string): Array<Array<{ text: string; braced: bool
       i = close + 1;
       continue;
     }
-    expansions = expansions.map((prefix) => [...prefix, { char, braced: false }]);
+    // Each expansion is its own array, so the character is added in place. Copying every prefix
+    // for each character made a long entry take time that grew with the square of its length.
+    for (const expansion of expansions) {
+      expansion.push({ char, braced: false });
+    }
     i++;
   }
   return expansions.map((expansion) => {
@@ -132,11 +159,6 @@ function checkGuardedPathForm(entry: string): void {
   if (entry.startsWith('/')) {
     const fixed = entry.replace(/^\/+/, '') || '.';
     throw configError`guardedPaths entry "${entry}" starts with /, so it names no path from the repository root. Write it as a path from the repository root without the leading slash: "${fixed}".`;
-  }
-  // The guard reads each expansion on its own and lists the working tree once for each, so it reads
-  // an entry past the cap as a wider folder. The count is taken before anything is expanded.
-  if ((countBraceExpansions(entry) ?? 0) > MAX_BRACE_EXPANSIONS) {
-    throw configError`guardedPaths entry "${entry}" has brace groups that expand to more than ${String(MAX_BRACE_EXPANSIONS)} paths, so the guard would read it as a wider folder or the whole repository. Split it into several entries, or guard the folder that holds the paths.`;
   }
   const expansions = bracedSegments(entry);
   for (const segments of expansions) {
@@ -559,13 +581,13 @@ export function parseUsablConfig(raw: string): UsablConfig {
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
-    uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
+    uiFileGlobs: expectBoundedGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
     discovery: {
       // routerFile is an exact path read with fs.readFile, never matched by matchGlob, so it
       // is not glob-validated. surfaces[].files are compared with exact string equality in the
       // planner, so they are exact paths too and stay plain string arrays.
       routerFile: expectString(Reflect.get(discovery, 'routerFile'), 'discovery.routerFile'),
-      wideBlastGlobs: expectGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
+      wideBlastGlobs: expectBoundedGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
     },
     surfaces,
     guardedPaths: expectGuardedPaths(Reflect.get(root, 'guardedPaths')),

@@ -10,8 +10,8 @@
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative, sep } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
@@ -31,7 +31,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { loadConfig, parseConfigText } from './intake/load-config.js';
+import { loadConfig, loadConfigWithBytes, parseConfigText } from './intake/load-config.js';
 import {
   branchScopeRefusal,
   ciRefusal,
@@ -40,6 +40,7 @@ import {
   localApprovalNextSteps,
   parseCliArgs,
   projectCli,
+  ROOT_CONFIG,
   type CliOptions,
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
@@ -79,11 +80,13 @@ import {
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, makeReceiptFs, RECEIPT_DIR, receiptToSave, saveReceipt } from './surfaces/receipt-store.js';
 import { withoutLocalFileBinding } from './evidence/local-files.js';
+import { noReceiptMessage, receiptConfigCheck } from './evidence/planned-config.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 import { readScannerVersions } from './deps/scanner-versions.js';
 import { probeChromiumSandbox } from './doctor/sandbox-probe.js';
+import { probeGitVersion } from './doctor/git-version.js';
 import { appendRecord } from './history/append.js';
 import { makeHistoryGit } from './history/git.js';
 import { serializeRecord } from './history/record.js';
@@ -259,6 +262,46 @@ async function repositoryRoot(): Promise<string> {
     return cwd;
   }
 }
+
+// The real path of a file as the operating system opens it, or null when it cannot be read. The
+// native call follows a link before the `..` after it, as opening the file does: `x/..` is the
+// folder above where `x` points, not the folder that holds `x`. Node's own realpath and
+// path.resolve drop `x/..` as text first, so they name a file the open does not read.
+function realPathOrNull(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+// A path as typed, made absolute without collapsing `..`, so realPathOrNull reads it as an open does.
+function unnormalizedFrom(cwd: string, path: string): string {
+  return isAbsolute(path) ? path : `${cwd}${sep}${path}`;
+}
+
+// Whether a config path, from the folder usabl runs in, is usabl.config.json at the repository
+// root once every link is followed. A path that cannot be read is not that file.
+async function isRootConfig(configPath: string): Promise<boolean> {
+  const named = realPathOrNull(unnormalizedFrom(process.cwd(), configPath));
+  return named !== null && named === realPathOrNull(join(await repositoryRoot(), ROOT_CONFIG));
+}
+
+// The bytes of usabl.config.json at the repository root now, the file the run bound into the
+// receipt and the Stop hook reads, or null when it cannot be read.
+async function readRootConfigBytes(): Promise<Buffer | null> {
+  try {
+    return await readFile(join(await repositoryRoot(), ROOT_CONFIG));
+  } catch {
+    return null;
+  }
+}
+
+// What a check says when it saves no receipt because it planned with another config.
+const NO_RECEIPT_OTHER_CONFIG =
+  'saved no receipt for this run. It planned with a config other than usabl.config.json at the repository ' +
+  'root, the file the Stop hook plans from, so its result cannot answer a stop. The verdict of this run stands. ' +
+  'The next stop runs its own check.';
 
 // A read-only gh reader for the branch-rule check. The only method issues a GET against an
 // api endpoint, building the argument list internally as ['api', endpoint] and never adding
@@ -448,7 +491,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  let opts;
+  let opts: CliOptions;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
@@ -816,6 +859,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // The same read "usabl check" binds into a receipt, so doctor reports what the run would see.
       readScannerVersions,
       probeChromiumSandbox: () => probeChromiumSandbox(),
+      // Read-only: git --version, so doctor can say when git is older than usabl needs.
+      probeGitVersion,
       // Read-only: a git listing of the last commit, so doctor can say a guarded entry names nothing.
       headFiles: (prefix) => makeGitReader().lsFilesUnder('HEAD', [prefix]),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
@@ -888,11 +933,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  const refusal = branchScopeRefusal(opts, process.cwd()) ?? ciRefusal(opts);
+  // The root config is found at the repository root, the folder the Stop hook reads it from, so a
+  // check from a subfolder can name it by its relative path.
+  const scopeFolders = opts.branchScope ? { cwd: await realpath(process.cwd()), root: await repositoryRoot() } : null;
+  const refusal =
+    (scopeFolders === null ? null : branchScopeRefusal(opts, scopeFolders.cwd, scopeFolders.root, realPathOrNull)) ??
+    ciRefusal(opts);
   if (refusal !== null) {
     process.stderr.write(`usabl: ${refusal.message}\n`);
     return refusal.exitCode;
   }
+  if (scopeFolders !== null) {
+    // The Stop hook runs at the repository root. A branch check from a subfolder runs there too, so
+    // it reads the guarded files the hook reads and saves its receipt where the next stop looks.
+    if (scopeFolders.cwd !== scopeFolders.root) {
+      process.chdir(scopeFolders.root);
+    }
+    // The refusal above has proved the config path names the root file, so the check opens that
+    // file by its plain name, from the root, and never by the path as typed.
+    opts = { ...opts, configPath: ROOT_CONFIG };
+  }
+  // A receipt binds the bytes of usabl.config.json at the root, the file the Stop hook plans from,
+  // not the bytes of the config this check plans with. So a receipt is saved only when the two are
+  // the same file. Taken before the config is read, so the answer is about the file that is read.
+  const plannedWithRootConfig = await isRootConfig(opts.configPath);
 
   // The judge's browser. The origins it may reach come from the trusted ref, and the build digest
   // it records comes from the workflow, checked again here.
@@ -927,10 +991,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // cannot stop the judge before it scans; the guard still compares its bytes and reports it.
   // Without a readable trusted config the head's copy plans the run, with its runtime settings
   // taken out, and no origin is allowed, so every screen it plans is a coverage gap.
-  const config =
-    judge === null || opts.trustedRef === null
-      ? await loadConfig(opts.configPath)
-      : (judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath)));
+  // The bytes a run plans from are kept, so the receipt is saved only while the root config still
+  // holds those bytes. See planned-config.ts.
+  let config: UsablConfig;
+  let plannedBytes: Buffer | null = null;
+  if (judge === null || opts.trustedRef === null) {
+    const loaded = await loadConfigWithBytes(opts.configPath);
+    config = loaded.config;
+    plannedBytes = loaded.bytes;
+  } else {
+    config = judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath));
+  }
   const built = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],
@@ -985,8 +1056,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const result = judge === null ? ran : judge.finish(ran);
     // Verified local checks persist local proof so the stop-hook fast path can re-check without a
     // browser. A CI run saves none. The write never follows a symbolic link.
+    // A run planned with another config, or with the trusted ref's config through the judge, saves
+    // none: its receipt would answer a stop planned with a config it did not read.
     const receipt = receiptToSave(result, { ci: opts.ci });
-    if (receipt !== null) {
+    // The root config is read once more just before the save. A second process that swapped it
+    // while the check ran leaves bytes the check did not plan with, or a receipt bound to them.
+    const configCheck =
+      receipt === null || plannedBytes === null || !plannedWithRootConfig || judge !== null
+        ? null
+        : await receiptConfigCheck({
+            deps: (await realpath(process.cwd())) === (await repositoryRoot()) ? deps : null,
+            config,
+            receipt,
+            plannedBytes,
+            currentBytes: await readRootConfigBytes(),
+          });
+    if (receipt !== null && (!plannedWithRootConfig || judge !== null)) {
+      process.stderr.write(`usabl: ${NO_RECEIPT_OTHER_CONFIG}\n`);
+    } else if (configCheck !== null && configCheck !== 'bound') {
+      process.stderr.write(`usabl: ${noReceiptMessage(configCheck)}\n`);
+    } else if (receipt !== null) {
       const saved = await saveReceipt(makeReceiptFs(process.cwd()), receipt, checkCommandFor(baseRevision));
       if (saved.status === 'refused') {
         process.stderr.write(`usabl: ${saved.message}\n`);

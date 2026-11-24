@@ -13,12 +13,12 @@
  */
 import type { UsablConfig } from '../contracts/index.js';
 import { parseDocsManifestText } from '../coverage/docs-manifest.js';
-import { operatorText } from './config-error.js';
+import { operatorPathText } from './config-error.js';
 
 /** The sentence every path prints when it refuses a config with an empty uiFileGlobs list. */
 export function emptyUiFileGlobsRefusal(configPath: string): string {
   return (
-    `${operatorText(configPath)} has an empty uiFileGlobs list, so usabl would read no change as a UI change, ` +
+    `${operatorPathText(configPath)} has an empty uiFileGlobs list, so usabl would read no change as a UI change, ` +
     'and every run would say nothing to check without looking at anything. usabl did not run. ' +
     'Set uiFileGlobs to the files that render your UI, such as src/**/*.tsx. ' +
     'If this repository holds documentation only, add a usabl.docs.json that loads and names at least one page, ' +

@@ -234,3 +234,37 @@ describe('parseDocsManifest refuses a user name or password in docsBaseUrl', () 
     }
   });
 });
+
+// The docs planner matches every changed file against each sharedGlobs entry, so the list has the
+// size bounds of the config glob lists, and a pattern usabl cannot build is a plain refusal.
+describe('parseDocsManifest bounds the size of sharedGlobs', () => {
+  const messageFor = async (sharedGlobs: string[]): Promise<string> => {
+    try {
+      await parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, sharedGlobs }) }));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return '';
+  };
+  const alternatives = (count: number): string => Array.from({ length: count }, (_, i) => `f${i}`).join(',');
+
+  it('loads an entry at the cap of 256 expansions, and refuses one past it or with 20 brace groups', async () => {
+    expect(await messageFor([`images/{${alternatives(256)}}/**`])).toBe('');
+    for (const glob of [`images/{${alternatives(257)}}/**`, 'images/' + '{a,b}'.repeat(20) + '/**']) {
+      const started = performance.now();
+      const message = await messageFor([glob]);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(message, glob).toContain('usabl.docs.json sharedGlobs entry');
+      expect(message, glob).toContain('more than 256');
+    }
+  });
+
+  it('refuses a pattern longer than 1024 characters, more than 4096 patterns, or too long to build', async () => {
+    expect(await messageFor([`images/${'x'.repeat(1100)}`])).toContain('makes a pattern longer than 1024 characters');
+    const entries = Array.from({ length: 17 }, (_, i) => `images/p${i}/${'{a,b}'.repeat(8)}`);
+    expect(await messageFor(entries)).toContain('usabl.docs.json sharedGlobs entries expand to 4352 patterns in all');
+    const huge = await messageFor([`images/${'x'.repeat(100_000)}`]);
+    expect(huge).toContain('usabl.docs.json sharedGlobs entry');
+    expect(huge).not.toContain('Regular expression');
+  });
+});

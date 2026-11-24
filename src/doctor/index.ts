@@ -60,6 +60,7 @@ import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 import { collectEngineReports, formatEngineReports } from './engines.js';
 import type { InstalledPackage } from '../providers/engines/shared.js';
 import type { ChromiumSandboxProbe } from './sandbox-probe.js';
+import { isOlderThanMinimum, MIN_GIT_VERSION, parseGitVersion, type GitVersionProbe } from './git-version.js';
 import { SANDBOX_FIX } from '../deps/sandbox.js';
 
 // The code-owners file the policy gate reads. Doctor reconciles it against guardedPaths so the
@@ -168,6 +169,8 @@ export interface DoctorDeps {
   // Without it, doctor reads the working tree, and says a literal guarded entry guards nothing
   // only when no file is there either.
   headFiles?: (prefix: string) => Promise<string[]>;
+  // Runs `git --version`. The CLI always passes it. A caller that leaves it out gets no git report.
+  probeGitVersion?: () => Promise<GitVersionProbe>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -972,6 +975,45 @@ async function collectChromiumSandbox(deps: DoctorDeps): Promise<SurfaceReport> 
   };
 }
 
+// The label names the version found, so the report shows it even when there is nothing to do.
+function gitLabel(version: string | null): string {
+  return `git (${version === null ? 'version not read' : version}; usabl needs ${MIN_GIT_VERSION} or later)`;
+}
+
+function collectGitVersion(probe: GitVersionProbe): SurfaceReport {
+  const install = `Install git ${MIN_GIT_VERSION} or later, then run "usabl doctor" again.`;
+  if (probe.kind === 'missing') {
+    return {
+      id: 'git',
+      label: gitLabel(null),
+      state: 'missing',
+      nextStep: `git was not found. usabl reads the changed files and the trusted branch with git. ${install}`,
+    };
+  }
+  const version = probe.kind === 'output' ? parseGitVersion(probe.text) : null;
+  if (version === null) {
+    return {
+      id: 'git',
+      label: gitLabel(null),
+      state: 'unknown',
+      nextStep: `usabl could not read the git version. Run "git --version" to see it. usabl needs git ${MIN_GIT_VERSION} or later.`,
+    };
+  }
+  if (isOlderThanMinimum(version)) {
+    return {
+      id: 'git',
+      label: gitLabel(version.text),
+      state: 'drifted',
+      nextStep:
+        `git ${version.text} is older than ${MIN_GIT_VERSION}, the oldest version usabl needs. usabl runs ` +
+        `"git rev-parse --end-of-options" so a branch name that starts with a dash is never read as an option, and ` +
+        `git learned that in ${MIN_GIT_VERSION}. With this git those reads fail, so a check cannot find the refs it ` +
+        `compares with. ${install}`,
+    };
+  }
+  return { id: 'git', label: gitLabel(version.text), state: 'wired', nextStep: '' };
+}
+
 async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promise<SurfaceReport> {
   // verified is the only wired mapping. not-applied is a confident absence (missing).
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
@@ -1392,11 +1434,14 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     ),
   );
   const labels = await readBranchLabels(deps);
+  // The git report sits with the other tools usabl runs, after the browser and its sandbox.
+  const gitReports = deps.probeGitVersion === undefined ? [] : [collectGitVersion(await deps.probeGitVersion())];
   return [
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
     await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
     await guardRead('playwright-chromium', PLAYWRIGHT_CHROMIUM_LABEL, () => collectPlaywrightChromium(deps)),
     await guardRead('chromium-sandbox', CHROMIUM_SANDBOX_LABEL, () => collectChromiumSandbox(deps)),
+    ...gitReports,
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
     await guardRead('readiness-signals', READINESS_SIGNALS_LABEL, () => collectReadinessSignals(deps)),

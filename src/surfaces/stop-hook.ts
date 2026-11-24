@@ -38,6 +38,11 @@ export interface HookContext {
   // that a file committed on the branch still counts. Absent means the last commit was the
   // reference.
   policyFromStartingCommit?: boolean;
+  // True when git records no trusted branch, so the stop compared policy with the last commit and
+  // checked only the uncommitted changes. An allow line (VERIFIED, or idle) then says so inside its
+  // parentheses, so a reader who skips the note that follows still sees it. Absent means a trusted
+  // branch was found.
+  noTrustedBranch?: boolean;
   // True when the stop read the branch's own policy, because the branch sets usabl up: neither the
   // trusted branch nor the starting commit has a config. A VERIFIED or idle line then says so in
   // its brackets, so the line alone never reads as a pass under approved policy.
@@ -54,16 +59,23 @@ export interface HookContext {
  */
 export const OWN_REPOSITORY_VERDICT_NOTE = 'checked the repository the assistant stopped in';
 
-/** The notes a VERIFIED or idle line carries in its brackets, joined, or undefined for none. */
+/**
+ * The notes a VERIFIED or idle line carries in its brackets, joined, or undefined for none. The
+ * order is fixed: session drift, then the branch's own policy, then the repository the assistant
+ * stopped in, then no trusted branch. Each note is added whenever its flag is set, so a line never
+ * drops one for another.
+ */
 function passNotes(notes: {
   sessionDriftChecked?: boolean;
   policyFromBranch?: boolean;
   repositoryFromOwnFolder?: boolean;
+  noTrustedBranch?: boolean;
 }): string | undefined {
   const parts = [
     ...(notes.sessionDriftChecked === false ? [DRIFT_NOT_CHECKED] : []),
     ...(notes.policyFromBranch === true ? [POLICY_FROM_BRANCH_VERDICT_NOTE] : []),
     ...(notes.repositoryFromOwnFolder === true ? [OWN_REPOSITORY_VERDICT_NOTE] : []),
+    ...(notes.noTrustedBranch === true ? [NO_TRUSTED_BRANCH_WARNING] : []),
   ];
   return parts.length === 0 ? undefined : parts.join(', ');
 }
@@ -92,6 +104,12 @@ function stopGuardedFileLines(result: Result, ctx: HookContext): { scaffold: str
 
 // The note an allow line carries when the session drift comparison did not run.
 const DRIFT_NOT_CHECKED = 'session drift not checked';
+
+/**
+ * What an allow line (VERIFIED, or idle) carries when no trusted branch was found. The note after
+ * the decision names what was not checked and the next step.
+ */
+export const NO_TRUSTED_BRANCH_WARNING = 'no trusted branch found to compare policy with; see the note below';
 
 export interface StopDecision {
   block: boolean;
@@ -126,6 +144,11 @@ interface NextSteps {
   approvalOnly: string;
   approvalWithRegression: string;
   approvalWithGaps: string;
+  // A regression outranks a gap, so a run with both is a regression. These name the gaps the way
+  // the not covered step does, so a reader who fixes the accessibility barriers does not meet the
+  // gaps only on the next stop.
+  regressionWithGaps: string;
+  approvalWithRegressionAndGaps: string;
   // The steps for a run that also holds checks usabl could not decide. The barrier step names
   // accessibility barriers only, because the undecided checks get the review sentence after it.
   regressionWithChecks: string;
@@ -144,16 +167,22 @@ interface NextSteps {
 const REVIEW_RULE =
   'Do not change code to make an undecided check pass, and do not mark one as reviewed yourself, for example by adding a waiver or recording it in the evidence floor.';
 
+// How a blocked stop names the gaps: the reasons under Not evaluated and the ways to resolve each.
+const BLOCK_GAP_WORK =
+  'resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>).';
+
 const BLOCK_STEPS: NextSteps = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
   regressionWithChecks:
     'Next: fix each accessibility barrier below, then stop again so usabl can re-check the change.',
+  regressionWithGaps: `Next: fix each accessibility barrier below, and ${BLOCK_GAP_WORK} Then stop again.`,
   approvalWithRegressionAndChecks:
     'Next: fix each accessibility barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  approvalWithRegressionAndGaps:
+    `Next: fix each accessibility barrier below, and ${BLOCK_GAP_WORK} Then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.`,
   review: `Each check undecided below needs a person to review it, so tell the user. ${REVIEW_RULE}`,
   reviewOnly: `Next: tell the user that each check undecided below needs a person to review it. ${REVIEW_RULE}`,
-  notCovered:
-    'Next: resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>). Then stop again.',
+  notCovered: `Next: ${BLOCK_GAP_WORK} Then stop again.`,
   approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
   approvalWithRegression:
@@ -183,8 +212,11 @@ const unrecognizedContinuationStep = (check: CheckCommand): string =>
 const continuationSteps = (check: CheckCommand): NextSteps => ({
   regression: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
   regressionWithChecks: `Next: fix each accessibility barrier usabl reported, then run ${check} before you tell the user this change is accessible.`,
+  regressionWithGaps: `Next: fix each accessibility barrier usabl reported and resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
   approvalWithRegressionAndChecks:
     'Next: fix each accessibility barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
+  approvalWithRegressionAndGaps:
+    'Next: fix each accessibility barrier usabl reported and resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to make a later stop pass.',
   review: `Tell the user that each check usabl could not decide needs a person to review it. ${REVIEW_RULE}`,
   reviewOnly: `Next: tell the user that each check usabl could not decide needs a person to review it. ${REVIEW_RULE}`,
   notCovered: `Next: resolve every reason usabl reported under Not evaluated, then run ${check} before you tell the user this change is accessible.`,
@@ -212,6 +244,9 @@ function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
   const withReview = (step: string): string => `${step} ${steps.review}`;
   if (result.verdict === 'approval_required') {
     if (result.accessibilityVerdict === 'regression') {
+      if (coverageFailed) {
+        return undecided ? withReview(steps.approvalWithRegressionAndGaps) : steps.approvalWithRegressionAndGaps;
+      }
       return undecided ? withReview(steps.approvalWithRegressionAndChecks) : steps.approvalWithRegression;
     }
     if (result.accessibilityVerdict === 'not_covered') {
@@ -225,6 +260,9 @@ function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
     return steps.approvalOnly;
   }
   if (result.verdict === 'regression') {
+    if (coverageFailed) {
+      return undecided ? withReview(steps.regressionWithGaps) : steps.regressionWithGaps;
+    }
     return undecided ? withReview(steps.regressionWithChecks) : steps.regression;
   }
   if (result.verdict === 'not_covered') {
@@ -353,6 +391,8 @@ export interface StoredReceiptPinState {
   // True when the hook checked the repository the assistant stopped in, because CLAUDE_PROJECT_DIR
   // named a folder outside any repository. The line then says so. Absent means false.
   repositoryFromOwnFolder?: boolean;
+  // True when git records no trusted branch. The line then carries NO_TRUSTED_BRANCH_WARNING.
+  noTrustedBranch?: boolean;
 }
 
 // A receipt records no known limits, so a run verified with known limits would read on the fast
