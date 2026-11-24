@@ -428,6 +428,15 @@
 
 ### Fixed
 
+- `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
+  modal hides the body's other children, and PatternFly places its toast group there, so an alert
+  shown while the dialog is open is not announced. When the hidden body child is the alert's
+  nearest live region, sits inside it, or is or holds a PatternFly toast group around the alert,
+  the alert now gets an `unverified` draft that asks a person to check whether alerts can appear
+  while the dialog is open. An alert in the app root behind a modal is still judged by its live
+  region, and every other case is unchanged. Gate effect: a screen checked with a modal open and a
+  hidden toast group that read `verified` now reads `not_covered`, unless the evidence floor or a
+  waiver already holds that finding.
 - A branch that sets usabl up is no longer blocked at every stop. When neither the commit where
   the branch left the trusted branch nor the tip of the trusted branch has `usabl.config.json`,
   a Stop hook stop and `usabl check --branch-scope` check every change since that commit with the
