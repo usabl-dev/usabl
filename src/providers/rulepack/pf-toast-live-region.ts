@@ -3,10 +3,29 @@
  * This unit must never claim the temporal announcement half. It only proves containment.
  */
 import type { AncestorAttributesRead, AxNode, CoverageGap, Draft, ProviderContext } from '../../contracts/index.js';
-import { ariaModalDialog, effectiveLiveValue, hiddenInChain, type HiddenAttributes, type LiveAttributes } from './live-value.js';
+import {
+  ariaModalDialog,
+  effectiveLiveValue,
+  hiddenInChain,
+  nearestLiveSetter,
+  type HiddenAttributes,
+  type LiveAttributes,
+} from './live-value.js';
 import { SEL } from './selectors.js';
 
-const LIVE_ATTRIBUTES = ['aria-live', 'role', 'aria-hidden', 'inert', 'hidden'] as const;
+// class is read only to tell a PatternFly toast group from other content. It is matched, never
+// copied into a draft.
+const LIVE_ATTRIBUTES = ['aria-live', 'role', 'aria-hidden', 'inert', 'hidden', 'class'] as const;
+
+// The class tokens of a PatternFly 6 toast group. An element is one when it carries both, in any
+// order. PatternFly renders the group as a live list inside a plain div that it adds to the body.
+const TOAST_GROUP_CLASS = 'pf-v6-c-alert-group pf-m-toast';
+const CLASS_SEPARATOR = /[\t\n\f\r ]+/;
+
+function isToastGroup(record: Record<string, string | null>): boolean {
+  const tokens = new Set((record['class'] ?? '').split(CLASS_SEPARATOR));
+  return TOAST_GROUP_CLASS.split(' ').every((token) => tokens.has(token));
+}
 
 function toLiveAttributes(record: Record<string, string | null>): LiveAttributes {
   return { ariaLive: record['aria-live'] ?? null, role: record['role'] ?? null };
@@ -100,6 +119,31 @@ function behindModalDraft(ctx: ProviderContext, selector: string, node: AxNode |
   };
 }
 
+// The toast area itself is hidden by an open modal dialog: the body's child that the modal hides is
+// the alert's live region, or holds the toast group the alert sits in. While the dialog is open, a
+// screen reader hears no toast. Whether a toast can appear while this dialog is open is not
+// something the rule can read from the page, so the alert is neither passed nor failed.
+function toastAreaBehindModalDraft(ctx: ProviderContext, selector: string, node: AxNode | null): Draft {
+  return {
+    rule: 'pf-toast-live-region',
+    layer: 'pf',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId: ctx.screen.id,
+    elementPath: selector,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: 'While the open dialog is shown, a screen reader may not announce this alert.',
+    why: 'An open dialog hides the toast area from screen readers, so an alert shown while the dialog is open may not be announced. usabl cannot tell whether alerts appear while this dialog is open.',
+    fix: 'A person needs to check whether alerts can appear while this dialog is open. If they can, show those alerts where a screen reader can reach them while the dialog is open, for example inside the dialog.',
+    evidence: {
+      name: { value: node?.name ?? null, source: 'ax-tree', fromTree: true },
+      role: { value: node?.role ?? null, source: 'ax-tree', fromTree: true },
+    },
+    confidence: 'unverified',
+  };
+}
+
 export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<ToastLiveRegionResult> {
   const allAlerts = await ctx.page.queryAll(SEL.alert);
   const drafts: Draft[] = [];
@@ -158,7 +202,10 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
     // the body, while a modal dialog it renders outside the root is open, and the live region works
     // again when the modal closes. When the only hidden element is the body's child and an open
     // modal sits outside it, the alert is judged by its live region alone, as when no modal is open.
+    // The same modal also hides a toast group under the body. That is not page content the modal
+    // means to hide, so it is reported below as undecided, never passed.
     const onlyHidden = hiddenAt.filter((entry) => entry).length === 1 ? hiddenAt.indexOf(true) : -1;
+    let toastAreaBehindModal = false;
     if (onlyHidden !== -1) {
       modalOpen ??= await exposedModalOpen(ctx);
       if (modalOpen) {
@@ -169,10 +216,19 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
         }
         if (onlyHidden === read.chain.length - 3) {
           hidden = false;
+          // The hidden body child is the toast area when it is the nearest live region above the
+          // alert, or sits below the one that is, or when it holds a toast group around the alert.
+          const liveSetter = nearestLiveSetter(nodes.slice(1));
+          toastAreaBehindModal =
+            (liveSetter !== -1 && liveSetter + 1 >= onlyHidden) ||
+            read.chain.slice(0, onlyHidden + 1).some(isToastGroup);
         }
       }
     }
     if (containerIsLive && contentIsLive && !hidden) {
+      if (toastAreaBehindModal) {
+        drafts.push(toastAreaBehindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector)));
+      }
       continue;
     }
 
