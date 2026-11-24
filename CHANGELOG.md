@@ -444,7 +444,9 @@
   toast group around it, is still judged by that live region. A toast group that holds no alert yet,
   which PatternFly renders as soon as a toast AlertGroup mounts, gets the same `unverified` draft
   on the group when the modal hides it the same way. A group that holds an alert gets no draft of
-  its own, and a group that is shown, or hidden in another way, gets nothing. Gate effect: a screen
+  its own, and a group that is shown, or hidden in another way, gets nothing. When a modal is open
+  and the rule cannot tell which element is the body's child, an empty group gets the same
+  `unverified` draft an alert gets in that state. Gate effect: a screen
   checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
   `not_covered`, unless the evidence floor or a waiver already holds that finding.
 - `usabl check` saves a receipt only when the config it planned with is `usabl.config.json` at
