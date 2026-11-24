@@ -689,6 +689,70 @@ describe('checkPage after the checks, with and without a reachedWhen selector', 
     });
   }
 
+  // The other ways a screen has no selector measured again after the checks: no usabl.config.json
+  // at all, only expectedUrl, and a screen id the config does not name. Each keeps the whole
+  // fragment rule, so a plain fragment router move reads as moved and a tab panel hash is a gap.
+  async function emptyProject(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-checkpage-noconfig-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  const noSelectorCases: Array<[string, string, string]> = [
+    ['a plain fragment router moves to another fragment', 'http://127.0.0.1:5173/app', 'http://127.0.0.1:5173/app#login'],
+    ['a tab panel sets a plain fragment', PAGE_URL, `${PAGE_URL}#tab-2`],
+  ];
+  for (const [name, from, to] of noSelectorCases) {
+    it(`is not covered with no config and only expectedUrl when ${name}`, async () => {
+      adopted.page = movesOnTab(from, to);
+      const result = await checkPage(pwPage(), { projectRoot: await emptyProject(), tabCap: 10, expectedUrl: from });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      // The folder holds no config, which is a gap of its own. The read after the checks is the other.
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['usabl.config.json', 'landing:page']);
+      expect(result.gaps[1]?.reason).toContain('The page left that screen while it was checked');
+      expect(result.gaps[1]?.reason).toContain('declare a reachedWhen selector');
+    });
+
+    // A response-only signal holds no selector, so nothing measured after the checks tells a plain
+    // fragment route apart, and the whole fragment rule applies.
+    it(`is not covered with a response-only reachedWhen when ${name}`, async () => {
+      const page = movesOnTab(from, to);
+      page.apiResponses = async () => [
+        { url: 'http://127.0.0.1:5173/api/clusters', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      ];
+      adopted.page = page;
+      const result = await checkPage(pwPage(), {
+        screenId: 'clusters',
+        projectRoot: await project({ response: '/api/clusters' }),
+        tabCap: 10,
+        expectedUrl: from,
+      });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:clusters']);
+      expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+      expect(result.gaps[0]?.reason).toContain('declare a reachedWhen selector');
+    });
+
+    it(`is not covered with a screen id the config does not name when ${name}`, async () => {
+      adopted.page = movesOnTab(from, to);
+      const result = await checkPage(pwPage(), {
+        screenId: 'unlisted',
+        projectRoot: await project(SELECTOR),
+        tabCap: 10,
+        expectedUrl: from,
+      });
+
+      expect(result.verdict).toBe('not_covered');
+      expect(result.drafts).toEqual([]);
+      expect(result.gaps.map((gap) => gap.ref)).toEqual(['landing:unlisted']);
+      expect(result.gaps[0]?.reason).toContain('The page left that screen while it was checked');
+    });
+  }
+
   it('leaves a plain fragment router move to the selector when the screen has one: gone after the move, the page is not covered', async () => {
     const result = await checkMove('http://127.0.0.1:5173/app', 'http://127.0.0.1:5173/app#login', {
       expectedUrl: 'http://127.0.0.1:5173/app',

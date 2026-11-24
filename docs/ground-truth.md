@@ -3662,6 +3662,29 @@ loaded before and no longer does; split it into several entries. An older config
 ref's config, can hold a refused form, and the guard reads it wide as above. An empty entry is the
 whole tree.
 
+The same cap holds for `uiFileGlobs`. The matcher builds one pattern for each brace expansion of
+an entry and tests every file against each, so a short entry with many brace groups can take a long
+time or exhaust memory. Config load refuses a `uiFileGlobs` entry with more than 256 brace
+expansions, names the entry, and says to split it or use a wildcard for the part that varies. The
+entry is never cut to fewer patterns, so no UI file it names drops out of the check. The count is
+taken before anything is expanded. The cost of matching also grows with the length of each
+pattern and with every entry together, and a pattern of about 100,000 characters made the regular
+expression engine throw. So config load also refuses an entry that expands to a pattern longer
+than 1024 characters, a list whose entries expand to more than 4096 patterns in all (sixteen
+entries at the cap), and a list whose patterns hold more than 262,144 characters in all (at 4096
+patterns of 1024 characters, each changed file took about 20 ms to match). Each entry's pattern
+is built and run once at load, so one the engine cannot build is a config refusal, never a crash
+in a run. The planner builds each entry's matcher once per run, not once per changed file.
+
+Every other policy glob list is matched the same way and has the same bounds: the 256 cap on each
+entry, 1024 characters for each pattern, 4096 patterns and 262,144 characters in all, and the build
+at load. The lists are `discovery.wideBlastGlobs` and `guardedPaths` in `usabl.config.json`, and
+`sharedGlobs` in `usabl.docs.json`. Each refusal names the list and the entry, as
+`discovery.wideBlastGlobs entry "..." has brace groups that expand to more than 256 patterns`. A
+`guardedPaths` entry past the 256 cap keeps its own message, which says the guard would read it
+as a wider folder. No other list in either file is a glob: `surfaces[].files`, `localFiles`, and
+the docs page `sources` are exact paths.
+
 The `requirements` value names a folder, and the requirements loader accepts any folder name, such
 as `requirements (v2)`. The guard reads it, and the always-guarded ledgers, as literal paths: no
 glob rule applies to them. A `guardedPaths` entry with the same text as `requirements` is read both
@@ -4359,7 +4382,16 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     decision, a block, an idle line, and a stored receipt allow included, is followed by "Note:
     usabl found no trusted branch to compare this branch with ... Work already committed on this
     branch was not checked on this stop." and the `git remote set-head origin --auto` step. In
-    Claude Code the note reaches the person through `systemMessage`.
+    Claude Code the note reaches the person through `systemMessage`. A note after the decision is
+    easy to miss, so an allow line also says it inside its parentheses: "VERIFIED (exit 0, no
+    trusted branch found to compare policy with; see the note below): ...", the stored receipt
+    line ("VERIFIED (exit 0, stored receipt, not re-scanned, no trusted branch found ...)"), and
+    the idle line ("NO VERDICT: IDLE (exit 0, no trusted branch found ...)") alike. When an allow
+    line carries more than one note, they come in a fixed order after the exit code (and after
+    "stored receipt, not re-scanned" on the stored receipt line): "session drift not checked",
+    then "policy from this branch, not approved yet", then "checked the repository the assistant
+    stopped in", then the no trusted branch warning. Each note appears whenever its condition
+    holds, so a line never drops one for another.
   - Limit: any process in the session can move `origin/HEAD`, or the branch it names, with
     ordinary git commands such as `git update-ref refs/remotes/origin/main HEAD`. That shrinks
     the stop's scope to the uncommitted changes, and usabl cannot tell this from a fetch. CI,
@@ -4414,9 +4446,22 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   - It is refused with exit 2 next to `--config` naming any file other than `usabl.config.json`
     at the project root (`--config usabl.config.json` and `--config ./usabl.config.json` run),
     because the hook plans from that file and the receipt answers the hook. The message says to
-    drop `--config`. The path is resolved against the folder the command runs in, so run the
-    check from the project root: from a subfolder, `--config ../usabl.config.json` is refused
-    too. The receipt does not bind the config bytes.
+    drop `--config`. The path is resolved against the folder the command runs in and must match
+    `usabl.config.json` at the repository root (git's top level) twice: as written, without
+    following links, and by the real path the operating system opens, which follows a link
+    before the `..` after it. So from a subfolder, `--config ../usabl.config.json` names the
+    root file and runs. A path that opens any other file is refused: a link elsewhere that points
+    at the root file, a file outside the repository, and a spelling such as
+    `x/../usabl.config.json` where `x` is a link out of the repository, which matches on paper
+    and opens a file outside. A run that passes then reads the root file by its plain name. A
+    check from a subfolder runs at the repository root, as the hook does, so it reads the same
+    guarded files and saves its receipt where the next stop looks. From a subfolder with no
+    `--config`, the default name means a file in that folder, so it is refused with exit 2 and
+    the message says to run from the project root or pass `--config` with the path to the root
+    file. The receipt does not bind the config bytes, so any `usabl check` saves a receipt only
+    when the config it planned with is the root `usabl.config.json` by real path. A plain check
+    with `--config` naming another file, and a run through `--isolated-browser`, save none and
+    say so on stderr, so no stop answers from a scan planned with a config it does not read.
 - Advice names that check. On a stop with a starting commit, each hook message that tells the
   reader to run a check says `usabl check --branch-scope`: the step after a verdict usabl does not
   recognize (block and continuation), the continuation steps for a regression and for gaps, a run
@@ -4454,6 +4499,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook that states no limit can still be ended by Claude Code before usabl answers, and the
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
     runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
+  - Limit: the deadline is a timer in the same process, so it fires only between steps that wait,
+    such as a browser call. It cannot end work that runs without waiting. A committed glob with
+    many wildcards can take long enough to match a long changed file name that the host ends the
+    hook before usabl answers, and the stop then goes on with nothing checked (threat model,
+    Threat 8). Such a pattern must be in committed policy, which a code owner approves. A matcher
+    that does not backtrack is planned.
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -4573,6 +4624,17 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   usabl did not save the receipt ..." after the decision line, and the next stop runs the full
   check. For an error, the first line of the error follows inside the untrusted frame under
   `reason:`.
+- The config a receipt binds is the config the run planned with. `usabl check` and the Stop hook
+  keep the raw bytes of `usabl.config.json` they planned from and read the root file again just
+  before the save. They save the receipt only when the bytes are the same and the receipt's local
+  files hash is the hash of the planned bytes, with the other bound files read as they are now.
+  The bytes are compared as read from disk, never as text decoded and encoded again, so a stable
+  config with a byte that is not valid UTF-8 still gets a receipt.
+  Otherwise they save none and print "usabl: saved no receipt for this run." with the reason:
+  "usabl.config.json at the repository root changed while usabl was checking", or that the files
+  the receipt binds changed. The verdict of the run is not changed, and the next stop runs its own
+  check. A check from a subfolder compares the bytes only: its receipt binds that folder's files
+  and is saved there, where no stop reads it.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new accessibility barrier blocks this change. It can proceed." and the stop hook allows with
@@ -4597,6 +4659,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   same rule. When coverage gaps also hold the run, the coverage step comes
   first and the review sentence follows. The same rule holds for the accessibility half of
   `approval_required`. A run with no undecided check keeps the steps as before.
+- A regression outranks a gap, so a run with both is a regression. Its step names the gaps the
+  way a `not_covered` step does: "Next: fix each accessibility barrier below, and resolve every
+  reason under Not evaluated below: make each unreachable screen reachable, ... Then stop
+  again." During an active continuation it reads "Next: fix each accessibility barrier usabl
+  reported and resolve every reason usabl reported under Not evaluated, then run ..." The same
+  holds when the accessibility half of `approval_required` is such a regression, and the
+  guarded-file step follows. An undecided check adds the review sentence after it.
 - A verdict that is not one of the contract's words, on any exit code, exit 4 included, or a
   null verdict on a run that was neither idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
   "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
@@ -5282,13 +5351,19 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox,
+reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox, git,
 route manifest, evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check
 and usabl-fix skills, cursor, ci, branch-rule, workflow owners, and policy scope, each with a state such as wired,
 missing, drifted, or unknown. The chromium sandbox surface starts Chromium with its sandbox the way
 a scan does, opens one blank page, and closes it. It is wired when that works, missing with the fix
 when Chromium reports that it cannot start its sandbox, and unknown when the launch failed for
-another reason, such as a missing Chromium. It writes nothing to the repository. The readiness signals surface is missing when a screen holds floored debt and
+another reason, such as a missing Chromium. It writes nothing to the repository. The git surface
+runs `git --version` and names the version in its label. usabl needs git 2.30 or later, because it
+runs `git rev-parse --verify --quiet --end-of-options <ref>` so a ref that starts with a dash is
+never read as an option, and git learned `--end-of-options` for rev-parse in 2.30. An older git is
+drifted, and the next step names its version, says those reads fail, and says to install 2.30 or
+later. No git is missing, and output usabl does not recognize is unknown and is never printed.
+The readiness signals surface is missing when a screen holds floored debt and
 declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
 does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
 that held is one way, and a matching element seen on the run is the other (section 9). A docs page
@@ -5323,7 +5398,9 @@ A Claude Code reinstall keeps a timeout of 60 seconds or more and makes the comm
 timeout usabl cannot match is left as the person wrote it, and the reinstall refuses with the fix.
 A Cursor reinstall that fixes a missing or low timeout changes only that key in `.cursor/hooks.json`
 and keeps every other key, `loop_limit` included. A higher Cursor timeout is kept, and the
-reinstall makes the adapter script pass it. Doctor never mints a verdict or a receipt.
+reinstall makes the adapter script pass it. A first Cursor install into an existing
+`.cursor/hooks.json` with no usabl stop entry adds that entry and keeps every other top-level key,
+every other event's hooks, and the key order as written. Doctor never mints a verdict or a receipt.
 
 After the surfaces, doctor prints an `optional engines` section (section 7.7). It opens with the line
 "Tested against the vendor's documented result format. Not yet run on a licensed SDK. Engine findings

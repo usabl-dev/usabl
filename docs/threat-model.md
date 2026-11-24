@@ -224,7 +224,9 @@ re-baseline to green.
   starting commit cannot be found or used, or the listing fails, the stop is a not-covered gap
   that blocks once; it never falls back to the uncommitted changes, to the whole history, or to
   nothing to check. With no trusted branch at all, the stop keeps the uncommitted scope and
-  every decision says that committed work was not checked. Limits: the trusted branch is what
+  every decision says that committed work was not checked. A VERIFIED or idle line says inside
+  its parentheses that no trusted branch was found to compare policy with, so a reader who skips
+  the note that follows still sees it. Limits: the trusted branch is what
   the local clone records for origin, so a stale `origin/HEAD` or an old fetch moves the
   starting commit, and a branch whose base is not origin's default branch is compared with the
   default branch anyway. In both cases the stop checks the changes since the commit the local
@@ -509,17 +511,30 @@ passing bundle from another run.
   exported. The bindings stop a receipt lifted from another run, not one written on purpose on
   this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
   re-scanned)" and says usabl did not scan the change again on that stop.
-- A receipt does not bind the config file a `usabl check --config <other file>` run used. It binds the committed policy files and
-  the bytes of `usabl.config.json` at the root, the file the Stop hook reads, never the file
-  `--config` names. So a plain `usabl check --config <other
-  file>`, which plans from that other file (for example one with narrower `uiFileGlobs`), saves a
-  receipt the hook checks against the root config. As built, that receipt records no starting
-  commit, because a plain check passes no changed list. It answers only a stop that has no
-  starting commit either: a stop in a repository where git records no trusted branch, which
-  checks the uncommitted changes and says that committed work was not checked. On a stop with a
-  starting commit it does not verify, and the stop runs the full check. `usabl check
-  --branch-scope` refuses `--config` naming any file other than the root `usabl.config.json`.
-  Binding the bytes of the file `--config` names is not built.
+- A receipt does not bind the config file a check planned with. It binds the committed policy
+  files and the bytes of `usabl.config.json` at the root, the file the Stop hook reads, never the
+  file `--config` names. Before, a plain `usabl check --config <other file>`, which plans from
+  that other file (for example one with narrower `uiFileGlobs`), saved a receipt that answered a
+  stop with no starting commit (a repository where git records no trusted branch). So now `usabl
+  check` saves a receipt only when the config it planned with is `usabl.config.json` at the
+  repository root once every link is followed (the operating system's own real path, which
+  follows a link before the `..` after it, as opening the file does). Any other config, a spelling
+  such as `x/../usabl.config.json` with `x` a link out of the repository included, saves no
+  receipt, and the check says so. A run through `--isolated-browser`, which plans with the trusted
+  ref's config, saves none either. `usabl check --branch-scope` refuses `--config` naming any file
+  other than the root `usabl.config.json`, compared as written and by real path, and then reads
+  the root file by its plain name from the root. The Stop hook plans from the root file itself.
+  Binding the bytes of the file `--config` names is not built; the rule above makes it unneeded
+  for a receipt a stop can use.
+- A check reads the root config to plan before it builds its deps, and the run reads it again
+  when it binds the local files into the receipt. Before, a second process that put the committed
+  config back in between made the check plan from weaker bytes and save a receipt bound to the
+  committed ones, and the next stop, with a clean tree, answered from it without a scan. So
+  `usabl check` and the Stop hook keep the raw bytes they planned with, read the root
+  `usabl.config.json` again just before the save, and save a receipt only when the bytes are the
+  same and the receipt's local files hash is the hash of the planned bytes with the other bound
+  files as they are now. Otherwise they save none and say "saved no receipt for this run" with the
+  reason. The second test catches a file put back to the planned bytes just before the save.
 - The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
   `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
   CI the pull request head would pick the target. The receipt store refuses a link at either
@@ -833,6 +848,16 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
+- Known limit: a committed glob with many wildcards can take long enough to match a long changed
+  file name that the host ends the hook before usabl answers, and the stop then goes on with
+  nothing checked. The regular expression engine tries each way the wildcards can split the name,
+  and the time grows fast with the name's length: `src/` then `*a` twelve times then `*b`, 30
+  characters, took 2.4 seconds against a name of 34 characters, and a stop with a name of 38
+  letters took 81.7 seconds against a 30 second limit. usabl's own Stop hook deadline does not
+  help here: it is a timer in the same process, and no timer can fire while a match runs. The
+  size bounds on each policy glob list do not bound this either. Such a pattern must be in
+  committed policy, which a code owner approves; the file name is the agent's choice. A matcher
+  that does not backtrack is planned.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.

@@ -8,8 +8,12 @@
  * Every difference is copied into the summary in full. Counts are per page. A fixture in a later
  * harness file replaces the same fixture from an earlier one, so a page run again on its own takes
  * the place of its result in the full run. `--sweep-from <summary.json>` keeps the sweep part of an
- * earlier summary in place of `--sweep`, for when only the fixtures were measured again. The script
- * writes nothing when any page was unstable.
+ * earlier summary in place of `--sweep`, for when only the fixtures were measured again. A kept sweep
+ * must come from the same usabl, axe-core, and Playwright versions as this install, and it does not
+ * cover browser tests added since it was made. The script writes nothing when any page was unstable,
+ * kept sweep included, or when a kept sweep came from other versions. A kept sweep that records no
+ * versions, from before the sweep part recorded them, is refused unless `--accept-unversioned-sweep`
+ * is passed, and then the output says its versions were not checked.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -41,15 +45,39 @@ interface SweepRecord {
   error?: string;
 }
 
-function parseArgs(argv: string[]): { out: string; sweep: string | null; sweepFrom: string | null; harness: string[] } {
+interface Versions {
+  usabl: string;
+  axeCore: string;
+  playwright: string;
+}
+
+// The parts of an earlier summary --sweep-from reads.
+interface KeptSweep {
+  versions?: Versions;
+  withDifferences?: Array<{ file: string; test: string; unstable?: boolean }>;
+}
+interface EarlierSummary {
+  sweep?: KeptSweep;
+}
+
+function parseArgs(argv: string[]): {
+  out: string;
+  sweep: string | null;
+  sweepFrom: string | null;
+  acceptUnversioned: boolean;
+  harness: string[];
+} {
   let out = '';
   let sweep: string | null = null;
   let sweepFrom: string | null = null;
+  let acceptUnversioned = false;
   const harness: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
     if (arg === '--') continue;
-    if (arg === '--out') {
+    if (arg === '--accept-unversioned-sweep') {
+      acceptUnversioned = true;
+    } else if (arg === '--out') {
       out = argv[++index] ?? '';
     } else if (arg === '--sweep') {
       sweep = argv[++index] ?? null;
@@ -65,7 +93,10 @@ function parseArgs(argv: string[]): { out: string; sweep: string | null; sweepFr
   if (sweep !== null && sweepFrom !== null) {
     throw new Error('axe-compare-summary: pass --sweep or --sweep-from, not both. --sweep-from keeps the sweep part of an earlier summary.');
   }
-  return { out, sweep, sweepFrom, harness };
+  if (acceptUnversioned && sweepFrom === null) {
+    throw new Error('axe-compare-summary: --accept-unversioned-sweep goes with --sweep-from, the sweep it accepts.');
+  }
+  return { out, sweep, sweepFrom, acceptUnversioned, harness };
 }
 
 // The origin is the only part of a frame address that reaches the summary, and test servers listen
@@ -82,7 +113,7 @@ function total(rows: Array<Record<string, number> | undefined>): Record<string, 
   return sum;
 }
 
-const { out, sweep, sweepFrom, harness } = parseArgs(process.argv.slice(2));
+const { out, sweep, sweepFrom, acceptUnversioned, harness } = parseArgs(process.argv.slice(2));
 // One outcome per fixture. A fixture in a later harness file replaces the same fixture from an
 // earlier one, so a page run again on its own, with USABL_AXE_COMPARE_GROUPS, takes the place of
 // its result in the full run.
@@ -101,12 +132,66 @@ const records: SweepRecord[] =
         .split('\n')
         .filter((line) => line.trim() !== '')
         .map((line) => JSON.parse(line) as SweepRecord);
+const require = createRequire(import.meta.url);
+// The versions of this install. The summary header names them, and a sweep built here records them.
+const installed: Versions = {
+  usabl: (require('../package.json') as { version: string }).version,
+  axeCore: (require('axe-core/package.json') as { version: string }).version,
+  playwright: (require('playwright/package.json') as { version: string }).version,
+};
+
 // The sweep part of an earlier summary, kept as it was, when only the fixtures were measured again.
-const earlierSweep: unknown =
-  sweepFrom === null ? null : ((JSON.parse(await readFile(sweepFrom, 'utf8')) as { sweep?: unknown }).sweep ?? null);
+const earlier: EarlierSummary | null = sweepFrom === null ? null : (JSON.parse(await readFile(sweepFrom, 'utf8')) as EarlierSummary);
+const earlierSweep: KeptSweep | null = earlier === null ? null : (earlier.sweep ?? null);
 if (sweepFrom !== null && earlierSweep === null) {
   process.stderr.write(`axe-compare-summary: not written. ${sweepFrom} has no sweep part to keep.\n`);
   process.exit(1);
+}
+// A kept sweep must come from this install, or the header of the new summary would name versions
+// the sweep did not run with. A sweep built before the sweep part recorded its versions cannot be
+// checked: the header of its summary names the install that wrote the summary, which kept an
+// earlier sweep as it was, so the header can be newer than the sweep. Such a sweep is refused
+// unless --accept-unversioned-sweep says to keep it anyway, and the output then says so.
+let keptNote = '';
+if (sweepFrom !== null && earlierSweep !== null) {
+  const recorded = earlierSweep.versions;
+  if (recorded === undefined && !acceptUnversioned) {
+    process.stderr.write(
+      `axe-compare-summary: not written. The sweep in ${sweepFrom} records no versions, so usabl cannot tell ` +
+        'whether it ran on this install. Run the sweep again on this install and pass its log with --sweep, or pass ' +
+        '--accept-unversioned-sweep to keep it with its versions unchecked.\n',
+    );
+    process.exit(1);
+  }
+  const names: Record<keyof Versions, string> = { usabl: 'usabl', axeCore: 'axe-core', playwright: 'Playwright' };
+  const differ =
+    recorded === undefined
+      ? []
+      : (Object.keys(names) as Array<keyof Versions>)
+          .filter((key) => recorded[key] !== installed[key])
+          .map((key) => `${names[key]} ${recorded[key]} there, ${installed[key]} here`);
+  if (differ.length > 0) {
+    process.stderr.write(
+      `axe-compare-summary: not written. The sweep in ${sweepFrom} was made with other versions than this install ` +
+        `(${differ.join('; ')}), so the new summary would name versions the sweep did not run with. ` +
+        'Run the sweep again on this install and pass its log with --sweep.\n',
+    );
+    process.exit(1);
+  }
+  // A kept sweep holds only the comparisons that differed or failed, so an unstable one is seen
+  // only there. Such a comparison says nothing about the engine, as in the refuse rule below.
+  const unstableKept = (earlierSweep.withDifferences ?? []).filter((entry) => entry.unstable === true);
+  if (unstableKept.length > 0) {
+    process.stderr.write(
+      `axe-compare-summary: not written. The sweep in ${sweepFrom} holds unstable comparisons, whose results ` +
+        `changed between two runs of the same world: ${unstableKept.map((entry) => `"${entry.file} > ${entry.test}"`).join(', ')}. ` +
+        'Run the sweep again and pass its log with --sweep.\n',
+    );
+    process.exit(1);
+  }
+  if (recorded === undefined) {
+    keptNote = ' (it records no versions, so they were not checked)';
+  }
 }
 
 // A page whose results changed between two runs of the same world was still loading, so its
@@ -131,10 +216,10 @@ const internals = outcomes.filter((outcome) => outcome.internals);
 const byFile: Record<string, number> = {};
 for (const record of records) byFile[record.file] = (byFile[record.file] ?? 0) + 1;
 
-const require = createRequire(import.meta.url);
 const summary = {
-  axeCore: (require('axe-core/package.json') as { version: string }).version,
-  playwright: (require('playwright/package.json') as { version: string }).version,
+  usabl: installed.usabl,
+  axeCore: installed.axeCore,
+  playwright: installed.playwright,
   fixtures: {
     pages: outcomes.length,
     withoutInternals: {
@@ -165,7 +250,7 @@ await writeFile(out, `${JSON.stringify(summary, null, 2)}\n`);
 const sweepLine =
   earlierSweep === null
     ? `sweep: ${records.length} comparisons, ${sweepPart().withDifferences.length} differ, ${sweepPart().errors.length} errors`
-    : `sweep: kept from ${sweepFrom}`;
+    : `sweep: kept from ${sweepFrom}${keptNote}`;
 process.stdout.write(
   `fixtures: ${outcomes.length} pages, ${plain.filter((o) => o.differences.length > 0).length} without internals differ, ` +
     `${internals.filter((o) => o.differences.length > 0).length} with internals differ; ${sweepLine}\n`,
@@ -173,6 +258,8 @@ process.stdout.write(
 
 function sweepPart() {
   return {
+    // The sweep's own record of the versions it ran with, so a later --sweep-from can check them.
+    versions: installed,
     comparisons: records.length,
     byFile,
     comparedEntries: total(records.map((record) => record.counts)),

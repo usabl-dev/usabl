@@ -119,12 +119,17 @@ function fakeDeadline(timeoutSetting: string | undefined, elapsedMs = 0) {
   return { port, state, fire: () => fire() };
 }
 
+// The text of usabl.config.json the hook reads, which the hook's config port parses as the fixture.
+const committedConfigText = '{}';
+
 function harness(deadline: ReturnType<typeof fakeDeadline> | null) {
   const fs = new MemoryRunnerFs();
   const stdout: string[] = [];
   const stderr: string[] = [];
   const browserClosed = { count: 0 };
-  const base = makeFakeDeps();
+  // The deps hold the config the hook reads, so a receipt minted from them binds the bytes the stop
+  // planned with, as a real run does.
+  const base = makeFakeDeps({ files: { 'usabl.config.json': committedConfigText } });
   const deps: Deps = {
     ...base,
     browser: {
@@ -144,7 +149,7 @@ function harness(deadline: ReturnType<typeof fakeDeadline> | null) {
     stderrWrite: async (text: string) => {
       stderr.push(text);
     },
-    readConfigBytes: async () => committedConfigBytes(),
+    readConfigBytes: async () => committedConfigBytes(committedConfigText),
     loadConfig: async () => configFixture,
     buildDeps: async () => deps,
     runEngine: async (): Promise<Result> => verifiedResult(null),

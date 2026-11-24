@@ -94,6 +94,9 @@ interface Fixture {
   // A page that never stops changing has its own timers cleared before the comparison, so both
   // runs read the same DOM. This changes the page's input, never either axe run.
   freeze?: boolean;
+  // The number of frames the page holds, each a fixture page with a main element. The comparison
+  // waits until every one has loaded, because axe reads only the frames that are ready when it runs.
+  frames?: number;
 }
 
 interface Outcome {
@@ -163,6 +166,28 @@ async function settle(pw: PwPage): Promise<void> {
   }
 }
 
+// Waits until the page holds `count` child frames and each has loaded its fixture page. settle()
+// counts the elements of the top document only, and a frameset's top document never changes, so
+// on a busy machine a run could start before a frame was ready and read it as empty. A page whose
+// frames never load fails the comparison here, so it is never compared half loaded.
+async function framesLoaded(pw: PwPage, count: number): Promise<void> {
+  for (let tries = 0; tries < 120; tries += 1) {
+    const children = pw.mainFrame().childFrames();
+    const ready =
+      children.length === count &&
+      (
+        await Promise.all(
+          children.map((frame) =>
+            frame.evaluate(() => document.readyState === 'complete' && document.querySelector('main') !== null).catch(() => false),
+          ),
+        )
+      ).every(Boolean);
+    if (ready) return;
+    await pw.waitForTimeout(250);
+  }
+  throw new Error(`the page did not load its ${String(count)} frames within 30 seconds`);
+}
+
 function fixtures(other: string): Fixture[] {
   const list: Fixture[] = [];
   // Rows, the way the row identity tests build them.
@@ -228,7 +253,12 @@ function fixtures(other: string): Fixture[] {
       unchecked: ['it is sandboxed without scripts, so axe cannot run in it'],
     },
     { name: 'frame: hidden and lazy', path: '/frame-hidden', html: page('<iframe title="Hidden" style="display:none" src="/frame-inner"></iframe><div style="height:4000px"></div><iframe title="Lazy" loading="lazy" src="/frame-inner"></iframe>') },
-    { name: 'frame: frameset', path: '/frameset', html: '<!doctype html><html lang="en"><head><title>Frames</title></head><frameset cols="50%,50%"><frame src="/frame-inner" title="Left"><frame src="/cell-broken"></frameset></html>' },
+    {
+      name: 'frame: frameset',
+      path: '/frameset',
+      frames: 2,
+      html: '<!doctype html><html lang="en"><head><title>Frames</title></head><frameset cols="50%,50%"><frame src="/frame-inner" title="Left"><frame src="/cell-broken"></frameset></html>',
+    },
   );
   // Pages other tests build inline, where a sweep run could not record them. The gradient page
   // runs into its five second test budget when the sweep doubles its axe run.
@@ -346,6 +376,7 @@ describe.skipIf(!ENABLED)('axe in the page world and in the isolated world', () 
     try {
       const pw = await context.newPage();
       await pw.goto(`${server.origin}${fixture.path}`, { waitUntil: 'load' });
+      if (fixture.frames !== undefined) await framesLoaded(pw, fixture.frames);
       await settle(pw);
       if (fixture.freeze === true) {
         await pw.evaluate(() => {
