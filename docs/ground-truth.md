@@ -813,10 +813,21 @@ also returns a gap for each alert it could not check:
    readers, so an alert shown while the dialog is open may not be announced, and that a
    person needs to check whether alerts can appear while this dialog is open. The same
    toast group with no modal open still fails, and one that is not hidden still passes.
-   This applies to the app root too. An app root that is itself a live region, or that
-   holds a PatternFly toast group around the alert, gives the `unverified` draft. Only an
-   alert in a live region inside the app root, with no toast group around it, is still
-   judged by that live region alone.
+   This applies to the app root too. An app root whose own live value is the nearest one
+   above the alert, or that holds a PatternFly toast group around the alert, gives the
+   `unverified` draft. An alert in a nearer live region inside the app root, with no
+   toast group around it, is still judged by that live region alone.
+   PatternFly renders the toast group as soon as a toast AlertGroup mounts, before any
+   alert is in it, so a screen checked with a modal open often holds an empty group. The
+   rule also finds each toast group on the page, read by the same two classes. A group
+   that holds no alert, and whose only hidden element is the body's child while an open
+   modal sits outside it (the same modal test the alert check uses), gets one
+   `unverified` draft on the group, with the same text. A group that holds an alert gets
+   no draft of its own, because the alert check judges that alert. A group that is not
+   hidden, or that is hidden in another way, gets nothing. When a modal is open but the
+   rule cannot tell which entry of the group's chain is the body's child, the group gets
+   nothing either. A group whose ancestors cannot be read while a modal is open becomes a
+   not-covered gap.
    An alert whose own container is hidden, below the body's child, still fails with or without a modal.
    Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
