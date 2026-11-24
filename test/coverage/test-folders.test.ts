@@ -234,10 +234,10 @@ describe('a changed file under a test folder that an unresolved import may reach
     });
   }
 
-  // A # specifier with no slash is a whole key of a package.json imports map, which can map it to
-  // any file, so its name says nothing about the file it loads.
-  it('is a gap when an unresolved import is a whole imports key', async () => {
-    const home = "import { Dashboard } from '#dash'\nexport function Home() { return <Dashboard /> }\n";
+  // A # specifier with no slash is a whole key of a package.json imports map. usabl reads it by its
+  // name without the #, as it reads a bare alias key.
+  it('is a gap when an unresolved whole imports key names the file', async () => {
+    const home = "import { Dashboard } from '#dashboard'\nexport function Home() { return <Dashboard /> }\n";
     const tree = treeWith(home, { [SCREEN_IN_TESTS]: 'export function Dashboard() { return <main /> }\n' });
     const coverage = await computeCoverage(depsOf(tree).fs, config, [SCREEN_IN_TESTS]);
     expect(coverage.nothingToCheck).toBe(false);
