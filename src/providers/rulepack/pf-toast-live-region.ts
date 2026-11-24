@@ -108,7 +108,14 @@ async function bodyChildKnown(ctx: ProviderContext): Promise<boolean> {
 // The alert sits in content hidden from assistive technology, and an open modal dialog is on the
 // page, but the rule cannot tell whether the hidden element is the page's top-level container that
 // the modal hides on purpose. So the alert is neither passed nor failed.
-function behindModalDraft(ctx: ProviderContext, selector: string, node: AxNode | null): Draft {
+// An empty toast group in the same state gets the same draft, worded for the group.
+function behindModalDraft(
+  ctx: ProviderContext,
+  selector: string,
+  node: AxNode | null,
+  subject: 'alert' | 'empty toast group',
+): Draft {
+  const alert = subject === 'alert';
   return {
     rule: 'pf-toast-live-region',
     layer: 'pf',
@@ -118,9 +125,15 @@ function behindModalDraft(ctx: ProviderContext, selector: string, node: AxNode |
     elementPath: selector,
     elementName: node?.name ?? null,
     role: node?.role ?? null,
-    whatUserExperiences: 'Could not verify that assistive technology announces this alert.',
-    why: 'The alert is inside content hidden from assistive technology while an open modal dialog is on the page. A modal dialog hides the page behind it on purpose, but usabl could not tell whether the hidden element is the page container the modal hides, so it could not check the alert.',
-    fix: 'Check this screen in a state with no modal dialog open when the page loads, or check the alert by hand.',
+    whatUserExperiences: alert
+      ? 'Could not verify that assistive technology announces this alert.'
+      : 'Could not verify that assistive technology announces an alert shown in this toast area.',
+    why: alert
+      ? 'The alert is inside content hidden from assistive technology while an open modal dialog is on the page. A modal dialog hides the page behind it on purpose, but usabl could not tell whether the hidden element is the page container the modal hides, so it could not check the alert.'
+      : 'The toast group is inside content hidden from assistive technology while an open modal dialog is on the page. A modal dialog hides the page behind it on purpose, but usabl could not tell whether the hidden element is the page container the modal hides, so it could not check the toast group.',
+    fix: alert
+      ? 'Check this screen in a state with no modal dialog open when the page loads, or check the alert by hand.'
+      : 'Check this screen in a state with no modal dialog open when the page loads, or check by hand whether alerts can appear while this dialog is open.',
     evidence: {
       name: { value: node?.name ?? null, source: 'ax-tree', fromTree: true },
       role: { value: node?.role ?? null, source: 'ax-tree', fromTree: true },
@@ -216,8 +229,9 @@ async function chainHiding(
  * Empty toast groups that an open modal hides. PatternFly renders the toast group as soon as a
  * toast AlertGroup mounts, before any alert is in it, so a screen checked with a modal open often
  * has an empty group. The alert walk never reaches it. A group that holds an alert is left to the
- * alert walk, so it gets one draft, not two. A group that is shown, or hidden in another way, gets
- * nothing here.
+ * alert walk, so it gets one draft, not two. A group hidden while a modal is open, where the chain
+ * cannot name the body's child, gets the same undecided draft an alert gets in that state. A group
+ * that is shown, or hidden in another way, gets nothing here.
  */
 async function checkEmptyToastGroups(
   ctx: ProviderContext,
@@ -261,11 +275,15 @@ async function checkEmptyToastGroups(
       continue;
     }
     // The group is a toast group, so when the modal hides the body's child above it, that child is
-    // or holds the toast area.
-    if ((await chainHiding(ctx, read.chain, reads)).kind === 'behind-modal') {
+    // or holds the toast area. When the chain cannot name the body's child, the group is undecided,
+    // as an alert is in that state.
+    const hiding = await chainHiding(ctx, read.chain, reads);
+    if (hiding.kind === 'behind-modal') {
       drafts.push(
         toastAreaBehindModalDraft(ctx, groupRef.selector, await ctx.page.axAt(groupRef.selector), 'empty toast group'),
       );
+    } else if (hiding.kind === 'modal-unclear') {
+      drafts.push(behindModalDraft(ctx, groupRef.selector, await ctx.page.axAt(groupRef.selector), 'empty toast group'));
     }
   }
 }
@@ -327,7 +345,7 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
     // means to hide, so it is reported below as undecided, never passed.
     const hiding = await chainHiding(ctx, read.chain, reads);
     if (hiding.kind === 'modal-unclear') {
-      drafts.push(behindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector)));
+      drafts.push(behindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector), 'alert'));
       continue;
     }
     const hidden = hiding.kind === 'hidden';
