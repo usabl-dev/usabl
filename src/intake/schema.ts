@@ -620,8 +620,24 @@ function toRequirementBundle(bundle: z.infer<typeof requirementBundleSchema>): R
   };
 }
 
+const TOO_MANY_PROBLEMS =
+  'this file has too many problems to check, so it is refused; fix the entries in its longest list, or split it into smaller files';
+
 export function parseBundle(raw: unknown): ParseBundleResult {
-  const parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
+  // The schema library collects the problems of a list entry with one function call that takes
+  // each problem as an argument. Past about 123,000 problems under one entry, that call goes over
+  // the engine's limit and throws a RangeError in place of returning them. The file is refused
+  // either way. This says why, and quotes nothing from the file, so the person is not told that
+  // valid YAML is invalid.
+  let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
+  try {
+    parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
+  } catch (error: unknown) {
+    if (error instanceof RangeError) {
+      return { ok: false, verdict: 'approval_required', reason: TOO_MANY_PROBLEMS };
+    }
+    throw error;
+  }
 
   if (parsed.success) {
     return {

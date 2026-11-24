@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { FsGlob } from '../../src/contracts/index.js';
+import { loadRequirements } from '../../src/intake/load.js';
 import { normalize } from '../../src/intake/normalize.js';
 import { parseBundle } from '../../src/intake/schema.js';
+import { testConfig } from '../helpers.js';
 
 // These tests pin the exact text a person reads when a requirement file is refused, and the
 // shape a valid file keeps. The schema library writes some of that text itself, so a change of
@@ -301,5 +304,46 @@ describe('an oversized focus order', () => {
     const reason = reasonOf(bundle(requirement({ kind: 'focus-order', assertion: { type: 'focus-order', sequence } })));
     expect(reason.length).toBeLessThan(200);
     expect(reason).toBe('requirements[0].assertion.sequence: sequence can list at most 200 names');
+  });
+});
+
+describe('a requirement file with too many problems to check', () => {
+  // The schema library stops with an error, not a list of problems, when one list in a file holds
+  // more than about 123,000 of them. The file is still refused, and the refusal says why, in place
+  // of a parser message that would call valid YAML invalid.
+  const TOO_MANY = 'this file has too many problems to check, so it is refused; fix the entries in its longest list, or split it into smaller files';
+  const emptySteps = 150_000;
+
+  it('is refused with a reason that says so', () => {
+    const steps = Array.from({ length: emptySteps }, () => ({ do: '' }));
+    expect(reasonOf(bundle(requirement({ kind: 'flow', assertion: { type: 'flow', steps } })))).toBe(TOO_MANY);
+  });
+
+  it('is refused by the loader with the file named and none of its text', async () => {
+    const yaml = [
+      'version: 1',
+      'requirements:',
+      '  - id: r1',
+      '    kind: flow',
+      '    surface: home',
+      '    description: d',
+      '    approved: true',
+      '    assertion:',
+      '      type: flow',
+      '      steps:',
+      ...Array.from({ length: emptySteps }, () => "        - do: ''"),
+    ].join('\n');
+    expect(yaml.length).toBeGreaterThan(2_400_000);
+    const fs: FsGlob = {
+      readFile: async (path) => (path === 'requirements/huge.yaml' ? yaml : null),
+      glob: async () => ['requirements/huge.yaml'],
+    };
+    const result = await loadRequirements(fs, testConfig({ requirements: 'requirements/' }));
+    expect(result).toEqual({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/huge.yaml',
+      reason: `requirements path requirements/huge.yaml: ${TOO_MANY}`,
+    });
   });
 });
