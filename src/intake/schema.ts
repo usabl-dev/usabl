@@ -620,20 +620,23 @@ function toRequirementBundle(bundle: z.infer<typeof requirementBundleSchema>): R
   };
 }
 
-const TOO_MANY_PROBLEMS =
-  'this file has too many problems to check, so it is refused; fix the entries in its longest list, or split it into smaller files';
+const TOO_MANY_PROBLEMS = 'this file has too many problems to check, so it is refused; shorten or fix its longest list';
+
+// The message the JavaScript engine gives when a call goes over its stack or argument limit.
+const STACK_LIMIT_MESSAGE = 'Maximum call stack size exceeded';
 
 export function parseBundle(raw: unknown): ParseBundleResult {
   // The schema library collects the problems of a list entry with one function call that takes
   // each problem as an argument. Past about 123,000 problems under one entry, that call goes over
   // the engine's limit and throws a RangeError in place of returning them. The file is refused
   // either way. This says why, and quotes nothing from the file, so the person is not told that
-  // valid YAML is invalid.
+  // valid YAML is invalid. Any other error, a RangeError with another message included, is a fault
+  // that says nothing about the file, so it is thrown on as before.
   let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
   try {
     parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
   } catch (error: unknown) {
-    if (error instanceof RangeError) {
+    if (error instanceof RangeError && error.message === STACK_LIMIT_MESSAGE) {
       return { ok: false, verdict: 'approval_required', reason: TOO_MANY_PROBLEMS };
     }
     throw error;

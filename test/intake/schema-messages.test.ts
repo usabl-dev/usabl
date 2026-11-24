@@ -311,7 +311,7 @@ describe('a requirement file with too many problems to check', () => {
   // The schema library stops with an error, not a list of problems, when one list in a file holds
   // more than about 123,000 of them. The file is still refused, and the refusal says why, in place
   // of a parser message that would call valid YAML invalid.
-  const TOO_MANY = 'this file has too many problems to check, so it is refused; fix the entries in its longest list, or split it into smaller files';
+  const TOO_MANY = 'this file has too many problems to check, so it is refused; shorten or fix its longest list';
   const emptySteps = 150_000;
 
   it('is refused with a reason that says so', () => {
