@@ -55,38 +55,41 @@ export async function loadConfig(
   },
   options: LoadConfigOptions = {},
 ): Promise<UsablConfig> {
-  return (await loadConfigWithText(path, warn, options)).config;
+  return (await loadConfigWithBytes(path, warn, options)).config;
 }
 
 /**
- * The config and the exact text it was parsed from. A check that saves a receipt compares this text
- * with the file again before it saves, so the receipt never binds bytes other than the planned ones.
+ * The config and the exact bytes it was parsed from, as read from disk. A check that saves a
+ * receipt compares these bytes with the file again before it saves, so the receipt never binds
+ * bytes other than the planned ones. They are kept raw, not as decoded text: a byte that is not
+ * valid UTF-8 decodes to a replacement character, so text would not stand for the file.
  */
-export async function loadConfigWithText(
+export async function loadConfigWithBytes(
   path = DEFAULT_CONFIG_PATH,
   warn: (line: string) => void = (line) => {
     process.stderr.write(`${line}\n`);
   },
   options: LoadConfigOptions = {},
-): Promise<{ config: UsablConfig; text: string }> {
+): Promise<{ config: UsablConfig; bytes: Buffer }> {
   const docsManifestPath = options.docsManifestPath ?? 'usabl.docs.json';
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  let raw: string;
+  let bytes: Buffer;
   try {
-    raw = await readFile(path, 'utf8');
+    bytes = await readFile(path);
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
       throw new Error(missingConfigMessage(path, options.caller ?? 'cli'));
     }
     throw error;
   }
-  const config = parseConfigText(raw, warn);
+  // The same decoding readFile with 'utf8' gives.
+  const config = parseConfigText(bytes.toString('utf8'), warn);
   // The manifest is read only when the list is empty. See ui-file-globs.ts.
   const refusal = config.uiFileGlobs.length === 0 ? uiFileGlobsRefusal(config, await readText(docsManifestPath), path) : null;
   if (refusal !== null) {
     throw new Error(refusal);
   }
-  return { config, text: raw };
+  return { config, bytes };
 }
 
 // A manifest usabl cannot read is not proof of a documentation-only repository, so any read

@@ -31,7 +31,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { loadConfig, loadConfigWithText, parseConfigText } from './intake/load-config.js';
+import { loadConfig, loadConfigWithBytes, parseConfigText } from './intake/load-config.js';
 import {
   branchScopeRefusal,
   ciRefusal,
@@ -285,11 +285,11 @@ async function isRootConfig(configPath: string): Promise<boolean> {
   return named !== null && named === realPathOrNull(join(await repositoryRoot(), ROOT_CONFIG));
 }
 
-// The text of usabl.config.json at the repository root now, the file the run bound into the
+// The bytes of usabl.config.json at the repository root now, the file the run bound into the
 // receipt and the Stop hook reads, or null when it cannot be read.
-async function readRootConfigText(): Promise<string | null> {
+async function readRootConfigBytes(): Promise<Buffer | null> {
   try {
-    return await readFile(join(await repositoryRoot(), ROOT_CONFIG), 'utf8');
+    return await readFile(join(await repositoryRoot(), ROOT_CONFIG));
   } catch {
     return null;
   }
@@ -989,14 +989,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // cannot stop the judge before it scans; the guard still compares its bytes and reports it.
   // Without a readable trusted config the head's copy plans the run, with its runtime settings
   // taken out, and no origin is allowed, so every screen it plans is a coverage gap.
-  // The text a run plans from is kept, so the receipt is saved only while the root config still
-  // holds that text. See planned-config.ts.
+  // The bytes a run plans from are kept, so the receipt is saved only while the root config still
+  // holds those bytes. See planned-config.ts.
   let config: UsablConfig;
-  let plannedText: string | null = null;
+  let plannedBytes: Buffer | null = null;
   if (judge === null || opts.trustedRef === null) {
-    const loaded = await loadConfigWithText(opts.configPath);
+    const loaded = await loadConfigWithBytes(opts.configPath);
     config = loaded.config;
-    plannedText = loaded.text;
+    plannedBytes = loaded.bytes;
   } else {
     config = judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath));
   }
@@ -1050,14 +1050,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // The root config is read once more just before the save. A second process that swapped it
     // while the check ran leaves bytes the check did not plan with, or a receipt bound to them.
     const configCheck =
-      receipt === null || plannedText === null || !plannedWithRootConfig || judge !== null
+      receipt === null || plannedBytes === null || !plannedWithRootConfig || judge !== null
         ? null
         : await receiptConfigCheck({
             deps: (await realpath(process.cwd())) === (await repositoryRoot()) ? deps : null,
             config,
             receipt,
-            plannedText,
-            currentText: await readRootConfigText(),
+            plannedBytes,
+            currentBytes: await readRootConfigBytes(),
           });
     if (receipt !== null && (!plannedWithRootConfig || judge !== null)) {
       process.stderr.write(`usabl: ${NO_RECEIPT_OTHER_CONFIG}\n`);

@@ -726,6 +726,47 @@ describe('a config swapped while usabl checks leaves no receipt', { timeout: REA
     expect(next.stderr).toContain('not re-scanned');
   });
 
+  // The receipt binds the bytes on disk. A byte that is not valid UTF-8 reads as a replacement
+  // character, so a check that compared or hashed the decoded text saw a changed config on every run.
+  // The byte is a Latin-1 e with an acute accent, inside a uiFileGlobs string, which the parser takes.
+  function configWithLatin1Byte(): Buffer {
+    const text = JSON.stringify({ ...config, uiFileGlobs: ['src/**', 'docs-@@/**'] }, null, 2) + '\n';
+    const [before = '', after = ''] = text.split('@@');
+    return Buffer.concat([Buffer.from(before, 'utf8'), Buffer.from([0xe9]), Buffer.from(after, 'utf8')]);
+  }
+
+  it('saves a receipt for a stable config with a byte that is not valid UTF-8, and the next stop uses it', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), configWithLatin1Byte());
+    git('commit', '-q', '-am', 'a config with a Latin-1 byte');
+    expect((await readFile(join(repo, 'usabl.config.json'))).includes(0xe9)).toBe(true);
+    state.drafts = {};
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    const ran = await check();
+    expect(ran.code).toBe(0);
+    expect(ran.scanned).toEqual(['home']);
+    expect(ran.stderr).not.toContain('saved no receipt');
+    await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).resolves.toContain('localFilesHash');
+    const next = await stop();
+    expect(next.scanned).toEqual([]);
+    expect(next.stderr).toContain('not re-scanned');
+  });
+
+  // The Stop hook binds the same bytes, so its own receipt answers the next stop too.
+  it('lets a stop save a receipt for such a config, and the next stop answers from it', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), configWithLatin1Byte());
+    git('commit', '-q', '-am', 'a config with a Latin-1 byte');
+    state.drafts = {};
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    const first = await stop();
+    expect(first.scanned).toEqual(['home']);
+    expect(first.stderr).not.toContain('saved no receipt');
+    const next = await stop();
+    expect(next.scanned).toEqual([]);
+    expect(next.stderr).toContain('not re-scanned');
+  });
+
   // The stop plans from the bytes it read and compared with the last commit. It reads the file once
   // more before it saves its receipt, and saves none when the file holds other bytes by then.
   it('a stop whose config changes while it checks saves no receipt, and the next stop checks again', async () => {

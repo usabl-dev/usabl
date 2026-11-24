@@ -78,8 +78,16 @@ export interface StopHookRunnerFs extends ReceiptFs {
   unlink(path: string): Promise<void>;
 }
 
-/** What a read of one file found: its text, nothing at the path, or an error that stopped the read. */
-export type FileBytes = { status: 'found'; text: string } | { status: 'missing' } | { status: 'unreadable'; reason: string };
+/**
+ * What a read of one file found: its text, nothing at the path, or an error that stopped the read.
+ * A read of the working config also keeps the raw bytes the text was decoded from, so the receipt
+ * check compares and hashes the file as it is on disk. Without them, the text encoded as UTF-8
+ * stands in.
+ */
+export type FileBytes =
+  | { status: 'found'; text: string; bytes?: Uint8Array }
+  | { status: 'missing' }
+  | { status: 'unreadable'; reason: string };
 
 /**
  * What the hook found at the last commit. `no-work-tree` means the hook found no git work tree from
@@ -483,8 +491,25 @@ function outsideWorkTreeMessage(folder: string): string {
   );
 }
 
+// The raw bytes of a file read, or its text encoded as UTF-8 when the read kept no bytes.
+function rawBytesOf(found: { text: string; bytes?: Uint8Array }): Uint8Array {
+  return found.bytes ?? Buffer.from(found.text, 'utf8');
+}
+
+// The working config's bytes now, or null when it is missing or cannot be read. A read that fails
+// is never the planned bytes, so no receipt is saved.
+async function currentConfigBytes(ports: StopHookRunnerPorts): Promise<Uint8Array | null> {
+  try {
+    const { working } = await ports.readConfigBytes();
+    return working.status === 'found' ? rawBytesOf(working) : null;
+  } catch {
+    return null;
+  }
+}
+
+// `bytes` are the raw bytes the text was decoded from, which the receipt check compares and hashes.
 type ConfigStep =
-  | { kind: 'parse'; text: string }
+  | { kind: 'parse'; text: string; bytes: Uint8Array }
   | { kind: 'outside-work-tree' }
   | { kind: 'not-configured' }
   | { kind: 'block'; problem: ConfigProblem; error: string | null }
@@ -507,17 +532,6 @@ type ConfigStep =
  * is not one of the block cases either, so it stays an internal error and fails open with
  * disclosure. A folder outside any work tree has no repository to look at, and says so.
  */
-// The working config's text now, or null when it is missing or cannot be read. A read that fails
-// is never the planned text, so no receipt is saved.
-async function currentConfigText(ports: StopHookRunnerPorts): Promise<string | null> {
-  try {
-    const { working } = await ports.readConfigBytes();
-    return working.status === 'found' ? working.text : null;
-  } catch {
-    return null;
-  }
-}
-
 function configStep(bytes: ConfigBytes): ConfigStep {
   const { working, head } = bytes;
   if (head.status === 'no-work-tree') {
@@ -533,7 +547,7 @@ function configStep(bytes: ConfigBytes): ConfigStep {
     if (working.status === 'unreadable') {
       return { kind: 'error', reason: `${CONFIG_FILE} could not be read: ${working.reason}` };
     }
-    return { kind: 'parse', text: working.text };
+    return { kind: 'parse', text: working.text, bytes: rawBytesOf(working) };
   }
   if (working.status === 'missing') {
     return { kind: 'block', problem: 'missing', error: null };
@@ -544,7 +558,7 @@ function configStep(bytes: ConfigBytes): ConfigStep {
   if (working.text !== head.text) {
     return { kind: 'block', problem: 'differs', error: null };
   }
-  return { kind: 'parse', text: working.text };
+  return { kind: 'parse', text: working.text, bytes: rawBytesOf(working) };
 }
 
 /**
@@ -639,7 +653,8 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
 
 async function readWorkingConfig(root: string): Promise<FileBytes> {
   try {
-    return { status: 'found', text: await readFile(resolve(root, CONFIG_FILE), 'utf8') };
+    const bytes = await readFile(resolve(root, CONFIG_FILE));
+    return { status: 'found', text: bytes.toString('utf8'), bytes };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { status: 'missing' };
@@ -1370,8 +1385,8 @@ async function runStopChecks(
             deps: guardDeps,
             config,
             receipt,
-            plannedText: step.text,
-            currentText: await currentConfigText(ports),
+            plannedBytes: step.bytes,
+            currentBytes: await currentConfigBytes(ports),
           });
     if (configCheck !== null && configCheck !== 'bound') {
       receiptNotice = `usabl: ${noReceiptMessage(configCheck)}`;

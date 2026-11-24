@@ -449,7 +449,11 @@ describe('Stop hook reads the config at the repository root, through the real po
 
     const h = realPorts(join(repo, 'packages', 'web'));
     expect(h.base.cwd()).toBe(repo);
-    expect(await h.base.readConfigBytes()).toEqual({ working: found(COMMITTED), head: found(COMMITTED) });
+    // The working read also keeps the raw bytes, which the receipt check compares and hashes.
+    expect(await h.base.readConfigBytes()).toEqual({
+      working: { ...found(COMMITTED), bytes: Buffer.from(COMMITTED, 'utf8') },
+      head: found(COMMITTED),
+    });
 
     await runStopHookFromStdin('{}', h.ports);
     expect(h.stdout()).not.toContain('"decision":"block"');

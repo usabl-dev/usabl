@@ -7,7 +7,7 @@
  * bytes, and the next stop, which finds the committed bytes, answers from that receipt without a
  * scan. So a receipt is saved only when both hold:
  *
- * - the file at the root still holds the exact text the check planned with, and
+ * - the file at the root still holds the exact bytes the check planned with, and
  * - the receipt's local files hash is the hash of the planned bytes, with every other bound file
  *   read as it is now.
  *
@@ -32,24 +32,25 @@ export type ReceiptConfigCheck = 'bound' | 'config-changed' | 'binding-changed';
 export interface ReceiptConfigCheckInput {
   // The deps the run bound the local files with, so the files are read from the same folder. Null
   // when that folder is not the repository root: the binding then reads another folder's files,
-  // and the receipt is saved in that folder, where no stop reads it, so only the text is compared.
+  // and the receipt is saved in that folder, where no stop reads it, so only the bytes are compared.
   deps: Deps | null;
   config: UsablConfig;
   receipt: Pick<Receipt, 'localFilesHash'>;
-  // The text the check planned with, and the text of the root config read again just now, or null
-  // when it could not be read.
-  plannedText: string;
-  currentText: string | null;
+  // The bytes the check planned with, as read from disk, and the bytes of the root config read
+  // again just now, or null when it could not be read. They are raw bytes, never text decoded and
+  // encoded again: a byte that is not valid UTF-8 decodes to a replacement character, so the text
+  // of a file that did not change would hash to another value than the file's bytes.
+  plannedBytes: Uint8Array;
+  currentBytes: Uint8Array | null;
 }
 
 // The same deps, with the config file read as the planned bytes. The size cap is the reader's, so
 // a planned file over it binds nothing that matches, as the real read would.
-function withPlannedConfig(deps: Deps, plannedText: string): Deps | null {
+function withPlannedConfig(deps: Deps, bytes: Uint8Array): Deps | null {
   const read = deps.fs.readLocalFile?.bind(deps.fs);
   if (read === undefined) {
     return null;
   }
-  const bytes = Buffer.from(plannedText, 'utf8');
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   return {
     ...deps,
@@ -66,7 +67,7 @@ function withPlannedConfig(deps: Deps, plannedText: string): Deps | null {
 }
 
 export async function receiptConfigCheck(input: ReceiptConfigCheckInput): Promise<ReceiptConfigCheck> {
-  if (input.currentText !== input.plannedText) {
+  if (input.currentBytes === null || !Buffer.from(input.currentBytes).equals(Buffer.from(input.plannedBytes))) {
     return 'config-changed';
   }
   const minted = input.receipt.localFilesHash;
@@ -75,7 +76,7 @@ export async function receiptConfigCheck(input: ReceiptConfigCheckInput): Promis
   if (input.deps === null || typeof minted !== 'string' || minted === UNREADABLE_LOCAL_FILES) {
     return 'bound';
   }
-  const planned = withPlannedConfig(input.deps, input.plannedText);
+  const planned = withPlannedConfig(input.deps, input.plannedBytes);
   if (planned === null) {
     return 'binding-changed';
   }
