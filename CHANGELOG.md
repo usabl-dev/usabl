@@ -2283,8 +2283,17 @@
   Gate effect: none.
 - Development dependencies move to fixed versions inside their major version: `vite` 6.4.3 to
   6.4.6 and `source-map-js` 1.2.1 to 1.2.4, which clears the `npm audit` advisories for them.
-  The advisories for `zod` (a runtime dependency), `vitest`, `tinypool`, and `uuid` need a major
-  version change and are still open. Gate effect: none.
+  The advisories for `vitest`, `tinypool`, and `uuid` need a major version change and are still
+  open. The `zod` advisory is fixed by the move to zod 4 below. Gate effect: none.
+- `zod`, a runtime dependency, moves from 3.25.76 to 4.6.7. This fixes advisory
+  GHSA-mrhx-c7xc-m3w5. zod 3 checked every entry of a list before the list's length limit, so a
+  very long list in a requirement file cost time and memory in proportion to its length. A focus
+  order of a million names took about 13 seconds and more than 1 GB of memory to refuse, and the
+  refusal held one message for each bad name. Now a list past its limit is refused on its length
+  alone. Every requirement file reads the same as before, and the message for a file that does
+  not match its schema is the same text. One message changes: a focus order with more than 200
+  names now gets only `sequence can list at most 200 names`, with no message for each name in it.
+  `npm audit --omit=dev` now reports no advisory. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
   repository GitHub reports as `admin` or `write`. It reads the permission once for each
