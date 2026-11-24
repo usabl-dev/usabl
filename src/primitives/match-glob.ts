@@ -117,19 +117,213 @@ export function countBraceExpansions(pattern: string): number | null {
   return count;
 }
 
-function compileToRegExp(pattern: string): RegExp {
-  // Encode **/? first so src/**/*.tsx matches src/App.tsx and deeper files. `**` becomes
-  // [\s\S]*, which matches any character, a newline too: git allows a newline in a file name,
-  // and `.` would skip it, so such a changed file would read as outside the globs.
-  return new RegExp(
-    '^' +
-      pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*\/?/g, '\x00')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\x00/g, '[\\s\\S]*') +
-      '$',
-  );
+/*
+ * Matching never backtracks. A regular expression with many wildcards tries each way they can
+ * split a name, so its time can grow very fast with the name's length, and a timer in the same
+ * process cannot end a match that is running. Here the time to match is at most about the
+ * pattern's length times the path's length. Both dot rules give the answers the regular
+ * expressions this unit used before gave, character for character.
+ */
+
+/**
+ * A matcher for one part of a path between slashes: `*` matches any run of characters, and, when
+ * `question` is set, `?` matches any one character. Every other character stands for itself. Time
+ * is at most the part's length times the name's length: the pieces between the stars are placed
+ * from the left, each at its first place, which is the classic glob algorithm and never backtracks.
+ */
+export function wildcardNameMatcher(part: string, options: { question?: boolean } = {}): (name: string) => boolean {
+  const question = options.question === true;
+  const pieces = part.split(/\*+/);
+  const first = pieces[0] ?? '';
+  const last = pieces[pieces.length - 1] ?? '';
+  const middle = pieces.slice(1, -1).filter((piece) => piece.length > 0);
+  const fixedLength = pieces.reduce((sum, piece) => sum + piece.length, 0);
+  const pieceAt = (piece: string, name: string, at: number): boolean => {
+    if (!question) return name.startsWith(piece, at);
+    for (let i = 0; i < piece.length; i += 1) {
+      const char = piece.charCodeAt(i);
+      if (char !== QUESTION && char !== name.charCodeAt(at + i)) return false;
+    }
+    return true;
+  };
+  const findPiece = (piece: string, name: string, from: number): number => {
+    if (!question || !piece.includes('?')) return name.indexOf(piece, from);
+    for (let at = from; at + piece.length <= name.length; at += 1) {
+      if (pieceAt(piece, name, at)) return at;
+    }
+    return -1;
+  };
+  if (pieces.length === 1) {
+    return (name) => name.length === first.length && pieceAt(first, name, 0);
+  }
+  return (name) => {
+    if (name.length < fixedLength) return false;
+    if (!pieceAt(first, name, 0) || !pieceAt(last, name, name.length - last.length)) return false;
+    let position = first.length;
+    const end = name.length - last.length;
+    for (const piece of middle) {
+      const found = findPiece(piece, name, position);
+      if (found === -1 || found + piece.length > end) return false;
+      position = found + piece.length;
+    }
+    return true;
+  };
+}
+
+const QUESTION = 0x3f;
+const SLASH = 0x2f;
+
+// The planner's dialect as a list of steps. A literal character matches itself, a star matches any
+// run of characters but a slash, and a double star matches any run of characters, slashes and
+// newlines included: git allows a newline in a file name, and a changed file with one must not
+// read as outside the globs. `**/` is one double star, so src/**/*.tsx matches src/App.tsx and
+// deeper files. A NUL character is a double star too, as it was in the regular expression.
+const LITERAL = 0;
+const STAR = 1;
+const DOUBLE_STAR = 2;
+
+interface AnyDepthProgram {
+  kinds: Uint8Array;
+  chars: Uint16Array;
+  // 1 when a literal may be left out: the regular expression read a `?` after a character as
+  // "this character or nothing". Config load refuses `?`, so no policy pattern has one.
+  optional: Uint8Array;
+  // Text every match starts and ends with, and the fewest characters it has, for a quick no.
+  prefix: string;
+  suffix: string;
+  minLength: number;
+}
+
+function nothingToRepeat(pattern: string): SyntaxError {
+  return new SyntaxError(`usabl cannot build the glob ${JSON.stringify(pattern)}: a ? has nothing before it to repeat`);
+}
+
+function compileAnyDepth(pattern: string): AnyDepthProgram {
+  const kinds: number[] = [];
+  const chars: number[] = [];
+  const optional: number[] = [];
+  // How many `?` follow each step. The regular expression allowed two after a character and one
+  // after a star, and refused to build with more, so this does too.
+  const questions: number[] = [];
+  let i = 0;
+  while (i < pattern.length) {
+    const char = pattern.charCodeAt(i);
+    if (char === QUESTION) {
+      const last = kinds.length - 1;
+      const count = (questions[last] ?? 0) + 1;
+      if (last < 0 || count > (kinds[last] === LITERAL ? 2 : 1)) throw nothingToRepeat(pattern);
+      questions[last] = count;
+      if (kinds[last] === LITERAL) optional[last] = 1;
+      i += 1;
+      continue;
+    }
+    let kind = LITERAL;
+    let width = 1;
+    if (char === 0x2a) {
+      if (pattern.charCodeAt(i + 1) === 0x2a) {
+        kind = DOUBLE_STAR;
+        width = pattern.charCodeAt(i + 2) === SLASH ? 3 : 2;
+      } else {
+        kind = STAR;
+      }
+    } else if (char === 0) {
+      kind = DOUBLE_STAR;
+    }
+    kinds.push(kind);
+    chars.push(kind === LITERAL ? char : 0);
+    optional.push(0);
+    questions.push(0);
+    i += width;
+  }
+  const required = (index: number): boolean => kinds[index] === LITERAL && optional[index] === 0;
+  let start = 0;
+  while (start < kinds.length && required(start)) start += 1;
+  let end = kinds.length;
+  while (end > start && required(end - 1)) end -= 1;
+  const text = (from: number, to: number): string =>
+    chars
+      .slice(from, to)
+      .map((code) => String.fromCharCode(code))
+      .join('');
+  let minLength = 0;
+  for (let index = 0; index < kinds.length; index += 1) if (required(index)) minLength += 1;
+  return {
+    kinds: Uint8Array.from(kinds),
+    chars: Uint16Array.from(chars),
+    optional: Uint8Array.from(optional),
+    prefix: text(0, start),
+    suffix: text(end, kinds.length),
+    minLength,
+  };
+}
+
+// Scratch space for runAnyDepth, grown as needed. Matching is synchronous, so one set is enough.
+let marks = new Int32Array(64);
+let listA = new Int32Array(64);
+let listB = new Int32Array(64);
+let generation = 0;
+
+function ensureScratch(size: number): void {
+  if (marks.length < size) {
+    marks = new Int32Array(size);
+    listA = new Int32Array(size);
+    listB = new Int32Array(size);
+    generation = 0;
+  }
+  if (generation > 0x7fff0000) {
+    marks.fill(0);
+    generation = 0;
+  }
+}
+
+// Runs the steps over the path once, keeping the set of steps a match can be at. Each character
+// moves every step in the set at most once, so the time is at most steps times characters.
+function runAnyDepth(program: AnyDepthProgram, file: string): boolean {
+  if (file.length < program.minLength || !file.startsWith(program.prefix) || !file.endsWith(program.suffix)) {
+    return false;
+  }
+  const { kinds, chars, optional } = program;
+  const last = kinds.length;
+  ensureScratch(last + 1);
+  let current = listA;
+  let next = listB;
+  let size = 0;
+  // Adds a step and every step after it that the match can reach without reading a character.
+  const add = (from: number, into: Int32Array, count: number): number => {
+    let step = from;
+    let length = count;
+    while (marks[step] !== generation) {
+      marks[step] = generation;
+      into[length] = step;
+      length += 1;
+      if (step === last || (kinds[step] === LITERAL && optional[step] === 0)) break;
+      step += 1;
+    }
+    return length;
+  };
+  generation += 1;
+  size = add(0, current, 0);
+  for (let position = 0; position < file.length; position += 1) {
+    const char = file.charCodeAt(position);
+    generation += 1;
+    let nextSize = 0;
+    for (let index = 0; index < size; index += 1) {
+      const step = current[index] ?? last;
+      if (step === last) continue;
+      const kind = kinds[step];
+      if (kind === DOUBLE_STAR || (kind === STAR && char !== SLASH)) {
+        nextSize = add(step, next, nextSize);
+      } else if (kind === LITERAL && chars[step] === char) {
+        nextSize = add(step + 1, next, nextSize);
+      }
+    }
+    if (nextSize === 0) return false;
+    const swap = current;
+    current = next;
+    next = swap;
+    size = nextSize;
+  }
+  return marks[last] === generation;
 }
 
 export interface GlobOptions {
@@ -138,38 +332,69 @@ export interface GlobOptions {
   dot?: boolean;
 }
 
-// A path segment a wildcard may match when dot names are excluded: any name that does not start
-// with a dot.
-const NON_DOT_NAME = '(?!\\.)[^/]+';
+// One part of a pattern read with Node's dot rule. `**` alone in a part matches whole parts of the
+// path: zero or more when more of the pattern follows, one or more when it ends the pattern. Each
+// part it skips is a name that is not empty and does not start with a dot.
+type DotRulePart =
+  | { kind: 'any-parts'; last: boolean }
+  | { kind: 'name'; matches: (name: string) => boolean; dotGuard: boolean };
 
-function segmentWithoutDotMatch(segment: string): string {
-  const body = segment.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*+/g, '[^/]*');
-  return segment.startsWith('.') ? body : `(?!\\.)${body}`;
+function compileWithDotRule(pattern: string): DotRulePart[] {
+  const parts = pattern.split('/');
+  return parts.map((part, index) => {
+    if (part === '**') return { kind: 'any-parts', last: index === parts.length - 1 };
+    // Every other character stands for itself here, `?` too, and a run of stars is one star.
+    return { kind: 'name', matches: wildcardNameMatcher(part), dotGuard: !part.startsWith('.') };
+  });
 }
 
-// The same dialect with Node's dot rule, built one segment at a time so `**` can skip only
-// segments that do not start with a dot. A `**` segment matches zero or more whole segments, and
-// a trailing `**` matches every file beneath.
-function compileWithoutDotMatch(pattern: string): RegExp {
-  const segments = pattern.split('/');
-  let source = '';
-  let slash = false;
-  segments.forEach((segment, index) => {
-    const separator = slash ? '/' : '';
-    if (segment === '**') {
-      if (index === segments.length - 1) {
-        source += `${separator}${NON_DOT_NAME}(?:/${NON_DOT_NAME})*`;
-        slash = true;
-      } else {
-        source += `${separator}(?:${NON_DOT_NAME}/)*`;
-        slash = false;
+function skippable(name: string): boolean {
+  return name.length > 0 && name.charCodeAt(0) !== 0x2e;
+}
+
+// Walks the pattern's parts over the path's parts, keeping the set of path positions a match can
+// be at. Each step costs at most one name match for each path part.
+function runWithDotRule(parts: readonly DotRulePart[], file: string): boolean {
+  const names = file.split('/');
+  const count = names.length;
+  let reach = new Uint8Array(count + 1);
+  reach[0] = 1;
+  for (const part of parts) {
+    const next = new Uint8Array(count + 1);
+    let any = false;
+    if (part.kind === 'any-parts') {
+      if (part.last) {
+        // One or more skippable parts to the end of the path.
+        let skippableToEnd = true;
+        for (let at = count - 1; at >= 0; at -= 1) {
+          skippableToEnd = skippableToEnd && skippable(names[at] ?? '');
+          if (skippableToEnd && reach[at] === 1) return true;
+        }
+        return false;
       }
-      return;
+      let carry = false;
+      for (let at = 0; at <= count; at += 1) {
+        carry = reach[at] === 1 || (carry && at > 0 && skippable(names[at - 1] ?? ''));
+        if (carry) {
+          next[at] = 1;
+          any = true;
+        }
+      }
+    } else {
+      for (let at = 0; at < count; at += 1) {
+        if (reach[at] !== 1) continue;
+        const name = names[at] ?? '';
+        if (part.dotGuard && name.charCodeAt(0) === 0x2e) continue;
+        if (part.matches(name)) {
+          next[at + 1] = 1;
+          any = true;
+        }
+      }
     }
-    source += separator + segmentWithoutDotMatch(segment);
-    slash = true;
-  });
-  return new RegExp(`^${source}$`);
+    if (!any) return false;
+    reach = next;
+  }
+  return reach[count] === 1;
 }
 
 /**
@@ -181,9 +406,12 @@ export function globMatcher(pattern: string, options: GlobOptions = {}): (file: 
   // A pattern this unit cannot expand falls back to literal-brace matching, which is the
   // prior behavior. The config-load guard refuses such patterns before a run reaches here.
   const patterns = expansions ?? [pattern];
-  const compile = options.dot === false ? compileWithoutDotMatch : compileToRegExp;
-  const compiled = patterns.map(compile);
-  return (file: string): boolean => compiled.some((rx) => rx.test(file));
+  if (options.dot === false) {
+    const compiled = patterns.map(compileWithDotRule);
+    return (file: string): boolean => compiled.some((parts) => runWithDotRule(parts, file));
+  }
+  const compiled = patterns.map(compileAnyDepth);
+  return (file: string): boolean => compiled.some((program) => runAnyDepth(program, file));
 }
 
 export function matchGlob(pattern: string, file: string, options: GlobOptions = {}): boolean {

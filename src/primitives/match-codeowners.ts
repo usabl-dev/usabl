@@ -5,6 +5,7 @@
  * unsatisfiable: every rule resolved to zero owners and every approval was refused.
  * This unit is pure and reads no files.
  */
+import { wildcardNameMatcher } from './match-glob.js';
 
 /**
  * Whether a pattern owns a path. `unknown` means the readings of the pattern that GitHub's
@@ -93,10 +94,6 @@ function unsupported(pattern: string): string | null {
   return null;
 }
 
-function segmentToSource(segment: string, questionIsWildcard: boolean): string {
-  const escaped = segment.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
-  return questionIsWildcard ? escaped.replace(/\?/g, '[^/]') : escaped.replace(/\?/g, '\\?');
-}
 
 /**
  * One way GitHub may read a pattern. GitHub's documentation fixes some choices and leaves others
@@ -155,23 +152,32 @@ function readingsOf(pattern: string, core: string): Reading[] {
   return readings;
 }
 
+// The pattern matches the path's parts one for one: every part at the root, or the last parts at
+// any depth. A `*` in a part matches any run of characters, and `?` one character in the reading
+// that takes it as a wildcard. Matching goes part by part with the glob matcher's name test, which
+// never backtracks, so a pattern with many wildcards cannot take a long time on a long name.
 function readingMatcher(core: string, directoryOnly: boolean, reading: Reading): (path: string) => boolean {
-  const body = core
-    .split('/')
-    .map((segment) => segmentToSource(segment, reading.questionIsWildcard))
-    .join('/');
-  const rx = new RegExp(`^${reading.atRoot ? '' : '(?:[\\s\\S]*/)?'}${body}$`);
+  const parts = core.split('/').map((segment) => wildcardNameMatcher(segment, { question: reading.questionIsWildcard }));
+  // Whether the pattern matches the path made of the first `count` of the path's parts.
+  const matchesFirst = (names: readonly string[], count: number): boolean => {
+    if (reading.atRoot ? count !== parts.length : count < parts.length) {
+      return false;
+    }
+    const offset = count - parts.length;
+    return parts.every((matches, index) => matches(names[offset + index] ?? ''));
+  };
   return (path) => {
+    const names = path.split('/');
     // A trailing slash rules out a plain file of the same name.
-    if (!directoryOnly && rx.test(path)) {
+    if (!directoryOnly && matchesFirst(names, names.length)) {
       return true;
     }
     if (!reading.throughParent) {
       return false;
     }
     // Owning a folder means owning what is under it, so every parent of the path is a candidate.
-    for (let cut = path.indexOf('/'); cut !== -1; cut = path.indexOf('/', cut + 1)) {
-      if (rx.test(path.slice(0, cut))) {
+    for (let count = 1; count < names.length; count += 1) {
+      if (matchesFirst(names, count)) {
         return true;
       }
     }
