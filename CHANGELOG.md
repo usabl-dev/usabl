@@ -438,17 +438,26 @@
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
   pattern's length times the path's length. Before, it built a regular expression, and a
   committed `uiFileGlobs` entry with twelve wildcards and a changed file name of 38 letters made a
-  stop take 81.7 seconds, so the host could end the Stop hook with nothing checked. That match now
-  takes well under a millisecond. The answers are the same as before for both dot rules.
-  `import.meta.glob` patterns, which come from source code, now have the size bounds of the policy
-  glob lists: a call with a pattern longer than 1024 characters, or more than 4096 patterns or
-  262,144 characters in all, may load any file, a gap, and the reason says so. Each pattern is
-  built once for the run, not once for each file. Gate effect: none for a pattern inside the
-  bounds; a changed test file that only a call past a bound could load is now a gap. Known limit:
-  Node's `fs.glob` still backtracks. usabl hands it a `guardedPaths` entry to list new files on
-  the working tree, `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is
-  placed, and `workspaces` patterns, so a pattern with many wildcards and a long file name there
-  can still outlast the host's limit.
+  stop take 81.7 seconds, so the host could end the Stop hook with nothing checked. That one match
+  now takes under a millisecond. The answers are the same as before for both dot rules. Many
+  bounded matches can still add up: a list inside the policy bounds took about 24 seconds to rule
+  out one changed path of 3999 characters. So the app planner and the docs planner each carry a
+  budget of 100,000,000 matching steps for a run, about 3 to 5 seconds of matching at most on a
+  loaded 8-core machine and far more than a normal run uses. `import.meta.glob` patterns, which
+  come from source code, have the size bounds of the policy glob lists for each call (a pattern
+  whose braces expand to one longer than 1024 characters, or more than 4096 patterns or 262,144
+  characters in all) and a budget of 65,536 characters across the run. A pattern that starts with
+  `/` is matched under every folder in one read of the path; before, one file 1000 folders deep
+  took 17 seconds. Gate effect: a changed file left untested when the step budget runs out is a
+  gap whose reason names the budget, so the run is `not_covered`, never nothing to check. A call
+  past a bound or the character budget, and every glob once the step budget is spent, may load any
+  file, so a changed test file it could reach is a gap. Known limits: the guard's own matching has
+  no budget, and a `guardedPaths` list inside the bounds took 9.2 seconds against one committed
+  path of 3999 characters. Node's `fs.glob` still backtracks. usabl hands it each `guardedPaths`
+  entry, in the guard's working-tree listing and in `usabl doctor`; `uiFileGlobs` and
+  `discovery.wideBlastGlobs` when a changed test file is placed; `workspaces` patterns; and
+  `uiFileGlobs` in `usabl baseline` and the docs output. A pattern with many wildcards and a long
+  file name there can still outlast the host's limit.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
