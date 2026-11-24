@@ -468,16 +468,22 @@
   changed file against it took 25 seconds and 750 MB. The refusal names the list and the entry. A
   long `guardedPaths` entry also loads faster: its form check took time that grew with the square
   of its length. Gate effect: a config or docs manifest past a bound no longer loads; split or
-  shorten the entry.
+  shorten the entry. Known limit: the bounds do not cover the number of wildcards. A committed glob
+  with many wildcards can take long enough to match a long changed file name that the host ends
+  the Stop hook before usabl answers, and the stop then goes on with nothing checked. usabl's own
+  deadline is a timer in the same process and cannot end a match that is running. A matcher that
+  does not backtrack is planned.
 - `usabl check` and the Stop hook save a receipt only when it binds the config they planned with.
   A check read `usabl.config.json` to plan and the run read it again when it bound the root config
   into the receipt. Before, a second process that put the committed config back in between made the
   check plan from weaker bytes and save a receipt bound to the committed bytes, and the next stop,
-  with a clean tree, answered from it, VERIFIED without a scan. Both now keep the text they planned
-  with, read the root config again before the save, and save only when the text is the same and the
-  receipt's local files hash is the hash of the planned bytes. Otherwise they save none and say
-  "saved no receipt for this run" with the reason; the verdict stands. Gate effect: a stop no
-  longer answers from a scan planned with config bytes it does not find.
+  with a clean tree, answered from it, VERIFIED without a scan. Both now keep the raw bytes they
+  planned with, read the root config again before the save, and save only when the bytes are the
+  same and the receipt's local files hash is the hash of the planned bytes. The bytes are compared
+  as read from disk, so a stable config with a byte that is not valid UTF-8 still gets a receipt.
+  Otherwise they save none and say "saved no receipt for this run" with the reason; the verdict
+  stands. Gate effect: a stop no longer answers from a scan planned with config bytes it does not
+  find.
 - A long config path in the missing-file and empty `uiFileGlobs` messages keeps its file name.
   It is shortened from the middle, so the start of the path and the file name both stay readable,
   where before it was cut at the end.
