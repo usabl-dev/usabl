@@ -4,6 +4,13 @@
  */
 import { importMayLoad, MAX_BRACE_ALTERNATIVES, type PackageFolders, type UnresolvableImport } from './import-graph.js';
 import { MAX_GLOB_LENGTH, MAX_GLOB_PATTERN_CHARACTERS, MAX_GLOB_PATTERNS } from '../intake/glob-list-bounds.js';
+import type { GlobMatchBudget } from '../primitives/match-glob.js';
+import { GLOB_IMPORT_CHARACTERS } from './import-graph.js';
+
+// A count with a comma between each group of three digits, as 262,144.
+function grouped(value: number): string {
+  return String(value).replace(/\B(?=(\d{3})+$)/g, ',');
+}
 
 const MAX_DETAIL_LINES = 3;
 
@@ -24,8 +31,14 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
     }
     if (entry.unread === 'size') {
       return (
-        `and its patterns are past the size bounds usabl matches (a pattern longer than ${String(MAX_GLOB_LENGTH)} characters, ` +
-        `or more than ${String(MAX_GLOB_PATTERNS)} patterns or ${String(MAX_GLOB_PATTERN_CHARACTERS).replace(/\B(?=(\d{3})+$)/g, ',')} characters in all), so it may load any file`
+        `and its patterns are past the size bounds usabl matches (a pattern whose braces expand to one longer than ${String(MAX_GLOB_LENGTH)} characters, ` +
+        `or more than ${String(MAX_GLOB_PATTERNS)} patterns or ${grouped(MAX_GLOB_PATTERN_CHARACTERS)} characters in all), so it may load any file`
+      );
+    }
+    if (entry.unread === 'budget') {
+      return (
+        `and the import.meta.glob patterns usabl read in this check passed its budget of ${grouped(GLOB_IMPORT_CHARACTERS)} characters ` +
+        'across every call, so this call and every call after it may load any file'
       );
     }
     return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';
@@ -149,8 +162,10 @@ export function unresolvedImportsNaming(
   unresolvable: readonly UnresolvableImport[],
   // The folders that hold a package.json, which an import that names them may load through.
   packageFolders: PackageFolders = new Map(),
+  // The run's glob matching budget. Once it is spent, every glob may load the file.
+  budget?: GlobMatchBudget,
 ): UnresolvableImport[] {
-  return unresolvable.filter((entry) => importMayLoad(entry, file, packageFolders));
+  return unresolvable.filter((entry) => importMayLoad(entry, file, packageFolders, budget));
 }
 
 /**
@@ -166,9 +181,10 @@ export function selectDiscoveryDetails(
   unresolvable: UnresolvableImport[],
   visitedFiles: ReadonlySet<string>,
   packageFolders: PackageFolders = new Map(),
+  budget?: GlobMatchBudget,
 ): string[] {
   const onPaths = unresolvable.filter((entry) => entry.importer !== file && visitedFiles.has(entry.importer));
-  const naming = unresolvedImportsNaming(file, onPaths, packageFolders);
+  const naming = unresolvedImportsNaming(file, onPaths, packageFolders, budget);
   const groups: Array<[string, UnresolvableImport[]]> = [
     ['imports that may load this file', naming],
     ['imports in this file', unresolvable.filter((entry) => entry.importer === file)],
@@ -209,10 +225,12 @@ export function buildUnresolvedReason(
   // The folders that hold a package.json, so the detail names an import that loads the file
   // through one, as the gap rule does (see importMayLoad).
   packageFolders: PackageFolders = new Map(),
+  // The run's glob matching budget, charged for each glob tested against the file.
+  budget?: GlobMatchBudget,
 ): string {
   // No "changed": baseline passes every UI file here, changed or not.
   const base = 'This UI file is not in any route closure, wide-blast glob, or manual surface mapping';
-  const details = selectDiscoveryDetails(file, unresolvable, visitedFiles, packageFolders);
+  const details = selectDiscoveryDetails(file, unresolvable, visitedFiles, packageFolders, budget);
   const fix = note ?? UNPLACED_FILE_FIX;
   // The fix goes before the detail. Surfaces bound a printed reason, and the detail is the part
   // that can run long, so it is the part a bound may cut.

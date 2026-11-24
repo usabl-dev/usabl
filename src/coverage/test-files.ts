@@ -25,6 +25,7 @@ import type { AliasConfig } from './alias-config.js';
 import { loadBaseUrlDirs } from './alias-config.js';
 import { declaredPackageNames, workspacePackages } from './workspace-packages.js';
 import { describeLoad } from './discovery-diagnostics.js';
+import { runGlobBudgets, type RunGlobBudgets } from './glob-budget.js';
 import {
   buildImportGraph,
   importMayLoad,
@@ -282,6 +283,10 @@ export async function placeTestFiles(
   // Whether the config names a story tool page, which leaves only the base names and folders in the
   // test file set (see isTestFile).
   storyToolPage = false,
+  // The run's glob budgets. Every graph built here charges the import.meta.glob characters it
+  // reads, and every glob tested against a file charges the matching steps. Once either is spent,
+  // a glob may load any file, so a test file it could reach is a gap.
+  budgets: RunGlobBudgets = runGlobBudgets(),
 ): Promise<Map<string, TestFilePlacement>> {
   const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
   const listed = sortedUnique(await fs.glob([...config.uiFileGlobs]));
@@ -290,7 +295,9 @@ export async function placeTestFiles(
     baseUrlDirs: await loadBaseUrlDirs(fs, config.discovery.routerFile),
     declaredPackages: await declaredPackageNames(fs, config),
     workspacePackages: await workspacePackages(fs),
+    globImports: budgets.globImports,
   };
+  const mayLoad = (entry: UnresolvableImport, file: string): boolean => importMayLoad(entry, file, packageFolders, budgets.steps);
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
   // files under uiFileGlobs that are not test files, the route entry files, the router file, the
   // files the wide-blast globs match that are not test files, and every surface's files. An
@@ -321,7 +328,7 @@ export async function placeTestFiles(
     const known = new Set(starts);
     packageFolders = await readPackageFolders(fs, universe, loads, packageFolderReads);
     const found = universe.filter(
-      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => importMayLoad(entry, file, packageFolders)),
+      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => mayLoad(entry, file)),
     );
     if (found.length === 0) break;
     starts = sortedUnique([...starts, ...found]);
@@ -336,7 +343,7 @@ export async function placeTestFiles(
   const reachedBy = new Map<string, Set<string>>();
   if (maybe !== null) {
     for (const entry of loads) {
-      const named = universe.filter((file) => !loaded.visited.has(file) && importMayLoad(entry, file, packageFolders));
+      const named = universe.filter((file) => !loaded.visited.has(file) && mayLoad(entry, file));
       reachedBy.set(entryKey(entry), reachable(maybe, named));
     }
   }

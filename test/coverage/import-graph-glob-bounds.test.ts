@@ -4,7 +4,8 @@
  * the bounds is built once for the run, not once for each file it is tested against.
  */
 import { describe, expect, it } from 'vitest';
-import { buildImportGraph, importMayLoad, type UnresolvableImport } from '../../src/coverage/import-graph.js';
+import { buildImportGraph, GlobImportBudget, importMayLoad, type UnresolvableImport } from '../../src/coverage/import-graph.js';
+import { GlobMatchBudget } from '../../src/primitives/match-glob.js';
 import { describeLoad } from '../../src/coverage/discovery-diagnostics.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { regexGlobMatcher } from '../support/glob-regex-reference.js';
@@ -29,6 +30,48 @@ function elapsedMs(run: () => unknown): number {
 }
 
 const FILES = Array.from({ length: 2000 }, (_, index) => `src/pages/${'x'.repeat(40)}/${String(index)}.tsx`);
+
+describe('the character budget for import.meta.glob patterns across a run', () => {
+  const call = (folder: string, length: number): string => `const a = import.meta.glob('./${folder}/${'x'.repeat(length)}*.tsx');\n`;
+
+  it('counts every call once, across graphs, and reads every call after the budget as one that may load any file', async () => {
+    const files = {
+      'src/A.tsx': call('a', 600),
+      'src/B.tsx': call('b', 600),
+      'src/C.tsx': call('c', 10),
+    };
+    const fs = makeFakeDeps({ files }).fs;
+    const globImports = new GlobImportBudget(1300);
+    const first = await buildImportGraph(fs, ['src/A.tsx', 'src/B.tsx', 'src/C.tsx'], undefined, { globImports });
+    const unread = first.unresolvable.map((entry) => (entry.kind === 'glob-import' ? (entry.unread ?? 'read') : 'other'));
+    // All three fit in 1300 characters. A graph built again, in another order, is not charged again
+    // and gives every call the same answer.
+    expect(unread).toEqual(['read', 'read', 'read']);
+    const again = await buildImportGraph(fs, ['src/C.tsx', 'src/B.tsx', 'src/A.tsx'], undefined, { globImports });
+    expect(again.unresolvable.map((entry) => (entry.kind === 'glob-import' ? (entry.unread ?? 'read') : 'other'))).toEqual(['read', 'read', 'read']);
+
+    const small = new GlobImportBudget(700);
+    const graph = await buildImportGraph(fs, ['src/A.tsx', 'src/B.tsx', 'src/C.tsx'], undefined, { globImports: small });
+    const entries = graph.unresolvable.filter((entry) => entry.kind === 'glob-import');
+    expect(entries.map((entry) => entry.unread ?? 'read')).toEqual(['read', 'budget', 'budget']);
+    const past = entries[1];
+    if (past?.kind !== 'glob-import') throw new Error('expected a glob-import entry');
+    expect(past.patterns).toBeNull();
+    expect(importMayLoad(past, 'src/anything.tsx')).toBe(true);
+    expect(describeLoad(past)).toContain('budget of 65,536 characters');
+  });
+
+  it('reads a glob as one that may load the file once the matching budget is spent', async () => {
+    const graph = await graphOf("const a = import.meta.glob('../tests/*.tsx');");
+    const entry = onlyGlobEntry(graph.unresolvable);
+    expect(importMayLoad(entry, 'src/other/x.tsx')).toBe(false);
+    const spent = new GlobMatchBudget(0);
+    expect(() => spent.charge(1)).toThrow();
+    expect(importMayLoad(entry, 'src/other/x.tsx', new Map(), spent)).toBe(true);
+    const tight = new GlobMatchBudget(5);
+    expect(importMayLoad(entry, `src/${'a/'.repeat(100)}x.tsx`, new Map(), tight)).toBe(true);
+  });
+});
 
 describe('import.meta.glob pattern bounds', () => {
   it('reads a 10,000-character pattern as one that may load any file, at no cost for each file', async () => {

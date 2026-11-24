@@ -24,11 +24,8 @@ import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { docsPageUrl } from './docs-planner.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
 import { configError } from '../intake/config-error.js';
-import { globMatcher, matchGlob } from '../primitives/match-glob.js';
-
-function isWideBlastFile(file: string, globs: string[]): boolean {
-  return globs.some((glob) => matchGlob(glob, file));
-}
+import { GlobBudgetExhausted, globMatcher } from '../primitives/match-glob.js';
+import { GLOB_BUDGET_LOADS_NOTE, globBudgetGapReason, runGlobBudgets, type RunGlobBudgets } from './glob-budget.js';
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
 // starts and ends with a double quote has the shape git prints for a name it quoted, and then usabl
@@ -203,13 +200,14 @@ async function buildRouteGraph(
   fs: FsGlob,
   attributedRoutes: ReadonlyArray<{ screenId: string; entryFile: string }>,
   routerFile: string,
+  budgets: RunGlobBudgets,
 ): Promise<RouteGraph> {
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
   // The aliases come from the nearest tsconfig and the nearest Vite config at or above the router
   // file, and from the repository root configs too. An import the two sets map to different places
   // is followed both ways and disclosed. See loadAppAliasConfig.
   const aliasConfig = await loadAppAliasConfig(fs, routerFile);
-  const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
+  const graph = await buildImportGraph(fs, routeEntries, aliasConfig, { globImports: budgets.globImports });
   const closures = new Map<string, Set<string>>();
   for (const route of attributedRoutes) {
     closures.set(route.screenId, importClosure(graph, route.entryFile));
@@ -253,10 +251,30 @@ export async function computeCoverage(
   const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
 
   const quotedFiles = changedFiles.filter(looksQuoted);
-  const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
+  // Every glob match of this run charges one budget. A file usabl could not test against the globs
+  // before the budget ran out is a gap: usabl cannot tell whether it is app code, so it is never
+  // read as outside the globs.
+  const budgets = runGlobBudgets();
   // Each entry is expanded and compiled once for the run, not once for each changed file.
-  const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob));
-  const globbedFiles = listedFiles.filter((file) => uiMatchers.some((matches) => matches(file)));
+  const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
+  const wideBlastMatchers = config.discovery.wideBlastGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
+  const wideBlastFiles = new Set<string>();
+  const globbedFiles: string[] = [];
+  const untestedFiles: string[] = [];
+  const listedFiles: string[] = [];
+  for (const file of changedFiles.filter((candidate) => !looksQuoted(candidate))) {
+    try {
+      const ui = uiMatchers.some((matches) => matches(file));
+      const wide = wideBlastMatchers.some((matches) => matches(file));
+      listedFiles.push(file);
+      if (ui) globbedFiles.push(file);
+      if (wide) wideBlastFiles.add(file);
+    } catch (err) {
+      if (!(err instanceof GlobBudgetExhausted)) throw err;
+      untestedFiles.push(file);
+    }
+  }
+  const isWideBlastFile = (file: string): boolean => wideBlastFiles.has(file);
 
   const attributedRoutes = manifest.routes.filter(
     // Router fallback routes have entryFile: null, so they cannot truthfully
@@ -267,7 +285,7 @@ export async function computeCoverage(
   // screen reaches it, and the screen mapping below asks which screens do.
   let routeGraph: Promise<RouteGraph> | null = null;
   const loadRouteGraph = (): Promise<RouteGraph> => {
-    routeGraph ??= buildRouteGraph(fs, attributedRoutes, config.discovery.routerFile);
+    routeGraph ??= buildRouteGraph(fs, attributedRoutes, config.discovery.routerFile, budgets);
     return routeGraph;
   };
 
@@ -321,6 +339,7 @@ export async function computeCoverage(
         [...unreached, ...placeable.map((entry) => entry.gap.ref)],
         packageStarts,
         storyToolPage,
+        budgets,
       );
       for (const file of unreached) {
         const placement = placements.get(file) ?? { state: 'none' };
@@ -328,9 +347,10 @@ export async function computeCoverage(
           reachedTestFiles.add(file);
           loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers, storyToolPage));
         } else if (placement.state === 'maybe') {
-          testFileGaps.push({ ref: file, state: 'unresolved', reason: testFileGapReason(file, placement.loads, storyToolPage) });
+          const reason = testFileGapReason(file, placement.loads, storyToolPage);
+          testFileGaps.push({ ref: file, state: 'unresolved', reason: budgets.steps.exhausted ? `${GLOB_BUDGET_LOADS_NOTE} ${reason}` : reason });
         } else {
-          const wide = isWideBlastFile(file, config.discovery.wideBlastGlobs);
+          const wide = isWideBlastFile(file);
           excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, wide, storyToolPage) });
         }
       }
@@ -338,7 +358,7 @@ export async function computeCoverage(
         const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
         if (placement.state === 'none') {
           const ref = entry.gap.ref;
-          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref, config.discovery.wideBlastGlobs), storyToolPage) });
+          excludedFiles.push({ ref, reason: excludedTestFileReason(ref, isWideBlastFile(ref), storyToolPage) });
         } else {
           workspaceTestGaps.push(entry.gap);
         }
@@ -365,6 +385,7 @@ export async function computeCoverage(
   if (
     uiFiles.length === 0 &&
     quotedFiles.length === 0 &&
+    untestedFiles.length === 0 &&
     testFileGaps.length === 0 &&
     workspaceGaps.length === 0 &&
     dependencyReason === null
@@ -372,19 +393,22 @@ export async function computeCoverage(
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true, ...excluded };
   }
   const quotedGaps: CoverageGap[] = quotedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: QUOTED_PATH_REASON }));
+  const untestedReason = globBudgetGapReason('uiFileGlobs and discovery.wideBlastGlobs');
+  const untestedGaps: CoverageGap[] = untestedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: untestedReason }));
   const unresolvedFiles: string[] = [
     ...quotedFiles,
+    ...untestedFiles,
     ...testFileGaps.map((gap) => gap.ref),
     ...workspaceGaps.map((gap) => gap.ref),
   ];
-  const gaps: CoverageGap[] = [...quotedGaps, ...testFileGaps, ...workspaceGaps];
+  const gaps: CoverageGap[] = [...quotedGaps, ...untestedGaps, ...testFileGaps, ...workspaceGaps];
   if (uiFiles.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false, ...excluded };
   }
   const affectedByScreen = new Map<string, AffectedScreen>();
   const wideBlastReason = dependencyReason === null ? {} : { reason: dependencyReason };
 
-  const hasWideBlast = dependencyReason !== null || uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
+  const hasWideBlast = dependencyReason !== null || uiFiles.some((file) => isWideBlastFile(file));
   let wideBlastAttributedAnyScreen = false;
   if (hasWideBlast) {
     // A shell or global file can influence any route, so queue every discovered
@@ -455,7 +479,7 @@ export async function computeCoverage(
   const packageFolderReads = new Map<string, PackageFolder | null>();
 
   for (const file of uiFiles) {
-    const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
+    const isWideBlastMatch = isWideBlastFile(file);
     // Wide-blast already covered discovered routes for this file, so per-file
     // route-graph matching adds no new evidence.
     // Manual surfaces are still additive because operators can declare URLs that
@@ -523,18 +547,16 @@ export async function computeCoverage(
       const combinedUnresolvable = [...graph.unresolvable, ...directDiagnostics];
       const onPaths = combinedUnresolvable.filter((entry) => entry.importer !== file && graph.visited.has(entry.importer));
       const packageFolders = await readPackageFolders(fs, [file], onPaths, packageFolderReads);
-      gaps.push({
-        ref: file,
-        state: 'unresolved',
-        reason: buildUnresolvedReason(
-          file,
-          combinedUnresolvable,
-          graph.visited,
-          // A file this set leaves out only because of the story tool page gets the story tool note.
-          loadedTestFileNotes.get(file) ?? (storyToolPage && isTestFile(file) ? storyToolNote(file) : undefined),
-          packageFolders,
-        ),
-      });
+      const reason = buildUnresolvedReason(
+        file,
+        combinedUnresolvable,
+        graph.visited,
+        // A file this set leaves out only because of the story tool page gets the story tool note.
+        loadedTestFileNotes.get(file) ?? (storyToolPage && isTestFile(file) ? storyToolNote(file) : undefined),
+        packageFolders,
+        budgets.steps,
+      );
+      gaps.push({ ref: file, state: 'unresolved', reason: budgets.steps.exhausted ? `${GLOB_BUDGET_LOADS_NOTE} ${reason}` : reason });
     }
   }
 

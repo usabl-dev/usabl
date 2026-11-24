@@ -11,10 +11,15 @@
  * The cost of matching also grows with the length of each pattern and with every entry together.
  * The matcher's time for one pattern is at most the pattern's length times the path's length, with
  * no backtracking, so a list has three more bounds, each far above what a real config holds:
- * - 1024 characters for each pattern an entry expands to. A real glob is a short path pattern.
+ * - 1024 characters for the longest pattern an entry's braces expand to. A real glob is a short
+ *   path pattern.
  * - 4096 patterns across the whole list: sixteen entries at the cap of 256 each.
  * - 262,144 characters across every pattern of the list, the count of each entry times its length:
- *   256 patterns of 1024 characters, or 4096 of 64. The bound keeps a large change quick.
+ *   256 patterns of 1024 characters, or 4096 of 64.
+ * These bounds keep one changed file of normal length quick: 0.2 ms for a 200-character path
+ * against a list at the bounds. They do not keep a run quick: the same list took about 24 seconds
+ * against one path of 3999 characters. The planners' budget of glob matching steps does that (see
+ * coverage/glob-budget.ts), and a file it leaves untested is a gap.
  *
  * Then each entry is built once, so a pattern the matcher cannot build is a plain refusal when the
  * file is read, never a crash in the middle of a run. This unit reads patterns only. It must never
