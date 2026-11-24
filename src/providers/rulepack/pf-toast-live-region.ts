@@ -18,7 +18,8 @@ import { SEL } from './selectors.js';
 const LIVE_ATTRIBUTES = ['aria-live', 'role', 'aria-hidden', 'inert', 'hidden', 'class'] as const;
 
 // The class tokens of a PatternFly 6 toast group. An element is one when it carries both, in any
-// order. PatternFly renders the group as a live list inside a plain div that it adds to the body.
+// order. PatternFly renders the group as a list inside a plain div that it adds to the body. The
+// list is live only when the app sets it live, with isLiveRegion.
 const TOAST_GROUP_CLASS = 'pf-v6-c-alert-group pf-m-toast';
 const CLASS_SEPARATOR = /[\t\n\f\r ]+/;
 
@@ -120,9 +121,10 @@ function behindModalDraft(ctx: ProviderContext, selector: string, node: AxNode |
 }
 
 // The toast area itself is hidden by an open modal dialog: the body's child that the modal hides is
-// the alert's live region or sits inside it, or it is or holds the toast group the alert sits in. While the dialog is open, a
-// screen reader hears no toast. Whether a toast can appear while this dialog is open is not
-// something the rule can read from the page, so the alert is neither passed nor failed.
+// the alert's live region or sits inside it, or it is or holds the toast group the alert sits in.
+// While the dialog is open, a screen reader hears no toast. Whether a toast can appear while this
+// dialog is open is not something the rule can read from the page, so the alert is neither passed
+// nor failed.
 function toastAreaBehindModalDraft(ctx: ProviderContext, selector: string, node: AxNode | null): Draft {
   return {
     rule: 'pf-toast-live-region',
