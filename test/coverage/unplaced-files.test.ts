@@ -161,6 +161,22 @@ describe('the discovery detail of a file usabl cannot place', () => {
     expect(detail).toContain('other imports usabl could not follow from the screens, any of which may load this file');
   });
 
+  // A bundler loads a folder through the main field of a package.json in it, so an import that names
+  // the folder may load a file in it under another name. The detail says so, as the gap rule does.
+  it('puts an import of a folder with a package.json first for a file in that folder', async () => {
+    const fs = makeFakeDeps({
+      files: {
+        'usabl.routes.json': routes,
+        'src/Page.tsx': ["import { A } from '@/a/A';", "import { Orphan } from '@/widgets/Orphan';"].join('\n'),
+        'src/widgets/Orphan/view.tsx': 'export const Orphan = 1;',
+        'src/widgets/Orphan/package.json': '{"main":"view.tsx"}',
+      },
+    }).fs;
+    const coverage = await computeCoverage(fs, config, ['src/widgets/Orphan/view.tsx']);
+    const reason = coverage.gaps.find((entry) => entry.ref === 'src/widgets/Orphan/view.tsx')?.reason ?? '';
+    expect(reason).toContain("Discovery detail: imports that may load this file: could not resolve '@/widgets/Orphan' in src/Page.tsx");
+  });
+
   it('labels unrelated imports as imports of other files, never as this file', async () => {
     const fs = makeFakeDeps({
       files: {
