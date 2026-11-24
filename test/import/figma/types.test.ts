@@ -100,6 +100,14 @@ describe('readFigmaFile shape', () => {
     expect(read).not.toHaveProperty('document.children');
   });
 
+  it('reads a slot id too large for a number, which JSON reads as Infinity', () => {
+    const json = JSON.stringify(
+      file({ ...leaf, componentProperties: { Content: { type: 'SLOT', value: { guid: { sessionID: 7, localID: 8 } } } } }),
+    ).replace('"localID":8', '"localID":1e999');
+    const read = readFigmaFile(JSON.parse(json));
+    expect(read?.document.componentProperties?.Content?.value).toEqual({ guid: { sessionID: 7, localID: Infinity } });
+  });
+
   it.each([
     ['a box with an infinite size', file({ ...leaf, absoluteBoundingBox: { x: 0, y: 0, width: Infinity, height: 1 } })],
     ['a box that is not a number', file({ ...leaf, absoluteBoundingBox: { x: 0, y: 0, width: Number.NaN, height: 1 } })],

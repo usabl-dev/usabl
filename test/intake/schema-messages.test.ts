@@ -214,6 +214,20 @@ describe('requirement file messages', () => {
       'requirements[0].source.node: Required',
     ],
     ['an empty owner', bundle(requirement({ owner: '' })), 'requirements[0].owner: owner must not be empty'],
+    // A value of the wrong type that has a length gets one message, for its type, and no length message.
+    ['a list where text belongs', bundle(requirement({ description: [] })), 'requirements[0].description: Expected string, received array'],
+    ['text where a list belongs', { version: 1, requirements: '' }, 'requirements: Expected array, received string'],
+    [
+      'a list where a click selector belongs',
+      voice({ steps: [{ do: 'click', selector: [] }] }),
+      "requirements[0].assertion.steps[0].selector: a click step needs a selector, such as selector: '#delete'",
+    ],
+    // A list that is too short and holds a bad entry reports its length first.
+    [
+      'a focus order with one empty name',
+      bundle(requirement({ kind: 'focus-order', assertion: { type: 'focus-order', sequence: [''] } })),
+      'requirements[0].assertion.sequence: sequence needs at least two names, because one name has no order; requirements[0].assertion.sequence[0]: each sequence entry must not be empty',
+    ],
   ])('refuses %s with the same message', (_, raw, reason) => {
     expect(reasonOf(raw)).toBe(reason);
   });
@@ -274,6 +288,18 @@ describe('requirement file shape', () => {
   it('refuses a focus order one name past its limit, with one message', () => {
     const sequence = Array.from({ length: 201 }, (_, index) => `Name ${index}`);
     const reason = reasonOf(bundle(requirement({ kind: 'focus-order', assertion: { type: 'focus-order', sequence } })));
+    expect(reason).toBe('requirements[0].assertion.sequence: sequence can list at most 200 names');
+  });
+});
+
+describe('an oversized focus order', () => {
+  // A list past its limit is refused on its length alone. Checking each entry of a very long list
+  // first would cost time and memory in proportion to its length, and would write one message per
+  // bad entry into the refusal.
+  it('is refused on its length, with one message, however many entries it has', () => {
+    const sequence = Array.from({ length: 100_000 }, () => '');
+    const reason = reasonOf(bundle(requirement({ kind: 'focus-order', assertion: { type: 'focus-order', sequence } })));
+    expect(reason.length).toBeLessThan(200);
     expect(reason).toBe('requirements[0].assertion.sequence: sequence can list at most 200 names');
   });
 });
