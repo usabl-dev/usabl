@@ -261,6 +261,89 @@ describe('a changed file under a test folder that an unresolved import may reach
     });
   }
 
+  // A file named Index.tsx keeps its own name, Index, as before, as well as its folder name. An
+  // alias usabl cannot read, such as @dash for src/tests/Dashboard, loads it as @dash/Index.
+  const screenCases: Array<[string, string]> = [
+    ['src/tests/Dashboard/Index.tsx', '@dash/Index'],
+    ['src/tests/Dashboard/Index.tsx', '~dash/Index'],
+    ['src/tests/Index.tsx', '$t/Index'],
+    // The import names an index file with an extension the resolver does not list, or in capitals.
+    ['src/tests/Dashboard/index.mdx', '@/tests/Dashboard/index.mdx'],
+    ['src/tests/Dashboard/index.astro', '@/tests/Dashboard/index.astro'],
+    ['src/tests/Dashboard/index.cts', '@/tests/Dashboard/index.cts'],
+    ['src/tests/Dashboard/index.tsx', '@/tests/Dashboard/index.TSX'],
+    // An alias key with a leading sign, such as @tests for src/tests, names the folder without it.
+    ['src/tests/index.tsx', '@tests/index'],
+    ['src/tests/index.tsx', '@tests'],
+    ['src/tests/index.tsx', '~tests/'],
+    ['src/tests/index.tsx', '#tests'],
+  ];
+  for (const [screen, form] of screenCases) {
+    it(`is a gap for ${screen} imported as '${form}'`, async () => {
+      const home = `import { Dashboard } from '${form}'\nexport function Home() { return <Dashboard /> }\n`;
+      const tree = treeWith(home, { [screen]: 'export function Dashboard() { return <main /> }\n' });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [screen]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([screen]);
+      expect(coverage.excludedFiles ?? []).toEqual([]);
+    });
+  }
+
+  // A Nuxt app imports virtual modules such as #app and #imports. Each is read by its name, so it
+  // does not make every test file a gap.
+  for (const [file, form] of [
+    ['src/test/setup.ts', '#app'],
+    ['src/test/setup.ts', '#imports'],
+    ['src/pages/Home.spec.tsx', '#app'],
+  ] as const) {
+    it(`keeps ${file} excluded beside an unresolved import of '${form}'`, async () => {
+      const home = `import { defineNuxtPlugin } from '${form}'\nexport function Home() { return <main /> }\n`;
+      const tree = treeWith(home, { [file]: "import '@testing-library/jest-dom'\n" });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [file]);
+      expect(coverage.nothingToCheck).toBe(true);
+      expect(coverage.gaps).toEqual([]);
+      expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([file]);
+    });
+  }
+
+  // The main or exports field of a folder's package.json can name a file outside the folder. An
+  // import that names the folder may load that file too.
+  for (const main of ['../Screens/view.tsx', '../Screens/view', './../Screens']) {
+    it(`is a gap for the file a folder's main field '${main}' names outside the folder`, async () => {
+      const screen = main === './../Screens' ? 'src/tests/Screens/index.tsx' : 'src/tests/Screens/view.tsx';
+      const tree = treeWith(aliasHome, {
+        [screen]: 'export function Dashboard() { return <main /> }\n',
+        'src/tests/Dashboard/package.json': `${JSON.stringify({ main })}\n`,
+      });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [screen]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([screen]);
+    });
+  }
+
+  it("is a gap for the file a folder's exports field names outside the folder", async () => {
+    const screen = 'src/tests/Screens/view.tsx';
+    const tree = treeWith(aliasHome, {
+      [screen]: 'export function Dashboard() { return <main /> }\n',
+      'src/tests/Dashboard/package.json': `${JSON.stringify({ exports: { '.': { import: '../Screens/view.tsx' } } })}\n`,
+    });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [screen]);
+    expect(coverage.nothingToCheck).toBe(false);
+    expect(coverage.unresolvedFiles).toEqual([screen]);
+  });
+
+  it("keeps a file excluded that a folder's main field does not name", async () => {
+    const helper = 'src/tests/Screens/helper.ts';
+    const tree = treeWith(aliasHome, {
+      [helper]: 'export const helper = 1;\n',
+      'src/tests/Screens/view.tsx': 'export function Dashboard() { return <main /> }\n',
+      'src/tests/Dashboard/package.json': `${JSON.stringify({ main: '../Screens/view.tsx' })}\n`,
+    });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [helper]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([helper]);
+  });
+
   it('keeps a file excluded in a folder of that name with no package.json', async () => {
     const viewFile = 'src/tests/Dashboard/view.tsx';
     const tree = treeWith(aliasHome, { [viewFile]: 'export function Dashboard() { return <main /> }\n' });

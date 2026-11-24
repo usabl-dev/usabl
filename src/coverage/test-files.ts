@@ -27,10 +27,11 @@ import { declaredPackageNames, workspacePackages } from './workspace-packages.js
 import { describeLoad } from './discovery-diagnostics.js';
 import {
   buildImportGraph,
-  foldersAbove,
   importMayLoad,
   type ImportGraphView,
-  namesFilesByName,
+  type PackageFolder,
+  type PackageFolders,
+  readPackageFolders,
   type UnresolvableImport,
 } from './import-graph.js';
 
@@ -312,23 +313,15 @@ export async function placeTestFiles(
   let loads = [...loaded.unresolvable];
   let starts: string[] = [];
   let maybe: ImportGraphView | null = null;
-  // The folders above the files that hold a package.json. An import that names such a folder may
-  // load any file in it (see importMayLoad). Read only while a load names files by name.
-  const manifestFolders = new Set<string>();
-  const folderRead = new Set<string>();
-  const readManifestFolders = async (): Promise<void> => {
-    if (!loads.some(namesFilesByName)) return;
-    for (const dir of sortedUnique(universe.flatMap(foldersAbove))) {
-      if (folderRead.has(dir)) continue;
-      folderRead.add(dir);
-      if ((await fs.readFile(`${dir}/package.json`)) !== null) manifestFolders.add(dir);
-    }
-  };
+  // The folders above the files that hold a package.json and that a load names. An import that names
+  // such a folder may load any file in it, or a file its package.json names (see importMayLoad).
+  const packageFolderReads = new Map<string, PackageFolder | null>();
+  let packageFolders: PackageFolders = new Map();
   for (;;) {
     const known = new Set(starts);
-    await readManifestFolders();
+    packageFolders = await readPackageFolders(fs, universe, loads, packageFolderReads);
     const found = universe.filter(
-      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => importMayLoad(entry, file, manifestFolders)),
+      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => importMayLoad(entry, file, packageFolders)),
     );
     if (found.length === 0) break;
     starts = sortedUnique([...starts, ...found]);
@@ -343,7 +336,7 @@ export async function placeTestFiles(
   const reachedBy = new Map<string, Set<string>>();
   if (maybe !== null) {
     for (const entry of loads) {
-      const named = universe.filter((file) => !loaded.visited.has(file) && importMayLoad(entry, file, manifestFolders));
+      const named = universe.filter((file) => !loaded.visited.has(file) && importMayLoad(entry, file, packageFolders));
       reachedBy.set(entryKey(entry), reachable(maybe, named));
     }
   }

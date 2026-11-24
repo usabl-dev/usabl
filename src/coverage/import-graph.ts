@@ -732,10 +732,10 @@ function pathHasSegmentStart(file: string, start: string): boolean {
  * every file its patterns or its fixed start cover, and any file when usabl could not read them.
  * A baseUrl import may load each file it resolves to. Any other unresolved import may load a file
  * whose name its last segment names, so `@/tests/Dashboard` names `src/tests/Dashboard.tsx` (see
- * importNames). It may also load any file below a folder of that name in `manifestFolders`, the
- * folders the caller found a package.json in.
+ * importNames). It may also load any file below a folder of that name in `packageFolders`, the
+ * folders the caller found a package.json in, and each file that package.json names.
  */
-export function importMayLoad(entry: UnresolvableImport, file: string, manifestFolders: ReadonlySet<string> = new Set()): boolean {
+export function importMayLoad(entry: UnresolvableImport, file: string, packageFolders: PackageFolders = new Map()): boolean {
   if (entry.kind === 'glob-import') {
     if (entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file))) return true;
     const below = entry.underEveryFolder ?? [];
@@ -754,12 +754,97 @@ export function importMayLoad(entry: UnresolvableImport, file: string, manifestF
   if (entry.kind === 'package-subpath') {
     return entry.packageDir === null || file.startsWith(`${entry.packageDir}/`);
   }
+  // The plain comparison: the last segment as written, with or without its extension, against the
+  // file's name in its own letter case. It is kept as it is, so every file it names stays named.
+  if (importLastSegments(entry.specifier).includes(nameInItsCase(file))) return true;
   const names = importNames(entry.importer, entry.specifier);
   // An import whose path names no file by name, such as '@/', may load any file.
-  if (names === null || names.includes(importName(file).toLowerCase())) return true;
-  // An import of a folder that holds a package.json loads the file its main field names, which can
-  // be any file in that folder, such as Dashboard/view.tsx for '@/tests/Dashboard'.
-  return foldersAbove(file).some((dir) => manifestFolders.has(dir) && names.includes(path.basename(dir).toLowerCase()));
+  if (names === null) return true;
+  if ([importName(file), nameInItsCase(file)].some((name) => names.includes(name.toLowerCase()))) return true;
+  // An import of a folder that holds a package.json loads the file its main or exports field names:
+  // any file in that folder, such as Dashboard/view.tsx for '@/tests/Dashboard', or a file outside
+  // it that the field names.
+  for (const [dir, folder] of packageFolders) {
+    if (!names.includes(path.basename(dir).toLowerCase())) continue;
+    if (file.startsWith(`${dir}/`) || folder.targets === null) return true;
+    if (folder.targets.some((target) => targetMayBe(target, file))) return true;
+  }
+  return false;
+}
+
+/**
+ * What a folder's package.json says the folder loads. `targets` are the paths its main, module,
+ * browser, and exports fields name, written relative to the repository root. A path with a * names
+ * every file whose path starts with the part before the *. Null when the file is not a JSON
+ * object, so the folder may load any file.
+ */
+export interface PackageFolder {
+  targets: string[] | null;
+}
+
+/** The folders that hold a package.json, by folder path. */
+export type PackageFolders = ReadonlyMap<string, PackageFolder>;
+
+// Whether a path a package.json names may be the file: the file itself, the file without its
+// extension, which the bundler adds, or a folder whose index file it is. Letter case is ignored.
+function targetMayBe(target: string, file: string): boolean {
+  const wanted = target.toLowerCase();
+  const lowered = file.toLowerCase();
+  const star = wanted.indexOf('*');
+  if (star !== -1) return lowered.startsWith(wanted.slice(0, star));
+  const stem = lowered.replace(/\.[^./]*$/u, '');
+  return lowered === wanted || stem === wanted || (path.dirname(lowered) === wanted && path.basename(stem) === 'index');
+}
+
+const PACKAGE_ENTRY_FIELDS = ['main', 'module', 'browser', 'exports'];
+
+// Every string inside a package.json field, at any depth of an object or an array.
+function stringsIn(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsIn);
+  if (typeof value === 'object' && value !== null) return Object.values(value).flatMap(stringsIn);
+  return [];
+}
+
+function packageFolderOf(dir: string, text: string): PackageFolder {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    return { targets: null };
+  }
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return { targets: null };
+  const fields = manifest as Record<string, unknown>;
+  const targets = PACKAGE_ENTRY_FIELDS.flatMap((field) => stringsIn(fields[field])).map((target) => path.normalize(path.join(dir, target)));
+  return { targets: [...new Set(targets)].sort() };
+}
+
+/**
+ * The folders above `files` that hold a package.json and whose name one of `loads` names (see
+ * importNames), with what each package.json names. `known` keeps what each folder held across calls,
+ * null for no package.json, so each folder is read once. Only folders a load names are read.
+ */
+export async function readPackageFolders(
+  fs: FsGlob,
+  files: readonly string[],
+  loads: readonly UnresolvableImport[],
+  known: Map<string, PackageFolder | null>,
+): Promise<PackageFolders> {
+  const wanted = new Set(loads.flatMap((entry) => (namesFilesByName(entry) ? (importNames(entry.importer, entry.specifier) ?? []) : [])));
+  if (wanted.size > 0) {
+    const dirs = [...new Set(files.flatMap(foldersAbove))].sort();
+    for (const dir of dirs) {
+      if (known.has(dir) || !wanted.has(path.basename(dir).toLowerCase())) continue;
+      const text = await fs.readFile(`${dir}/package.json`);
+      known.set(dir, text === null ? null : packageFolderOf(dir, text));
+    }
+  }
+  const found = new Map<string, PackageFolder>();
+  for (const dir of [...known.keys()].sort()) {
+    const folder = known.get(dir);
+    if (folder !== null && folder !== undefined) found.set(dir, folder);
+  }
+  return found;
 }
 
 /**
@@ -777,56 +862,80 @@ export function foldersAbove(file: string): string[] {
   return folders;
 }
 
+// A name without its last extension, if it has one: Dashboard for Dashboard.tsx, index for index.TSX.
+function withoutExtension(name: string): string {
+  return name.replace(/\.[^.]*$/u, '');
+}
+
 // The name an import would use for a file: its name without the extension, or the folder name for
-// an index file, since `./Dashboard` loads `Dashboard/index.tsx`. Index.tsx counts as an index file
-// too, because a disk that ignores letter case loads it for `./Dashboard`.
+// an index file, since `./Dashboard` loads `Dashboard/index.tsx`. Index.tsx and index.MDX count as
+// index files too, because a disk that ignores letter case loads them for `./Dashboard`.
 function importName(file: string): string {
   const segments = file.split('/');
-  const base = segments[segments.length - 1] ?? '';
-  const stem = base.replace(/\.[^.]*$/u, '');
+  const stem = withoutExtension(segments[segments.length - 1] ?? '');
   if (stem.toLowerCase() === 'index' && segments.length > 1) {
     return segments[segments.length - 2] ?? stem;
   }
   return stem;
 }
 
-// Whether an extension is one the resolver adds or maps, such as .tsx or .js (see resolveFileAtPath).
-function isModuleExtension(extension: string): boolean {
-  return EXTENSIONS.includes(extension) || extension in TYPESCRIPT_NAMES;
+// The file's name in its own letter case: its name without the extension, or the folder name for a
+// file named index in lower case. So Index.tsx keeps the name Index, which an import such as
+// @dash/Index uses through an alias whose folder name usabl cannot see.
+function nameInItsCase(file: string): string {
+  const segments = file.split('/');
+  const stem = withoutExtension(segments[segments.length - 1] ?? '');
+  if (stem === 'index' && segments.length > 1) {
+    return segments[segments.length - 2] ?? stem;
+  }
+  return stem;
+}
+
+// The last path segment of an import, with and without its extension, so `@/tests/Dashboard` and
+// `@/tests/Dashboard.js` both name a file called Dashboard.
+function importLastSegments(specifier: string): string[] {
+  // A query or hash is not part of the name, so @/tests/Widget?raw names Widget.
+  const last = withoutQueryOrHash(specifier).split('/').pop() ?? '';
+  return [last, withoutExtension(last)];
 }
 
 // The segments that name no file: an empty one, a dot segment, and an alias or imports prefix on its
 // own. An import whose path ends in one of them names a folder usabl cannot read by name.
 const UNNAMED_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..', '@', '~', '#']);
 
+// The signs an alias key or an imports key often starts with, such as @tests, ~tests, $lib, or #app.
+const KEY_SIGNS = /^[@~$#]+/u;
+
 /**
  * The names an import that did not resolve may use for a file, in lower case, or null when its path
  * names no file usabl can read by name. Each way to write the same path gives the same name. The
- * query and hash are taken off, and so are `.` and `..` segments, a trailing slash, a module
- * extension, and a trailing `/index`. So `@/tests/Dashboard`, `@/tests/Dashboard/`,
+ * query and hash are taken off, and so are `.` and `..` segments, a trailing slash, the extension,
+ * and a trailing `/index` in any letter case. So `@/tests/Dashboard`, `@/tests/Dashboard/`,
  * `@/tests/Dashboard/index`, and `@/tests/Dashboard/index.tsx` all name Dashboard. The last segment
- * as written, with and without any extension, counts too. Letter case is ignored, because a disk
- * that ignores it loads Dashboard.tsx for an import of dashboard. A relative path is read from the
- * importer's folder. One whose path ends with no name, such as the alias root `@/` or a relative
- * path to the repository root or above it, or that is a whole imports key such as `#dashboard`,
- * names no file by name, so it may load any file.
+ * as written, with and without its extension, counts too, and so does each name without a leading
+ * `@`, `~`, `$`, or `#`, since an alias key such as `@tests` often names the folder `tests`. So a
+ * whole imports key such as `#app` names a file called app. A relative path is read from the
+ * importer's folder. One whose path ends with no name, such as the alias root `@/` or a relative path
+ * to the repository root or above it, names no file by name, so it may load any file.
  */
 function importNames(importer: string, specifier: string): string[] | null {
   // A query or hash is not part of the name, so @/tests/Widget?raw names Widget.
   const written = withoutQueryOrHash(specifier);
-  // A # specifier with no slash, such as #dashboard, is a whole key of a package.json imports map,
-  // which can map it to any file.
-  if (written.startsWith('#') && !written.includes('/')) return null;
   const writtenLast = written.split('/').pop() ?? '';
   const joined = isRelativeSpecifier(written) ? path.join(path.dirname(importer), written) : path.normalize(written);
   const segments = joined.replace(/\/+$/u, '').split('/');
-  let last = segments.pop() ?? '';
-  const extension = path.extname(last);
-  if (extension !== '' && isModuleExtension(extension)) last = last.slice(0, -extension.length);
-  if (last.toLowerCase() === 'index' && segments.length > 0) last = segments.pop() ?? '';
+  const last = segments.pop() ?? '';
+  const names = [writtenLast, withoutExtension(writtenLast), last, withoutExtension(last)];
   // A relative path that ends at the repository root reads as '.', and one that ends above it as '..'.
-  if (UNNAMED_SEGMENTS.has(last)) return null;
-  return [...new Set([writtenLast, writtenLast.replace(/\.[^.]*$/u, ''), last].map((name) => name.toLowerCase()))];
+  if (withoutExtension(last).toLowerCase() === 'index' && segments.length > 0) {
+    const folder = segments[segments.length - 1] ?? '';
+    if (UNNAMED_SEGMENTS.has(folder)) return null;
+    names.push(folder);
+  } else if (UNNAMED_SEGMENTS.has(last)) {
+    return null;
+  }
+  const lowered = names.flatMap((name) => [name, name.replace(KEY_SIGNS, '')]).map((name) => name.toLowerCase());
+  return [...new Set(lowered)].filter((name) => name !== '');
 }
 
 /**
