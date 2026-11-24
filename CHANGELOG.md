@@ -433,8 +433,10 @@
   shown while the dialog is open is not announced. When the hidden body child is the alert's
   nearest live region, sits inside it, or is or holds a PatternFly toast group around the alert,
   the alert now gets an `unverified` draft that asks a person to check whether alerts can appear
-  while the dialog is open. An alert in the app root behind a modal is still judged by its live
-  region, and every other case is unchanged. Gate effect: a screen checked with a modal open and a
+  while the dialog is open. Two app root shapes change the same way: an app root that is itself a
+  live region, and an app root that holds a PatternFly toast group around the alert. An alert in a
+  live region inside the app root behind a modal, with no toast group around it, is still judged by
+  that live region. Gate effect: a screen checked with a modal open and a
   hidden toast group that read `verified` now reads `not_covered`, unless the evidence floor or a
   waiver already holds that finding.
 - A branch that sets usabl up is no longer blocked at every stop. When neither the commit where
