@@ -71,6 +71,22 @@ const rectSchema = z.object({
 // is allowed here.
 const idNumber = z.custom<number>((value) => typeof value === 'number' && !Number.isNaN(value), { abort: true });
 
+// A map from names to values. JSON.parse makes a key named "__proto__" an own key. The schema
+// library's version 4 skips such a key in a record before it checks the value. Earlier versions
+// checked the value, so a file whose "__proto__" entry did not match was not readable, and then
+// left the entry out. This keeps both: the value is checked here, and the record still leaves the
+// entry out, so it never reaches an object's prototype.
+function recordOf<Value extends z.ZodType>(value: Value) {
+  return z
+    .custom<unknown>((input) => {
+      if (typeof input !== 'object' || input === null || !Object.hasOwn(input, '__proto__')) {
+        return true;
+      }
+      return value.safeParse(Object.getOwnPropertyDescriptor(input, '__proto__')?.value).success;
+    }, { abort: true })
+    .pipe(z.record(z.string(), value));
+}
+
 const annotationSchema = z.object({
   label: z.string().optional(),
   labelMarkdown: z.string().optional(),
@@ -98,7 +114,7 @@ const nodeSchema: z.ZodType<FigmaNode, unknown> = z.lazy(() =>
       characters: z.string().optional(),
       absoluteBoundingBox: rectSchema.nullable().optional(),
       componentId: z.string().optional(),
-      componentProperties: z.record(z.string(), propertySchema).optional(),
+      componentProperties: recordOf(propertySchema).optional(),
       // Other annotation fields, such as measurements, are not read.
       annotations: z.array(annotationSchema).optional(),
     })
@@ -124,11 +140,8 @@ const fileSchema = z.object({
   version: z.string(),
   lastModified: z.string(),
   document: nodeSchema,
-  components: z.record(
-    z.string(),
-    z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() }),
-  ),
-  componentSets: z.record(z.string(), z.object({ name: z.string() })).optional(),
+  components: recordOf(z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() })),
+  componentSets: recordOf(z.object({ name: z.string() })).optional(),
 });
 
 /**
