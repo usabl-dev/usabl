@@ -2307,8 +2307,15 @@
   order of a million names took about 13 seconds and more than 1 GB of memory to refuse, and the
   refusal held one message for each bad name. Now a list past its limit is refused on its length
   alone. Every requirement file reads the same as before, and the message for a file that does
-  not match its schema is the same text. One message changes: a focus order with more than 200
+  not match its schema is the same text, with two exceptions. A focus order with more than 200
   names now gets only `sequence can list at most 200 names`, with no message for each name in it.
+  A file with one list entry that holds more than about 123,000 problems, such as 150,000 empty
+  flow steps, now gets one reason: the file has too many problems to check, so it is refused, and
+  the person should fix the entries in its longest list or split the file. Before, it got one
+  message for each problem. Without this fix, zod 4 would have stopped with an error that read
+  `intake YAML is invalid`. A Figma file still cannot be read when a map entry named `__proto__`
+  does not match, as before. The deepest chain of nested Figma frames that can be read goes from
+  about 780 levels to about 600. A deeper file is refused as a file usabl cannot read.
   `npm audit --omit=dev` now reports no advisory. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
