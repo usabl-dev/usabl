@@ -826,7 +826,8 @@ also returns a gap for each alert it could not check:
    no draft of its own, because the alert check judges that alert. A group that is not
    hidden, or that is hidden in another way, gets nothing. When a modal is open but the
    rule cannot tell which entry of the group's chain is the body's child, the group gets
-   nothing either. A group whose ancestors cannot be read while a modal is open becomes a
+   the same `unverified` draft an alert gets in that state, whose reason names the open
+   modal, never a pass. A group whose ancestors cannot be read while a modal is open becomes a
    not-covered gap.
    An alert whose own container is hidden, below the body's child, still fails with or without a modal.
    Its own live value does not count as a
