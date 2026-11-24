@@ -284,7 +284,8 @@ export async function placeTestFiles(
   // test file set (see isTestFile).
   storyToolPage = false,
   // The run's glob budgets. Every graph built here charges the import.meta.glob characters it
-  // reads, and every glob tested against a file charges the matching steps. Once either is spent,
+  // reads, and every glob tested against a file charges the placement budget of matching steps,
+  // which is its own because placement tests every test file of the app. Once either is spent,
   // a glob may load any file, so a test file it could reach is a gap.
   budgets: RunGlobBudgets = runGlobBudgets(),
 ): Promise<Map<string, TestFilePlacement>> {
@@ -297,7 +298,7 @@ export async function placeTestFiles(
     workspacePackages: await workspacePackages(fs),
     globImports: budgets.globImports,
   };
-  const mayLoad = (entry: UnresolvableImport, file: string): boolean => importMayLoad(entry, file, packageFolders, budgets.steps);
+  const mayLoad = (entry: UnresolvableImport, file: string): boolean => importMayLoad(entry, file, packageFolders, budgets.placement);
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
   // files under uiFileGlobs that are not test files, the route entry files, the router file, the
   // files the wide-blast globs match that are not test files, and every surface's files. An

@@ -373,10 +373,11 @@ export class GlobMatchBudget {
 }
 
 /**
- * The glob matching steps one planner may spend in a run. The worst shapes ran at 20 to 35 million
- * steps a second on a loaded 8-core machine, so the budget is about 3 to 5 seconds of matching at
- * most, far inside a Stop hook's limit. A normal run spends far less: 20,000 changed files against
- * four common globs took about 3 million steps.
+ * The glob matching steps one planner may spend in a run on the changed files. The worst shapes
+ * ran at 20 to 35 million steps a second on a loaded 8-core machine, so the budget is about 3 to 5
+ * seconds of matching at most, far inside a Stop hook's limit. 20,000 changed files against four
+ * common globs took about 3 million steps. Test-file placement has a budget of its own (see
+ * coverage/glob-budget.ts).
  */
 export const RUN_GLOB_MATCH_STEPS = 100_000_000;
 

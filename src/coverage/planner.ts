@@ -24,8 +24,8 @@ import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { docsPageUrl } from './docs-planner.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
 import { configError } from '../intake/config-error.js';
-import { GlobBudgetExhausted, globMatcher } from '../primitives/match-glob.js';
-import { GLOB_BUDGET_LOADS_NOTE, globBudgetGapReason, runGlobBudgets, type RunGlobBudgets } from './glob-budget.js';
+import { GlobBudgetExhausted, globMatcher, RUN_GLOB_MATCH_STEPS } from '../primitives/match-glob.js';
+import { budgetOrder, globBudgetGapReason, globBudgetLoadsNote, PLACEMENT_GLOB_MATCH_STEPS, runGlobBudgets, type RunGlobBudgets } from './glob-budget.js';
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
 // starts and ends with a double quote has the shape git prints for a name it quoted, and then usabl
@@ -251,29 +251,33 @@ export async function computeCoverage(
   const isTest = (file: string): boolean => isTestFile(file, storyToolPage);
 
   const quotedFiles = changedFiles.filter(looksQuoted);
-  // Every glob match of this run charges one budget. A file usabl could not test against the globs
-  // before the budget ran out is a gap: usabl cannot tell whether it is app code, so it is never
-  // read as outside the globs.
+  // Every glob match of this run charges a budget: test-file placement its own, the rest one
+  // shared budget. A file usabl could not test against the globs before the budget ran out is a
+  // gap: usabl cannot tell whether it is app code, so it is never read as outside the globs.
   const budgets = runGlobBudgets();
   // Each entry is expanded and compiled once for the run, not once for each changed file.
   const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
   const wideBlastMatchers = config.discovery.wideBlastGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
+  // The files are tested in a fixed order, so the same set of changed files runs out at the same
+  // file in any order the caller gives. The lists below keep the caller's order.
+  const inUiGlobs = new Set<string>();
   const wideBlastFiles = new Set<string>();
-  const globbedFiles: string[] = [];
-  const untestedFiles: string[] = [];
-  const listedFiles: string[] = [];
-  for (const file of changedFiles.filter((candidate) => !looksQuoted(candidate))) {
+  const untested = new Set<string>();
+  for (const file of budgetOrder(changedFiles.filter((candidate) => !looksQuoted(candidate)))) {
     try {
       const ui = uiMatchers.some((matches) => matches(file));
       const wide = wideBlastMatchers.some((matches) => matches(file));
-      listedFiles.push(file);
-      if (ui) globbedFiles.push(file);
+      if (ui) inUiGlobs.add(file);
       if (wide) wideBlastFiles.add(file);
     } catch (err) {
       if (!(err instanceof GlobBudgetExhausted)) throw err;
-      untestedFiles.push(file);
+      untested.add(file);
     }
   }
+  const unquoted = changedFiles.filter((candidate) => !looksQuoted(candidate));
+  const untestedFiles = unquoted.filter((file) => untested.has(file));
+  const listedFiles = unquoted.filter((file) => !untested.has(file));
+  const globbedFiles = listedFiles.filter((file) => inUiGlobs.has(file));
   const isWideBlastFile = (file: string): boolean => wideBlastFiles.has(file);
 
   const attributedRoutes = manifest.routes.filter(
@@ -348,7 +352,8 @@ export async function computeCoverage(
           loadedTestFileNotes.set(file, loadedTestFileNote(file, placement.importers, storyToolPage));
         } else if (placement.state === 'maybe') {
           const reason = testFileGapReason(file, placement.loads, storyToolPage);
-          testFileGaps.push({ ref: file, state: 'unresolved', reason: budgets.steps.exhausted ? `${GLOB_BUDGET_LOADS_NOTE} ${reason}` : reason });
+          const note = budgets.placement.exhausted ? `${globBudgetLoadsNote(PLACEMENT_GLOB_MATCH_STEPS, 'placing test files')} ` : '';
+          testFileGaps.push({ ref: file, state: 'unresolved', reason: `${note}${reason}` });
         } else {
           const wide = isWideBlastFile(file);
           excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, wide, storyToolPage) });
@@ -556,7 +561,8 @@ export async function computeCoverage(
         packageFolders,
         budgets.steps,
       );
-      gaps.push({ ref: file, state: 'unresolved', reason: budgets.steps.exhausted ? `${GLOB_BUDGET_LOADS_NOTE} ${reason}` : reason });
+      const note = budgets.steps.exhausted ? `${globBudgetLoadsNote(RUN_GLOB_MATCH_STEPS, 'the changed files')} ` : '';
+      gaps.push({ ref: file, state: 'unresolved', reason: `${note}${reason}` });
     }
   }
 
