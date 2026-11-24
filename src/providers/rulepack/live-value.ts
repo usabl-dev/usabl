@@ -236,6 +236,12 @@ export const firstRecognizedRole = resolver.firstRecognizedRole;
 export const ownLiveValue = resolver.ownLiveValue;
 
 /**
+ * The index of the nearest element in a chain that sets a live value, explicitly or through its
+ * role, or -1 when none does. The chain is nearest first.
+ */
+export const nearestLiveSetter = resolver.nearestLiveSetter;
+
+/**
  * The effective live value for a chain of elements, nearest first: the element itself, then its
  * parent, and so on to the root. An empty chain is off.
  */
