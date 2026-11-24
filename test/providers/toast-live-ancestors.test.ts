@@ -297,6 +297,40 @@ describe('pf-toast-live-region: a toast group hidden by an open modal dialog', (
   });
 });
 
+// PatternFly renders the toast group as soon as a toast AlertGroup mounts, before any alert is in it.
+describe('pf-toast-live-region: an empty toast group hidden by an open modal dialog', () => {
+  const APP_ROOT = '<div id="root" aria-hidden="true"><main><h1>Clusters</h1></main></div>';
+  const SHOWN_ROOT = '<div id="root"><main><h1>Clusters</h1></main></div>';
+  const emptyGroup = (portalHidden: boolean): string =>
+    `<div${portalHidden ? ' aria-hidden="true"' : ''}><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"></ul></div>`;
+
+  it('reports one undecided draft on an empty toast group hidden by an open modal', async () => {
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${emptyGroup(true)}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.elementPath).not.toBe('');
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    expect(drafts[0]?.fix).toContain('check whether alerts can appear while this dialog is open');
+    expect(JSON.stringify(drafts[0])).not.toContain('pf-m-toast');
+  });
+
+  it('reports nothing new for the same hidden empty group when no modal is open', async () => {
+    expect(await toastDraftsForBody(`${SHOWN_ROOT}${emptyGroup(true)}`)).toEqual([]);
+  });
+
+  it('reports exactly one draft, from the alert, for a hidden toast group that holds an alert', async () => {
+    const holding = `<div aria-hidden="true"><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${holding}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.whatUserExperiences).toBe('While the open dialog is shown, a screen reader may not announce this alert.');
+  });
+
+  it('reports nothing for an empty toast group that is not hidden while a modal is open', async () => {
+    expect(await toastDraftsForBody(`${APP_ROOT}${emptyGroup(false)}${OPEN_MODAL}`)).toEqual([]);
+  });
+});
+
 describe('pf-toast-live-region: contained alerts stay silent', () => {
   it('passes an alert in a role="status" host that sits inside an aria-live="off" wrapper', async () => {
     // The nearest live value wins, and the status host is nearer than the off wrapper.

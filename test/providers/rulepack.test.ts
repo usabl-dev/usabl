@@ -674,3 +674,67 @@ describe('pf-toast-live-region: a toast group hidden by an open modal dialog', (
     }
   });
 });
+
+describe('pf-toast-live-region: an empty toast group hidden by an open modal dialog', () => {
+  // PatternFly renders the toast group as soon as a toast AlertGroup mounts, before any alert is in
+  // it: a list inside a plain div under the body. A modal sets aria-hidden on that div.
+  const TOAST_GROUP_SELECTOR = '[class~="pf-v6-c-alert-group"][class~="pf-m-toast"]';
+  const group = element('.toast-group');
+  const alertRef = element('.toast-alert');
+  const modal = element('.open-modal');
+  const GROUP_ENTRY = { 'aria-live': 'polite', role: 'list', class: 'pf-v6-c-alert-group pf-m-toast' };
+  const BODY = { 'aria-live': null, role: null };
+  const HTML = { 'aria-live': null, role: null };
+  const HIDDEN_PORTAL = { 'aria-live': null, role: null, 'aria-hidden': 'true' };
+  const SHOWN_PORTAL = { 'aria-live': null, role: null };
+
+  // A page with one toast group, its chain given nearest first. With holdsAlert, an alert sits in
+  // the group. With modalOpen, an exposed role="dialog" aria-modal="true" element is on the page.
+  async function groupDrafts(portal: Record<string, string | null>, modalOpen: boolean, holdsAlert: boolean): Promise<Draft[]> {
+    const groupChain = [GROUP_ENTRY, portal, BODY, HTML];
+    const queryPlan: Record<string, ElementRef[]> = {
+      [TOAST_GROUP_SELECTOR]: [group],
+      ':root > body': [element('body')],
+      ...(modalOpen ? { '[aria-modal]': [modal] } : {}),
+      ...(holdsAlert ? { [SEL.alert]: [alertRef], [`${group.selector} ${SEL.alert}`]: [alertRef] } : {}),
+    };
+    const axPlan: Record<string, AxNode | null> = modalOpen
+      ? { [modal.selector]: { name: 'Edit cluster', role: 'dialog', states: {} } }
+      : {};
+    const ancestors: AncestorPlan = {
+      [group.selector]: groupChain,
+      [alertRef.selector]: [{ 'aria-live': null, role: null, class: 'pf-v6-c-alert' }, { 'aria-live': null, role: 'listitem' }, ...groupChain],
+    };
+    const context = await makeContext(queryPlan, axPlan, undefined, ancestors);
+    const modalAttributes: Record<string, string> = { role: 'dialog', 'aria-modal': 'true' };
+    context.page.getAttribute = async (selector: string, name: string) =>
+      selector === modal.selector ? (modalAttributes[name] ?? null) : null;
+    const output = await makeRulepackProvider().run(context);
+    expect(gapsOf(output)).toEqual([]);
+    return draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+  }
+
+  it('reports one undecided draft on an empty toast group hidden by an open modal', async () => {
+    const drafts = await groupDrafts(HIDDEN_PORTAL, true, false);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', elementPath: '.toast-group' });
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    expect(drafts[0]?.why).toContain('may not be announced');
+    expect(drafts[0]?.fix).toContain('check whether alerts can appear while this dialog is open');
+    expect(JSON.stringify(drafts[0])).not.toContain('pf-m-toast');
+  });
+
+  it('reports nothing new for the same hidden empty group when no modal is open', async () => {
+    expect(await groupDrafts(HIDDEN_PORTAL, false, false)).toEqual([]);
+  });
+
+  it('reports one draft, from the alert, for a hidden toast group that holds an alert', async () => {
+    const drafts = await groupDrafts(HIDDEN_PORTAL, true, true);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', elementPath: '.toast-alert' });
+  });
+
+  it('reports nothing for an empty toast group that is not hidden while a modal is open', async () => {
+    expect(await groupDrafts(SHOWN_PORTAL, true, false)).toEqual([]);
+  });
+});
