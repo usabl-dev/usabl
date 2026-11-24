@@ -24,6 +24,7 @@ import {
 import {
   branchScopeGapText,
   findStartingCommit,
+  scopeGit,
   type ScopeGit,
   type ScopeGitResult,
   type ScopeProblem,
@@ -654,8 +655,122 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
       'rev-parse': ok(COMMIT),
       'merge-base': ok(COMMIT),
       'is-ancestor': { code: 0, stdout: '', stderr: '' },
+      'ls-tree': { code: 0, stdout: 'usabl.config.json\0', stderr: '' },
     });
-    await expect(findStartingCommit(git)).resolves.toEqual({ kind: 'found', branch: 'origin/main', commit: COMMIT });
+    await expect(findStartingCommit(git)).resolves.toEqual({
+      kind: 'found',
+      branch: 'origin/main',
+      commit: COMMIT,
+      policy: 'starting-commit',
+      configOnTrustedBranch: true,
+    });
+  });
+
+  // Where the config is decides where policy is read. Each commit's tree is checked first, then
+  // listed for the config at the root: a name means held, no output means absent.
+  type ConfigAnswer = 'held' | 'absent' | 'tree-missing' | ScopeGitResult;
+  function withConfigAt(answers: { start: ConfigAnswer; tip: ConfigAnswer }): ScopeGit {
+    const TIP = 'd'.repeat(40);
+    const answerFor = (commit: string): ConfigAnswer => (commit === COMMIT ? answers.start : answers.tip);
+    return async (args) => {
+      if (args[0] === 'symbolic-ref') return ok('refs/remotes/origin/main');
+      if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { code: 0, stdout: '', stderr: '' } : ok(COMMIT);
+      if (args[0] === 'cat-file') {
+        const answer = answerFor((args.at(-1) ?? '').replace('^{tree}', ''));
+        return answer === 'tree-missing' ? { code: 128, stdout: '', stderr: 'fatal: Not a valid object name' } : { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'ls-tree') {
+        const answer = answerFor(args.find((arg) => /^[0-9a-f]{40}$/.test(arg)) ?? '');
+        if (answer === 'held') return { code: 0, stdout: 'usabl.config.json\0', stderr: '' };
+        if (answer === 'absent') return { code: 0, stdout: '', stderr: '' };
+        if (answer === 'tree-missing') return { code: 128, stdout: '', stderr: 'fatal: not a tree object' };
+        return answer;
+      }
+      return ok(TIP);
+    };
+  }
+
+  it('reads policy from the branch when neither the starting commit nor the trusted branch holds a config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: 'absent', tip: 'absent' }))).resolves.toMatchObject({
+      kind: 'found',
+      policy: 'branch-sets-usabl-up',
+      configOnTrustedBranch: false,
+    });
+  });
+
+  it('reads a branch older than the setup when only the trusted branch holds a config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: 'absent', tip: 'held' }))).resolves.toMatchObject({
+      kind: 'found',
+      policy: 'branch-older-than-setup',
+      configOnTrustedBranch: true,
+    });
+  });
+
+  it('keeps the starting commit as the policy reference when it holds a config, and says whether the trusted branch does', async () => {
+    for (const tip of ['held', 'absent'] as const) {
+      await expect(findStartingCommit(withConfigAt({ start: 'held', tip }))).resolves.toMatchObject({
+        kind: 'found',
+        policy: 'starting-commit',
+        configOnTrustedBranch: tip === 'held',
+      });
+    }
+  });
+
+  it('reads a config lookup that fails as a git failure, never as no config', async () => {
+    await expect(findStartingCommit(withConfigAt({ start: broken, tip: 'absent' }))).resolves.toMatchObject({
+      kind: 'not-found',
+      problem: 'git-failed',
+      detail: 'fatal: unable to read refs',
+    });
+    await expect(findStartingCommit(withConfigAt({ start: 'absent', tip: broken }))).resolves.toMatchObject({
+      kind: 'not-found',
+      problem: 'git-failed',
+    });
+    await expect(findStartingCommit(withConfigAt({ start: 'held', tip: broken }))).resolves.toMatchObject({
+      kind: 'not-found',
+      problem: 'git-failed',
+    });
+  });
+
+  it('reads a missing tree as a git failure, never as no config', async () => {
+    for (const answers of [
+      { start: 'tree-missing', tip: 'absent' },
+      { start: 'absent', tip: 'tree-missing' },
+    ] as const) {
+      await expect(findStartingCommit(withConfigAt(answers))).resolves.toMatchObject({
+        kind: 'not-found',
+        problem: 'git-failed',
+      });
+    }
+  });
+});
+
+// The same lookups on real git: a tree object deleted from the repository is a git failure, and
+// the config is found at the root wherever git runs.
+describe('findStartingCommit on real git', () => {
+  async function deleteTreeOf(commit: string): Promise<void> {
+    const tree = git('rev-parse', `${commit}^{tree}`).trim();
+    await rm(join(repo, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+  }
+
+  it('reads a deleted tree object at the starting commit as a git failure', async () => {
+    recordTrustedBranch();
+    git('switch', '-q', '-c', 'feature');
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('commit', '-q', '-am', 'change the app');
+    await deleteTreeOf('main');
+
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+  });
+
+  it('finds the config at the root from a subfolder', async () => {
+    recordTrustedBranch();
+    await mkdir(join(repo, 'src', 'deep'), { recursive: true });
+    await expect(findStartingCommit(scopeGit(join(repo, 'src', 'deep')))).resolves.toMatchObject({
+      kind: 'found',
+      policy: 'starting-commit',
+      configOnTrustedBranch: true,
+    });
   });
 });
 

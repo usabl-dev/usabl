@@ -19,7 +19,7 @@ import {
   unrecognizedRunLine,
 } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
-import type { CheckCommand } from './stop-hook-scope.js';
+import { POLICY_FROM_BRANCH_VERDICT_NOTE, type CheckCommand } from './stop-hook-scope.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -43,6 +43,46 @@ export interface HookContext {
   // parentheses, so a reader who skips the note that follows still sees it. Absent means a trusted
   // branch was found.
   noTrustedBranch?: boolean;
+  // True when the stop read the branch's own policy, because the branch sets usabl up: neither the
+  // trusted branch nor the starting commit has a config. A VERIFIED or idle line then says so in
+  // its brackets, so the line alone never reads as a pass under approved policy.
+  policyFromBranch?: boolean;
+  // True when CLAUDE_PROJECT_DIR named a folder outside any repository and the hook checked the
+  // repository the assistant stopped in instead. Every verdict line then says so in its brackets,
+  // because that repository may not be the one the session changed.
+  repositoryFromOwnFolder?: boolean;
+}
+
+/**
+ * The note a verdict line carries when the hook checked the repository the assistant stopped in,
+ * because CLAUDE_PROJECT_DIR named a folder outside any repository.
+ */
+export const OWN_REPOSITORY_VERDICT_NOTE = 'checked the repository the assistant stopped in';
+
+/**
+ * The notes a VERIFIED or idle line carries in its brackets, joined, or undefined for none. The
+ * order is fixed: session drift, then the branch's own policy, then the repository the assistant
+ * stopped in, then no trusted branch. Each note is added whenever its flag is set, so a line never
+ * drops one for another.
+ */
+function passNotes(notes: {
+  sessionDriftChecked?: boolean;
+  policyFromBranch?: boolean;
+  repositoryFromOwnFolder?: boolean;
+  noTrustedBranch?: boolean;
+}): string | undefined {
+  const parts = [
+    ...(notes.sessionDriftChecked === false ? [DRIFT_NOT_CHECKED] : []),
+    ...(notes.policyFromBranch === true ? [POLICY_FROM_BRANCH_VERDICT_NOTE] : []),
+    ...(notes.repositoryFromOwnFolder === true ? [OWN_REPOSITORY_VERDICT_NOTE] : []),
+    ...(notes.noTrustedBranch === true ? [NO_TRUSTED_BRANCH_WARNING] : []),
+  ];
+  return parts.length === 0 ? undefined : parts.join(', ');
+}
+
+/** The note every other verdict line carries in its brackets, or undefined for none. */
+function decisionNote(ctx: HookContext): string | undefined {
+  return ctx.repositoryFromOwnFolder === true ? OWN_REPOSITORY_VERDICT_NOTE : undefined;
 }
 
 /**
@@ -70,15 +110,6 @@ const DRIFT_NOT_CHECKED = 'session drift not checked';
  * the decision names what was not checked and the next step.
  */
 export const NO_TRUSTED_BRANCH_WARNING = 'no trusted branch found to compare policy with; see the note below';
-
-// The notes an allow line carries in its parentheses, in order, or undefined when there are none.
-function passNotes(sessionDriftChecked: boolean | undefined, noTrustedBranch: boolean | undefined): string | undefined {
-  const notes = [
-    ...(sessionDriftChecked === false ? [DRIFT_NOT_CHECKED] : []),
-    ...(noTrustedBranch === true ? [NO_TRUSTED_BRANCH_WARNING] : []),
-  ];
-  return notes.length === 0 ? undefined : notes.join(', ');
-}
 
 export interface StopDecision {
   block: boolean;
@@ -248,9 +279,9 @@ function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
  * means for the change. Every part is an engine constant chosen by the verdict, or the exit code
  * once it is checked to be a whole number, so it is trusted scaffold and never framed.
  */
-function verdictLine(result: Result, meaningPrefix: string): string {
+function verdictLine(result: Result, meaningPrefix: string, note?: string): string {
   const verdict = describeVerdict(result);
-  return `${formatVerdictWord(verdict)}: ${meaningPrefix}${verdict.meaning}`;
+  return `${formatVerdictWord(verdict, note)}: ${meaningPrefix}${verdict.meaning}`;
 }
 
 /**
@@ -293,7 +324,7 @@ function summaryPiece(result: Result): string {
  * block of untrusted text.
  */
 function buildBlockMessage(result: Result, ctx: HookContext, config?: UsablConfig): string {
-  const scaffold = [verdictLine(result, 'NOT verified. ')];
+  const scaffold = [verdictLine(result, 'NOT verified. ', decisionNote(ctx))];
   const budget = resolveNoiseBudgetDefault(config);
   // The barriers this block is about are the ones the gate blocks on, by the gate's own rule.
   const gating = result.findings.filter(isBlockingBarrier);
@@ -354,6 +385,12 @@ export interface StoredReceiptPinState {
   // False when this stop did not compare pins it should have, for example because the pin store
   // refused. The line then carries the same note a full run's allow line does.
   sessionDriftChecked: boolean;
+  // True when the stop read the branch's own policy because the branch sets usabl up. The line
+  // then says so, as a full run's line does. Absent means false.
+  policyFromBranch?: boolean;
+  // True when the hook checked the repository the assistant stopped in, because CLAUDE_PROJECT_DIR
+  // named a folder outside any repository. The line then says so. Absent means false.
+  repositoryFromOwnFolder?: boolean;
   // True when git records no trusted branch. The line then carries NO_TRUSTED_BRANCH_WARNING.
   noTrustedBranch?: boolean;
 }
@@ -381,7 +418,7 @@ export function formatStoredReceiptAllow(
   sourceTree: unknown,
   pins: StoredReceiptPinState = { pinsCompared: false, sessionDriftChecked: true },
 ): string {
-  const notes = passNotes(pins.sessionDriftChecked, pins.noTrustedBranch);
+  const notes = passNotes(pins);
   const note = notes === undefined ? '' : `, ${notes}`;
   const pinClause = pins.pinsCompared ? ' Guarded policy files match the session pins.' : '';
   const line =
@@ -426,7 +463,7 @@ function divergedPolicyDecision(result: Result, diverged: string[], ctx: HookCon
   const continuation = ctx.stopHookActive;
   const verdict = describeVerdict(result);
   const opening =
-    `${formatVerdictWord(verdict)}: NOT verified. ` +
+    `${formatVerdictWord(verdict, decisionNote(ctx))}: NOT verified. ` +
     (continuation ? 'usabl let this stop through without blocking again (continuation already active). ' : '') +
     `Guarded policy files changed, so this change needs approval whatever the run found. The run said: ${verdict.meaning}`;
   // approvalOnly names no check, so the check this wording set takes does not matter here.
@@ -456,7 +493,7 @@ export function evaluateStopDecision(
   config?: UsablConfig,
 ): StopDecision {
   const safe = scrubResult(result);
-  const passNote = passNotes(ctx.sessionDriftChecked, ctx.noTrustedBranch);
+  const passNote = passNotes(ctx);
   const check = ctx.checkCommand ?? 'usabl check';
 
   // Diverged guarded policy blocks whatever the exit code. The blocking verdicts carry it in their
@@ -503,7 +540,7 @@ export function evaluateStopDecision(
       block: false,
       message: assembleBoundedMessage({
         scaffold: [
-          `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
+          `${formatVerdictWord(verdict, decisionNote(ctx))}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
           `Next: run ${check} again, or check the change by hand, before you call this change accessible.`,
         ],
         keep: 2,
@@ -575,6 +612,7 @@ export function evaluateStopDecision(
       verdictLine(
         safe,
         'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
+        decisionNote(ctx),
       ),
     ];
     const step = chooseNextStep(safe, continuationSteps(check));

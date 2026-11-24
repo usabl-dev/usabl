@@ -212,8 +212,8 @@ export function formatVerdictWord(line: VerdictLine, note?: string): string {
   return `${line.word} (exit ${formatExitCode(line.exitCode)}${suffix})`;
 }
 
-/** The full verdict line: symbol, word, and exit code. */
-export function formatVerdictLine(line: VerdictLine): string {
+/** The full verdict line: symbol, word, and exit code, with the note in the brackets when given. */
+export function formatVerdictLine(line: VerdictLine, note?: string): string {
   const symbol = line.symbol.length > 0 ? `${line.symbol} ` : '';
-  return `${symbol}${formatVerdictWord(line)}`;
+  return `${symbol}${formatVerdictWord(line, note)}`;
 }

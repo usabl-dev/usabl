@@ -49,6 +49,8 @@ import {
   branchScopeGapText,
   checkCommandFor,
   findStartingCommit,
+  olderThanSetupText,
+  POLICY_FROM_BRANCH_VERDICT_NOTE,
   resolveBranchScope,
   scopeGit,
 } from './surfaces/stop-hook-scope.js';
@@ -1012,27 +1014,37 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     let changedFiles: string[] | undefined;
     let baseRevision: string | null = null;
+    let scopePolicyRef: string | null = null;
+    let policyFromBranch = false;
     let scopeNote: string | null = null;
     if (opts.trustedRef !== null) {
       changedFiles = await listChangedFiles(deps.git, opts.trustedRef);
     } else if (opts.branchScope) {
       // The Stop hook's scope, found by the same function, so the receipt binds the same starting
       // commit and the next stop of this tree answers from it. A gap checks nothing and never
-      // exits 0, so it cannot read as a clean check.
+      // exits 0, so it cannot read as a clean check. Neither does a branch older than the setup.
       const scope = await resolveBranchScope(() => findStartingCommit(scopeGit(process.cwd())), deps.git);
       if (scope.kind === 'gap') {
         process.stderr.write(branchScopeGapText(scope) + '\n');
         return 4;
       }
+      if (scope.kind === 'older-than-setup') {
+        process.stderr.write(olderThanSetupText(scope) + '\n');
+        return 4;
+      }
       changedFiles = scope.changedFiles;
       baseRevision = scope.baseRevision;
+      scopePolicyRef = scope.policyRef;
+      policyFromBranch = scope.policyFromBranch;
       scopeNote = scope.note;
     }
 
     // With a starting commit, policy is read and guarded at that commit, as the Stop hook and CI
-    // read it, so a policy change committed on the branch is a guarded change here too. Deps are
-    // still built without a trusted ref, so a saved session still signs the scan in.
-    const policyRef = opts.trustedRef ?? baseRevision;
+    // read it, so a policy change committed on the branch is a guarded change here too. On a
+    // branch that sets usabl up there is no policy there, so the branch's own is read, and the
+    // verdict line says it is not approved yet. Deps are still built without a trusted ref, so a
+    // saved session still signs the scan in.
+    const policyRef = opts.trustedRef ?? scopePolicyRef;
     const ran = await run(deps, config, {
       ...(policyRef === null ? {} : { trustedRef: policyRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
@@ -1075,7 +1087,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       process.stdout.write(advisory.message + '\n');
       return advisory.advisoryExitCode;
     }
-    const projected = projectCli(result);
+    const projected = projectCli(result, policyFromBranch ? { verdictNote: POLICY_FROM_BRANCH_VERDICT_NOTE } : {});
     if (opts.json) {
       process.stdout.write(projected.json + '\n');
       return projected.exitCode;
@@ -1083,7 +1095,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // A local run has no pull request to approve on, so it also says how to clear the state here.
     const nextSteps =
       opts.trustedRef === null
-        ? localApprovalNextSteps(result, baseRevision === null ? 'last-commit' : 'starting-commit')
+        ? localApprovalNextSteps(result, policyRef === null ? 'last-commit' : 'starting-commit')
         : [];
     process.stdout.write([projected.text, ...nextSteps].join('\n') + '\n');
     return projected.exitCode;

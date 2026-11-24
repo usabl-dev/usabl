@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { AGENT_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
-import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
+import {
+  evaluateStopDecision,
+  formatStoredReceiptAllow,
+  NO_TRUSTED_BRANCH_WARNING,
+  OWN_REPOSITORY_VERDICT_NOTE,
+} from '../../src/surfaces/stop-hook.js';
+import { POLICY_FROM_BRANCH_VERDICT_NOTE } from '../../src/surfaces/stop-hook-scope.js';
 import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
@@ -1338,5 +1344,48 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
         'Next: fix each barrier below, then stop again so usabl can re-check the change.',
       );
     });
+  });
+});
+
+// Two changes each add a note to the same brackets: the branch's own policy and the repository the
+// assistant stopped in, and the no trusted branch warning. When several hold, every one is kept,
+// in a fixed order.
+describe('the notes in an allow line come in a fixed order and none is dropped', () => {
+  const allNotes = {
+    sessionDriftChecked: false,
+    policyFromBranch: true,
+    repositoryFromOwnFolder: true,
+    noTrustedBranch: true,
+  } as const;
+  const ordered = [
+    'session drift not checked',
+    POLICY_FROM_BRANCH_VERDICT_NOTE,
+    OWN_REPOSITORY_VERDICT_NOTE,
+    NO_TRUSTED_BRANCH_WARNING,
+  ].join(', ');
+
+  it('a VERIFIED line and an idle line carry every note in order', () => {
+    const verified = evaluateStopDecision(baseResult({}), { stopHookActive: false, ...allNotes });
+    expect(verified.message.startsWith(`VERIFIED (exit 0, ${ordered}): the gate verified this change.`)).toBe(true);
+    const idle = evaluateStopDecision(
+      baseResult({
+        verdict: null,
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+      }),
+      { stopHookActive: false, ...allNotes },
+    );
+    expect(idle.message.startsWith(`NO VERDICT: IDLE (exit 0, ${ordered}):`)).toBe(true);
+  });
+
+  it('a stored receipt line carries every note in order after "not re-scanned"', () => {
+    const line = formatStoredReceiptAllow('tree-a', { pinsCompared: false, ...allNotes });
+    expect(line.startsWith(`VERIFIED (exit 0, stored receipt, not re-scanned, ${ordered}): `)).toBe(true);
+  });
+
+  it('keeps the no trusted branch warning when only it and one other note hold', () => {
+    for (const other of [{ policyFromBranch: true }, { repositoryFromOwnFolder: true }]) {
+      const decision = evaluateStopDecision(baseResult({}), { stopHookActive: false, noTrustedBranch: true, ...other });
+      expect(decision.message.split('\n')[0], JSON.stringify(other)).toContain(`, ${NO_TRUSTED_BRANCH_WARNING}): `);
+    }
   });
 });

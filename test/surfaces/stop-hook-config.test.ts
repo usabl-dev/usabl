@@ -534,6 +534,46 @@ describe('Stop hook reads the config at the repository root, through the real po
     expect(reason).toContain('does not parse');
   });
 
+  // A session started in a parent folder that is not a repository sets CLAUDE_PROJECT_DIR there.
+  // The hook then uses the work tree it runs in, in both protocols, so the stop still checks.
+  for (const cursorMode of [false, true]) {
+    const protocol = cursorMode ? 'Cursor' : 'Claude Code';
+    it(`uses the work tree the hook runs in when CLAUDE_PROJECT_DIR is in no work tree (${protocol})`, async () => {
+      await writeFile(join(repo, 'usabl.config.json'), CORRUPT);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'init');
+      const outside = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-parent-')));
+      try {
+        const h = realPorts(join(repo, 'packages', 'web'), { CLAUDE_PROJECT_DIR: outside });
+        expect(h.base.cwd()).toBe(repo);
+        await runStopHookFromStdin(stopInput(false), h.ports, { cursorMode });
+        const payload = JSON.parse(h.stdout().trim()) as { decision?: string; reason?: string; followup_message?: string };
+        const reason = cursorMode ? payload.followup_message : payload.reason;
+        expect(reason).toContain('approval required');
+        expect(reason).toContain('does not parse');
+        expect(h.stderr()).not.toContain('outside any git work tree');
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it('keeps the outside notice, naming CLAUDE_PROJECT_DIR, when neither folder is in a work tree', async () => {
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-parent-')));
+    const start = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-start-')));
+    try {
+      const h = realPorts(start, { CLAUDE_PROJECT_DIR: outside });
+      expect(h.base.cwd()).toBe(outside);
+      await runStopHookFromStdin(stopInput(false), h.ports);
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      expect(h.stderr()).toContain('outside any git work tree');
+      expect(h.stderr()).toContain(`folder: ${outside}`);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+      await rm(start, { recursive: true, force: true });
+    }
+  });
+
   it('ignores a CLAUDE_PROJECT_DIR that does not name a folder', async () => {
     await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
     git('add', '-A');
