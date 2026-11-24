@@ -3,6 +3,7 @@
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
 import { importMayLoad, MAX_BRACE_ALTERNATIVES, type PackageFolders, type UnresolvableImport } from './import-graph.js';
+import { MAX_GLOB_LENGTH, MAX_GLOB_PATTERN_CHARACTERS, MAX_GLOB_PATTERNS } from '../intake/glob-list-bounds.js';
 
 const MAX_DETAIL_LINES = 3;
 
@@ -19,6 +20,12 @@ function globWhich(entry: Extract<UnresolvableImport, { kind: 'glob-import' }>):
       return (
         'and one of its patterns has a part usabl cannot evaluate (a nested or unbalanced brace, more than ' +
         `${MAX_BRACE_ALTERNATIVES} brace alternatives, an escaped brace or comma, or a .. after a glob segment), so it may load any file`
+      );
+    }
+    if (entry.unread === 'size') {
+      return (
+        `and its patterns are past the size bounds usabl matches (a pattern longer than ${String(MAX_GLOB_LENGTH)} characters, ` +
+        `or more than ${String(MAX_GLOB_PATTERNS)} patterns or ${String(MAX_GLOB_PATTERN_CHARACTERS).replace(/\B(?=(\d{3})+$)/g, ',')} characters in all), so it may load any file`
       );
     }
     return 'and its argument is not a string or a list of strings that usabl can read, so it may load any file';

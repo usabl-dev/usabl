@@ -8,7 +8,8 @@
 import { builtinModules } from 'node:module';
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
-import { braceRangeIn, expandBraces, matchGlob, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { globListBoundProblem } from '../intake/glob-list-bounds.js';
 import { commentRanges, syntaxForFile } from '../primitives/source-ast.js';
 import {
   type AliasConfig,
@@ -59,9 +60,10 @@ export type UnresolvableImport =
       // none.
       underEveryFolder?: string[];
       // Why the patterns are null: the argument is not a string or a list of strings, the
-      // options set `base`, a pattern starts in a way usabl cannot resolve, or a pattern has a
-      // part usabl cannot read exactly (see braceAlternatives). Absent otherwise.
-      unread?: 'argument' | 'base' | 'start' | 'pattern';
+      // options set `base`, a pattern starts in a way usabl cannot resolve, a pattern has a
+      // part usabl cannot read exactly (see braceAlternatives), or the patterns are past the size
+      // bounds of the policy glob lists (see globListBoundProblem). Absent otherwise.
+      unread?: 'argument' | 'base' | 'start' | 'pattern' | 'size';
       // The patterns, as written, that hold syntax the glob matcher does not evaluate, such as a
       // character class. Each is read as every file in the folder above that syntax, sorted.
       // Absent when there is none.
@@ -631,7 +633,7 @@ function pathsBelowEachFolder(file: string): string[] {
 
 function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
   const { aliases, baseUrlDirs, rootedUnderEveryFolder } = context;
-  const open = (unread: 'argument' | 'base' | 'start' | 'pattern'): UnresolvableImport => ({
+  const open = (unread: 'argument' | 'base' | 'start' | 'pattern' | 'size'): UnresolvableImport => ({
     importer,
     specifier: call.text,
     kind: 'glob-import',
@@ -639,6 +641,16 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
     unread,
   });
   if (call.patterns === null) return open(call.base === true ? 'base' : 'argument');
+  // The patterns come from source code, so they have the bounds of the policy glob lists, counted
+  // before anything is expanded. Past one, the call may load any file. A pattern whose braces
+  // usabl cannot read, or that has more than the cap of brace alternatives, is left to
+  // braceAlternatives below, which reads it as one that may load any file too.
+  const positive = call.patterns.filter((candidate) => !candidate.startsWith('!'));
+  const expandable = positive.filter((pattern) => {
+    const count = countBraceExpansions(pattern);
+    return count !== null && count <= MAX_BRACE_ALTERNATIVES;
+  });
+  if (globListBoundProblem(expandable) !== null) return open('size');
   const resolved: string[] = [];
   const rooted: string[] = [];
   const widened: string[] = [];
@@ -653,7 +665,7 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
     }
   };
   // A negative pattern only takes files away, so leaving it out can only name more files.
-  for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
+  for (const pattern of positive) {
     // The braces are expanded first, so a .. or an alias inside an alternative is resolved.
     const alternatives = braceAlternatives(pattern);
     if (alternatives === null) return open('pattern');
@@ -722,6 +734,25 @@ function loaderEntries(importer: string, calls: readonly LoaderCall[], context: 
   return entries;
 }
 
+// The matchers of a glob entry, built the first time the entry is tested and kept with it, so a
+// run builds each pattern once, not once for each file it tests.
+const builtGlobMatchers = new WeakMap<object, { patterns: ((file: string) => boolean)[]; below: ((file: string) => boolean)[] }>();
+
+function globEntryMatchers(
+  entry: Extract<UnresolvableImport, { kind: 'glob-import' }>,
+  patterns: readonly string[],
+): { patterns: ((file: string) => boolean)[]; below: ((file: string) => boolean)[] } {
+  let built = builtGlobMatchers.get(entry);
+  if (built === undefined) {
+    built = {
+      patterns: patterns.map((pattern) => globMatcher(pattern)),
+      below: (entry.underEveryFolder ?? []).map((pattern) => globMatcher(pattern)),
+    };
+    builtGlobMatchers.set(entry, built);
+  }
+  return built;
+}
+
 // Whether a path segment of a file starts with `start`: `tests/` names src/tests/Widget.tsx.
 function pathHasSegmentStart(file: string, start: string): boolean {
   return `/${file}`.includes(`/${start}`);
@@ -737,9 +768,10 @@ function pathHasSegmentStart(file: string, start: string): boolean {
  */
 export function importMayLoad(entry: UnresolvableImport, file: string, packageFolders: PackageFolders = new Map()): boolean {
   if (entry.kind === 'glob-import') {
-    if (entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file))) return true;
-    const below = entry.underEveryFolder ?? [];
-    return below.length > 0 && pathsBelowEachFolder(file).some((tail) => below.some((pattern) => matchGlob(pattern, tail)));
+    if (entry.patterns === null) return true;
+    const { patterns, below } = globEntryMatchers(entry, entry.patterns);
+    if (patterns.some((matches) => matches(file))) return true;
+    return below.length > 0 && pathsBelowEachFolder(file).some((tail) => below.some((matches) => matches(tail)));
   }
   if (entry.kind === 'dynamic-import') {
     return (
