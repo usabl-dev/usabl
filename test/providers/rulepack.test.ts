@@ -690,11 +690,19 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
 
   // A page with one toast group, its chain given nearest first. With holdsAlert, an alert sits in
   // the group. With modalOpen, an exposed role="dialog" aria-modal="true" element is on the page.
-  async function groupDrafts(portal: Record<string, string | null>, modalOpen: boolean, holdsAlert: boolean): Promise<Draft[]> {
+  // With strayBesideBody, an element sits under the html element beside the body, so the rule
+  // cannot tell which entry of a chain is the body's child.
+  async function groupDrafts(
+    portal: Record<string, string | null>,
+    modalOpen: boolean,
+    holdsAlert: boolean,
+    strayBesideBody = false,
+  ): Promise<Draft[]> {
     const groupChain = [GROUP_ENTRY, portal, BODY, HTML];
     const queryPlan: Record<string, ElementRef[]> = {
       [TOAST_GROUP_SELECTOR]: [group],
       ':root > body': [element('body')],
+      ...(strayBesideBody ? { ':root > :not(head):not(body)': [element('.stray')] } : {}),
       ...(modalOpen ? { '[aria-modal]': [modal] } : {}),
       ...(holdsAlert ? { [SEL.alert]: [alertRef], [`${group.selector} ${SEL.alert}`]: [alertRef] } : {}),
     };
@@ -736,5 +744,18 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
 
   it('reports nothing for an empty toast group that is not hidden while a modal is open', async () => {
     expect(await groupDrafts(SHOWN_PORTAL, true, false)).toEqual([]);
+  });
+
+  it('reports unverified, naming the open modal, when it cannot tell which element is the child of the body', async () => {
+    // The alert check gives this draft for an alert in the same state. The empty group gets it too.
+    const drafts = await groupDrafts(HIDDEN_PORTAL, true, false, true);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', elementPath: '.toast-group' });
+    expect(drafts[0]?.why).toContain('open modal dialog');
+    expect(JSON.stringify(drafts[0])).not.toContain('pf-m-toast');
+  });
+
+  it('reports nothing for a hidden empty group with no modal open, even when it cannot name the body child', async () => {
+    expect(await groupDrafts(HIDDEN_PORTAL, false, false, true)).toEqual([]);
   });
 });
