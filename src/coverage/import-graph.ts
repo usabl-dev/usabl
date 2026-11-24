@@ -754,56 +754,111 @@ export function importMayLoad(entry: UnresolvableImport, file: string, packageFo
   if (entry.kind === 'package-subpath') {
     return entry.packageDir === null || file.startsWith(`${entry.packageDir}/`);
   }
+  const { lastSegments, names } = namesOf(entry);
+  const own = fileNamesOf(file);
   // The plain comparison: the last segment as written, with or without its extension, against the
   // file's name in its own letter case. It is kept as it is, so every file it names stays named.
-  if (importLastSegments(entry.specifier).includes(nameInItsCase(file))) return true;
-  const names = importNames(entry.importer, entry.specifier);
+  if (lastSegments.includes(own.inItsCase)) return true;
   // An import whose path names no file by name, such as '@/', may load any file.
   if (names === null) return true;
-  if ([importName(file), nameInItsCase(file)].some((name) => names.includes(name.toLowerCase()))) return true;
+  if (own.lowered.some((name) => names.has(name))) return true;
   // An import of a folder that holds a package.json loads the file its main or exports field names:
   // any file in that folder, such as Dashboard/view.tsx for '@/tests/Dashboard', or a file outside
   // it that the field names.
   for (const [dir, folder] of packageFolders) {
-    if (!names.includes(path.basename(dir).toLowerCase())) continue;
+    if (!names.has(path.basename(dir).toLowerCase())) continue;
     if (file.startsWith(`${dir}/`) || folder.targets === null) return true;
-    if (folder.targets.some((target) => targetMayBe(target, file))) return true;
+    if (targetsMayName(folder.targets, file)) return true;
   }
   return false;
 }
 
+// What an unresolved import names, worked out once per import: placement asks about every file
+// for every import, and the names do not change. Keyed by the entry, so it holds no import that is
+// no longer in use.
+interface ImportNamesOf {
+  lastSegments: readonly string[];
+  names: ReadonlySet<string> | null;
+}
+const NAMES_OF = new WeakMap<UnresolvableImport, ImportNamesOf>();
+
+// The names of a file, kept for the last file asked about. Callers ask about one file for every
+// import in turn, so this works each file's names out once for all of them.
+interface FileNames {
+  file: string;
+  inItsCase: string;
+  lowered: readonly string[];
+}
+let lastFileNames: FileNames | null = null;
+
+function fileNamesOf(file: string): FileNames {
+  if (lastFileNames?.file !== file) {
+    const inItsCase = nameInItsCase(file);
+    lastFileNames = { file, inItsCase, lowered: [importName(file).toLowerCase(), inItsCase.toLowerCase()] };
+  }
+  return lastFileNames;
+}
+
+function namesOf(entry: UnresolvableImport): ImportNamesOf {
+  let found = NAMES_OF.get(entry);
+  if (found === undefined) {
+    const names = importNames(entry.importer, entry.specifier);
+    found = { lastSegments: importLastSegments(entry.specifier), names: names === null ? null : new Set(names) };
+    NAMES_OF.set(entry, found);
+  }
+  return found;
+}
+
 /**
- * What a folder's package.json says the folder loads. `targets` are the paths its main, module,
- * browser, and exports fields name, written relative to the repository root. A path with a * names
- * every file whose path starts with the part before the *. Null when the file is not a JSON
- * object, so the folder may load any file.
+ * What a folder's package.json says the folder loads: the paths its main, module, browser, and
+ * exports fields name, written relative to the repository root and in lower case. `exact` holds the
+ * plain paths. `prefixes` holds, for each path with a *, the part before the *, which names every
+ * file whose path starts with it. `targets` is null when the file is not a JSON object, or is
+ * nested deeper or holds more values than usabl reads, so the folder may load any file.
  */
 export interface PackageFolder {
-  targets: string[] | null;
+  targets: { exact: ReadonlySet<string>; prefixes: readonly string[] } | null;
 }
 
 /** The folders that hold a package.json, by folder path. */
 export type PackageFolders = ReadonlyMap<string, PackageFolder>;
 
 // Whether a path a package.json names may be the file: the file itself, the file without its
-// extension, which the bundler adds, or a folder whose index file it is. Letter case is ignored.
-function targetMayBe(target: string, file: string): boolean {
-  const wanted = target.toLowerCase();
+// extension, which the bundler adds, a folder whose index file it is, or a path with a * that
+// covers it. Letter case is ignored.
+function targetsMayName(targets: NonNullable<PackageFolder['targets']>, file: string): boolean {
   const lowered = file.toLowerCase();
-  const star = wanted.indexOf('*');
-  if (star !== -1) return lowered.startsWith(wanted.slice(0, star));
   const stem = lowered.replace(/\.[^./]*$/u, '');
-  return lowered === wanted || stem === wanted || (path.dirname(lowered) === wanted && path.basename(stem) === 'index');
+  if (targets.exact.has(lowered) || targets.exact.has(stem)) return true;
+  if (path.basename(stem) === 'index' && targets.exact.has(path.dirname(lowered))) return true;
+  return targets.prefixes.some((prefix) => lowered.startsWith(prefix));
 }
 
 const PACKAGE_ENTRY_FIELDS = ['main', 'module', 'browser', 'exports'];
+// The deepest nesting and the most values usabl reads in those fields. Real fields are a few levels
+// deep and hold a few thousand values at most. A file past either limit may load any file.
+export const MAX_PACKAGE_FIELD_DEPTH = 64;
+export const MAX_PACKAGE_FIELD_VALUES = 100_000;
 
-// Every string inside a package.json field, at any depth of an object or an array.
-function stringsIn(value: unknown): string[] {
-  if (typeof value === 'string') return [value];
-  if (Array.isArray(value)) return value.flatMap(stringsIn);
-  if (typeof value === 'object' && value !== null) return Object.values(value).flatMap(stringsIn);
-  return [];
+// Every string inside the package.json fields, at any depth of an object or an array, or null when
+// the fields are nested deeper than MAX_PACKAGE_FIELD_DEPTH or hold more than
+// MAX_PACKAGE_FIELD_VALUES values. The walk keeps its own list of values to visit, so a deeply
+// nested file cannot overflow the call stack.
+function stringsIn(fields: readonly unknown[]): string[] | null {
+  const found: string[] = [];
+  const pending: Array<{ value: unknown; depth: number }> = fields.map((value) => ({ value, depth: 1 }));
+  let visited = 0;
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    visited += 1;
+    if (visited > MAX_PACKAGE_FIELD_VALUES || next.depth > MAX_PACKAGE_FIELD_DEPTH) return null;
+    const { value, depth } = next;
+    if (typeof value === 'string') {
+      found.push(value);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const item of Array.isArray(value) ? value : Object.values(value)) pending.push({ value: item, depth: depth + 1 });
+    }
+  }
+  return found;
 }
 
 function packageFolderOf(dir: string, text: string): PackageFolder {
@@ -815,8 +870,17 @@ function packageFolderOf(dir: string, text: string): PackageFolder {
   }
   if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return { targets: null };
   const fields = manifest as Record<string, unknown>;
-  const targets = PACKAGE_ENTRY_FIELDS.flatMap((field) => stringsIn(fields[field])).map((target) => path.normalize(path.join(dir, target)));
-  return { targets: [...new Set(targets)].sort() };
+  const strings = stringsIn(PACKAGE_ENTRY_FIELDS.map((field) => fields[field]));
+  if (strings === null) return { targets: null };
+  const exact = new Set<string>();
+  const prefixes = new Set<string>();
+  for (const value of strings) {
+    const target = path.normalize(path.join(dir, value)).toLowerCase();
+    const star = target.indexOf('*');
+    if (star === -1) exact.add(target);
+    else prefixes.add(target.slice(0, star));
+  }
+  return { targets: { exact, prefixes: [...prefixes].sort() } };
 }
 
 /**
@@ -830,7 +894,7 @@ export async function readPackageFolders(
   loads: readonly UnresolvableImport[],
   known: Map<string, PackageFolder | null>,
 ): Promise<PackageFolders> {
-  const wanted = new Set(loads.flatMap((entry) => (namesFilesByName(entry) ? (importNames(entry.importer, entry.specifier) ?? []) : [])));
+  const wanted = new Set(loads.flatMap((entry) => (namesFilesByName(entry) ? [...(namesOf(entry).names ?? [])] : [])));
   if (wanted.size > 0) {
     const dirs = [...new Set(files.flatMap(foldersAbove))].sort();
     for (const dir of dirs) {

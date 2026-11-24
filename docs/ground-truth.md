@@ -1838,7 +1838,8 @@ in this order:
      import also names each file below a folder of its name that holds a `package.json`, and each
      file that package.json's `main`, `module`, `browser`, or `exports` field names, inside the
      folder or outside it, because a bundler loads the folder through those fields. A package.json
-     that is not a JSON object may make the folder load any file. Only folders above the files usabl
+     that is not a JSON object, or whose fields are nested more than 64 levels deep or hold more
+     than 100000 values, may make the folder load any file. Only folders above the files usabl
      considers are read, and only those whose name an import names;
    - an `import.meta.glob` or `import.meta.globEager` call whose pattern matches it. A string
      with a backslash escape is read as the string it is. Brace groups are expanded first, and each

@@ -332,6 +332,42 @@ describe('a changed file under a test folder that an unresolved import may reach
     expect(coverage.unresolvedFiles).toEqual([screen]);
   });
 
+  // A package.json nested deeper than usabl reads is a folder that may load any file. It is a gap,
+  // never a crash of the run.
+  const deepExports: Array<[string, string]> = [
+    ['arrays 200000 deep', `{"exports":${'['.repeat(200000)}"./x.tsx"${']'.repeat(200000)}}`],
+    ['objects 50000 deep', `{"exports":${'{"a":'.repeat(50000)}"./x.tsx"${'}'.repeat(50000)}}`],
+  ];
+  for (const [label, manifest] of deepExports) {
+    it(`is a gap, not a crash, when a folder's exports field is nested ${label}`, async () => {
+      const screen = 'src/tests/Screens/view.tsx';
+      const tree = treeWith(aliasHome, {
+        [screen]: 'export function Dashboard() { return <main /> }\n',
+        'src/tests/Dashboard/package.json': `${manifest}\n`,
+      });
+      const coverage = await computeCoverage(depsOf(tree).fs, config, [screen]);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.unresolvedFiles).toEqual([screen]);
+      const result = await run(depsOf(tree), config, { changedFiles: [screen] });
+      expect(result.verdict).toBe('not_covered');
+    });
+  }
+
+  it("keeps a file excluded that a folder's exports map does not name", async () => {
+    const helper = 'src/tests/Screens/helper.ts';
+    const exportsMap = { '.': { import: './esm/index.js', require: './cjs/index.cjs' }, './view': ['../Screens/view.tsx'] };
+    const tree = treeWith(aliasHome, {
+      [helper]: 'export const helper = 1;\n',
+      'src/tests/Screens/view.tsx': 'export function Dashboard() { return <main /> }\n',
+      'src/tests/Dashboard/package.json': `${JSON.stringify({ exports: exportsMap })}\n`,
+    });
+    const coverage = await computeCoverage(depsOf(tree).fs, config, [helper]);
+    expect(coverage.nothingToCheck).toBe(true);
+    expect((coverage.excludedFiles ?? []).map((entry) => entry.ref)).toEqual([helper]);
+    const named = await computeCoverage(depsOf(tree).fs, config, ['src/tests/Screens/view.tsx']);
+    expect(named.unresolvedFiles).toEqual(['src/tests/Screens/view.tsx']);
+  });
+
   it("keeps a file excluded that a folder's main field does not name", async () => {
     const helper = 'src/tests/Screens/helper.ts';
     const tree = treeWith(aliasHome, {
