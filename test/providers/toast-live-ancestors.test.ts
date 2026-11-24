@@ -235,6 +235,116 @@ describe('pf-toast-live-region: alerts behind an open modal dialog', () => {
   });
 });
 
+// A toast group under the body, as PatternFly places it. A PatternFly modal sets aria-hidden on
+// every other child of the body while it is open, so the toast group is hidden with the app root.
+describe('pf-toast-live-region: a toast group hidden by an open modal dialog', () => {
+  const APP_ROOT = '<div id="root" aria-hidden="true"><main><h1>Clusters</h1></main></div>';
+  const LIVE_GROUP_HIDDEN = `<div class="pf-v6-c-alert-group pf-m-toast" aria-live="polite" aria-hidden="true">${ALERT}</div>`;
+  // PatternFly renders the toast group as a live list inside a plain div it adds to the body.
+  const PORTAL_HIDDEN = `<div aria-hidden="true"><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
+
+  it('reports one undecided draft for a hidden live toast group under the body while a modal is open', async () => {
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${LIVE_GROUP_HIDDEN}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    // The alert is hidden from the accessibility tree, so the draft carries no name for it.
+    expect(drafts[0]).toMatchObject({ rule: 'pf-toast-live-region', confidence: 'unverified', elementName: null });
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    expect(drafts[0]?.fix).toContain('check whether alerts can appear while this dialog is open');
+  });
+
+  it('reports one undecided draft for the toast group as PatternFly renders it while a modal is open', async () => {
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${PORTAL_HIDDEN}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+  });
+
+  it('still fails the same hidden toast group when no modal is open', async () => {
+    for (const group of [LIVE_GROUP_HIDDEN, PORTAL_HIDDEN]) {
+      const drafts = await toastDraftsForBody(`<div id="root"><main><h1>Clusters</h1></main></div>${group}`);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('fail');
+      expect(drafts[0]?.why).toContain('hidden from assistive technology');
+    }
+  });
+
+  // The next cases carry no toast group class, so only the live region part of the rule can find
+  // them.
+  it('reports one undecided draft when a hidden body child is itself the live region, with no toast group class', async () => {
+    for (const region of [
+      `<div aria-live="polite" aria-hidden="true">${ALERT}</div>`,
+      `<div role="status" aria-hidden="true">${ALERT}</div>`,
+    ]) {
+      const drafts = await toastDraftsForBody(`${APP_ROOT}${region}${OPEN_MODAL}`);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    }
+  });
+
+  it('reports one undecided draft when the body is live and the hidden body child sits inside it', async () => {
+    const drafts = await toastDraftsForBody(
+      `<script>document.body.setAttribute('aria-live', 'polite');</script>${APP_ROOT}<div aria-hidden="true">${ALERT}</div>${OPEN_MODAL}`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+  });
+
+  it('still passes a toast group under the body that is not hidden while a modal is open', async () => {
+    const shown = `<div aria-live="polite" class="pf-v6-c-alert-group pf-m-toast">${ALERT}</div>`;
+    expect(await toastDraftsForBody(`${APP_ROOT}${shown}${OPEN_MODAL}`)).toEqual([]);
+  });
+});
+
+// PatternFly renders the toast group as soon as a toast AlertGroup mounts, before any alert is in it.
+describe('pf-toast-live-region: an empty toast group hidden by an open modal dialog', () => {
+  const APP_ROOT = '<div id="root" aria-hidden="true"><main><h1>Clusters</h1></main></div>';
+  const SHOWN_ROOT = '<div id="root"><main><h1>Clusters</h1></main></div>';
+  const emptyGroup = (portalHidden: boolean): string =>
+    `<div${portalHidden ? ' aria-hidden="true"' : ''}><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"></ul></div>`;
+
+  it('reports one undecided draft on an empty toast group hidden by an open modal', async () => {
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${emptyGroup(true)}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.elementPath).not.toBe('');
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+    expect(drafts[0]?.fix).toContain('check whether alerts can appear while this dialog is open');
+    expect(JSON.stringify(drafts[0])).not.toContain('pf-m-toast');
+  });
+
+  it('reports nothing new for the same hidden empty group when no modal is open', async () => {
+    expect(await toastDraftsForBody(`${SHOWN_ROOT}${emptyGroup(true)}`)).toEqual([]);
+  });
+
+  it('reports exactly one draft, from the alert, for a hidden toast group that holds an alert', async () => {
+    const holding = `<div aria-hidden="true"><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
+    const drafts = await toastDraftsForBody(`${APP_ROOT}${holding}${OPEN_MODAL}`);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.whatUserExperiences).toBe('While the open dialog is shown, a screen reader may not announce this alert.');
+  });
+
+  it('reports nothing for an empty toast group that is not hidden while a modal is open', async () => {
+    expect(await toastDraftsForBody(`${APP_ROOT}${emptyGroup(false)}${OPEN_MODAL}`)).toEqual([]);
+  });
+
+  it('reports unverified, naming the open modal, when it cannot tell which element is the child of the body', async () => {
+    // The hidden group is put straight under the html element, beside the body, so the top of its
+    // chain is not the body the rule expects. The alert check gives the same draft for an alert.
+    const drafts = await toastDraftsForBody(
+      `${APP_ROOT}${OPEN_MODAL}<script>const stray = document.createElement('div'); stray.setAttribute('aria-hidden', 'true');` +
+        ` stray.innerHTML = '<ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"></ul>';` +
+        ` document.documentElement.appendChild(stray);</script>`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain('open modal dialog');
+    expect(JSON.stringify(drafts[0])).not.toContain('pf-m-toast');
+  });
+});
+
 describe('pf-toast-live-region: contained alerts stay silent', () => {
   it('passes an alert in a role="status" host that sits inside an aria-live="off" wrapper', async () => {
     // The nearest live value wins, and the status host is nearer than the off wrapper.

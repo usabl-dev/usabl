@@ -449,6 +449,22 @@
   the working tree, `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is
   placed, and `workspaces` patterns, so a pattern with many wildcards and a long file name there
   can still outlast the host's limit.
+- `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
+  modal hides the body's other children, and PatternFly places its toast group there, so an alert
+  shown while the dialog is open is not announced. When the hidden body child is the alert's
+  nearest live region, sits inside it, or is or holds a PatternFly toast group around the alert,
+  the alert now gets an `unverified` draft that asks a person to check whether alerts can appear
+  while the dialog is open. Two app root shapes change the same way: an app root whose own live
+  value is the nearest one above the alert, and an app root that holds a PatternFly toast group
+  around the alert. An alert in a nearer live region inside the app root behind a modal, with no
+  toast group around it, is still judged by that live region. A toast group that holds no alert yet,
+  which PatternFly renders as soon as a toast AlertGroup mounts, gets the same `unverified` draft
+  on the group when the modal hides it the same way. A group that holds an alert gets no draft of
+  its own, and a group that is shown, or hidden in another way, gets nothing. When a modal is open
+  and the rule cannot tell which element is the body's child, an empty group gets the same
+  `unverified` draft an alert gets in that state. Gate effect: a screen
+  checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
+  `not_covered`, unless the evidence floor or a waiver already holds that finding.
 - A screen kept in a test folder is a gap for every way an unresolved import can name it. An
   import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
   `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
