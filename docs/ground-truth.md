@@ -813,6 +813,10 @@ also returns a gap for each alert it could not check:
    readers, so an alert shown while the dialog is open may not be announced, and that a
    person needs to check whether alerts can appear while this dialog is open. The same
    toast group with no modal open still fails, and one that is not hidden still passes.
+   This applies to the app root too. An app root that is itself a live region, or that
+   holds a PatternFly toast group around the alert, gives the `unverified` draft. Only an
+   alert in a live region inside the app root, with no toast group around it, is still
+   judged by that live region alone.
    An alert whose own container is hidden, below the body's child, still fails with or without a modal.
    Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
