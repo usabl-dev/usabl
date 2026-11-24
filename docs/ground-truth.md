@@ -803,8 +803,17 @@ also returns a gap for each alert it could not check:
    the accessibility tree. The rule knows which entry of the chain is the body's child
    only when the root element holds one body, no other child but the head, and the alert
    is not in the head. When it cannot tell, and a modal is open, the alert gets an
-   `unverified` draft whose reason names the open modal, never a `fail`. An alert whose
-   own container is hidden, below the body's child, still fails with or without a modal.
+   `unverified` draft whose reason names the open modal, never a `fail`. The same modal
+   also hides a toast group under the body, where PatternFly places it, and an alert
+   shown there while the modal is open is not announced. So the exemption does not pass
+   such an alert. When the hidden body child is the alert's nearest live region, or sits
+   inside it, or is or holds a PatternFly toast group (an element with both the
+   `pf-v6-c-alert-group` and `pf-m-toast` classes) around the alert, the alert gets an
+   `unverified` draft. Its text says that an open dialog hides the toast area from screen
+   readers, so an alert shown while the dialog is open may not be announced, and that a
+   person needs to check whether alerts can appear while this dialog is open. The same
+   toast group with no modal open still fails, and one that is not hidden still passes.
+   An alert whose own container is hidden, below the body's child, still fails with or without a modal.
    Its own live value does not count as a
    container. An alert that cannot be found again, for example a toast that closed on
    its timer, and an alert with more than 512 ancestors each become their own

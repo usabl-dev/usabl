@@ -120,7 +120,7 @@ function behindModalDraft(ctx: ProviderContext, selector: string, node: AxNode |
 }
 
 // The toast area itself is hidden by an open modal dialog: the body's child that the modal hides is
-// the alert's live region, or holds the toast group the alert sits in. While the dialog is open, a
+// the alert's live region or sits inside it, or it is or holds the toast group the alert sits in. While the dialog is open, a
 // screen reader hears no toast. Whether a toast can appear while this dialog is open is not
 // something the rule can read from the page, so the alert is neither passed nor failed.
 function toastAreaBehindModalDraft(ctx: ProviderContext, selector: string, node: AxNode | null): Draft {
@@ -217,7 +217,8 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
         if (onlyHidden === read.chain.length - 3) {
           hidden = false;
           // The hidden body child is the toast area when it is the nearest live region above the
-          // alert, or sits below the one that is, or when it holds a toast group around the alert.
+          // alert, or sits inside the one that is, or when it is or holds a toast group around the
+          // alert.
           const liveSetter = nearestLiveSetter(nodes.slice(1));
           toastAreaBehindModal =
             (liveSetter !== -1 && liveSetter + 1 >= onlyHidden) ||
