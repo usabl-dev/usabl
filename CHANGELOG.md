@@ -438,12 +438,15 @@
   shown while the dialog is open is not announced. When the hidden body child is the alert's
   nearest live region, sits inside it, or is or holds a PatternFly toast group around the alert,
   the alert now gets an `unverified` draft that asks a person to check whether alerts can appear
-  while the dialog is open. Two app root shapes change the same way: an app root that is itself a
-  live region, and an app root that holds a PatternFly toast group around the alert. An alert in a
-  live region inside the app root behind a modal, with no toast group around it, is still judged by
-  that live region. Gate effect: a screen checked with a modal open and a
-  hidden toast group that read `verified` now reads `not_covered`, unless the evidence floor or a
-  waiver already holds that finding.
+  while the dialog is open. Two app root shapes change the same way: an app root whose own live
+  value is the nearest one above the alert, and an app root that holds a PatternFly toast group
+  around the alert. An alert in a nearer live region inside the app root behind a modal, with no
+  toast group around it, is still judged by that live region. A toast group that holds no alert yet,
+  which PatternFly renders as soon as a toast AlertGroup mounts, gets the same `unverified` draft
+  on the group when the modal hides it the same way. A group that holds an alert gets no draft of
+  its own, and a group that is shown, or hidden in another way, gets nothing. Gate effect: a screen
+  checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
+  `not_covered`, unless the evidence floor or a waiver already holds that finding.
 - `usabl check` saves a receipt only when the config it planned with is `usabl.config.json` at
   the repository root, by the real path the operating system opens. A receipt binds the bytes of
   that root file, the one the Stop hook plans from, and not the config the check used. Before, a
