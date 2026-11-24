@@ -4384,6 +4384,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook that states no limit can still be ended by Claude Code before usabl answers, and the
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
     runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
+  - Limit: the deadline is a timer in the same process, so it fires only between steps that wait,
+    such as a browser call. It cannot end work that runs without waiting. A committed glob with
+    many wildcards can take long enough to match a long changed file name that the host ends the
+    hook before usabl answers, and the stop then goes on with nothing checked (threat model,
+    Threat 8). Such a pattern must be in committed policy, which a code owner approves. A matcher
+    that does not backtrack is planned.
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -4504,13 +4510,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   check. For an error, the first line of the error follows inside the untrusted frame under
   `reason:`.
 - The config a receipt binds is the config the run planned with. `usabl check` and the Stop hook
-  keep the text of `usabl.config.json` they planned from and read the root file again just
-  before the save. They save the receipt only when the text is the same and the receipt's local
+  keep the raw bytes of `usabl.config.json` they planned from and read the root file again just
+  before the save. They save the receipt only when the bytes are the same and the receipt's local
   files hash is the hash of the planned bytes, with the other bound files read as they are now.
+  The bytes are compared as read from disk, never as text decoded and encoded again, so a stable
+  config with a byte that is not valid UTF-8 still gets a receipt.
   Otherwise they save none and print "usabl: saved no receipt for this run." with the reason:
   "usabl.config.json at the repository root changed while usabl was checking", or that the files
   the receipt binds changed. The verdict of the run is not changed, and the next stop runs its own
-  check. A check from a subfolder compares the text only: its receipt binds that folder's files
+  check. A check from a subfolder compares the bytes only: its receipt binds that folder's files
   and is saved there, where no stop reads it.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is

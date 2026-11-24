@@ -485,8 +485,8 @@ passing bundle from another run.
   when it binds the local files into the receipt. Before, a second process that put the committed
   config back in between made the check plan from weaker bytes and save a receipt bound to the
   committed ones, and the next stop, with a clean tree, answered from it without a scan. So
-  `usabl check` and the Stop hook keep the text they planned with, read the root
-  `usabl.config.json` again just before the save, and save a receipt only when the text is the
+  `usabl check` and the Stop hook keep the raw bytes they planned with, read the root
+  `usabl.config.json` again just before the save, and save a receipt only when the bytes are the
   same and the receipt's local files hash is the hash of the planned bytes with the other bound
   files as they are now. Otherwise they save none and say "saved no receipt for this run" with the
   reason. The second test catches a file put back to the planned bytes just before the save.
@@ -803,12 +803,16 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
-- Known limit: a glob with many wildcards can take seconds to match a long file name, and the
-  Stop hook deadline still ends the stop inside the host's limit. The size bounds on each policy
-  glob list do not bound this: `src/` then `*a` twelve times then `*b`, 30 characters, took 2.4
-  seconds against one file name of 34 characters, because the regular expression engine tries
-  each way the wildcards can split the name. The glob is committed policy, and a stop that hits
-  the deadline blocks once with "NOT verified - usabl ran out of time" and saves no receipt.
+- Known limit: a committed glob with many wildcards can take long enough to match a long changed
+  file name that the host ends the hook before usabl answers, and the stop then goes on with
+  nothing checked. The regular expression engine tries each way the wildcards can split the name,
+  and the time grows fast with the name's length: `src/` then `*a` twelve times then `*b`, 30
+  characters, took 2.4 seconds against a name of 34 characters, and a stop with a name of 38
+  letters took 81.7 seconds against a 30 second limit. usabl's own Stop hook deadline does not
+  help here: it is a timer in the same process, and no timer can fire while a match runs. The
+  size bounds on each policy glob list do not bound this either. Such a pattern must be in
+  committed policy, which a code owner approves; the file name is the agent's choice. A matcher
+  that does not backtrack is planned.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
