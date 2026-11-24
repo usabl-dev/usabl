@@ -442,8 +442,12 @@
   now takes under a millisecond. The answers are the same as before for both dot rules. Many
   bounded matches can still add up: a list inside the policy bounds took about 24 seconds to rule
   out one changed path of 3999 characters. So the app planner and the docs planner each carry a
-  budget of 100,000,000 matching steps for a run, about 3 to 5 seconds of matching at most on a
-  loaded 8-core machine and far more than a normal run uses. `import.meta.glob` patterns, which
+  budget of 100,000,000 matching steps for the changed files (20,000 changed files against four
+  common globs used about 3 million), and test-file placement carries 1,000,000,000 of its own (an
+  app of 20,000 test files and 40 ordinary `import.meta.glob` calls used 0.51 billion). All of them
+  together are at most about 60 seconds of matching on a loaded 8-core machine. Each planner tests
+  the changed files in a fixed order, so the same set of changed files gives the same gaps in any
+  order. `import.meta.glob` patterns, which
   come from source code, have the size bounds of the policy glob lists for each call (a pattern
   whose braces expand to one longer than 1024 characters, or more than 4096 patterns or 262,144
   characters in all) and a budget of 65,536 characters across the run. A pattern that starts with
