@@ -8,6 +8,7 @@
  */
 import type { FsGlob } from '../contracts/index.js';
 import { configError } from '../intake/config-error.js';
+import { checkGlobListBounds } from '../intake/glob-list-bounds.js';
 import { describeIdProblem } from '../intake/id-grammar.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
 
@@ -172,6 +173,9 @@ function parseSidecar(raw: string): DocsManifest {
 
   // sharedGlobs are glob patterns, not filesystem paths, so no ".." path-safety check.
   const sharedGlobs = expectStringArray(parsed['sharedGlobs'], 'sharedGlobs');
+  // The docs planner matches every changed file against each entry, so the list has the size
+  // bounds of the config glob lists.
+  checkGlobListBounds(sharedGlobs, 'usabl.docs.json sharedGlobs');
 
   return { format, docsBaseUrl, builtRoot, buildCommand, pages, sharedGlobs };
 }

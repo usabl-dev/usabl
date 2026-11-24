@@ -78,6 +78,15 @@ export function boundedOperatorPath(path: string): string {
 }
 
 /**
+ * Prepares a config file path to be quoted in a message: bounded from the middle, so its start and
+ * its file name both stay readable, and then scrubbed. `operatorText` would cut a long path at the
+ * end and lose the file name.
+ */
+export function operatorPathText(path: string): string {
+  return operatorText(boundedOperatorPath(path));
+}
+
+/**
  * Builds a config error whose interpolated values are all scrubbed.
  *
  * Use it for every message that quotes anything read out of a config or manifest file, including

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { AGENT_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
-import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
+import {
+  evaluateStopDecision,
+  formatStoredReceiptAllow,
+  NO_TRUSTED_BRANCH_WARNING,
+  OWN_REPOSITORY_VERDICT_NOTE,
+} from '../../src/surfaces/stop-hook.js';
+import { POLICY_FROM_BRANCH_VERDICT_NOTE } from '../../src/surfaces/stop-hook-scope.js';
 import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
@@ -1272,5 +1278,114 @@ describe('evaluateStopDecision gives undecided checks the review step', () => {
     const next = step({ verdict: 'not_covered', exitCode: 3, findings: [item({ rule: 'rule-from-page' })] }, false);
 
     expect(next).not.toContain('rule-from-page');
+  });
+
+  // A regression outranks a gap, so a run with both is a regression. Its step named the
+  // accessibility barriers and not the gaps, so a reader who fixed them stopped again and met the
+  // gaps next.
+  describe('a regression with coverage gaps', () => {
+    // The words a not_covered stop uses for its gaps.
+    const BLOCK_GAPS =
+      'resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>).';
+    const ACTIVE_GAPS = 'resolve every reason usabl reported under Not evaluated';
+    const unmapped: Result['coverage'] = { ...gaps, gaps: [], unresolvedFiles: ['src/Orphan.tsx'] };
+
+    it('names the accessibility barriers and the gaps on a blocked stop', () => {
+      for (const coverage of [gaps, unmapped]) {
+        const message = evaluateStopDecision(baseResult({ verdict: 'regression', exitCode: 1, findings: [failing], coverage }), {
+          stopHookActive: false,
+        }).message;
+        const next = message.split('\n')[1]!;
+
+        expect(next.startsWith('Next: fix each accessibility barrier below')).toBe(true);
+        expect(next).toContain(BLOCK_GAPS);
+        expect(next.endsWith('Then stop again.')).toBe(true);
+        if (coverage === gaps) expect(message).toContain('Not evaluated:');
+      }
+    });
+
+    it('names them on a stop let through because continuation is already active', () => {
+      const next = step({ verdict: 'regression', exitCode: 1, findings: [failing], coverage: gaps }, true);
+
+      expect(next).toBe(
+        `Next: fix each accessibility barrier usabl reported and ${ACTIVE_GAPS}, then run usabl check before you tell the user this change is accessible.`,
+      );
+    });
+
+    it('adds the review step when a check is also undecided', () => {
+      const next = step({ verdict: 'regression', exitCode: 1, findings: [failing, item({})], coverage: gaps }, false);
+
+      expect(next).toContain(BLOCK_GAPS);
+      expect(next.endsWith(BLOCK_REVIEW)).toBe(true);
+    });
+
+    it('names them behind guarded files too', () => {
+      const over: Partial<Result> = {
+        verdict: 'approval_required',
+        exitCode: 2,
+        accessibilityVerdict: 'regression',
+        accessibilityExitCode: 1,
+        dirtyGuardedPaths: ['.usabl-waivers.json'],
+        findings: [failing],
+        coverage: gaps,
+      };
+      const blocked = step(over, false);
+      expect(blocked.startsWith('Next: fix each accessibility barrier below')).toBe(true);
+      expect(blocked).toContain(BLOCK_GAPS);
+      expect(blocked).toContain('tell the user that guarded policy files changed');
+
+      const active = step(over, true);
+      expect(active).toContain(ACTIVE_GAPS);
+      expect(active).toContain('tell the user that guarded policy files changed');
+    });
+
+    it('keeps the plain regression step when there is no gap', () => {
+      expect(step({ verdict: 'regression', exitCode: 1, findings: [failing] }, false)).toBe(
+        'Next: fix each barrier below, then stop again so usabl can re-check the change.',
+      );
+    });
+  });
+});
+
+// Two changes each add a note to the same brackets: the branch's own policy and the repository the
+// assistant stopped in, and the no trusted branch warning. When several hold, every one is kept,
+// in a fixed order.
+describe('the notes in an allow line come in a fixed order and none is dropped', () => {
+  const allNotes = {
+    sessionDriftChecked: false,
+    policyFromBranch: true,
+    repositoryFromOwnFolder: true,
+    noTrustedBranch: true,
+  } as const;
+  const ordered = [
+    'session drift not checked',
+    POLICY_FROM_BRANCH_VERDICT_NOTE,
+    OWN_REPOSITORY_VERDICT_NOTE,
+    NO_TRUSTED_BRANCH_WARNING,
+  ].join(', ');
+
+  it('a VERIFIED line and an idle line carry every note in order', () => {
+    const verified = evaluateStopDecision(baseResult({}), { stopHookActive: false, ...allNotes });
+    expect(verified.message.startsWith(`VERIFIED (exit 0, ${ordered}): the gate verified this change.`)).toBe(true);
+    const idle = evaluateStopDecision(
+      baseResult({
+        verdict: null,
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+      }),
+      { stopHookActive: false, ...allNotes },
+    );
+    expect(idle.message.startsWith(`NO VERDICT: IDLE (exit 0, ${ordered}):`)).toBe(true);
+  });
+
+  it('a stored receipt line carries every note in order after "not re-scanned"', () => {
+    const line = formatStoredReceiptAllow('tree-a', { pinsCompared: false, ...allNotes });
+    expect(line.startsWith(`VERIFIED (exit 0, stored receipt, not re-scanned, ${ordered}): `)).toBe(true);
+  });
+
+  it('keeps the no trusted branch warning when only it and one other note hold', () => {
+    for (const other of [{ policyFromBranch: true }, { repositoryFromOwnFolder: true }]) {
+      const decision = evaluateStopDecision(baseResult({}), { stopHookActive: false, noTrustedBranch: true, ...other });
+      expect(decision.message.split('\n')[0], JSON.stringify(other)).toContain(`, ${NO_TRUSTED_BRANCH_WARNING}): `);
+    }
   });
 });

@@ -20,6 +20,7 @@ import {
 } from '../../src/surfaces/receipt-store.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeStopHookRunnerPorts, runStopHookFromStdin, type StopHookRunnerPorts } from '../../src/surfaces/stop-hook-runner.js';
+import { NO_TRUSTED_BRANCH_WARNING } from '../../src/surfaces/stop-hook.js';
 import { testConfig } from '../helpers.js';
 import { committedConfigBytes } from '../support/config-bytes.js';
 import { memoryPinStore } from '../support/memory-pin-store.js';
@@ -260,7 +261,8 @@ describe('A receipt save that fails for another reason', () => {
     expect(await runStopHookFromStdin('{"session_id":"session-one"}', ports)).toBe(0);
 
     const text = stderr.join('');
-    expect(text.startsWith('VERIFIED (exit 0)')).toBe(true);
+    // The temporary repository records no trusted branch, so the line also carries that warning.
+    expect(text.startsWith(`VERIFIED (exit 0, ${NO_TRUSTED_BRANCH_WARNING}): `)).toBe(true);
     expect(text).not.toContain('stop hook error');
     expect(text.indexOf('NOT saved - usabl did not save the receipt')).toBeGreaterThan(0);
     const payload = JSON.parse(stdout.join('').trim()) as { systemMessage?: string };

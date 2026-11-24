@@ -24,7 +24,7 @@ import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { docsPageUrl } from './docs-planner.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
 import { configError } from '../intake/config-error.js';
-import { matchGlob } from '../primitives/match-glob.js';
+import { globMatcher, matchGlob } from '../primitives/match-glob.js';
 
 function isWideBlastFile(file: string, globs: string[]): boolean {
   return globs.some((glob) => matchGlob(glob, file));
@@ -254,7 +254,9 @@ export async function computeCoverage(
 
   const quotedFiles = changedFiles.filter(looksQuoted);
   const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
-  const globbedFiles = listedFiles.filter((file) => config.uiFileGlobs.some((glob) => matchGlob(glob, file)));
+  // Each entry is expanded and compiled once for the run, not once for each changed file.
+  const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob));
+  const globbedFiles = listedFiles.filter((file) => uiMatchers.some((matches) => matches(file)));
 
   const attributedRoutes = manifest.routes.filter(
     // Router fallback routes have entryFile: null, so they cannot truthfully

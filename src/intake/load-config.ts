@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises';
 import type { UsablConfig } from '../contracts/index.js';
 import { configUrlWarningsByUrl, parseUsablConfig } from './config.js';
-import { operatorText } from './config-error.js';
+import { operatorPathText } from './config-error.js';
 import { uiFileGlobsRefusal } from './ui-file-globs.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
@@ -38,14 +38,14 @@ export interface LoadConfigOptions {
 function missingConfigMessage(path: string, caller: 'cli' | 'dev-server'): string {
   if (caller === 'dev-server') {
     return (
-      `${operatorText(path)} not found. The usabl dev server plugin reads its config from that path, which it ` +
+      `${operatorPathText(path)} not found. The usabl dev server plugin reads its config from that path, which it ` +
       'builds from its cwd and configPath options. Run "usabl init" in that folder to draft it, or set cwd or ' +
       'configPath in the plugin options to where the config is.'
     );
   }
   return path === DEFAULT_CONFIG_PATH
     ? `${path} not found. Run "usabl init" to draft it, or pass --config <path>.`
-    : `${operatorText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`;
+    : `${operatorPathText(path)} not found. Check the path given to --config, or run "usabl init" to draft ${DEFAULT_CONFIG_PATH}.`;
 }
 
 export async function loadConfig(
@@ -55,24 +55,41 @@ export async function loadConfig(
   },
   options: LoadConfigOptions = {},
 ): Promise<UsablConfig> {
+  return (await loadConfigWithBytes(path, warn, options)).config;
+}
+
+/**
+ * The config and the exact bytes it was parsed from, as read from disk. A check that saves a
+ * receipt compares these bytes with the file again before it saves, so the receipt never binds
+ * bytes other than the planned ones. They are kept raw, not as decoded text: a byte that is not
+ * valid UTF-8 decodes to a replacement character, so text would not stand for the file.
+ */
+export async function loadConfigWithBytes(
+  path = DEFAULT_CONFIG_PATH,
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+  options: LoadConfigOptions = {},
+): Promise<{ config: UsablConfig; bytes: Buffer }> {
   const docsManifestPath = options.docsManifestPath ?? 'usabl.docs.json';
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  let raw: string;
+  let bytes: Buffer;
   try {
-    raw = await readFile(path, 'utf8');
+    bytes = await readFile(path);
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
       throw new Error(missingConfigMessage(path, options.caller ?? 'cli'));
     }
     throw error;
   }
-  const config = parseConfigText(raw, warn);
+  // The same decoding readFile with 'utf8' gives.
+  const config = parseConfigText(bytes.toString('utf8'), warn);
   // The manifest is read only when the list is empty. See ui-file-globs.ts.
   const refusal = config.uiFileGlobs.length === 0 ? uiFileGlobsRefusal(config, await readText(docsManifestPath), path) : null;
   if (refusal !== null) {
     throw new Error(refusal);
   }
-  return config;
+  return { config, bytes };
 }
 
 // A manifest usabl cannot read is not proof of a documentation-only repository, so any read
