@@ -433,6 +433,22 @@
 
 ### Fixed
 
+- usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
+  `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
+  pattern's length times the path's length. Before, it built a regular expression, and a
+  committed `uiFileGlobs` entry with twelve wildcards and a changed file name of 38 letters made a
+  stop take 81.7 seconds, so the host could end the Stop hook with nothing checked. That match now
+  takes well under a millisecond. The answers are the same as before for both dot rules.
+  `import.meta.glob` patterns, which come from source code, now have the size bounds of the policy
+  glob lists: a call with a pattern longer than 1024 characters, or more than 4096 patterns or
+  262,144 characters in all, may load any file, a gap, and the reason says so. Each pattern is
+  built once for the run, not once for each file. Gate effect: none for a pattern inside the
+  bounds; a changed test file that only a call past a bound could load is now a gap. Known limit:
+  Node's `fs.glob` still backtracks. usabl hands it a `guardedPaths` entry to list new files on
+  the working tree, `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is
+  placed, and `workspaces` patterns, so a pattern with many wildcards and a long file name there
+  can still outlast the host's limit.
 - A screen kept in a test folder is a gap for every way an unresolved import can name it. An
   import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
   `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
@@ -488,8 +504,8 @@
   shorten the entry. Known limit: the bounds do not cover the number of wildcards. A committed glob
   with many wildcards can take long enough to match a long changed file name that the host ends
   the Stop hook before usabl answers, and the stop then goes on with nothing checked. usabl's own
-  deadline is a timer in the same process and cannot end a match that is running. A matcher that
-  does not backtrack is planned.
+  deadline is a timer in the same process and cannot end a match that is running. The matcher no
+  longer backtracks; see the entry on the glob matcher above.
 - `usabl check` and the Stop hook save a receipt only when it binds the config they planned with.
   A check read `usabl.config.json` to plan and the run read it again when it bound the root config
   into the receipt. Before, a second process that put the committed config back in between made the
