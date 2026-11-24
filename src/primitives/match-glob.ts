@@ -278,8 +278,13 @@ function ensureScratch(size: number): void {
 
 // Runs the steps over the path once, keeping the set of steps a match can be at. Each character
 // moves every step in the set at most once, so the time is at most steps times characters.
-function runAnyDepth(program: AnyDepthProgram, file: string): boolean {
-  if (file.length < program.minLength || !file.startsWith(program.prefix) || !file.endsWith(program.suffix)) {
+//
+// With `underEveryFolder`, the pattern may start at the start of the path or right after any
+// slash, as if it were tested against every tail of the path. The start step joins the set at each
+// of those places, so the path is still read once.
+function runAnyDepth(program: AnyDepthProgram, file: string, budget: GlobMatchBudget | undefined, underEveryFolder: boolean): boolean {
+  if (budget !== undefined) budget.charge(1 + program.prefix.length + program.suffix.length);
+  if (file.length < program.minLength || (!underEveryFolder && !file.startsWith(program.prefix)) || !file.endsWith(program.suffix)) {
     return false;
   }
   const { kinds, chars, optional } = program;
@@ -305,6 +310,7 @@ function runAnyDepth(program: AnyDepthProgram, file: string): boolean {
   size = add(0, current, 0);
   for (let position = 0; position < file.length; position += 1) {
     const char = file.charCodeAt(position);
+    if (budget !== undefined) budget.charge(size + 1);
     generation += 1;
     let nextSize = 0;
     for (let index = 0; index < size; index += 1) {
@@ -317,7 +323,14 @@ function runAnyDepth(program: AnyDepthProgram, file: string): boolean {
         nextSize = add(step + 1, next, nextSize);
       }
     }
-    if (nextSize === 0) return false;
+    if (underEveryFolder && char === SLASH) nextSize = add(0, next, nextSize);
+    if (nextSize === 0) {
+      if (!underEveryFolder) return false;
+      // Nothing can match until the next slash starts the pattern again.
+      const slash = file.indexOf('/', position + 1);
+      if (slash === -1) return false;
+      position = slash - 1;
+    }
     const swap = current;
     current = next;
     next = swap;
@@ -326,10 +339,56 @@ function runAnyDepth(program: AnyDepthProgram, file: string): boolean {
   return marks[last] === generation;
 }
 
+/** Thrown when a match needs more work than the budget it was given has left. */
+export class GlobBudgetExhausted extends Error {
+  constructor(readonly steps: number) {
+    super(`usabl used its budget of ${String(steps)} glob matching steps before it finished`);
+    this.name = 'GlobBudgetExhausted';
+  }
+}
+
+/**
+ * The work glob matching may do, in steps, shared by every match that is given it. A step is one
+ * pattern position tested at one path position, so a match costs at most its pattern's length
+ * times its path's length. A caller makes one budget for a run and hands it to each matcher. Once
+ * the budget is spent, every match given it throws GlobBudgetExhausted, and the caller reads the
+ * file as one it could not place. The count depends only on the patterns and the paths, never on
+ * the clock, so the same input runs out at the same file every time.
+ */
+export class GlobMatchBudget {
+  remaining: number;
+
+  constructor(readonly steps: number) {
+    this.remaining = steps;
+  }
+
+  get exhausted(): boolean {
+    return this.remaining < 0;
+  }
+
+  charge(steps: number): void {
+    this.remaining -= steps;
+    if (this.remaining < 0) throw new GlobBudgetExhausted(this.steps);
+  }
+}
+
+/**
+ * The glob matching steps one planner may spend in a run. The worst shapes ran at 20 to 35 million
+ * steps a second on a loaded 8-core machine, so the budget is about 3 to 5 seconds of matching at
+ * most, far inside a Stop hook's limit. A normal run spends far less: 20,000 changed files against
+ * four common globs took about 3 million steps.
+ */
+export const RUN_GLOB_MATCH_STEPS = 100_000_000;
+
 export interface GlobOptions {
   // False: a wildcard never matches a name that starts with a dot, the rule Node's fs.glob uses.
   // A dot written in the pattern itself still matches. The default, true, is the planner's rule.
   dot?: boolean;
+  // Charged for the work of every match. Without one, a match costs what it costs.
+  budget?: GlobMatchBudget;
+  // True: the pattern matches a path when it matches the path itself or the part after any slash,
+  // as if tested against every tail, in one read of the path. Only with the default dot rule.
+  underEveryFolder?: boolean;
 }
 
 // One part of a pattern read with Node's dot rule. `**` alone in a part matches whole parts of the
@@ -337,14 +396,14 @@ export interface GlobOptions {
 // part it skips is a name that is not empty and does not start with a dot.
 type DotRulePart =
   | { kind: 'any-parts'; last: boolean }
-  | { kind: 'name'; matches: (name: string) => boolean; dotGuard: boolean };
+  | { kind: 'name'; matches: (name: string) => boolean; dotGuard: boolean; length: number };
 
 function compileWithDotRule(pattern: string): DotRulePart[] {
   const parts = pattern.split('/');
   return parts.map((part, index) => {
     if (part === '**') return { kind: 'any-parts', last: index === parts.length - 1 };
     // Every other character stands for itself here, `?` too, and a run of stars is one star.
-    return { kind: 'name', matches: wildcardNameMatcher(part), dotGuard: !part.startsWith('.') };
+    return { kind: 'name', matches: wildcardNameMatcher(part), dotGuard: !part.startsWith('.'), length: part.length };
   });
 }
 
@@ -353,8 +412,10 @@ function skippable(name: string): boolean {
 }
 
 // Walks the pattern's parts over the path's parts, keeping the set of path positions a match can
-// be at. Each step costs at most one name match for each path part.
-function runWithDotRule(parts: readonly DotRulePart[], file: string): boolean {
+// be at. Each step costs at most one name match for each path part. A name match is charged its
+// part's length times the name's length, the most it can cost.
+function runWithDotRule(parts: readonly DotRulePart[], file: string, budget: GlobMatchBudget | undefined): boolean {
+  if (budget !== undefined) budget.charge(file.length + 1);
   const names = file.split('/');
   const count = names.length;
   let reach = new Uint8Array(count + 1);
@@ -363,6 +424,7 @@ function runWithDotRule(parts: readonly DotRulePart[], file: string): boolean {
     const next = new Uint8Array(count + 1);
     let any = false;
     if (part.kind === 'any-parts') {
+      if (budget !== undefined) budget.charge(count + 1);
       if (part.last) {
         // One or more skippable parts to the end of the path.
         let skippableToEnd = true;
@@ -384,6 +446,7 @@ function runWithDotRule(parts: readonly DotRulePart[], file: string): boolean {
       for (let at = 0; at < count; at += 1) {
         if (reach[at] !== 1) continue;
         const name = names[at] ?? '';
+        if (budget !== undefined) budget.charge((part.length + 1) * (name.length + 1));
         if (part.dotGuard && name.charCodeAt(0) === 0x2e) continue;
         if (part.matches(name)) {
           next[at + 1] = 1;
@@ -406,12 +469,15 @@ export function globMatcher(pattern: string, options: GlobOptions = {}): (file: 
   // A pattern this unit cannot expand falls back to literal-brace matching, which is the
   // prior behavior. The config-load guard refuses such patterns before a run reaches here.
   const patterns = expansions ?? [pattern];
+  const { budget } = options;
   if (options.dot === false) {
+    if (options.underEveryFolder === true) throw new Error('underEveryFolder needs the default dot rule');
     const compiled = patterns.map(compileWithDotRule);
-    return (file: string): boolean => compiled.some((parts) => runWithDotRule(parts, file));
+    return (file: string): boolean => compiled.some((parts) => runWithDotRule(parts, file, budget));
   }
+  const underEveryFolder = options.underEveryFolder === true;
   const compiled = patterns.map(compileAnyDepth);
-  return (file: string): boolean => compiled.some((program) => runAnyDepth(program, file));
+  return (file: string): boolean => compiled.some((program) => runAnyDepth(program, file, budget, underEveryFolder));
 }
 
 export function matchGlob(pattern: string, file: string, options: GlobOptions = {}): boolean {

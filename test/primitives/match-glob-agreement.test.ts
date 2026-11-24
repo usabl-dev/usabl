@@ -123,6 +123,39 @@ describe('the glob matcher gives the old regular expression answers', () => {
   });
 });
 
+// Every path of a file below a folder at or above it, the old way to read a pattern that starts
+// with / under every folder: a/b/c.tsx, b/c.tsx, and c.tsx for a/b/c.tsx.
+function tails(file: string): string[] {
+  const segments = file.split('/');
+  return segments.map((_, index) => segments.slice(index).join('/'));
+}
+
+describe('a pattern read under every folder gives the answer of testing each tail', () => {
+  it('for generated patterns and paths, in one read of the path', () => {
+    const random = generator(99);
+    const paths = [...FIXED_PATHS, ...Array.from({ length: 60 }, () => build(random, PATH_PIECES, 8))];
+    const differences: string[] = [];
+    let yes = 0;
+    for (const pattern of [...FIXED_PATTERNS, ...Array.from({ length: 600 }, () => build(random, PATTERN_PIECES, 6))]) {
+      let old: (file: string) => boolean;
+      try {
+        old = regexGlobMatcher(pattern);
+      } catch {
+        expect(() => globMatcher(pattern, { underEveryFolder: true }), JSON.stringify(pattern)).toThrow();
+        continue;
+      }
+      const now = globMatcher(pattern, { underEveryFolder: true });
+      for (const path of paths) {
+        const expected = tails(path).some((tail) => old(tail));
+        if (expected) yes += 1;
+        if (now(path) !== expected) differences.push(`${JSON.stringify(pattern)} ${JSON.stringify(path)}: old ${String(expected)}`);
+      }
+    }
+    expect(differences.slice(0, 20)).toEqual([]);
+    expect(yes).toBeGreaterThan(1000);
+  });
+});
+
 const CODEOWNERS_PIECES = ['a', 'b', '.', '/', '*', '?', 'x.js', 'docs', '{', '}', '$', '+', '-'];
 
 describe('the CODEOWNERS matcher gives the old regular expression answers', () => {
