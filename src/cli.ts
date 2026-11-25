@@ -18,6 +18,7 @@ import { run } from './run.js';
 import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
+import { gitProcessEnvironment } from './deps/git-environment.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
@@ -255,7 +256,7 @@ const execFileAsync = promisify(execFile);
 async function repositoryRoot(): Promise<string> {
   const cwd = await realpath(process.cwd());
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', env: gitProcessEnvironment() });
     const top = stdout.trim();
     return top.length === 0 ? cwd : await realpath(top);
   } catch {

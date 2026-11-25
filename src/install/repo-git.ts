@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import type { InstallFs } from './index.js';
 import { CONFIG_PATH } from './app-origin.js';
 import { isSafeBranchName } from '../primitives/branch-name.js';
+import { gitProcessEnvironment } from '../deps/git-environment.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,7 @@ export function gitRunner(cwd: string): InstallGit {
   return {
     run: async (args) => {
       try {
-        const { stdout } = await execFileAsync('git', [...args], { cwd, encoding: 'utf8' });
+        const { stdout } = await execFileAsync('git', [...args], { cwd, encoding: 'utf8', env: gitProcessEnvironment() });
         return stdout;
       } catch {
         return null;
