@@ -128,7 +128,11 @@ describe('the branch the check reads', () => {
       ghWithRuleset('trunk', { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }).reader,
       { name: 'main', source: 'gate' },
     );
-    expect(result.action).toBe('not-applied');
+    // The protection on main, read by itself, is not applied. The result is cannot-verify whatever
+    // it reads, because pull requests into trunk, the default branch, are not gated.
+    expect(result.gateBranch?.action).toBe('not-applied');
+    expect(result.action).toBe('cannot-verify');
+    expect(result.exitCode).toBe(2);
   });
 
   it('checks main and says it assumed it when there is no gate workflow', async () => {

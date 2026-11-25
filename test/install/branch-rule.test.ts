@@ -528,7 +528,11 @@ describe('verifyBranchRule', () => {
   it('does not count a ruleset on ~DEFAULT_BRANCH when another branch is the default', async () => {
     const gh = ghWithDefaultBranchRuleset('trunk', { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } });
     const result = await verifyBranchRule(gh.reader, GATE_MAIN);
-    expect(result.action).toBe('not-applied');
+    // The protection on main, read by itself, is not applied. The result is cannot-verify whatever
+    // it reads, because pull requests into trunk, the default branch, are not gated.
+    expect(result.gateBranch?.action).toBe('not-applied');
+    expect(result.action).toBe('cannot-verify');
+    expect(result.exitCode).toBe(2);
   });
 
   it('reads an exclusion of ~DEFAULT_BRANCH as excluding main when main is the default', async () => {
