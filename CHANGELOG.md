@@ -442,10 +442,15 @@
   `usabl.config.json` at its tip. When another one has it, the stop is a not-covered gap that
   checks nothing, says `origin/HEAD` may be stale, names the first such branch with a plain name
   inside the untrusted frame, and gives the step `git remote set-head origin --auto` first;
-  `usabl check --branch-scope` prints the same and exits 4. The lookup reads local objects only,
-  in two git calls with lazy fetch off: it reads each tip's root tree, never the config's own
-  object, so a partial clone does not fetch from origin inside a stop, and a tree the clone does
-  not have is a gap. A git failure in it is a gap, never "no config", and so is an answer git was
+  `usabl check --branch-scope` prints the same and exits 4. The lookup reads local objects only:
+  it reads each tip's root tree, never the config's own object. Every git call that finds the
+  starting commit and where policy is read now runs with lazy fetch off, so in a partial clone
+  that step does not fetch from origin inside a stop; before, a treeless clone fetched the tree of
+  the starting commit or the trusted branch there. A tree the clone does not have is a gap whose
+  next step is `git ls-tree` with the branch to load (a fetch does not load trees in a treeless
+  clone), and a branch of origin that names a blob or a tree says so. In a treeless clone that
+  gap can follow each fetch that moves the trusted branch, until its tree is loaded. A git
+  failure in the lookup is a gap, never "no config", and so is an answer git was
   not expected to print, such as a second branch checked out here. git may print up to 64 MiB, so
   a clone with tens of thousands of branches is read, and past that limit the gap says git
   printed more than usabl reads. This branch's own copy on
