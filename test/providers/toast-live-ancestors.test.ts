@@ -330,10 +330,19 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
     expect(await toastDraftsForBody(`${APP_ROOT}${emptyGroup(false)}${OPEN_MODAL}`)).toEqual([]);
   });
 
-  // The page changes after the rule read its alerts. The script runs when the rule asks for the
+  // The page changes after the rule read its alerts. The change runs when the rule asks for the
   // toast groups, which it does once, after the alert walk, so the change lands at a fixed point.
+  // Each change is a function that gets its values as data, and it throws when an element it needs
+  // is missing, so a change that did nothing cannot pass as one that worked.
   const GROUP_QUERY = '[class~="pf-v6-c-alert-group"][class~="pf-m-toast"]';
-  async function draftsWithChangeBeforeGroupQuery(body: string, script: string): Promise<Draft[]> {
+  interface PageChangeData {
+    groupQuery: string;
+    alertId: string;
+    alertTitle: string;
+    bodyChildIndex: number;
+  }
+  const CHANGE_DATA: PageChangeData = { groupQuery: GROUP_QUERY, alertId: 'save-alert', alertTitle: 'Saved', bodyChildIndex: 1 };
+  async function draftsWithChangeBeforeGroupQuery(body: string, change: (data: PageChangeData) => void): Promise<Draft[]> {
     const pw = await browser.newPage({ viewport: { width: 800, height: 900 } });
     try {
       await pw.setContent(`<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>${body}</body></html>`, {
@@ -344,7 +353,7 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
         ...adopted,
         async queryAll(selector: string) {
           if (selector === GROUP_QUERY) {
-            await pw.evaluate(script);
+            await pw.evaluate(change, CHANGE_DATA);
           }
           return adopted.queryAll(selector);
         },
@@ -362,29 +371,53 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
   const GROUP_DRAFT_TEXT = 'While the open dialog is shown, a screen reader may not announce an alert shown in this toast area.';
 
   it('reports one undecided draft on the group when a listed alert that passed moves into the hidden group', async () => {
-    const drafts = await draftsWithChangeBeforeGroupQuery(
-      `${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`,
-      `(() => { const li = document.createElement('li'); li.appendChild(document.getElementById('save-alert')); document.querySelector('${GROUP_QUERY}').appendChild(li); })()`,
-    );
+    const drafts = await draftsWithChangeBeforeGroupQuery(`${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`, (data) => {
+      const alert = document.getElementById(data.alertId);
+      const group = document.querySelector(data.groupQuery);
+      if (alert === null || group === null) {
+        throw new Error('the alert or the toast group is missing');
+      }
+      const item = document.createElement('li');
+      item.appendChild(alert);
+      group.appendChild(item);
+    });
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
   });
 
   it('reports one undecided draft on the group when a new toast reuses the id of a listed alert that passed', async () => {
-    const drafts = await draftsWithChangeBeforeGroupQuery(
-      `${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`,
-      `(() => { document.getElementById('save-alert').remove(); const li = document.createElement('li'); li.innerHTML = ${JSON.stringify(SAVE_ALERT)}; document.querySelector('${GROUP_QUERY}').appendChild(li); })()`,
-    );
+    const drafts = await draftsWithChangeBeforeGroupQuery(`${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`, (data) => {
+      const inline = document.getElementById(data.alertId);
+      const group = document.querySelector(data.groupQuery);
+      if (inline === null || group === null) {
+        throw new Error('the inline alert or the toast group is missing');
+      }
+      inline.remove();
+      // The new toast has the same markup and id as the inline alert, built element by element.
+      const toast = document.createElement('div');
+      toast.id = data.alertId;
+      toast.className = 'pf-v6-c-alert pf-m-success';
+      const title = document.createElement('h4');
+      title.className = 'pf-v6-c-alert__title';
+      title.textContent = data.alertTitle;
+      toast.appendChild(title);
+      const item = document.createElement('li');
+      item.appendChild(toast);
+      group.appendChild(item);
+    });
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
   });
 
   it('reports one undecided draft on the group when it is hidden after its alert was read and passed', async () => {
     const shownHolding = `<div><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
-    const drafts = await draftsWithChangeBeforeGroupQuery(
-      `${APP_ROOT}${shownHolding}${OPEN_MODAL}`,
-      `document.querySelectorAll('body > div')[1].setAttribute('aria-hidden', 'true')`,
-    );
+    const drafts = await draftsWithChangeBeforeGroupQuery(`${APP_ROOT}${shownHolding}${OPEN_MODAL}`, (data) => {
+      const portal = document.querySelectorAll('body > div')[data.bodyChildIndex];
+      if (portal === undefined || portal.querySelector(data.groupQuery) === null) {
+        throw new Error('the toast group portal is missing');
+      }
+      portal.setAttribute('aria-hidden', 'true');
+    });
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
   });
