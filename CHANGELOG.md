@@ -433,6 +433,19 @@
 
 ### Fixed
 
+- A stale `origin/HEAD` no longer makes a configured repository read as a branch that sets usabl
+  up. After a project moves its default branch, for example from `master` to `main`, a clone's
+  `origin/HEAD` can still name the old branch, because a fetch does not move it. When that branch
+  and the commit where this branch left it had no `usabl.config.json`, a Stop hook stop and
+  `usabl check --branch-scope` read the branch's own policy, so a waiver the branch committed was
+  taken as policy. A branch now reads as one that sets usabl up only when no branch of origin has
+  `usabl.config.json` at its tip. When another one has it, the stop is a not-covered gap that
+  checks nothing, says `origin/HEAD` may be stale, names the first such branch with a plain name
+  inside the untrusted frame, and gives the step `git remote set-head origin --auto` first;
+  `usabl check --branch-scope` prints the same and exits 4. The lookup reads local refs only, in
+  two git calls, and a git failure in it is a gap, never "no config". Known limit: a branch that
+  sets usabl up and is pushed to origin has the config at the tip of its own branch of origin, so
+  after that push its stops are this gap until the setup merges.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
