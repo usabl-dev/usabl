@@ -7,6 +7,7 @@
  * Any parse failure is surfaced as approval_required for explicit human review.
  */
 import { JSON_SCHEMA, load, YAMLException } from 'js-yaml';
+import { REQUIREMENT_FILE_BYTE_LIMIT, REQUIREMENT_FILE_TOO_LARGE } from './file-size.js';
 import { parseBundle, type ParseBundleResult } from './schema.js';
 
 // The words of a parser problem, up to the first character that can open source text. Some
@@ -35,6 +36,11 @@ function formatYamlFailure(error: unknown): string {
 }
 
 export function normalize(raw: string): ParseBundleResult {
+  // Every caller gets the byte limit, the loader and the Figma import's check of the file it drafts
+  // alike, so no text past it is parsed.
+  if (Buffer.byteLength(raw, 'utf8') > REQUIREMENT_FILE_BYTE_LIMIT) {
+    return { ok: false, verdict: 'approval_required', reason: REQUIREMENT_FILE_TOO_LARGE };
+  }
   try {
     const parsedYaml = load(raw, { schema: JSON_SCHEMA });
     return parseBundle(parsedYaml);

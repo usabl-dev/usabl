@@ -5,6 +5,7 @@
  */
 import type { FsGlob, GitReader, UsablConfig } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
+import { textWithin } from './file-size.js';
 
 function stripTrailingSlashes(path: string): string {
   const stripped = path.replace(/\/+$/g, '');
@@ -66,6 +67,14 @@ export function overlayRequirementsFs(
         return git.show(trustedRef, path);
       }
       return fs.readFile(path);
+    },
+    // git reads a blob at the trusted ref whole, up to the most it reads as text, so the limit is
+    // checked on the text it returns.
+    async readTextUpTo(path, maxBytes) {
+      if (isWithinRoot(path, root)) {
+        return textWithin(await git.show(trustedRef, path), maxBytes);
+      }
+      return fs.readTextUpTo !== undefined ? fs.readTextUpTo(path, maxBytes) : textWithin(await fs.readFile(path), maxBytes);
     },
   };
 }

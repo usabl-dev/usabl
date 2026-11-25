@@ -3,9 +3,10 @@
  * This unit reads and validates authored files into one normalized bundle.
  * It must fail closed on any malformed file because policy cannot be half-applied.
  */
-import type { FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
+import type { BoundedTextRead, FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { boundedOperatorPath } from './config-error.js';
+import { REQUIREMENT_FILE_BYTE_LIMIT, REQUIREMENT_FILE_TOO_LARGE, textWithin } from './file-size.js';
 import { normalize } from './normalize.js';
 import { findDuplicateRequirementId, type RequirementIdSite } from './requirement-ids.js';
 import type { ParseBundleResult } from './schema.js';
@@ -84,18 +85,26 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
       return pathFailure(path, `glob match escaped configured requirements root ${root}`);
     }
 
-    let raw: string | null;
+    // The size is checked before the file is parsed. A reader with a bounded read never reads a
+    // file past the limit. Any other reader's text is checked after it is read.
+    let read: BoundedTextRead | null;
     try {
-      raw = await fs.readFile(path);
+      read =
+        fs.readTextUpTo !== undefined
+          ? await fs.readTextUpTo(path, REQUIREMENT_FILE_BYTE_LIMIT)
+          : textWithin(await fs.readFile(path), REQUIREMENT_FILE_BYTE_LIMIT);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return pathFailure(path, `failed to read requirement file: ${message}`);
     }
-    if (raw === null) {
+    if (read === null) {
       return pathFailure(path, 'file was missing when read');
     }
+    if (read.kind === 'too-large') {
+      return pathFailure(path, REQUIREMENT_FILE_TOO_LARGE);
+    }
 
-    const normalized = normalize(raw);
+    const normalized = normalize(read.text);
     if (!normalized.ok) {
       // Intake is policy input. A single bad file means the full set is untrusted.
       return pathFailure(path, normalized.reason);
