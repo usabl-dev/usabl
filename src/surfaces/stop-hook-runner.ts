@@ -12,9 +12,9 @@
  *                          maps to stopHookActive to prevent recursive loops.
  */
 import { execFileSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
@@ -738,12 +738,30 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
     });
     const root = out.replace(/\r?\n$/, '');
     if (root.length > 0) {
+      // git names a work tree that does not hold the hook's folder when a setting such as
+      // core.worktree points it at another folder. Reading that folder would check files the dev
+      // server does not serve. The hook then works in its own folder, where the git reader
+      // refuses to read such a work tree, so the stop checks nothing and says so.
+      if (!holds(root, startDir)) {
+        return { root: resolve(startDir), inRepository: true };
+      }
       return { root: resolve(root), inRepository: true };
     }
   } catch {
     // Not a repository, or git is missing. Both mean there is no last commit to compare with.
   }
   return { root: resolve(startDir), inRepository: false };
+}
+
+// Whether the folder is the root or inside it, by real paths. A path that cannot be resolved is
+// not held.
+function holds(root: string, folder: string): boolean {
+  try {
+    const inside = relative(realpathSync.native(root), realpathSync.native(folder));
+    return !inside.startsWith('..') && !isAbsolute(inside);
+  } catch {
+    return false;
+  }
 }
 
 async function readWorkingConfig(root: string): Promise<FileBytes> {

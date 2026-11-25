@@ -1131,7 +1131,14 @@ export interface TreeEntry {
  */
 export type ListedText = 'none' | 'links' | 'blobs';
 export interface GitReader {
+  // The tree of the working tree as the checks read it: the bytes on disk, with no filter, no
+  // attribute, and no index flag applied. The receipt binds it, and a run reads it before and after
+  // its scan. It is stable while the bytes are, and it is not HEAD's tree id in a repository whose
+  // filters change bytes (LFS, line endings).
   writeTree(): Promise<string>;
+  // The tree git add -A would commit, through git's filters and attributes, so one commit gives one
+  // tree id on every CI runner. Only the history of main scans records it.
+  indexedTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
   // The tree entries at the ref for the paths, by path. With recursive, every file, symbolic link,
   // and submodule that is one of the paths or under one, in one listing; an empty path stands for
@@ -1145,6 +1152,10 @@ export interface GitReader {
     paths: readonly string[],
     options: { recursive: boolean; text?: ListedText },
   ): Promise<Map<string, TreeEntry>>;
+  // The files whose bytes on disk are not the content HEAD holds, and the new files git does not
+  // ignore, by path from the repository root: M, D, A (in the index only), or ??. Read from the same
+  // walk as writeTree, so no index flag, saved file info, fsmonitor hook, attribute, or filter can
+  // hide an edit. A change of line endings alone or of the executable bit alone is not listed.
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
   diffNameOnly(ref: string): Promise<string[]>;

@@ -12,6 +12,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
+import { STORED_OBJECTS_ENVIRONMENT } from '../deps/git-environment.js';
 import { boundField } from '../output/bounded-text.js';
 import { firstLine } from '../primitives/first-line.js';
 import { listChangedFiles } from './cli.js';
@@ -65,7 +66,9 @@ export interface ScopeGitResult {
 export type ScopeGit = (args: readonly string[]) => Promise<ScopeGitResult>;
 
 // usabl reads git's exit codes here, never its words, but the detail it prints is kept in English.
-const ENGLISH_MESSAGES = { LC_ALL: 'C' };
+// Commits and their parents are read as stored, so a graft or a replace ref cannot move the
+// starting commit (see git-environment.ts).
+const SCOPE_ENVIRONMENT = { LC_ALL: 'C', ...STORED_OBJECTS_ENVIRONMENT };
 
 /** git, run in `cwd` with an argument list, never a shell string. */
 export function scopeGit(cwd: string): ScopeGit {
@@ -74,7 +77,7 @@ export function scopeGit(cwd: string): ScopeGit {
       const { stdout, stderr } = await execFileAsync('git', [...args], {
         cwd,
         encoding: 'utf8',
-        env: { ...process.env, ...ENGLISH_MESSAGES },
+        env: { ...process.env, ...SCOPE_ENVIRONMENT },
       });
       return { code: 0, stdout, stderr };
     } catch (err) {
