@@ -5,6 +5,7 @@
  */
 import type { FsGlob, GitReader, UsablConfig } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
+import { textWithin } from './file-size.js';
 
 function stripTrailingSlashes(path: string): string {
   const stripped = path.replace(/\/+$/g, '');
@@ -21,7 +22,7 @@ function patternTargetsRoot(pattern: string, root: string): boolean {
 
 export function overlayRequirementsFs(
   fs: FsGlob,
-  git: Pick<GitReader, 'lsFiles' | 'show'>,
+  git: Pick<GitReader, 'lsFiles' | 'show'> & Partial<Pick<GitReader, 'blobSize'>>,
   config: Pick<UsablConfig, 'requirements'>,
   trustedRef: string | undefined,
 ): FsGlob {
@@ -66,6 +67,22 @@ export function overlayRequirementsFs(
         return git.show(trustedRef, path);
       }
       return fs.readFile(path);
+    },
+    // A file at the trusted ref is sized from what git stores, before it is read, so the limit
+    // counts the same bytes as on disk. A git reader with no size read is sized from its text.
+    async readTextUpTo(path, maxBytes) {
+      if (isWithinRoot(path, root)) {
+        const size = git.blobSize === undefined ? null : await git.blobSize(trustedRef, path);
+        if (size === null) {
+          return textWithin(await git.show(trustedRef, path), maxBytes);
+        }
+        if (size > maxBytes) {
+          return { kind: 'too-large' };
+        }
+        const text = await git.show(trustedRef, path);
+        return text === null ? null : { kind: 'text', text };
+      }
+      return fs.readTextUpTo !== undefined ? fs.readTextUpTo(path, maxBytes) : textWithin(await fs.readFile(path), maxBytes);
     },
   };
 }

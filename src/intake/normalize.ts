@@ -7,6 +7,7 @@
  * Any parse failure is surfaced as approval_required for explicit human review.
  */
 import { JSON_SCHEMA, load, YAMLException } from 'js-yaml';
+import { REQUIREMENT_FILE_BYTE_LIMIT, REQUIREMENT_FILE_TOO_LARGE } from './file-size.js';
 import { parseBundle, type ParseBundleResult } from './schema.js';
 
 // The words of a parser problem, up to the first character that can open source text. Some
@@ -34,7 +35,16 @@ function formatYamlFailure(error: unknown): string {
   return `intake YAML is invalid${where}: ${what}`;
 }
 
-export function normalize(raw: string): ParseBundleResult {
+/**
+ * The bundle a requirement file holds, or why it does not load. sizeChecked says the caller
+ * already held the file to the byte limit, as the loader does from the bytes it read. Any other
+ * caller, such as the Figma import with the text it drafted, gets the limit here, counted as the
+ * UTF-8 bytes of the text, which are the bytes such a caller writes.
+ */
+export function normalize(raw: string, options: { sizeChecked?: boolean } = {}): ParseBundleResult {
+  if (options.sizeChecked !== true && Buffer.byteLength(raw, 'utf8') > REQUIREMENT_FILE_BYTE_LIMIT) {
+    return { ok: false, verdict: 'approval_required', reason: REQUIREMENT_FILE_TOO_LARGE };
+  }
   try {
     const parsedYaml = load(raw, { schema: JSON_SCHEMA });
     return parseBundle(parsedYaml);

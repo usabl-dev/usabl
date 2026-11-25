@@ -12,7 +12,7 @@
  * the request. The answer is checked before anything reads it, because it comes from the network.
  */
 import { describeFileKeyProblem } from '../../intake/design-source.js';
-import { readFigmaFile, type FigmaFile } from './types.js';
+import { checkFigmaFile, type FigmaFile } from './types.js';
 
 export const FIGMA_API_BASE = 'https://api.figma.com';
 
@@ -157,9 +157,11 @@ export async function fetchFigmaFile(
   } catch {
     throw new FigmaFetchError('Figma returned a file usabl cannot read.');
   }
-  const file = readFigmaFile(body);
-  if (file === null) {
-    throw new FigmaFetchError('Figma returned a file usabl cannot read.');
+  const read = checkFigmaFile(body);
+  if (!read.ok) {
+    throw new FigmaFetchError(
+      read.limit === null ? 'Figma returned a file usabl cannot read.' : `Figma returned a file usabl cannot read: ${read.limit}.`,
+    );
   }
-  return file;
+  return read.file;
 }
