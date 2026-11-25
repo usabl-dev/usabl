@@ -6961,22 +6961,32 @@ The outcome, in this order:
 - `unreadable`: the scans cannot say. Either scan had a coverage gap, including a screen marked
   unseen. The edit was not made, or did not take hold when it was read back at once. The gate did
   not verify the mutated scan, and no new finding explains it. Every new gating finding is
-  `unverified`. Or the only definite new findings are away from the change, for an entry not
-  reported on the screen: the two loads differ, so they prove nothing about the defect.
+  `unverified`. Or no definite new finding is where it can count below: the two loads differ, so
+  they prove nothing about the defect. For most entries that means every definite new finding is
+  away from the change. For an entry reported on the screen, it means every one is from another
+  rule and away from the changed element (for a removed element, anywhere but the element that
+  held it).
 - `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
   it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
   anywhere on the screen.
-- `caught by another rule`: a new gating finding with confidence `fail` from another rule, on the
-  changed element. Counted apart from caught.
+- `caught by another rule`: a new gating finding with confidence `fail` from another rule, where
+  the entry says it reports. For an entry reported on the screen, that is on the changed element
+  or inside it, never elsewhere on the screen. When the edit removed an element
+  (`heading-one-removed`, `page-title-removed`), it is only on the element that held the removed
+  one, never inside it: the rest of that element, such as all of `main` for a heading that sits
+  straight in it, is not the change. Counted apart from caught.
 - `preview only`: nothing new gates, and a preview finding is new.
 - `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
   the reason says so.
 
-The second read comes last. It finds that the change did not hold through the scan when a markup
-change is gone, a key aimed at the element got past the swallow, or focus reached the element in a
-way the edit does not stop. Then `caught` and `caught by another rule` stand, because a new definite
-failure, where the entry says it reports, was measured while the defect was there.
+The second read comes last. It finds that the change did not hold through the scan when an element
+the edit changed is no longer on the page, a markup change is gone, a key aimed at the element got
+past the swallow, or focus reached the element in a way the edit does not stop. The first of these
+covers a page that drew the element again as a new one, for the key and focus edits too: the new
+element does not carry the change. For a removed element, the element that held it must still be on
+the page. Then `caught` and `caught by another rule` stand, because a new definite failure, where
+the entry says it reports, was measured while the defect was there.
 The row's reason notes that the change did not hold to the end of the scan, and why. Every other
 outcome becomes `unreadable` with that reason, because a miss or a preview finding then proves
 nothing: the checks may never have seen the defect.

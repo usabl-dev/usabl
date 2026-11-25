@@ -68,7 +68,8 @@ export interface EditResultInPage {
  * The result also holds a second read for after the scan. A markup edit reads its change back
  * again. The two script edits count what they did: a key edit counts the keys aimed at the element
  * that got past it, and a focus edit counts focus that reached the element in a way the edit does
- * not stop. The reasons are engine words. An error the page throws while the edit runs can still
+ * not stop. Every second read first checks that the changed element is still on the page. The
+ * reasons are engine words. An error the page throws while the edit runs can still
  * carry page words into the reason the real editor builds, so every reason is scrubbed before any
  * output.
  */
@@ -262,11 +263,14 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
           window.addEventListener(type, observe, { capture: true, passive: true });
           element.addEventListener(type, swallow, true);
         }
-        readBacks.push(() =>
-          aimed.some((event) => !swallowed.has(event))
+        // A page that draws the element again as a new node leaves the swallow on the old one, and
+        // keys aimed at the new node never pass it. So a node no longer on the page means not held.
+        readBacks.push(() => {
+          if (!element.isConnected) return GONE;
+          return aimed.some((event) => !swallowed.has(event))
             ? `a ${key} key aimed at the changed element reached the page before the edit could cancel it`
-            : null,
-        );
+            : null;
+        });
         notes.push(() => (pressed === 0 ? `the checks never pressed ${key} on the changed element` : null));
         anchors.push(element);
         break;
@@ -325,7 +329,10 @@ export function applyEditInPage(arg: { targets: string[]; edit: Edit }): EditRes
           },
           true,
         );
+        // A new node the page drew in place of the element has a working focus(), and focus that
+        // reaches it is never counted here. So a node no longer on the page means not held.
         readBacks.push(() => {
+          if (!element.isConnected) return GONE;
           if (stubbed.some((node) => (node as HTMLElement).focus !== nothing)) {
             return 'the page replaced a focus() call the edit turned off';
           }
