@@ -1762,17 +1762,24 @@ says so, never a short list read as complete.
 come from one walk, in `src/deps/worktree.ts`. git is never asked whether a file changed, and never
 asked to convert bytes for that answer:
 
-1. git lists the paths: every entry of HEAD (`git ls-tree -r -z --full-tree HEAD`), every entry of
-   the index (`git ls-files -v -s -z`, read for its names and its skip-worktree tag only, never for
-   its ids or its saved file info), and the new files above. The listings run with
-   `core.fsmonitor` and `core.untrackedCache` off.
+1. The paths: every entry of HEAD, every entry of the index (`git ls-files -v -s -z`, read for its
+   names and its skip-worktree tag only, never for its ids or its saved file info), and the new
+   files above. HEAD's entries are read in Node from the objects `git cat-file --batch` prints: the
+   commit, then each tree below it, one git process per level of folders. Each object's id is
+   computed from its bytes and must match, because git does not check that when it reads an
+   object. A mismatch stops the read with an error that names the object and `git fsck`. The
+   listings run with `core.fsmonitor` and `core.untrackedCache` off and `core.ignorecase` false.
 2. usabl reads each path's kind with one synchronous `lstat`, in chunks of 2000 between turns of
-   the event loop. A folder found missing answers for every file in it.
+   the event loop. Each folder on a path is read once with `lstat` too. A missing folder answers
+   for every file in it. A path with a link in its folder part is never hashed through the link: a
+   HEAD file there is `D`, as git sees it.
 3. Every regular file is hashed as the bytes on disk, with `git hash-object --no-filters
    --stdin-paths`: no filter, no attribute, and no line ending rule. More than 2000 files are split
    over four git processes. Each name goes to git in its C quoting, so a name with a newline
    arrives whole, and each name is kept as the bytes git stores, so a name that is not valid UTF-8
-   is read as that file. A symbolic link is hashed from its link text.
+   is read as that file. A symbolic link is hashed from its link text. A link whose target, with
+   every link on the way resolved, is not a file the walk hashes or a folder that holds one makes
+   the tree id one that never repeats (see step 7).
 4. A file is unchanged when its id is the id HEAD holds. When it is not, three forms still count as
    the committed content. Each follows from the blob alone, so each accepts one content only:
    - the same text with each CR LF read as LF. git computes this id in a scratch repository whose
@@ -1780,6 +1787,8 @@ asked to convert bytes for that answer:
      `.git/config` and `.git/info/attributes` are never read;
    - the content an LFS pointer names: the HEAD blob is exactly a pointer (version, `oid sha256`,
      size), and the file's sha256 and size match it;
+
+   For the last two forms, the HEAD blob is used only when its bytes hash to its id;
    - the blob with each `$Id$` marker holding the blob id, as checkout writes it, line endings
      aside. Text inside a marker can never change unseen.
 
@@ -1798,10 +1807,18 @@ asked to convert bytes for that answer:
    not there), and its files are listed by their paths in the outer repository. A submodule that
    was never set up is an empty folder, and the tree keeps the recorded commit. A submodule folder
    that holds files but no repository stops the read with an error.
+7. The tree is built from the records in a temporary index (`git update-index -z --index-info`,
+   then `git write-tree --missing-ok`), and the index is read back (`git ls-files -s -z`). It must
+   hold exactly the records sent, name by name, with each mode and id, because `--index-info`
+   skips a name it will not store, such as a folder named `GIT~1` or `.GIT`, and exits 0. On any
+   difference, or for a link from step 3, the tree id is one that never repeats: no stored receipt
+   answers for it, and a run that reads it twice ends with the not-covered gap for files that
+   changed during the check.
 
 Settings the walk ignores, because none of them changes a byte the dev server serves: the index's
 assume-unchanged and skip-worktree flags and its saved file info, `core.trustctime`,
-`core.checkStat`, `core.ignoreStat`, `core.fsmonitor`, `core.untrackedCache`, every attribute
+`core.checkStat`, `core.ignoreStat`, `core.fsmonitor`, `core.untrackedCache`, `core.ignorecase`,
+every attribute
 (`filter`, `ident`, `working-tree-encoding`, `text`, `eol`), every filter driver from any config,
 `core.autocrlf`, and `core.eol`. `core.fileMode` still sets the mode the tree records. Each of the
 others made git faster, or made git see bytes other than the ones on disk, and the threat model
@@ -1810,34 +1827,51 @@ the executable bit alone, is not in the changed list. The tree moves for both, s
 answers for them.
 
 Every git command usabl runs gets `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null`, so
-objects and commit parents are read as stored. A replace ref made git read a replaced HEAD tree
-that holds a staged edit, and git status read clean. A graft that makes HEAD a parent of the
-trusted commit made the merge-base diff list nothing for a committed edit.
+replace refs and grafts never apply. A replace ref made git read a replaced HEAD tree that holds a
+staged edit, and git status read clean. A graft that makes HEAD a parent of the trusted commit made
+the merge-base diff list nothing for a committed edit. Every git command usabl runs also drops the
+variables that point git at another repository, index, object store, work tree, config, or
+attribute source: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_QUARANTINE_PATH`, `GIT_SHALLOW_FILE`,
+`GIT_NAMESPACE`, the pathspec variables, and every `GIT_CONFIG_*` and `GIT_ATTR_*` variable. The
+reader sets its own `GIT_INDEX_FILE` for the temporary index, and its own `GIT_DIR` and
+`GIT_WORK_TREE` for the scratch repository of step 4.
 
-The reader refuses a work tree outside its folder. The repository root is the one git names
-(`git rev-parse --show-toplevel`, a physical path), so a folder reached through a link inside the
-repository reads the same root. The folder usabl was given must be that root or inside it. With
-`core.worktree` set, git reads another folder, so the read stops with an error that names the
-setting, and the Stop hook blocks on it.
+The reader refuses a work tree other than the repository it runs in. The repository root is the one
+git names (`git rev-parse --show-toplevel`, a physical path), so a folder reached through a link
+inside the repository reads the same root. The folder usabl was given must be that root or inside
+it, git run in the root must find the same repository (`git rev-parse --absolute-git-dir`) as git
+run in that folder, and `core.worktree`, when set, must name the root. `core.worktree` naming a
+sibling copy of the files fails the first check, and naming a parent folder that is a repository of
+its own fails the second. The read then stops with an error that names the setting. The Stop hook
+makes the first two checks before it moves to git's root, so it stays in its own folder, where the
+reader refuses, and it blocks.
 
-One git reader keeps the hashes of its own reads in memory, for one process, so the four reads of
-a stop hash each file once. An entry is used only while usabl's `lstat` gives the same device,
-inode, size, modification time, and change time, to the nanosecond. A file changed within two
-seconds of a read is never kept. A process that is not root cannot set the change time, so an edit
-that keeps the size and restores the modification time is read again.
+One git reader keeps the hashes of its changed lists in memory, for one process. An entry is used
+only while usabl's `lstat` gives the same device, inode, size, modification time, and change time,
+to the nanosecond. A file changed within two seconds of a read is never kept. A process that is not
+root cannot set the change time, so an edit that keeps the size and restores the modification time
+is read again. A second write to a page of a mapped file that is already dirty keeps both times,
+so the tree (`writeTree`) never reads the cache: every tree read hashes every file fresh. It still
+fills the cache for the list that comes after it.
 
-Cost, measured on a shared 8-core machine under load, for the four reads of one stop that runs a
-check (tree, list, tree, tree):
+Cost, measured on a shared 8-core machine under heavy load (a load average of 6 to 12, so the
+spread is wide), for the four reads of one stop that runs a check (tree, list, tree, tree), two
+runs each:
 
-| Repository | Before | Now |
-| --- | --- | --- |
-| 50,000 files, no filters | 8.4 to 8.8 s | 8.0 to 8.6 s |
-| 50,000 files, `eol=crlf` on every file | 11.3 to 11.8 s | 9.8 to 9.9 s |
-| sparse checkout, 45,000 of 50,000 files left out | 2.9 to 3.1 s | 4.7 to 5.9 s |
+| Repository | Before this change | With a cache for every read | Now |
+| --- | --- | --- | --- |
+| 50,000 files, no filters | 8.4 to 8.8 s | 18.5 to 22.3 s | 13.5 to 25.3 s |
+| 50,000 files, `eol=crlf` on every file | 11.3 to 11.8 s | 9.4 to 17.0 s | 15.4 to 16.2 s |
+| sparse checkout, 45,000 of 50,000 files left out | 2.9 to 3.1 s | 4.6 to 5.4 s | 4.9 to 5.1 s |
 
-The changed list costs more than before (about 1.6 s against 0.2 s on 50,000 files), because git
-status trusted the index's saved file info, which is exactly what an agent could set. The tree
-reads cost less, because the cache spans them.
+The first column was measured on another day, with less load. On the same runs in the two
+50,000-file repositories, a tree read after the first took 1.8 to 5.1 s with the cache and 3.1 to
+7.1 s fresh, so a stop that runs a check pays
+about two fresh tree reads more: a few seconds on 50,000 files. Reading HEAD's trees in Node costs
+nothing measurable (1,001 trees). The changed list costs more than git status did (about 1.6 s
+against 0.2 s on 50,000 files), because git status trusted the index's saved file info, which is
+exactly what an agent could set.
 
 Known limits:
 - A file under a filter driver that is not LFS (an encryption filter, a notebook output filter),
@@ -1846,7 +1880,17 @@ Known limits:
   a false green.
 - An agent can write the sparse patterns too. A file it leaves out of the set and deletes reads as
   left out on purpose, so the deletion is not in the changed list. The tree moves, so no stored
-  receipt answers, but a stop whose only change it is reads "nothing to check".
+  receipt answers, but a stop whose only change it is reads "nothing to check". The same holds for
+  a submodule whose folder the agent empties, its `.git` included: it reads as never set up, so
+  its files' deletion is not listed, and the tree keeps the recorded commit.
+- A link out of the files the walk hashes, such as one committed to point outside the repository,
+  makes every tree read differ, so every run ends with the not-covered gap for files that changed
+  during the check, and that gap's text tells the person to wait rather than naming the link. So
+  does a name git will not store.
+- Only HEAD's commit and trees are checked against their ids. Other reads take objects as stored:
+  the merge-base diff, the Stop hook's search for the starting commit, and the guard's policy
+  reads at the trusted ref. Locally, an agent that can write `.git/objects` can also write a
+  receipt; in CI, git computes the id of every object it fetches.
 - `.git/info/exclude` and a local `core.excludesFile` still hide a new file, as the threat model
   says for ignored files.
 

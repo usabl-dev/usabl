@@ -474,21 +474,53 @@ passing bundle from another run.
   - a graft (`.git/info/grafts`): a graft that makes HEAD a parent of the trusted commit made
     `git diff <trusted>...HEAD` list nothing for a committed edit.
 
-  Now one walk gives both answers (`src/deps/worktree.ts`). git lists the paths: every entry of
-  HEAD, every entry of the index (for its names and its skip-worktree tag only), and every new
-  file git does not ignore. usabl reads each path's kind with its own `lstat` and hashes the bytes
-  with `git hash-object --no-filters`. The tree is built from those ids. A file is unchanged only
-  when its bytes are the blob HEAD holds, or one of three forms that follow from that blob alone,
-  so each accepts one content only: the same text with CR LF read as LF, the content an LFS
-  pointer names (its sha256 and size), or the blob with each `$Id$` marker holding the blob id, as
-  checkout writes it. No filter program runs, no attribute decides the answer, and no hook runs.
-  Every git command runs with `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null`, so
-  objects and parents are read as stored, the Stop hook's search for the starting commit and the
-  guard's policy reads included. The listings run with `core.fsmonitor` and `core.untrackedCache`
-  off.
+  Now one walk gives both answers (`src/deps/worktree.ts`). The paths are every entry of HEAD,
+  every entry of the index (for its names and its skip-worktree tag only), and every new file git
+  does not ignore. usabl reads each path's kind with its own `lstat` and hashes the bytes with
+  `git hash-object --no-filters`. The tree is built from those ids. A file is unchanged only when
+  its bytes are the blob HEAD holds, or one of three forms that follow from that blob alone, so
+  each accepts one content only: the same text with CR LF read as LF, the content an LFS pointer
+  names (its sha256 and size), or the blob with each `$Id$` marker holding the blob id, as checkout
+  writes it. No filter program runs, no attribute decides the answer, and no hook runs. Every git
+  command runs with `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null`, so replace refs and
+  grafts never apply, the Stop hook's search for the starting commit and the guard's policy reads
+  included. The listings run with `core.fsmonitor` and `core.untrackedCache` off and
+  `core.ignorecase` false.
+- git does not check an object's id against its bytes when it reads it, and the agent can write
+  `.git/objects`. An object file overwritten with other bytes made an edited file read unchanged
+  two ways: a HEAD blob rewritten as an LFS pointer to the edited bytes passed the LFS form, and a
+  HEAD tree rewritten to list the edited blob made the raw id match. The stop then scanned only the
+  other screens and read VERIFIED. Now the walk reads the HEAD commit and every tree below it in
+  Node and checks each id; one that does not match stops the read with an error that names the
+  object and `git fsck`, and the Stop hook blocks. A HEAD blob read for the LFS or `$Id$` form is
+  used only when its bytes hash to its id; otherwise the file is changed. Limit: other reads take
+  objects as stored, among them the merge-base diff (a tree object only the trusted commit's side
+  holds) and the guard's policy reads at the trusted ref. Locally that is inside the stated limit
+  that a user with a shell can write a receipt that verifies. In CI the runner fetches the objects,
+  and git computes each fetched object's id from its bytes.
+- A name git will not store is never silently left out of the tree. `git update-index
+  --index-info` skips a name such as a folder named `GIT~1` or `.GIT` (rejected on every platform),
+  prints a line, and exits 0, and it drops a record that clashes with another one. A new screen file
+  under such a folder kept the tree of the last receipt, and the stop answered from it. Now the
+  reader reads the index it built back (`git ls-files -s -z`) and requires exactly the records it
+  sent, name by name, with each mode and id. On any difference the tree id is one that never
+  repeats, so no stored receipt answers. A run that reads such a tree twice sees two trees, so it
+  ends with the not-covered gap for files that changed during the check.
+- A file is never hashed through a link in its folder part. With `src/pages` swapped for a link to
+  a folder elsewhere, `lstat` followed the link for each committed file below it, so the tree held
+  those files and new files in the target were never listed. Now a committed file below a link is
+  `D`, as git sees it, and the link is a path of its own.
+- A link binds its link text, and the dev server serves its target's bytes. So a link, committed or
+  new, whose target is outside the files the walk hashes (outside the repository, in an ignored
+  folder, in `.git`, or not there at all) makes the tree id one that never repeats, and no stored receipt answers. A link to a file the walk hashes, or to a folder
+  that holds one, is bound by its text and its target's own record. Cost: a repository that commits
+  a link out of the repository never verifies a run, because each run reads two trees; the gap
+  says files changed during the check.
 - Settings the two reads ignore, and why that is safe: the index's flags and saved file info,
   `core.trustctime`, `core.checkStat`, `core.ignoreStat`, `core.fsmonitor`,
-  `core.untrackedCache`, every attribute (`filter`, `ident`, `working-tree-encoding`, `text`,
+  `core.untrackedCache`, `core.ignorecase` (with it true on a file system that tells case apart,
+  git did not list a new file whose name differs from a tracked one only in case, or a folder
+  named `.GIT`), every attribute (`filter`, `ident`, `working-tree-encoding`, `text`,
   `eol`), every filter driver from any config, `core.autocrlf`, and `core.eol`. None of them
   changes a byte the dev server serves. Each only made git faster, or made git see bytes other
   than the ones on disk. `core.fileMode` still sets the mode the tree records, because the
@@ -513,24 +545,39 @@ passing bundle from another run.
   leaves out of the set and deletes reads as left out on purpose. The tree moves, because the
   file is gone from disk, so no stored receipt answers. But the deletion is not in the changed
   list, so a stop whose only change it is reads "nothing to check". A deletion is quiet only for a
-  file nothing imports, such as one loaded through `import.meta.glob` or a CSS file.
+  file nothing imports, such as one loaded through `import.meta.glob` or a CSS file. The same holds
+  for a submodule whose folder the agent empties, its `.git` included: it reads as a submodule that
+  was never set up, so the deletion of its files is not in the changed list, and the tree keeps the
+  recorded commit, which differs from the tree of a receipt minted while its files were there.
 - A submodule's files are walked by the same rule, against the commit the outer repository
   records, and are listed by their paths in the outer repository, so an edit inside one moves the
   tree and is planned. A submodule that was never set up is an empty folder, and the tree keeps the
   recorded commit. A submodule folder that holds files but no repository cannot be compared, so the
   read stops with an error.
-- The reader refuses a work tree outside its folder. With `core.worktree` in `.git/config`, git
-  reads the files of another folder: a copy of the committed files there kept the tree and the list
-  unchanged while the served files changed, and the stop answered VERIFIED. The git reader now
-  requires its folder to be the repository root git names or inside it, and the Stop hook does
-  not move to a root that does not hold its own folder. Such a stop checks nothing and blocks on
-  the listing failure.
-- One reader keeps the hashes of its own reads in memory, for one process, so the four reads of a
-  stop hash each file once. An entry is used only while usabl's own `lstat` gives the same device,
-  inode, size, modification time, and change time, to the nanosecond, and a file changed within
-  two seconds of a read is never kept. A process that is not root cannot set the change time, so
-  an edit that keeps the size and restores the modification time is read again. The first read of
-  each stop starts with no entries.
+- The reader refuses a work tree other than the repository it runs in. With `core.worktree` in
+  `.git/config`, git reads the files of another folder: a copy of the committed files in a sibling
+  folder kept the tree and the list unchanged while the served files changed, and the stop answered
+  VERIFIED. A parent folder that is a repository of its own and ignores the project passed a check
+  that the folder is inside the root: every read then listed the parent's files, `usabl check`
+  read "nothing to check", and the Stop hook moved to the parent and allowed the stop as not
+  configured. Now the git reader requires three things: its folder is the root git names or inside
+  it, git run in that root finds the same repository as git run in its folder, and
+  `core.worktree`, when set, names that root. The Stop hook makes the same first two checks before
+  it moves to a root. A stop that fails one checks nothing and blocks with a reason that names
+  `core.worktree`, and `usabl check` fails with the same text. Every git call usabl makes also
+  drops `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, the other variables that point git at
+  another repository, and every `GIT_CONFIG_*` and `GIT_ATTR_*` variable from its environment, so a
+  `usabl check` run with them set reads the repository in its folder.
+- One reader keeps the hashes of its changed lists in memory, for one process. An entry is used
+  only while usabl's own `lstat` gives the same device, inode, size, modification time, and change
+  time, to the nanosecond, and a file changed within two seconds of a read is never kept. A process
+  that is not root cannot set the change time, so an edit that keeps the size and restores the
+  modification time is read again. But a second write to a page of a file that is mapped into
+  memory and already dirty changes its bytes and keeps both times (measured on btrfs and overlayfs).
+  So the tree a receipt binds, which the fast path and the run compare, is hashed fresh on every
+  read and never taken from the cache. Only the changed list reads it, and the list decides what to
+  check and binds nothing. The first read of each stop starts with no entries.
 - CI lists changes the same way: the gate's `usabl check --trusted-ref` joins the merge-base diff
   with this listing. A fresh checkout reads unchanged against HEAD, so its list does not change.
   A sparse CI checkout lists none of the files it left out, because git says they are outside its
