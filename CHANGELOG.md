@@ -448,6 +448,37 @@
   one node. Its failure names the limit. A file over a limit is never cut short or read in part.
   Gate effect: a requirement file over a limit no longer loads, and is `approval_required` with
   the limit named.
+- A stale `origin/HEAD` no longer makes a configured repository read as a branch that sets usabl
+  up. After a project moves its default branch, for example from `master` to `main`, a clone's
+  `origin/HEAD` can still name the old branch, because a fetch does not move it. When that branch
+  and the commit where this branch left it had no `usabl.config.json`, a Stop hook stop and
+  `usabl check --branch-scope` read the branch's own policy, so a waiver the branch committed was
+  taken as policy. A branch now reads as one that sets usabl up only when no branch of origin has
+  `usabl.config.json` at its tip. When another one has it, the stop is a not-covered gap that
+  checks nothing, says `origin/HEAD` may be stale, names the first such branch with a plain name
+  inside the untrusted frame, and gives the step `git remote set-head origin --auto` first;
+  `usabl check --branch-scope` prints the same and exits 4. The lookup reads local objects only:
+  it reads each tip's root tree, never the config's own object. Every git call that finds the
+  starting commit and where policy is read now runs with lazy fetch off, so in a partial clone
+  that step does not fetch from origin inside a stop; before, a treeless clone fetched the tree of
+  the starting commit or the trusted branch there. A tree the clone does not have is a gap whose
+  next step is `git ls-tree` with the branch to load (a fetch does not load trees in a treeless
+  clone), and a branch of origin that names a blob or a tree says so. In a treeless clone that
+  gap can follow each fetch that moves the trusted branch, until its tree is loaded. A git
+  failure in the lookup is a gap, never "no config", and so is an answer git was
+  not expected to print, such as a second branch checked out here. git may print up to 64 MiB, so
+  a clone with tens of thousands of branches is read, and past that limit the gap says git
+  printed more than usabl reads. This branch's own copy on
+  origin does not count, so a setup branch still reads as one after it is pushed: the branch of
+  origin with the current branch's name and the current branch's upstream are skipped, except
+  that a branch of origin named `main`, `master`, `trunk`, or `develop` always counts. A detached
+  HEAD skips nothing. Known limits: a setup branch named one of those four is this gap after its
+  push, until the setup merges. When a project renamed its default branch to a name outside the
+  four and `origin/HEAD` is stale, a branch named after the new default branch, or one that
+  tracks it, still reads as a setup branch; CI still reads policy at the real base and blocks.
+  Only the branches of origin are asked, so when origin is a fork made before the setup and never
+  synced, a branch made from another remote's configured branch reads as a setup branch; CI reads
+  policy at the real base there too.
 - An edit to a tracked file marked assume-unchanged or skip-worktree is now a change. git status
   and git diff do not compare such a file, so a stop whose only edit was one read "No UI files
   changed, so there was nothing to check", and a stop with other edits did not plan the screens
