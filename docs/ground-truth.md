@@ -260,50 +260,49 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
 
 ### Module map
 
-This is the actual source layout as built for v0.2.2. Dedup is not a separate module;
-it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
-an MCP wrapper stays an optional transport.
+This is the source layout on main, one line per folder: what it holds, not every file in it.
+Dedup is not a separate module; it runs inside the gate (see section 9). There is no built MCP
+surface (section 11.5); an MCP wrapper stays an optional transport.
 
 ```
 src/
-  contracts/        index.ts
-  primitives/       canonical.ts identity.ts iso8601.ts match-glob.ts neutralize.ts slug.ts sortKey.ts
-  deps/             build.ts real.ts ax-tree.ts fakes.ts fs.ts git.ts
-  providers/
-    axe/            index.ts notes.ts
-    rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
-    rhds/           index.ts sources.ts draft.ts rhds-<one-file-per-rule>.ts
-    design-system-pack.ts   (design-system markers and the inapplicable record; section 7.2)
-    docs-rulepack/  index.ts heading-order.ts
-    keyboard-walk/  index.ts steps.ts
-    check-runner.ts index.ts
-  evidence/         receipt.ts floor.ts
-  coverage/         import-graph.ts planner.ts route-manifest.ts docs-manifest.ts docs-planner.ts asciidoc-include-graph.ts
-  gate/             index.ts
-  trust/            guard.ts
-  intake/           schema.ts normalize.ts load.ts config.ts load-config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
-  docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
-  output/           conformance.ts summary.ts
-  doctor/           index.ts
-  brief/            index.ts   (usabl brief: the task-start brief; measurement only, section 11.5)
-  drift/            routes.ts
-  floor/            prune.ts
-  init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
-  baseline/         index.ts
-  session/          index.ts   (usabl session: sign in once, save the storage state)
-  install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
-  history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
-                    ledger.ts ledger-git.ts ledger-report.ts   (usabl debt ledger; measurement only, section 9)
-  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
-  measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
-    sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
-  surfaces/
-    cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
-    stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
-    overlay-host.ts vite-plugin.ts webpack-plugin.ts webpack-loader.ts overlay-client.ts
-    playwright-helper.ts
-    self-check.ts docs.ts docs-html.ts
-  run.ts cli.ts cli-bin.ts index.ts
+  run.ts              the sequencer: guard, coverage, scan, gate, then the receipt when the gate verifies
+  index.ts            the library entry: the contracts, run, and gate
+  cli.ts cli-bin.ts   the CLI entry and the installed binary
+  integration-smoke.ts  a manual real-browser smoke run of the provider stack; prints scan evidence only
+  contracts/          the shared types: Draft, Finding, Result, config, and the injected deps
+  primitives/         small pure helpers: hashing, identity, globs, CODEOWNERS matching, accessible names, neutralize
+  deps/               adapters for git, the file system, the browser (real.ts, ax-tree.ts, axe-world.ts), the session, the sandbox, and scanner versions, plus fakes for tests
+  providers/          the evidence collectors and the check runner; they emit drafts only
+    axe/              axe-core (section 7.1)
+    rulepack/         the PatternFly rulepack, one pf-*.ts file per rule (section 7.2)
+    rhds/             the Red Hat Design System rulepack, one rhds-*.ts file per rule (section 7.2.1)
+    keyboard-walk/    the keyboard walk (section 7.3)
+    docs-rulepack/    checks for rendered documentation (section 7.6)
+    engines/          the optional Deque and Evinced engines, preview (section 7.7)
+  coverage/           maps changed files to screens: import graph, aliases, routes, docs manifests, and completeness (section 8)
+  gate/               the gate, the only verdict authority, and the checks on its own input (section 9)
+  trust/              the guard that detects policy drift from the trusted ref (section 10)
+  evidence/           the evidence floor, the waivers, and the verified receipt with what it binds
+  intake/             config, route, and requirement loading and validation, and the design check providers (section 13)
+  voicing/            the voice lane and the silent change rule (section 7.5)
+  history/            the debt history, usabl debt, and usabl debt ledger (measurement only, section 9)
+  judge/              the trusted judge: build extract, the static build server, the isolated browser's request filter, and its disclosure (section 11.4)
+  import/             usabl import figma: Figma files to draft requirements, written as YAML (section 13)
+  surfaces/           CLI commands, stop hook, overlay, pull request comment, CI enforce, Playwright helper, self-check, docs output, and scrub.ts (section 11)
+  output/             text projections of a Result: verdict line, summary, disclosure, debt words, bounds
+  docs/               the reports artifacts and rendered-finding to AsciiDoc source mapping (section 14)
+  app/                finding to app source mapping, presentation only
+  doctor/             usabl doctor, a read-only health check (section 11.9)
+  brief/              usabl brief, the task-start brief; measurement only (section 11.5)
+  init/               usabl init and usabl init --docs: draft policy from the working tree
+  install/            usabl install: the workflows, hooks, skills, and overlay setup for each integration
+  baseline/           usabl baseline: the first evidence floor draft
+  floor/              usabl floor prune, and the floor entries a run cannot call fixed
+  drift/              usabl drift routes and usabl drift design
+  session/            usabl session: sign in once and save the storage state
+  measure/            measurement only, never in the run or gate path: fleet insights and identity stability (section 25)
+    sensitivity/      usabl verify sensitivity (section 25)
 fixtures/
 test/
 usabl.config.json
@@ -313,6 +312,8 @@ usabl.docs.json
 .usabl-waivers.json
 .github/workflows/usabl.yml        (engine dogfood CI: gitleaks, pre-commit, semgrep, npm run check)
 .github/workflows/usabl-gate.yml   (engine PR gate; see section 11.4)
+.github/workflows/codeql.yml       (CodeQL code scanning; not a required check)
+.github/workflows/pages.yml        (publishes the approved public docs pages, run by hand)
 ```
 
 ### Check-agnostic data flow
