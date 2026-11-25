@@ -433,6 +433,35 @@
 
 ### Fixed
 
+- usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
+  `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
+  pattern's length times the path's length. Before, it built a regular expression, and a
+  committed `uiFileGlobs` entry with twelve wildcards and a changed file name of 38 letters made a
+  stop take 81.7 seconds, so the host could end the Stop hook with nothing checked. That one match
+  now takes under a millisecond. The answers are the same as before for both dot rules. Many
+  bounded matches can still add up: a list inside the policy bounds took about 24 seconds to rule
+  out one changed path of 3999 characters. So the app planner and the docs planner each carry a
+  budget of 100,000,000 matching steps for the changed files (20,000 changed files against four
+  common globs used about 3 million), and test-file placement carries 1,000,000,000 of its own (an
+  app of 20,000 test files and 40 ordinary `import.meta.glob` calls used 0.51 billion). All of them
+  together are at most about 60 seconds of matching on a loaded 8-core machine. Each planner tests
+  the changed files in a fixed order, so the same set of changed files gives the same gaps in any
+  order. `import.meta.glob` patterns, which
+  come from source code, have the size bounds of the policy glob lists for each call (a pattern
+  whose braces expand to one longer than 1024 characters, or more than 4096 patterns or 262,144
+  characters in all) and a budget of 65,536 characters across the run. A pattern that starts with
+  `/` is matched under every folder in one read of the path; before, one file 1000 folders deep
+  took 17 seconds. Gate effect: a changed file left untested when the step budget runs out is a
+  gap whose reason names the budget, so the run is `not_covered`, never nothing to check. A call
+  past a bound or the character budget, and every glob once the step budget is spent, may load any
+  file, so a changed test file it could reach is a gap. Known limits: the guard's own matching has
+  no budget, and a `guardedPaths` list inside the bounds took 9.2 seconds against one committed
+  path of 3999 characters. Node's `fs.glob` still backtracks. usabl hands it each `guardedPaths`
+  entry, in the guard's working-tree listing and in `usabl doctor`; `uiFileGlobs` and
+  `discovery.wideBlastGlobs` when a changed test file is placed; `workspaces` patterns; and
+  `uiFileGlobs` in `usabl baseline` and the docs output. A pattern with many wildcards and a long
+  file name there can still outlast the host's limit.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
@@ -504,8 +533,8 @@
   shorten the entry. Known limit: the bounds do not cover the number of wildcards. A committed glob
   with many wildcards can take long enough to match a long changed file name that the host ends
   the Stop hook before usabl answers, and the stop then goes on with nothing checked. usabl's own
-  deadline is a timer in the same process and cannot end a match that is running. A matcher that
-  does not backtrack is planned.
+  deadline is a timer in the same process and cannot end a match that is running. The matcher no
+  longer backtracks; see the entry on the glob matcher above.
 - `usabl check` and the Stop hook save a receipt only when it binds the config they planned with.
   A check read `usabl.config.json` to plan and the run read it again when it bound the root config
   into the receipt. Before, a second process that put the committed config back in between made the
