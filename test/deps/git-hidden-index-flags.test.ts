@@ -6,7 +6,7 @@
  *
  * Real git in a temporary folder.
  */
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -149,5 +149,71 @@ describe('git status listing and files git hides with index flags', { timeout: R
       await write('docs/guide.md', 'edited guide\n');
       expect(await statusPaths()).toEqual(['docs/guide.md']);
     });
+
+    it('lists an assume-unchanged file in a folder sparse checkout removed', async () => {
+      await git('update-index', '--no-skip-worktree', 'docs/guide.md');
+      await git('update-index', '--assume-unchanged', 'docs/guide.md');
+      await expect(makeGitReader({ cwd: repo }).statusZ()).resolves.toEqual([{ code: 'D', path: 'docs/guide.md' }]);
+    });
+
+    it('lists a skip-worktree file inside the sparse set that was deleted', async () => {
+      await git('update-index', '--skip-worktree', 'src/App.tsx');
+      await unlink(join(repo, 'src/App.tsx'));
+      await expect(makeGitReader({ cwd: repo }).statusZ()).resolves.toEqual([{ code: 'D', path: 'src/App.tsx' }]);
+    });
+  });
+
+  // An agent can turn sparse checkout on with one config line and no patterns. git cannot then
+  // say which files are outside the sparse set, so a missing skip-worktree file is a deletion.
+  it('lists a deleted skip-worktree file when sparse checkout is on with no patterns', async () => {
+    await git('config', 'core.sparseCheckout', 'true');
+    await git('update-index', '--skip-worktree', 'src/App.tsx');
+    await unlink(join(repo, 'src/App.tsx'));
+    expect(await git('status', '--porcelain')).toBe('');
+    await expect(makeGitReader({ cwd: repo }).statusZ()).resolves.toEqual([{ code: 'D', path: 'src/App.tsx' }]);
+  });
+});
+
+// A file name that is not valid UTF-8. git stores its bytes as they are, so the reader must read the
+// file by those bytes, not by a decoded copy that names no file.
+describe('a flagged file whose name is not valid UTF-8', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const RAW_NAME = Buffer.concat([Buffer.from('src/lat'), Buffer.from([0xe9]), Buffer.from('.tsx')]);
+  // How the reader returns the name: decoded as UTF-8, as git status names are.
+  const SHOWN_NAME = RAW_NAME.toString('utf8');
+
+  async function writeRaw(text: string): Promise<void> {
+    await writeFile(Buffer.concat([Buffer.from(`${repo}/`), RAW_NAME]), text, 'utf8');
+  }
+
+  // update-index reads the name from stdin, so its bytes reach git as they are.
+  async function flagRaw(flag: string): Promise<void> {
+    execFileSync('git', ['update-index', flag, '-z', '--stdin'], { cwd: repo, input: Buffer.concat([RAW_NAME, Buffer.from([0])]) });
+  }
+
+  beforeEach(async () => {
+    await writeRaw('export const Lat = 1;\n');
+    await git('add', '-A');
+    await git('commit', '-q', '-m', 'raw name');
+  });
+
+  it('lists nothing when the flagged file did not change', async () => {
+    await flagRaw('--assume-unchanged');
+    expect(await statusPaths()).toEqual([]);
+  });
+
+  it('lists an edit to it', async () => {
+    await flagRaw('--assume-unchanged');
+    await writeRaw('export const Lat = 2;\n');
+    await expect(makeGitReader({ cwd: repo }).statusZ()).resolves.toEqual([{ code: 'M', path: SHOWN_NAME }]);
+  });
+
+  it('lists an edit to it as an edit in a sparse checkout', async () => {
+    await git('sparse-checkout', 'set', '--no-cone', '/src/');
+    // Without this setting git status clears the flag of a file that is there, and lists the edit
+    // itself. With it, only the reader's own listing can find the edit.
+    await git('config', 'sparse.expectFilesOutsideOfPatterns', 'true');
+    await flagRaw('--skip-worktree');
+    await writeRaw('export const Lat = 2;\n');
+    await expect(makeGitReader({ cwd: repo }).statusZ()).resolves.toEqual([{ code: 'M', path: SHOWN_NAME }]);
   });
 });

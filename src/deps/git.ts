@@ -4,7 +4,8 @@
  * Missing HEAD blobs return null so the guard can disclose not-covered work honestly.
  */
 import { execFile, spawn } from 'node:child_process';
-import { lstat, mkdtemp, readlink, rm } from 'node:fs/promises';
+import { lstatSync } from 'node:fs';
+import { mkdtemp, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -186,34 +187,39 @@ function parseStatus(output: string): Array<{ code: string; path: string }> {
  * assume-unchanged flag (`git update-index --assume-unchanged`, or core.ignoreStat) and the
  * skip-worktree flag (`git update-index --skip-worktree`, or sparse checkout) both make git skip
  * the file, so an edit to it was in no changed list, and a stop whose only edit it was read
- * "nothing to check". The tree a receipt binds is built from a fresh index with no flags, so it
- * always saw the edit.
+ * "nothing to check".
+ *
+ * The name is kept as the bytes git stores. A name that is not valid UTF-8 has no exact string
+ * form, so the file is read, hashed, and checked against the sparse set by those bytes, and only
+ * the name the listing returns is decoded.
  */
 interface FlaggedEntry {
-  path: string;
+  raw: Buffer;
   mode: string;
   id: string;
   skipWorktree: boolean;
 }
 
+const TAB = 0x09;
+
 // `git ls-files -v -s -z` prints "TAG MODE ID STAGE\tNAME\0". The tag is S for skip-worktree and a
 // lower case letter for assume-unchanged. A file with both flags gets the lower case tag, so it
 // reads as assume-unchanged here, which never leaves it out (see hiddenIndexEdits). An entry in a
 // merge conflict has a stage above 0, and git status lists it already.
-function parseFlaggedEntry(record: string): FlaggedEntry | null {
-  const tag = record.slice(0, 1);
+function parseFlaggedEntry(record: Buffer): FlaggedEntry | null {
+  const tag = String.fromCharCode(record[0] ?? 0);
   if (tag !== 'S' && !/^[a-z]$/u.test(tag)) {
     return null;
   }
-  const tab = record.indexOf('\t');
+  const tab = record.indexOf(TAB);
   if (tab < 0) {
     return null;
   }
-  const [mode, id, stage] = record.slice(2, tab).split(' ');
+  const [mode, id, stage] = record.subarray(2, tab).toString('latin1').split(' ');
   if (mode === undefined || id === undefined || stage !== '0' || !FULL_OBJECT_ID.test(id)) {
     return null;
   }
-  return { path: record.slice(tab + 1), mode, id, skipWorktree: tag === 'S' || tag === 's' };
+  return { raw: Buffer.from(record.subarray(tab + 1)), mode, id, skipWorktree: tag === 'S' || tag === 's' };
 }
 
 // Every tracked file is listed, so in a large repository the listing can be far longer than the
@@ -233,7 +239,7 @@ function listFlaggedEntries(top: string): Promise<FlaggedEntry[]> {
       let data = rest.length === 0 ? chunk : Buffer.concat([rest, chunk]);
       let end = data.indexOf(0);
       while (end >= 0) {
-        const entry = parseFlaggedEntry(data.subarray(0, end).toString('utf8'));
+        const entry = parseFlaggedEntry(data.subarray(0, end));
         if (entry !== null) {
           flagged.push(entry);
         }
@@ -260,6 +266,21 @@ function firstLineOf(text: string): string {
   return operatorText(text.split('\n')[0] ?? '');
 }
 
+// One git command with bytes on stdin, its exit code, and its output as bytes. A command that
+// cannot start gives code null.
+function runGitWithInput(top: string, args: string[], input: Buffer): Promise<{ code: number | null; stdout: Buffer }> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd: top, env: { ...process.env, ...GIT_ENVIRONMENT }, stdio: ['pipe', 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    child.on('error', () => resolve({ code: null, stdout: Buffer.alloc(0) }));
+    child.on('close', (code) => resolve({ code, stdout: Buffer.concat(chunks) }));
+    // A command that ends before it reads all of stdin closes the pipe. Its exit code says so.
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+}
+
 async function isSparseCheckout(top: string): Promise<boolean> {
   try {
     return (await runGit(top, ['config', '--bool', '--get', 'core.sparseCheckout'])).trim() === 'true';
@@ -268,25 +289,80 @@ async function isSparseCheckout(top: string): Promise<boolean> {
   }
 }
 
-// The blob ids git add would store for these regular files, read through the same filters, such
-// as line ending rules in .gitattributes. Each path is an argument after --, so a name with a
-// newline or a leading dash is read as that file. A failure, such as a file removed in between,
-// gives null, and every file in the call then counts as changed.
-async function hashFiles(top: string, paths: readonly string[]): Promise<Array<string | null>> {
-  const ids: Array<string | null> = [];
-  for (let i = 0; i < paths.length; i += HASH_BATCH) {
-    const batch = paths.slice(i, i + HASH_BATCH);
-    try {
-      const lines = (await runGit(top, ['hash-object', '--', ...batch])).split('\n');
-      ids.push(...batch.map((_, index) => lines[index] ?? null));
-    } catch {
-      ids.push(...batch.map(() => null));
+// A name in git's C quoting: every byte outside printable ASCII as three octal digits, and " and
+// \ escaped. git hash-object --stdin-paths reads a line that starts with a double quote this way,
+// so every name, one with a newline or with bytes that are not UTF-8 included, reaches it whole.
+function cQuote(raw: Buffer): string {
+  let quoted = '"';
+  for (const byte of raw) {
+    if (byte === 0x22 || byte === 0x5c) {
+      quoted += `\\${String.fromCharCode(byte)}`;
+    } else if (byte >= 0x20 && byte <= 0x7e) {
+      quoted += String.fromCharCode(byte);
+    } else {
+      quoted += `\\${byte.toString(8).padStart(3, '0')}`;
     }
   }
-  return ids;
+  return `${quoted}"`;
 }
 
-const HASH_BATCH = 200;
+// The blob ids git add would store for these regular files, read through the same filters, such
+// as line ending rules in .gitattributes. One git process reads every name from stdin, so the
+// count of files sets no command line length. A failure, such as a file removed in between,
+// gives null for every file, and each then counts as changed.
+async function hashFiles(top: string, raws: readonly Buffer[]): Promise<Array<string | null>> {
+  if (raws.length === 0) {
+    return [];
+  }
+  const input = Buffer.from(raws.map((raw) => `${cQuote(raw)}\n`).join(''), 'latin1');
+  const { code, stdout } = await runGitWithInput(top, ['hash-object', '--stdin-paths'], input);
+  if (code !== 0) {
+    return raws.map(() => null);
+  }
+  const lines = stdout.toString('latin1').split('\n');
+  return raws.map((_, index) => lines[index] ?? null);
+}
+
+// The missing skip-worktree files that git says are outside the sparse set, by name bytes in hex.
+// git reads the sparse patterns itself (`git sparse-checkout check-rules`, git 2.41 or later), so
+// cone mode and the other pattern rules are read as git reads them. Any failure says no file is
+// outside: with no pattern file at all git cannot tell, and an older git has no such command.
+async function outsideSparseSet(top: string, raws: readonly Buffer[]): Promise<Set<string>> {
+  const outside = new Set<string>();
+  if (raws.length === 0) {
+    return outside;
+  }
+  const input = Buffer.concat(raws.flatMap((raw) => [raw, Buffer.from([0])]));
+  const { code, stdout } = await runGitWithInput(top, ['sparse-checkout', 'check-rules', '-z'], input);
+  if (code !== 0) {
+    return outside;
+  }
+  // check-rules prints the names inside the sparse set. The rest are outside.
+  const inside = new Set(splitNulBytes(stdout).map((raw) => raw.toString('hex')));
+  for (const raw of raws) {
+    if (!inside.has(raw.toString('hex'))) {
+      outside.add(raw.toString('hex'));
+    }
+  }
+  return outside;
+}
+
+function splitNulBytes(output: Buffer): Buffer[] {
+  const parts: Buffer[] = [];
+  let start = 0;
+  let end = output.indexOf(0, start);
+  while (end >= 0) {
+    if (end > start) {
+      parts.push(output.subarray(start, end));
+    }
+    start = end + 1;
+    end = output.indexOf(0, start);
+  }
+  if (start < output.length) {
+    parts.push(output.subarray(start));
+  }
+  return parts;
+}
 
 // The link text the index stores for a symbolic link, as bytes, or null when git cannot read it.
 async function blobBytes(top: string, id: string): Promise<Buffer | null> {
@@ -304,6 +380,26 @@ async function blobBytes(top: string, id: string): Promise<Buffer | null> {
 
 const REGULAR_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
 const LINK_MODE = '120000';
+// Entries read with one synchronous lstat each, between two turns of the event loop. An awaited
+// lstat per entry made a sparse checkout with 45,000 files left out take many seconds, because a
+// missing file is slow on that path. A chunk this size takes a few milliseconds, so a deadline
+// timer still fires on time.
+const LSTAT_CHUNK = 2000;
+
+type EntryKind = 'missing' | 'file' | 'link' | 'other';
+
+function entryKind(path: Buffer): EntryKind {
+  try {
+    const stats = lstatSync(path, { throwIfNoEntry: false });
+    if (stats === undefined) {
+      return 'missing';
+    }
+    return stats.isFile() ? 'file' : stats.isSymbolicLink() ? 'link' : 'other';
+  } catch (err) {
+    // A path below a file is not there either. Any other failure is a file usabl cannot read.
+    return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ENOTDIR' ? 'missing' : 'other';
+  }
+}
 
 /**
  * The flagged files whose working copy is not what the index holds, as status entries: M for a
@@ -314,51 +410,87 @@ const LINK_MODE = '120000';
  * so a flagged file written again with the same bytes is no change. A file usabl cannot read, a
  * folder, a pipe, a submodule, or a file that turned into a link or back counts as changed, so a
  * file usabl could not compare is never left out. A skip-worktree file that is not there is left
- * out only in a sparse checkout, where git removes the files outside the sparse set on purpose.
- * Anywhere else it is a deleted file. A change of the executable bit alone is not compared.
+ * out only when sparse checkout is on and git says the file is outside the sparse set, because
+ * sparse checkout removes those files on purpose. Anywhere else it is a deleted file, so a setting
+ * of core.sparseCheckout with no patterns hides nothing. A change of the executable bit alone is
+ * not compared.
+ *
+ * Known limit: the compare goes through git's own filters, as git add does. So an attribute such
+ * as ident, working-tree-encoding, or a clean filter can make an edited file hash to the id the
+ * index holds, and the edit is not listed. The same attribute keeps the tree id of the working
+ * tree the same.
  */
 async function hiddenIndexEdits(cwd: string): Promise<Array<{ code: string; path: string }>> {
-  const top = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).replace(/\n$/u, '');
+  // The way up to the repository root is made of ../ steps only, so the root is a plain string
+  // whatever bytes the folder names hold.
+  const top = join(cwd, (await runGit(cwd, ['rev-parse', '--show-cdup'])).replace(/\n$/u, ''));
   const flagged = await listFlaggedEntries(top);
   if (flagged.length === 0) {
     return [];
   }
+  const topBytes = Buffer.from(`${top}/`);
+  const onDisk = (entry: FlaggedEntry): Buffer => Buffer.concat([topBytes, entry.raw]);
   const sparse = await isSparseCheckout(top);
-  const edits: Array<{ code: string; path: string }> = [];
+  // A sparse checkout leaves whole folders out, so a folder found missing once answers for every
+  // file in it, and each of those files needs no lstat of its own. Only a missing folder is kept:
+  // a folder that is there says nothing about the file.
+  const missingFolders = new Set<string>();
+  const kindOf = (entry: FlaggedEntry): EntryKind => {
+    const slash = entry.raw.lastIndexOf(0x2f);
+    if (slash > 0) {
+      const folder = entry.raw.subarray(0, slash).toString('hex');
+      if (missingFolders.has(folder)) {
+        return 'missing';
+      }
+      const kind = entryKind(onDisk(entry));
+      if (kind === 'missing' && entryKind(Buffer.concat([topBytes, entry.raw.subarray(0, slash)])) === 'missing') {
+        missingFolders.add(folder);
+      }
+      return kind;
+    }
+    return entryKind(onDisk(entry));
+  };
+  const changed: Array<{ code: string; raw: Buffer }> = [];
   const toHash: FlaggedEntry[] = [];
-  for (const entry of flagged) {
-    let stats: Awaited<ReturnType<typeof lstat>>;
-    try {
-      stats = await lstat(join(top, entry.path));
-    } catch (err) {
-      const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
-        if (!(entry.skipWorktree && sparse)) {
-          edits.push({ code: 'D', path: entry.path });
+  const missingSkipped: FlaggedEntry[] = [];
+  for (let start = 0; start < flagged.length; start += LSTAT_CHUNK) {
+    if (start > 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    for (const entry of flagged.slice(start, start + LSTAT_CHUNK)) {
+      const kind = kindOf(entry);
+      if (kind === 'missing') {
+        if (entry.skipWorktree && sparse) {
+          missingSkipped.push(entry);
+        } else {
+          changed.push({ code: 'D', raw: entry.raw });
+        }
+      } else if (kind === 'file' && REGULAR_MODES.has(entry.mode)) {
+        toHash.push(entry);
+      } else if (kind === 'link' && entry.mode === LINK_MODE) {
+        const stored = await blobBytes(top, entry.id);
+        const current = await readlink(onDisk(entry), { encoding: 'buffer' }).catch(() => null);
+        if (stored === null || current === null || !stored.equals(current)) {
+          changed.push({ code: 'M', raw: entry.raw });
         }
       } else {
-        edits.push({ code: 'M', path: entry.path });
+        changed.push({ code: 'M', raw: entry.raw });
       }
-      continue;
-    }
-    if (stats.isFile() && REGULAR_MODES.has(entry.mode)) {
-      toHash.push(entry);
-    } else if (stats.isSymbolicLink() && entry.mode === LINK_MODE) {
-      const stored = await blobBytes(top, entry.id);
-      const current = await readlink(join(top, entry.path), { encoding: 'buffer' }).catch(() => null);
-      if (stored === null || current === null || !stored.equals(current)) {
-        edits.push({ code: 'M', path: entry.path });
-      }
-    } else {
-      edits.push({ code: 'M', path: entry.path });
     }
   }
-  const ids = await hashFiles(top, toHash.map((entry) => entry.path));
+  const outside = await outsideSparseSet(top, missingSkipped.map((entry) => entry.raw));
+  for (const entry of missingSkipped) {
+    if (!outside.has(entry.raw.toString('hex'))) {
+      changed.push({ code: 'D', raw: entry.raw });
+    }
+  }
+  const ids = await hashFiles(top, toHash.map((entry) => entry.raw));
   toHash.forEach((entry, index) => {
     if (ids[index] !== entry.id) {
-      edits.push({ code: 'M', path: entry.path });
+      changed.push({ code: 'M', raw: entry.raw });
     }
   });
+  const edits = changed.map((edit) => ({ code: edit.code, path: edit.raw.toString('utf8') }));
   // Plain code-unit order, so the list never depends on the order the checks finished in.
   return edits.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
