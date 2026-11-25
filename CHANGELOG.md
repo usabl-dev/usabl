@@ -2328,8 +2328,22 @@
   Gate effect: none.
 - Development dependencies move to fixed versions inside their major version: `vite` 6.4.3 to
   6.4.6 and `source-map-js` 1.2.1 to 1.2.4, which clears the `npm audit` advisories for them.
-  The advisories for `zod` (a runtime dependency), `vitest`, `tinypool`, and `uuid` need a major
-  version change and are still open. Gate effect: none.
+  The advisories for `vitest`, `tinypool`, and `uuid` need a major version change and are still
+  open. The `zod` advisory is fixed by the move to zod 4 below. Gate effect: none.
+- `zod`, a runtime dependency, moves from 3.25.76 to 4.6.7. This fixes advisory
+  GHSA-mrhx-c7xc-m3w5. zod 3 checked every entry of a list before the list's length limit, so a
+  very long list in a requirement file cost time and memory in proportion to its length. A focus
+  order of a million names took about 13 seconds and more than 1 GB of memory to refuse, and the
+  refusal held one message for each bad name. Now a list past its limit is refused on its length
+  alone. Every requirement file reads the same as before, and the message for a file that does
+  not match its schema is the same text, with two exceptions. A focus order with more than 200
+  names now gets only `sequence can list at most 200 names`, with no message for each name in it.
+  A file with one list entry that holds more than about 123,000 problems, such as 150,000 empty
+  flow steps, now gets one reason: the file has too many problems to check, so it is refused, and
+  the person should shorten or fix its longest list. Before, it got one message for each problem.
+  A Figma file still cannot be read when a map entry named `__proto__` does not match, as before. The deepest chain of nested Figma frames that can be read goes from
+  about 780 levels to about 600. A deeper file is refused as a file usabl cannot read.
+  `npm audit --omit=dev` now reports no advisory. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
   repository GitHub reports as `admin` or `write`. It reads the permission once for each
