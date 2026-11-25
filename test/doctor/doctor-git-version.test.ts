@@ -22,6 +22,7 @@ const EMPTY_FS: InstallFs = {
 function deps(probe?: () => Promise<GitVersionProbe>): DoctorDeps {
   return {
     fs: EMPTY_FS,
+    readWorkflow: (path) => EMPTY_FS.readFile(path),
     gh: GH_UNAVAILABLE,
     configPath: 'usabl.config.json',
     probePlaywrightChromium: async () => 'wired',

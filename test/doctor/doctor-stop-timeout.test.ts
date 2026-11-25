@@ -37,6 +37,7 @@ function readOnlyFs(files: Record<string, string>): InstallFs {
 async function report(files: Record<string, string>, id: string): Promise<SurfaceReport> {
   const deps: DoctorDeps = {
     fs: readOnlyFs(files),
+    readWorkflow: (path) => readOnlyFs(files).readFile(path),
     gh: GH_UNAVAILABLE,
     configPath: 'usabl.config.json',
     probePlaywrightChromium: async () => 'wired',

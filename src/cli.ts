@@ -853,6 +853,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // The environment is read here, at the edge, so no collector reaches for a global.
     const deps: DoctorDeps = {
       fs: doctorFs,
+      // The branch rule reads the gate the way install --branch-rule does, so a folder or a file
+      // usabl cannot read at the gate path says so in both commands instead of reading as missing.
+      readWorkflow: makeWorkflowReader(),
       gh: makeGhReader(),
       configPath: opts.configPath,
       env: process.env,

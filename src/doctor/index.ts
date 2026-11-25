@@ -171,6 +171,12 @@ export interface DoctorDeps {
   headFiles?: (prefix: string) => Promise<string[]>;
   // Runs `git --version`. The CLI always passes it. A caller that leaves it out gets no git report.
   probeGitVersion?: () => Promise<GitVersionProbe>;
+  // Reads a gate workflow for the branch rule check, the way "usabl install --branch-rule" reads
+  // it: null only when nothing is at the path, and a throw for a folder or a file usabl cannot
+  // read. fs.readFile reads a folder as no file, which would turn a gate usabl cannot read into a
+  // missing gate, so it is required: a caller cannot fall back to that read by leaving it out. The
+  // CLI passes makeWorkflowReader.
+  readWorkflow: (path: string) => Promise<string | null>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -909,8 +915,9 @@ async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
     docsCi: named(DOCS_CI_LABEL, 'pull requests into', workflowTriggerBranch(await read(USABL_DOCS_GATE_WORKFLOW_PATH), 'pull_request')),
     historyCi: named(HISTORY_CI_LABEL, 'pushes to', workflowTriggerBranch(await read(USABL_HISTORY_WORKFLOW_PATH), 'push')),
     // The app gate's branch, or the docs gate's when there is no app gate. gateBranchTarget reads the
-    // files itself, so a file it cannot read says so instead of reading as missing.
-    target: await gateBranchTarget((path) => deps.fs.readFile(path)),
+    // files itself, with the workflow reader, so a folder or a file it cannot read says so instead
+    // of reading as missing, the same as in install --branch-rule.
+    target: await gateBranchTarget(deps.readWorkflow),
   };
 }
 
@@ -1024,15 +1031,22 @@ async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promis
   const result = await verifyBranchRule(deps.gh, target);
   const label = branchRuleLabel(target);
   const note = result.branchNote;
+  // When GitHub's default branch is not the gate's branch, or cannot be read, install --branch-rule
+  // is not verified, whatever the protection on the gate's branch reads. The state here says what
+  // that protection reads, and the next step says what install says about the default branch, and
+  // how to fix it. None of these states is wired. A protected gate branch is drifted when GitHub
+  // reports another default branch, and unknown when usabl could not read which one it is.
+  const gateBranch = result.gateBranch;
+  if (gateBranch !== null && gateBranch.action === 'verified') {
+    return { id: 'branch-rule', label, state: result.otherDefault === null ? 'unknown' : 'drifted', nextStep: note ?? '' };
+  }
+  if (gateBranch !== null && gateBranch.action === 'cannot-verify') {
+    return { id: 'branch-rule', label, state: 'unknown', nextStep: `usabl cannot confirm branch protection: ${gateBranch.finding}. ${note ?? ''}`.trimEnd() };
+  }
   if (result.action === 'verified') {
-    // Protection on a branch that is not GitHub's default branch still leaves pull requests into the
-    // default branch without a gate, so the surface is not wired.
-    if (result.otherDefault !== null) {
-      return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
-    }
     return { id: 'branch-rule', label, state: 'wired', nextStep: '' };
   }
-  if (result.action === 'not-applied') {
+  if (result.action === 'not-applied' || gateBranch?.action === 'not-applied') {
     const branch = target.source === 'assumed' ? `${target.name} branch, which usabl assumed,` : `${target.name} branch`;
     return {
       id: 'branch-rule',
