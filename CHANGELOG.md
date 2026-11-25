@@ -492,21 +492,41 @@
   re-scanned)" for bytes no check saw. With the others the stop could read "nothing to check". Now
   usabl hashes every file with `git hash-object --no-filters` and compares it with HEAD. A file
   still reads unchanged when only its line endings differ, when it is the content an LFS pointer
-  names, or when checkout expanded its `$Id$` markers. No filter program and no hook runs. git
-  reads objects and parents as stored (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`) on
-  every read, the Stop hook's search for the starting commit and the guard's policy reads
-  included. An edit inside a submodule is listed by its path in the outer repository. The reader
-  refuses a work tree outside its folder, and an empty sparse pattern file, or a folder in its
-  place, no longer hides a deleted skip-worktree file. Gate effect: each of those stops now scans
-  the screens the edit reaches, and a stop under a `core.worktree` decoy blocks instead of reading
-  VERIFIED. Listing changes: a rename that is not committed lists both names, and a change of line
-  endings alone or of the executable bit alone is not listed (the tree still moves, so no stored
-  receipt answers for it). The history of main scans keeps the tree `git add -A` gives. Cost, for
-  the four reads of one stop on 50,000 files: about the same as before with no filters, less with
-  `eol=crlf`, and about 2 seconds more in a sparse checkout with 45,000 files left out. Known
-  limits: a file under a filter driver that is not LFS, or a `working-tree-encoding` file, reads as
-  changed on every stop while its bytes differ from the blob, and a deletion under sparse patterns
-  the agent wrote is not listed, though the tree moves.
+  names, or when checkout expanded its `$Id$` markers. No filter program and no hook runs. Replace
+  refs and grafts never apply (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`) on any
+  read, the Stop hook's search for the starting commit and the guard's policy reads included.
+  HEAD's commit and trees are read in Node and each id is checked, because git does not check an
+  object's id when it reads it: an object file overwritten to list an edited blob now stops the
+  read with an error that names `git fsck`, and a HEAD blob overwritten as an LFS pointer to edited
+  bytes no longer passes. The reader reads back the index it builds, so a new file under a folder
+  git will not store, such as `GIT~1` or `.GIT`, no longer keeps the tree of the last receipt. A
+  file below a link in its folder part is never hashed through the link. A link whose target is
+  outside the files the walk hashes (outside the repository, in an ignored folder, or in `.git`)
+  gives a tree id that never repeats. Listings run with `core.ignorecase` false, so a new file
+  whose name differs from a tracked one only in case is listed. An edit inside a submodule is
+  listed by its path in the outer repository. The reader refuses a work tree other than the
+  repository it runs in: outside its folder, or a folder where git finds another repository, as
+  with `core.worktree` naming a parent repository that ignores the project. Every git call drops
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, the object store variables, and every
+  `GIT_CONFIG_*` and `GIT_ATTR_*` variable. An empty sparse pattern file, or a folder in its place,
+  no longer hides a deleted skip-worktree file. Gate effect: each of those stops now scans the
+  screens the edit reaches, or never answers from a stored receipt, and a stop under a
+  `core.worktree` decoy, a sibling copy or a parent repository, blocks with a reason that names the
+  setting instead of reading VERIFIED or allowing the stop as not configured; `usabl check` there
+  fails with the same text. Listing changes: a rename that is not committed lists both names, and
+  a change of line endings alone or of the executable bit alone is not listed (the tree still
+  moves, so no stored receipt answers for it). The history of main scans keeps the tree `git add
+  -A` gives. The tree a receipt binds is hashed fresh on every read; only the changed list uses
+  the in-memory hash cache, because a write through a memory map can keep both file times. Cost,
+  for the four reads of one stop that runs a check on 50,000 files: about two fresh tree reads more
+  than with a cache for every read, a few seconds under load, and about the same in a sparse
+  checkout with 45,000 files left out. Known limits: a file under a filter driver that is not LFS,
+  an LFS pointer with extension lines, or a `working-tree-encoding` file reads as changed on every
+  stop while its bytes differ from the blob. A deletion under sparse patterns the agent wrote, and
+  the deletion of a submodule's files by emptying its folder, are not listed, though the tree
+  moves. A repository that keeps a link out of the hashed files never verifies a run, and the gap
+  says files changed during the check. Reads other than HEAD's trees, such as the merge-base diff
+  and the guard's policy reads, take objects as stored.
 - usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
   `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
