@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { assertReadableRef } from '../deps/git.js';
-import { STORED_OBJECTS_ENVIRONMENT } from '../deps/git-environment.js';
+import { STORED_OBJECTS_ENVIRONMENT, gitProcessEnvironment } from '../deps/git-environment.js';
 import type { HistoryWriter } from './append.js';
 import { HISTORY_REMOTE_REF } from './record.js';
 
@@ -32,14 +32,14 @@ async function git(cwd: string, args: string[], env?: Record<string, string>): P
     encoding: 'utf8',
     maxBuffer: MAX_BUFFER,
     // Commits and their parents are read as stored, never through a graft or a replace ref.
-    env: { ...process.env, ...env, ...STORED_OBJECTS_ENVIRONMENT },
+    env: { ...gitProcessEnvironment(), ...env, ...STORED_OBJECTS_ENVIRONMENT },
   });
   return stdout;
 }
 
 function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, env: { ...process.env, ...STORED_OBJECTS_ENVIRONMENT }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('git', args, { cwd, env: { ...gitProcessEnvironment(), ...STORED_OBJECTS_ENVIRONMENT }, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {

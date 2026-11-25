@@ -12,7 +12,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
-import { STORED_OBJECTS_ENVIRONMENT } from '../deps/git-environment.js';
+import { STORED_OBJECTS_ENVIRONMENT, gitProcessEnvironment } from '../deps/git-environment.js';
 import { boundField } from '../output/bounded-text.js';
 import { isSafeBranchName } from '../primitives/branch-name.js';
 import { firstLine } from '../primitives/first-line.js';
@@ -111,7 +111,7 @@ export function scopeGit(cwd: string, limits: { maxBytes?: number } = {}): Scope
         encoding: options.encoding ?? 'utf8',
         maxBuffer: maxBytes,
         // The fixed settings come last, so no caller's env can turn them back on.
-        env: { ...process.env, ...options.env, ...SCOPE_ENVIRONMENT },
+        env: { ...gitProcessEnvironment(), ...options.env, ...SCOPE_ENVIRONMENT },
       });
       if (options.input !== undefined) {
         // A git that stops before it reads all of its input reports that with its exit code. The
