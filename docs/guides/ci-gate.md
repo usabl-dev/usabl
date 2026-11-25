@@ -128,26 +128,39 @@ reports `main` as the default branch. When GitHub reports another default branch
 say which one it is, the check is not verified and exits 2: it names both branches when it
 can, and the next step.
 
-When the gate names one branch and GitHub reports another as the default branch, pull
-requests into the default branch are not gated. `usabl install --branch-rule` then exits 2
-with "cannot verify", even when the branch the gate names is fully protected, so a setup
-script that reads only the exit code does not pass. The first line says the default branch is
-not gated and whether the branch rule on the gate's branch is set. The next lines say what
-that protection reads, which line to change to gate the default branch, and how to gate both
-branches instead. `usabl doctor` reports the same facts and the same next step. Its branch
-protection line is never wired then: it is drifted when the gate's branch is protected,
-missing when it is not, and unknown when usabl cannot read its protection.
+A branch a gate names passes only when GitHub reports that branch as the default branch. When
+GitHub reports another one, pull requests into the default branch are not gated. When usabl
+cannot read GitHub's default branch (the read failed, or its answer named no plain branch),
+usabl cannot confirm that pull requests into it are gated. In both cases
+`usabl install --branch-rule` exits 2 with "cannot verify", even when the branch the gate
+names is fully protected, so a setup script that reads only the exit code does not pass. The
+first line says what usabl knows about the default branch, and whether the branch rule on the
+gate's branch is set. The next lines say what that protection reads, which line of the gate
+file to change (the line in the file on disk), and how to gate both branches instead. When the
+docs gate runs on the default branch and the app gate does not, it says the app's pull
+requests into the default branch are not gated. `usabl doctor` reports the same facts and the
+same next step. Its branch protection line is never wired then: it is drifted when the gate's
+branch is protected and GitHub reports another default branch, unknown when it is protected
+and usabl cannot read the default branch, missing when it is not protected, and unknown when
+usabl cannot read its protection.
 
-This table shows the branch question alone, with the branch usabl checks fully protected.
-A part of the protection that is off is "not applied" (exit 2, and missing in `usabl doctor`)
-in every row except the second, which is "cannot verify" whatever the protection reads.
+The table shows each case with the branch usabl checks fully protected. "The gate" is the app
+gate, or the docs gate when there is no app gate. When a part of the protection is off,
+`usabl install --branch-rule` says "not applied" (exit 2) and `usabl doctor` says missing,
+with two exceptions. In the second and third rows, install says "cannot verify" instead,
+whatever the protection reads, and doctor still says missing. When usabl assumed `main` and
+GitHub reports another default branch (the fifth row, and the last row in that case), usabl
+does not use the protection on `main`, so both say what the row says.
 
-| What usabl reads                                   | `usabl install --branch-rule`          | `usabl doctor` branch protection |
-| -------------------------------------------------- | -------------------------------------- | -------------------------------- |
-| The gate names GitHub's default branch             | exit 0, verified                       | wired                            |
-| The gate names a branch that is not the default    | exit 2, cannot verify                  | drifted                          |
-| No gate file, and GitHub reports `main` as default | exit 0, verified (`main` assumed)      | wired                            |
-| A folder or an unreadable file at the gate path    | exit 2, cannot verify (`main` assumed) | unknown                          |
+| What usabl reads                                                   | `usabl install --branch-rule`          | `usabl doctor` branch protection |
+| ------------------------------------------------------------------ | -------------------------------------- | -------------------------------- |
+| The gate names GitHub's default branch                             | exit 0, verified                       | wired                            |
+| The gate names a branch that is not the default                    | exit 2, cannot verify                  | drifted                          |
+| The gate names a branch, and usabl cannot read the default branch  | exit 2, cannot verify                  | unknown                          |
+| No gate file, and GitHub reports `main` as the default             | exit 0, verified (`main` assumed)      | wired                            |
+| No gate file, and GitHub reports another default branch            | exit 2, cannot verify (`main` assumed) | unknown                          |
+| No gate file, and usabl cannot read the default branch             | exit 2, cannot verify (`main` assumed) | unknown                          |
+| A folder, an unreadable file, or a trigger usabl cannot read       | exit 2, cannot verify (`main` assumed) | unknown                          |
 
 ## After an earlier 0.3.0 build
 
