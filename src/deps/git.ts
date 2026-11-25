@@ -455,6 +455,17 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
       }
     },
+    async blobSize(ref, path) {
+      assertReadableRef(ref);
+      try {
+        // cat-file reads objects only, as in show, and -s prints the stored size without the bytes.
+        const output = await runGit(cwd, ['cat-file', '-s', '--end-of-options', `${ref}:${path}`]);
+        const size = Number(output.trim());
+        return Number.isSafeInteger(size) && size >= 0 ? size : null;
+      } catch {
+        return null;
+      }
+    },
     async listEntries(ref, paths, { recursive, text = 'none' }) {
       // One ls-tree for every path, so a ref is read once. The mode and the object id say what the
       // ref stores, so no file content is read. --full-tree reads each path from the root of the

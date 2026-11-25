@@ -20,6 +20,7 @@ import type {
   VoiceAssertion,
 } from '../contracts/index.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { normalizeToken } from '../voicing/normalize.js';
 import { describeFileKeyProblem, describeNodeIdProblem, describeVersionProblem } from './design-source.js';
 import { describeRequirementIdProblem } from './requirement-ids.js';
@@ -41,6 +42,28 @@ function receivedType(value: unknown): string {
 
 function quoteValues(values: readonly unknown[], separator = ' | '): string {
   return values.map((value) => (typeof value === 'string' ? `'${value}'` : String(value))).join(separator);
+}
+
+// A count as a person reads it, such as 1,000.
+function count(limit: number): string {
+  return limit.toLocaleString('en-US');
+}
+
+// An unknown-key message names at most this many keys, and each name at most this many
+// characters. A key name is file text, so its secrets are taken out before it is cut, and a cut
+// can never leave part of a secret behind.
+const KEYS_SHOWN = 5;
+const KEY_NAME_CHARS = 60;
+
+function keyName(key: string): string {
+  const safe = [...scrubString(key)];
+  return safe.length > KEY_NAME_CHARS ? `${safe.slice(0, KEY_NAME_CHARS).join('')}...` : safe.join('');
+}
+
+function keyList(keys: readonly string[], quote: boolean): string {
+  const shown = keys.slice(0, KEYS_SHOWN).map((key) => (quote ? `'${keyName(key)}'` : keyName(key)));
+  const rest = keys.length - shown.length;
+  return rest > 0 ? `${shown.join(', ')}, and ${count(rest)} more` : shown.join(', ');
 }
 
 function invalidTypeMessage(expected: string, input: unknown): string {
@@ -67,7 +90,7 @@ const issueMessage: z.core.$ZodErrorMap = (issue) => {
       return `Invalid literal value, expected ${issue.values.map((value) => JSON.stringify(value)).join(' | ')}`;
     }
     case 'unrecognized_keys':
-      return `Unrecognized key(s) in object: ${quoteValues(issue.keys, ', ')}`;
+      return `Unrecognized key(s) in object: ${keyList(issue.keys, true)}`;
     case 'invalid_union':
       // Only a discriminated union names its discriminator, and then options lists its values.
       return issue.discriminator !== undefined && 'options' in issue && Array.isArray(issue.options)
@@ -99,16 +122,46 @@ const contentAssertionSchema = z
   })
   .strict();
 
+// The most entries each list in a requirement file may hold. A real file holds a few of each. A
+// list past its limit is refused on its length alone, before any entry is read, so a huge file is
+// refused fast, with one message, and is never cut short or read in part.
+const REQUIREMENTS_LIMIT = 1000;
+const STEPS_LIMIT = 1000;
+const STEP_FIELDS_LIMIT = 100;
+// One requirement holds its obligations and each obligation's words, so a bad requirement can hold
+// up to obligations times words problems. The schema library collects the problems of one list
+// entry in a single call, and past about 123,000 of them that call fails (see parseBundle). These
+// two limits keep one requirement under about 13,000 problems.
+const OBLIGATIONS_LIMIT = 100;
+const TOKENS_LIMIT = 100;
+
+function atMost(list: string, limit: number, items: string): string {
+  return `${list} can list at most ${count(limit)} ${items}`;
+}
+
+// A flow step keeps the fields it does not name, for the step runner to read. Their number is
+// checked first, so a step with a huge number of fields is refused on that alone.
 const flowStepSchema = z
-  .object({
-    do: z.string().min(1, 'steps[].do is required'),
-  })
-  .catchall(z.unknown());
+  .custom<unknown>(
+    (input) =>
+      typeof input !== 'object' || input === null || Array.isArray(input) || Object.keys(input).length <= STEP_FIELDS_LIMIT,
+    { abort: true, error: `a flow step can have at most ${count(STEP_FIELDS_LIMIT)} fields` },
+  )
+  .pipe(
+    z
+      .object({
+        do: z.string().min(1, 'steps[].do is required'),
+      })
+      .catchall(z.unknown()),
+  );
 
 const flowAssertionSchema = z
   .object({
     type: z.literal('flow'),
-    steps: z.array(flowStepSchema).min(1, 'flow steps must contain at least one action'),
+    steps: z
+      .array(flowStepSchema)
+      .min(1, 'flow steps must contain at least one action')
+      .max(STEPS_LIMIT, atMost('flow steps', STEPS_LIMIT, 'steps')),
     expectedAnnouncement: z
       .string()
       .min(1, 'expectedAnnouncement must not be empty')
@@ -124,7 +177,7 @@ function voiceStepSchema<Shape extends z.ZodRawShape>(kind: string, shape: Shape
     .object(shape, {
       error: (issue) =>
         issue.code === 'unrecognized_keys'
-          ? `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}`
+          ? `${keyList(issue.keys, false)} is not a field of a ${kind} step; write only ${write}`
           : undefined,
     })
     .strict();
@@ -157,7 +210,8 @@ const voiceObligationSchema = z
     afterStep: numberField(),
     requiredTokens: z
       .array(z.string())
-      .min(1, 'requiredTokens must list at least one word a screen reader user must hear'),
+      .min(1, 'requiredTokens must list at least one word a screen reader user must hear')
+      .max(TOKENS_LIMIT, atMost('requiredTokens', TOKENS_LIMIT, 'words')),
     focusedRole: z
       .string()
       .trim()
@@ -172,10 +226,12 @@ const voiceAssertionSchema = z
     type: z.literal('voice'),
     steps: z
       .array(voiceStepsSchema)
-      .min(1, 'voice steps must list at least one step, such as a click on the control under test'),
+      .min(1, 'voice steps must list at least one step, such as a click on the control under test')
+      .max(STEPS_LIMIT, atMost('voice steps', STEPS_LIMIT, 'steps')),
     obligations: z
       .array(voiceObligationSchema)
-      .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear'),
+      .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear')
+      .max(OBLIGATIONS_LIMIT, atMost('voice obligations', OBLIGATIONS_LIMIT, 'obligations')),
     maxTabPath: numberField().optional(),
   })
   .strict();
@@ -299,7 +355,7 @@ const focusOrderAssertionSchema = z
     sequence: z
       .array(accessibleName('each sequence entry'))
       .min(2, 'sequence needs at least two names, because one name has no order')
-      .max(FOCUS_SEQUENCE_LIMIT, `sequence can list at most ${FOCUS_SEQUENCE_LIMIT} names`),
+      .max(FOCUS_SEQUENCE_LIMIT, atMost('sequence', FOCUS_SEQUENCE_LIMIT, 'names')),
   })
   .strict();
 
@@ -418,7 +474,10 @@ const requirementSchema = z
 const requirementBundleSchema = z
   .object({
     version: z.literal(1),
-    requirements: z.array(requirementSchema).min(1, 'requirements must contain at least one entry'),
+    requirements: z
+      .array(requirementSchema)
+      .min(1, 'requirements must contain at least one entry')
+      .max(REQUIREMENTS_LIMIT, `${atMost('requirements', REQUIREMENTS_LIMIT, 'requirements')}; put the rest in another file`),
   })
   .strict();
 
@@ -463,13 +522,19 @@ function isUnder(path: readonly PropertyKey[], parent: readonly PropertyKey[]): 
  * length message moves back in front of the messages for the list's entries.
  */
 function inReportedOrder(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  // Only a length problem is ever dropped, so only the paths of length problems are looked up. A
+  // file can hold over 100,000 type problems, and none of their paths is built unless it could
+  // match one.
+  const sizePaths = new Set(issues.filter(isSizeIssue).map((issue) => formatIssuePath(issue.path)));
   const wrongType = new Set<string>();
   const ordered: z.core.$ZodIssue[] = [];
   for (const issue of issues) {
-    const where = formatIssuePath(issue.path);
-    if (issue.code === 'invalid_type') {
-      wrongType.add(where);
-    } else if (isSizeIssue(issue) && wrongType.has(where)) {
+    if (sizePaths.size > 0 && issue.code === 'invalid_type') {
+      const where = formatIssuePath(issue.path);
+      if (sizePaths.has(where)) {
+        wrongType.add(where);
+      }
+    } else if (isSizeIssue(issue) && wrongType.has(formatIssuePath(issue.path))) {
       continue;
     }
     let at = ordered.length;
@@ -483,14 +548,22 @@ function inReportedOrder(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[
   return ordered;
 }
 
+// A refusal lists at most this many problems, then says how many more the file has. A file within
+// every limit can still hold over 100,000 problems, and the first ones are enough to start fixing.
+const PROBLEMS_SHOWN = 100;
+
 function formatValidationReason(issues: readonly z.core.$ZodIssue[]): string {
   if (issues.length === 0) {
     return 'requirement bundle did not match schema';
   }
 
-  return inReportedOrder(issues)
+  const ordered = inReportedOrder(issues);
+  const shown = ordered
+    .slice(0, PROBLEMS_SHOWN)
     .map((issue) => `${formatIssuePath(issue.path)}: ${issue.message}`)
     .join('; ');
+  const rest = ordered.length - PROBLEMS_SHOWN;
+  return rest > 0 ? `${shown}; and ${count(rest)} more ${rest === 1 ? 'problem' : 'problems'}` : shown;
 }
 
 function toContentAssertion(assertion: z.infer<typeof contentAssertionSchema>): ContentAssertion {
@@ -631,7 +704,12 @@ export function parseBundle(raw: unknown): ParseBundleResult {
   // the engine's limit and throws a RangeError in place of returning them. The file is refused
   // either way. This says why, and quotes nothing from the file, so the person is not told that
   // valid YAML is invalid. Any other error, a RangeError with another message included, is a fault
-  // that says nothing about the file, so it is thrown on as before.
+  // that says nothing about the file, so it is thrown on as before. With Node's default settings,
+  // no file within the limits reaches this: the list limits keep one requirement under about
+  // 13,000 problems, and the library's compiled object check adds them up one at a time. When code
+  // generation is turned off, the library checks objects another way, which collects all the
+  // problems of the file's requirements in one call, so the densest files within the limits reach
+  // this. They are still refused, with this reason.
   let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
   try {
     parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });

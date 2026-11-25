@@ -10,6 +10,7 @@
  */
 import { writeFile } from 'node:fs/promises';
 import { describeFileKeyProblem } from '../../intake/design-source.js';
+import { REQUIREMENT_FILE_SIZE, REQUIREMENT_FILE_TOO_LARGE } from '../../intake/file-size.js';
 import { normalize } from '../../intake/normalize.js';
 import { describeRequirementIdProblem } from '../../intake/requirement-ids.js';
 import { firstLine } from '../../primitives/first-line.js';
@@ -174,6 +175,13 @@ export async function runImportCommand(
     // The file must load through the normal loader, and nothing in it may be approved, or a person
     // would review a file that cannot run or one that already blocks.
     const check = normalize(yaml);
+    // A draft over the byte limit is not a file a person can split: nothing was written. The way out
+    // is to import fewer frames at a time.
+    if (!check.ok && check.reason === REQUIREMENT_FILE_TOO_LARGE) {
+      return fail([
+        `usabl import: the drafted requirements are larger than ${REQUIREMENT_FILE_SIZE}, the most one requirement file can hold, so no file was written. Import fewer frames at a time, each with its own --out.`,
+      ]);
+    }
     if (!check.ok) {
       return fail([`usabl import: the drafted requirements would not load: ${check.reason}`]);
     }

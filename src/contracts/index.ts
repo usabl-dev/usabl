@@ -1140,6 +1140,10 @@ export interface GitReader {
   // tree id on every CI runner. Only the history of main scans records it.
   indexedTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
+  // The size in bytes of the object at the path at the ref, as git stores it, without reading it.
+  // Null when git names no object there or the size cannot be read; show then says what is there.
+  // It is optional: a reader without it is sized from the text show returns.
+  blobSize?(ref: string, path: string): Promise<number | null>;
   // The tree entries at the ref for the paths, by path. With recursive, every file, symbolic link,
   // and submodule that is one of the paths or under one, in one listing; an empty path stands for
   // the whole tree. Without it, the entry each path names itself, a folder included. A path that
@@ -1189,8 +1193,16 @@ export interface FsGlob {
   // reader and the fakes have it. A reader without it binds nothing: a receipt minted with it has no
   // local files hash, and a receipt checked with it never verifies. A --ci run uses such a reader.
   readLocalFile?(path: string, maxBytes: number): Promise<LocalFileRead>;
+  // The text of a file, read only when it holds at most maxBytes bytes. A larger file is
+  // `too-large`, and the real reader says so from its size, without reading it. Null for nothing
+  // there, as readFile. It is optional: a reader without it is read with readFile, and the text
+  // is checked against the limit after.
+  readTextUpTo?(path: string, maxBytes: number): Promise<BoundedTextRead | null>;
   glob(patterns: string[]): Promise<string[]>;
 }
+
+/** The text of a file read up to a byte limit, or the fact that the file is larger. */
+export type BoundedTextRead = { kind: 'text'; text: string } | { kind: 'too-large' };
 
 /**
  * What is at one path the receipt binds. A regular file carries the sha256 hash of its bytes and

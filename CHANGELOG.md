@@ -433,6 +433,35 @@
 
 ### Fixed
 
+- Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
+  in one flow or voice contract, 100 fields in one flow step, 100 obligations in one voice
+  contract, and 100 `requiredTokens` in one obligation. The focus order keeps its limit of 200
+  names. A list past its limit is refused on its length before any entry is read, with one
+  message that names the list and its limit, such as
+  `requirements can list at most 1,000 requirements; put the rest in another file`. Before, each
+  entry was checked first, so a bad file with 200,000 requirements took about 9 seconds and 1.3
+  GB of memory to refuse, with 1.2 million messages. Now it takes a few milliseconds. With these
+  limits, one requirement holds at most about 12,500 problems, so with Node's default settings no
+  file reaches the schema library's problem limit. With code generation turned off, the library
+  checks objects another way and the densest files within the limits do reach it; they are still
+  refused, with the too-many-problems reason. A Figma
+  answer is limited too: 100,000 entries in `components`, `componentSets`, and the
+  `componentProperties` of one node, 100,000 `children` of one node, and 1,000 `annotations` of
+  one node. Its failure names the limit. A file over a limit is never cut short or read in part.
+  A requirement file can also be at most 128 KiB, counted as the bytes it is stored as and checked
+  before it is parsed: the loader reads a file on disk, or at the trusted ref, only when its size
+  is within the limit, so the loader never reads a huge file whole. A file with Latin-1 bytes is
+  counted by those bytes, so one that loads on main still loads. The Figma import checks the UTF-8
+  bytes of the file it drafts, and a draft over the limit is not written: the command says so and
+  says to import fewer frames at a time. One frame that drafts more than about 330 requirements
+  cannot be imported yet. Known limit: in a local run the guard still reads every guarded file
+  whole, requirement files included, before the loader refuses it. A refusal now lists the first 100 problems and
+  then says how many more there are, and an unknown-key message names the first five keys, each
+  with its secrets taken out and cut to 60 characters, and then counts the rest. The worst bad
+  file under 128 KiB holds about 143,000 problems and is refused in about 0.9 seconds with 203 MB
+  of peak memory; before these caps the same file took 1.3 seconds and 266 MB and printed 9 MB of
+  messages. Gate effect: a requirement file over a limit no longer loads, and is
+  `approval_required` with the limit named.
 - `usabl verify sensitivity` no longer writes a catch it did not measure. For the five entries
   reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), a new
@@ -2457,9 +2486,10 @@
   alone. Every requirement file reads the same as before, and the message for a file that does
   not match its schema is the same text, with two exceptions. A focus order with more than 200
   names now gets only `sequence can list at most 200 names`, with no message for each name in it.
-  A file with one list entry that holds more than about 123,000 problems, such as 150,000 empty
-  flow steps, now gets one reason: the file has too many problems to check, so it is refused, and
-  the person should shorten or fix its longest list. Before, it got one message for each problem.
+  A file with one list entry that holds more than about 123,000 problems now gets one reason: the
+  file has too many problems to check, so it is refused, and the person should shorten or fix its
+  longest list. Before, it got one message for each problem. The list size limits in this release
+  now refuse such a file on a list's length first.
   A Figma file still cannot be read when a map entry named `__proto__` does not match, as before. The deepest chain of nested Figma frames that can be read goes from
   about 780 levels to about 600. A deeper file is refused as a file usabl cannot read.
   `npm audit --omit=dev` now reports no advisory. Gate effect: none.
