@@ -1735,10 +1735,11 @@ rules that ran, because Deque records applicability for its own rules. Those cou
 
 ### How it works
 
-**Which files changed.** A local run takes the paths
-`git status --porcelain -z --untracked-files=all` reports. A run with `--trusted-ref` joins them
-with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every git listing usabl reads
-(status, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z` and is split on NUL.
+**Which files changed.** A local run takes the paths whose bytes on disk are not the content HEAD
+holds, and the new files git does not ignore (the working tree walk below). A run with
+`--trusted-ref` joins them with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every
+git listing usabl reads (`ls-files`, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z`
+and is split on NUL.
 Without `-z`, git quotes a name that holds a byte above 0x7f, a newline, a tab, or a double quote,
 so `src/pages/Über.tsx` arrived as `"src/pages/\303\234ber.tsx"`, matched no UI glob, and a CI
 run read as nothing to check. Names are never trimmed, so a name that starts or ends with a space
@@ -1752,45 +1753,107 @@ A changed file usabl could not test against `uiFileGlobs` and `discovery.wideBla
 the run's glob matching budget ran out (100,000,000 steps, see the Stop hook deadline limit) is
 an `unresolved` gap whose reason names the budget, never a file outside the UI globs.
 
-New untracked files are listed one by one. Without `--untracked-files=all`, git status lists a new
-folder as the folder alone, which matches no file glob, and a user's
-`status.showUntrackedFiles=no` hides new files completely. A listing longer than usabl reads (10
-MB of output) stops the run with an error that says so, never a short list read as complete.
+New untracked files are listed one by one, with `git ls-files -z --others --exclude-standard`, so
+a new folder is never listed as the folder alone, and a user's `status.showUntrackedFiles=no` does
+not apply. A listing longer than usabl reads (10 MB of output) stops the run with an error that
+says so, never a short list read as complete.
 
-Files git hides with an index flag are listed too. git status never compares a tracked file
-marked assume-unchanged or skip-worktree with the index, so an edit to one is not in its output.
-The status listing reads the flags with `git ls-files -v -s -z` (a lower case tag for
-assume-unchanged, `S` for skip-worktree) and adds each flagged file whose working copy is not what
-the index holds, by its path from the repository root. Each name is kept as the bytes git stores,
-so a name that is not valid UTF-8 is read, hashed, and checked against the sparse set as that
-file; only the name the listing returns is decoded. A regular file is compared by the blob id
-`git hash-object --stdin-paths` gives it, through the same filters `git add` uses, so a line
-ending change that a filter removes is no edit. One process hashes every file, and each name goes
-to it in git's C quoting, so a name with a newline arrives whole. A symbolic link is compared by
-its link text. A file usabl cannot read, a folder, a pipe, a submodule, and a file that turned
-into a link or back are listed as changed, and a file that is gone is listed as deleted. A
-skip-worktree file that is not there is left out only when `core.sparseCheckout` is true and
-`git sparse-checkout check-rules -z` says the file is outside the sparse set, because sparse
-checkout removes those files on purpose. When that command fails (no pattern file, or a git older
-than 2.41) or the file is inside the set, the file is listed as deleted. A change of the
-executable bit alone is not compared. That listing covers every tracked file, so it is read as a
-stream and has no size limit. Each entry gets one synchronous `lstat`, in chunks of 2000 between
-turns of the event loop, and a folder found missing answers for every file in it. In a sparse
-checkout of 50,000 files with 45,000 left out, the listing took about 0.7 seconds on a loaded
-8-core machine, where `git status` took about 0.1 seconds. Every surface that lists changes uses
-this listing, the CI gate's `--trusted-ref` check included, so an edit hidden this way is planned
-and checked like any other. A fresh CI checkout has no flagged edits, so its list does not change.
+**The working tree walk.** The changed list and the tree a receipt binds (`writeTree`, section 10)
+come from one walk, in `src/deps/worktree.ts`. git is never asked whether a file changed, and never
+asked to convert bytes for that answer:
 
-Known limit: the compare goes through git's filters. A clean filter, the `ident` attribute, or a
-`working-tree-encoding` attribute on a flagged file, set from `.git/info/attributes` or
-`.git/config` with no tracked change, can make an edited file hash to the id the index holds, so
-the edit is not listed. The same attributes keep the tree id from `writeTree` the same, flagged or
-not, so a stored receipt can answer for bytes no check saw. A follow-up change closes this by
-building the receipt tree and the changed list from the bytes the checks see. The threat model
-names this case and the other local settings that hide an edit.
+1. git lists the paths: every entry of HEAD (`git ls-tree -r -z --full-tree HEAD`), every entry of
+   the index (`git ls-files -v -s -z`, read for its names and its skip-worktree tag only, never for
+   its ids or its saved file info), and the new files above. The listings run with
+   `core.fsmonitor` and `core.untrackedCache` off.
+2. usabl reads each path's kind with one synchronous `lstat`, in chunks of 2000 between turns of
+   the event loop. A folder found missing answers for every file in it.
+3. Every regular file is hashed as the bytes on disk, with `git hash-object --no-filters
+   --stdin-paths`: no filter, no attribute, and no line ending rule. More than 2000 files are split
+   over four git processes. Each name goes to git in its C quoting, so a name with a newline
+   arrives whole, and each name is kept as the bytes git stores, so a name that is not valid UTF-8
+   is read as that file. A symbolic link is hashed from its link text.
+4. A file is unchanged when its id is the id HEAD holds. When it is not, three forms still count as
+   the committed content. Each follows from the blob alone, so each accepts one content only:
+   - the same text with each CR LF read as LF. git computes this id in a scratch repository whose
+     own attributes file turns off every filter, `ident`, and encoding, so the repository's
+     `.git/config` and `.git/info/attributes` are never read;
+   - the content an LFS pointer names: the HEAD blob is exactly a pointer (version, `oid sha256`,
+     size), and the file's sha256 and size match it;
+   - the blob with each `$Id$` marker holding the blob id, as checkout writes it, line endings
+     aside. Text inside a marker can never change unseen.
 
-A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
-a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
+   Anything else is `M`. A path not in HEAD is `A` when the index holds it and `??` otherwise. A
+   file that turned into a link, a folder, or a pipe, or back, is `M`. A HEAD path that is gone is
+   `D`.
+5. A skip-worktree file that is not there is left out only when `core.sparseCheckout` is true, the
+   pattern file is a regular file with at least one pattern line, and
+   `git sparse-checkout check-rules -z` says the file is outside the sparse set, because sparse
+   checkout removes those files on purpose. Otherwise it is `D`: no pattern file, an empty one, a
+   folder in its place, a git older than 2.41, or a file inside the set. An empty pattern file made
+   `check-rules` call every file outside, so a deletion read as no change. A file that is on disk
+   is compared wherever the patterns put it.
+6. A submodule, and a repository inside the working tree that is not one, is walked by the same
+   rule, against the commit the outer repository records (or as all new files when that commit is
+   not there), and its files are listed by their paths in the outer repository. A submodule that
+   was never set up is an empty folder, and the tree keeps the recorded commit. A submodule folder
+   that holds files but no repository stops the read with an error.
+
+Settings the walk ignores, because none of them changes a byte the dev server serves: the index's
+assume-unchanged and skip-worktree flags and its saved file info, `core.trustctime`,
+`core.checkStat`, `core.ignoreStat`, `core.fsmonitor`, `core.untrackedCache`, every attribute
+(`filter`, `ident`, `working-tree-encoding`, `text`, `eol`), every filter driver from any config,
+`core.autocrlf`, and `core.eol`. `core.fileMode` still sets the mode the tree records. Each of the
+others made git faster, or made git see bytes other than the ones on disk, and the threat model
+(Threat 4) lists how an agent used each to hide an edit. So a change of line endings alone, or of
+the executable bit alone, is not in the changed list. The tree moves for both, so no stored receipt
+answers for them.
+
+Every git command usabl runs gets `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null`, so
+objects and commit parents are read as stored. A replace ref made git read a replaced HEAD tree
+that holds a staged edit, and git status read clean. A graft that makes HEAD a parent of the
+trusted commit made the merge-base diff list nothing for a committed edit.
+
+The reader refuses a work tree outside its folder. The repository root is the one git names
+(`git rev-parse --show-toplevel`, a physical path), so a folder reached through a link inside the
+repository reads the same root. The folder usabl was given must be that root or inside it. With
+`core.worktree` set, git reads another folder, so the read stops with an error that names the
+setting, and the Stop hook blocks on it.
+
+One git reader keeps the hashes of its own reads in memory, for one process, so the four reads of
+a stop hash each file once. An entry is used only while usabl's `lstat` gives the same device,
+inode, size, modification time, and change time, to the nanosecond. A file changed within two
+seconds of a read is never kept. A process that is not root cannot set the change time, so an edit
+that keeps the size and restores the modification time is read again.
+
+Cost, measured on a shared 8-core machine under load, for the four reads of one stop that runs a
+check (tree, list, tree, tree):
+
+| Repository | Before | Now |
+| --- | --- | --- |
+| 50,000 files, no filters | 8.4 to 8.8 s | 8.0 to 8.6 s |
+| 50,000 files, `eol=crlf` on every file | 11.3 to 11.8 s | 9.8 to 9.9 s |
+| sparse checkout, 45,000 of 50,000 files left out | 2.9 to 3.1 s | 4.7 to 5.9 s |
+
+The changed list costs more than before (about 1.6 s against 0.2 s on 50,000 files), because git
+status trusted the index's saved file info, which is exactly what an agent could set. The tree
+reads cost less, because the cache spans them.
+
+Known limits:
+- A file under a filter driver that is not LFS (an encryption filter, a notebook output filter),
+  an LFS pointer with extension lines, or a `working-tree-encoding` file such as UTF-16 reads as
+  changed on every stop while its bytes on disk are not the blob's. That is a false change, never
+  a false green.
+- An agent can write the sparse patterns too. A file it leaves out of the set and deletes reads as
+  left out on purpose, so the deletion is not in the changed list. The tree moves, so no stored
+  receipt answers, but a stop whose only change it is reads "nothing to check".
+- `.git/info/exclude` and a local `core.excludesFile` still hide a new file, as the threat model
+  says for ignored files.
+
+A rename that is committed is listed by its new name only, on local runs and in CI, because the
+merge-base diff lists it that way. A rename that is not committed is listed by both names, because
+the working tree walk compares each name with HEAD. For a committed rename, a file moved out of
+the UI globs, or into a test folder, is seen only through other changed files:
 the files that import it, and the router file or `usabl.routes.json` when a route names it. An
 import left pointing at the old path is an import usabl cannot resolve, so a file moved into a
 test folder under the same name is a gap (see "Test files" below). A move that changes nothing
@@ -3414,7 +3477,10 @@ working tree, so a pull request cannot write its own history. The gate job alrea
 **What a record holds.** The schema version, the time, the commit, the receipt bindings of the
 scan (source tree, policy hash, runner version, scanner versions), the hash of the floor it was
 compared with, and per screen its coverage: `full` when every scan of the screen had no gap,
-`partial` otherwise. For each floored identity on a full screen it holds the first 16 hex
+`partial` otherwise. The source tree here is the tree `git add -A` would commit, through git's
+filters, not the tree of the bytes on disk that a receipt binds. So one commit keeps one tree id on
+every runner, whatever its line ending or LFS settings. Records are written by CI on main, where no
+agent runs. For each floored identity on a full screen it holds the first 16 hex
 characters of the SHA-256 of the identity key, the rule, the basis, and the observed count. A
 count at or above the floor's count is recorded as seen. A count below it needs evidence that the
 identity's part of the page rendered; otherwise the record holds no observation for it. An absent
@@ -3964,8 +4030,11 @@ What this does not cover:
 ### Receipt binding
 
 Six bindings are compared on re-verification, plus the waiver end below:
-- `sourceTree`: hash of the working tree (git write-tree on a temporary index), read before the
-  run plans. The run reads it again after the scan and every policy read, before the gate. If
+- `sourceTree`: the tree id of the bytes on disk (the working tree walk, section 8: every file
+  hashed with no filter, attribute, or index flag, and the tree written from a temporary index),
+  read before the run plans. In a repository whose filters change bytes, such as LFS or line
+  ending rules, it is not HEAD's tree id, and it stays the same from one read to the next while
+  the bytes do. The run reads it again after the scan and every policy read, before the gate. If
   the two reads differ, a file changed during the check: the run carries a not-covered gap
   (ref `working tree`), is never verified, and mints no receipt. The receipt binds the first
   read, so an edit after the second read moves the tree away from it. An idle run is left idle.
@@ -6172,15 +6241,18 @@ from `usabl/docs`. All of these use one check, `markStale` in `src/docs/evidence
 No usabl command reads a saved report back; a static HTML page saved to disk cannot mark
 itself, so regenerate a page before publishing it.
 
-The tree is the working tree as git would commit it with everything added: usabl builds a
-temporary index from `git read-tree HEAD`, runs `git add -A` into it, and runs `git write-tree`
-(`writeTree` in `src/deps/git.ts`, the same function the receipt uses). So staged, unstaged, and
-untracked edits all change it. A caller of `markStaleDocArtifacts` must compute `currentTree`
-the same way, with `GIT_INDEX_FILE` set to a temporary file for all three commands. A plain
-`git write-tree` reads the real index, and `HEAD^{tree}` leaves out every edit not committed, so
-with a dirty work tree either gives another tree and every report reads as stale. That fails
-safe, but no report ever reads as current. `git add -A` skips files git ignores, so an edit to an ignored file, such
-as a generated asset the app serves, does not change the tree and does not mark a report stale.
+The tree is the tree id of the bytes on disk (`writeTree` in `src/deps/git.ts`, the same function
+the receipt uses; the working tree walk in section 8). So staged, unstaged, and untracked edits all
+change it. A caller of `markStaleDocArtifacts` can compute `currentTree` with git: build a
+temporary index from `git read-tree HEAD`, run `git add -A` into it, and run `git write-tree`,
+with `GIT_INDEX_FILE` set to a temporary file for all three commands. That recipe gives the same
+id only in a repository where git changes no bytes as it adds them: no LFS or other filter, no
+line ending rule, and no `ident` or `working-tree-encoding` attribute. In any other repository
+every report reads as stale. A plain `git write-tree` reads the real index, and `HEAD^{tree}`
+leaves out every edit not committed, so with a dirty work tree either gives another tree and every
+report reads as stale. Each fails safe, but no report ever reads as current. The walk skips files
+git ignores, so an edit to an ignored file, such as a generated asset the app serves, does not
+change the tree and does not mark a report stale.
 
 ### How to run it
 

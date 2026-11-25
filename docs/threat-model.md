@@ -395,16 +395,16 @@ passing bundle from another run.
 
 **Controls:**
 
-- A minted receipt binds six values re-checked on verify: `sourceTree` (the working-tree
-  `git write-tree`), `baseRevision` (the commit the changed list was taken from, or null for
+- A minted receipt binds six values re-checked on verify: `sourceTree` (the tree id of the bytes
+  on disk, below), `baseRevision` (the commit the changed list was taken from, or null for
   uncommitted changes only), `policyHash` (HEAD modes and blob shas over the guarded set),
   `runnerVersion`, `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the
   debt history commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among
   the waivers the run applied, or null when it applied none. It also binds `localFilesHash`, the
   files the app reads that git does not see (below). It records `mintedAt`. A receipt exists
   only for a `verified` run.
-- git does not see ignored files. `sourceTree` comes from `git write-tree`, and the changed list
-  from git status, so an edit only to a git-ignored file the app reads, such as `.env.local`
+- git does not see ignored files. `sourceTree` and the changed list are read from the files git
+  lists, so an edit only to a git-ignored file the app reads, such as `.env.local`
   (Vite loads it, and the Vite templates ignore it), moved neither. A stored receipt kept
   answering the stop with "VERIFIED (exit 0, stored receipt, not re-scanned)". This hit honest
   work and needed no forgery. The receipt now binds `localFilesHash`: for every file in the
@@ -425,45 +425,90 @@ passing bundle from another run.
   the stop. To bind such a file, list its path from the repository root in `localFiles` in
   `usabl.config.json` (ground truth, section 22). A folder or a glob cannot be listed, so list
   each file. CI is not affected, because ignored files are not in the pull request.
-- git status and git diff do not compare a tracked file marked assume-unchanged or
-  skip-worktree with the index. An agent can set either flag with `git update-index`, a developer
-  may mark a local settings file this way, and sparse checkout sets skip-worktree. So an edit to
-  such a file was in no changed list, and a stop whose only edit it was read "nothing to check".
-  The status listing now reads the flags (`git ls-files -v`) and adds each flagged file whose
-  working copy is not what the index holds: content that hashes to another blob id through the
-  filters `git add` uses, a different link text, a change of kind, a file usabl cannot read, or a
-  file that is gone. File names are read as the bytes git stores, so a name that is not valid
-  UTF-8 is compared as that file. Each surface that lists changes reads this listing: the Stop
-  hook with and without a starting commit, `usabl check` in each mode (the CI gate's
-  `--trusted-ref` check included), the overlay, and `usabl brief`. The file is then planned and
-  checked like any other edit, from the bytes on disk.
-- A missing skip-worktree file is left out only when `core.sparseCheckout` is true and
-  `git sparse-checkout check-rules` says the file is outside the sparse set, because sparse
-  checkout removes those files on purpose. When git cannot answer (no pattern file, or a git
-  older than 2.41) or the file is inside the set, it is a deletion. So the setting alone, which an
-  agent can write with one `git config` line, hides nothing. Limit: an agent can write the
-  patterns too (`.git/info/sparse-checkout`), and then a file it leaves out of the set reads as
-  left out on purpose.
-- Limit, stated plainly: the compare goes through git's own filters, as `git add` does. A clean
-  filter, the `ident` attribute, or a `working-tree-encoding` attribute on a flagged file can make
-  edited bytes hash to the id the index holds, so the edit is still in no changed list. An agent
-  can set each of these without any tracked change: an attribute line in `.git/info/attributes`,
-  or a filter in `.git/config`. The same attributes also keep the tree id the receipt binds the
-  same, with or without a flag, so a stored receipt can answer a stop for bytes no check saw.
-  `writeTree` builds that tree with `git add -A`, which applies them, and patterns an agent writes
-  for sparse checkout keep a left-out file's committed bytes in the tree the same way. A
-  follow-up change closes this: the receipt tree and the changed list are to be built from the
-  bytes the checks see, with no attribute and no sparse pattern applied. Until then this case is
-  open.
+- The tree a receipt binds and the changed list come from the bytes the checks read. Before, both
+  went through git's normal path: `git add -A` into a temporary index for the tree, and
+  `git status` for the list. That path applies settings and files the agent can write from inside
+  the repository, with no tracked change, so an edited file could read unchanged:
+  - an index flag (`git update-index --assume-unchanged` or `--skip-worktree`): git status never
+    compares the file;
+  - the index's saved file info: with `core.trustctime=false`, an edit of the same size with its
+    modification time restored passed git's check;
+  - a `core.fsmonitor` hook that answers "nothing changed";
+  - a clean filter defined in `.git/config`, or the `ident` or `working-tree-encoding` attribute
+    from `.git/info/attributes` or `.gitattributes`. Each can turn edited bytes back into the
+    committed blob, so the tree id stayed the one a stored receipt bound, and the stop answered
+    "VERIFIED (exit 0, stored receipt, not re-scanned)" for bytes no check saw. In UTF-7, for
+    example, `+ADw-label` decodes to `<label`, so the commit view kept a label element the
+    served page no longer had;
+  - sparse patterns the agent writes: `git add -A` does not update a present file outside the
+    set, so the tree kept its committed bytes;
+  - a replace ref (`git replace`), which makes git read one object as another everywhere: a
+    replaced HEAD tree that holds a staged edit made git status read clean;
+  - a graft (`.git/info/grafts`): a graft that makes HEAD a parent of the trusted commit made
+    `git diff <trusted>...HEAD` list nothing for a committed edit.
+
+  Now one walk gives both answers (`src/deps/worktree.ts`). git lists the paths: every entry of
+  HEAD, every entry of the index (for its names and its skip-worktree tag only), and every new
+  file git does not ignore. usabl reads each path's kind with its own `lstat` and hashes the bytes
+  with `git hash-object --no-filters`. The tree is built from those ids. A file is unchanged only
+  when its bytes are the blob HEAD holds, or one of three forms that follow from that blob alone,
+  so each accepts one content only: the same text with CR LF read as LF, the content an LFS
+  pointer names (its sha256 and size), or the blob with each `$Id$` marker holding the blob id, as
+  checkout writes it. No filter program runs, no attribute decides the answer, and no hook runs.
+  Every git command runs with `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null`, so
+  objects and parents are read as stored, the Stop hook's search for the starting commit and the
+  guard's policy reads included. The listings run with `core.fsmonitor` and `core.untrackedCache`
+  off.
+- Settings the two reads ignore, and why that is safe: the index's flags and saved file info,
+  `core.trustctime`, `core.checkStat`, `core.ignoreStat`, `core.fsmonitor`,
+  `core.untrackedCache`, every attribute (`filter`, `ident`, `working-tree-encoding`, `text`,
+  `eol`), every filter driver from any config, `core.autocrlf`, and `core.eol`. None of them
+  changes a byte the dev server serves. Each only made git faster, or made git see bytes other
+  than the ones on disk. `core.fileMode` still sets the mode the tree records, because the
+  executable bit changes no byte a check reads.
+- What an honest repository sees. An LFS repository whose content is checked out reads unchanged,
+  and an edit to an LFS file reads changed. A committed `eol=crlf` rule, `core.autocrlf`, and a
+  committed `ident` attribute read unchanged after a checkout. The tree is stable from one read to
+  the next while the bytes are, but in such a repository it is not HEAD's tree id, and it does not
+  need to be: a receipt compares it only with a tree read before. A change of line endings alone,
+  or of the executable bit alone, is not in the changed list, and the tree moves, so no stored
+  receipt answers for it.
+- Limit, stated plainly: a file under a filter driver that is not LFS (an encryption filter, a
+  notebook output filter), an LFS pointer with extension lines, or a `working-tree-encoding` file
+  such as UTF-16 reads changed on every stop when its bytes on disk are not the blob's. That is a
+  false change, never a false green: such a file plans the screens it reaches.
+- A missing skip-worktree file is left out only when `core.sparseCheckout` is true, the pattern
+  file is a regular file with at least one pattern line, and `git sparse-checkout check-rules`
+  says the file is outside the sparse set, because sparse checkout removes those files on
+  purpose. When git cannot answer (no pattern file, an empty one, a folder in its place, or a git
+  older than 2.41) or the file is inside the set, it is a deletion. A present file is compared
+  wherever the patterns put it. Limit: an agent can write the patterns too, and then a file it
+  leaves out of the set and deletes reads as left out on purpose. The tree moves, because the
+  file is gone from disk, so no stored receipt answers. But the deletion is not in the changed
+  list, so a stop whose only change it is reads "nothing to check". A deletion is quiet only for a
+  file nothing imports, such as one loaded through `import.meta.glob` or a CSS file.
+- A submodule's files are walked by the same rule, against the commit the outer repository
+  records, and are listed by their paths in the outer repository, so an edit inside one moves the
+  tree and is planned. A submodule that was never set up is an empty folder, and the tree keeps the
+  recorded commit. A submodule folder that holds files but no repository cannot be compared, so the
+  read stops with an error.
+- The reader refuses a work tree outside its folder. With `core.worktree` in `.git/config`, git
+  reads the files of another folder: a copy of the committed files there kept the tree and the list
+  unchanged while the served files changed, and the stop answered VERIFIED. The git reader now
+  requires its folder to be the repository root git names or inside it, and the Stop hook does
+  not move to a root that does not hold its own folder. Such a stop checks nothing and blocks on
+  the listing failure.
+- One reader keeps the hashes of its own reads in memory, for one process, so the four reads of a
+  stop hash each file once. An entry is used only while usabl's own `lstat` gives the same device,
+  inode, size, modification time, and change time, to the nanosecond, and a file changed within
+  two seconds of a read is never kept. A process that is not root cannot set the change time, so
+  an edit that keeps the size and restores the modification time is read again. The first read of
+  each stop starts with no entries.
 - CI lists changes the same way: the gate's `usabl check --trusted-ref` joins the merge-base diff
-  with this status listing. Its result changes only when the CI checkout itself holds a flagged
-  file whose working copy differs from the index. A fresh checkout has none. A sparse CI checkout
-  lists none of the files it left out, because git says they are outside its sparse set.
-- Limit: other local git settings still hide an edit from every changed list, flag or not:
-  `core.trustctime=false` with an edit of the same size and a restored modification time, and a
-  `core.fsmonitor` hook that answers "nothing changed". The tree id moves in both cases, so no
-  stored receipt answers, but the stop can read "nothing to check". This case is open. Listing
-  changes from a fresh index, as `writeTree` builds one, would close it.
+  with this listing. A fresh checkout reads unchanged against HEAD, so its list does not change.
+  A sparse CI checkout lists none of the files it left out, because git says they are outside its
+  sparse set. The history of main scans records the tree `git add -A` would commit instead, so one
+  commit keeps one tree id on every runner. No agent runs there.
 - Limits of the local files binding. It makes a stored receipt stop matching, and it does not
   widen what the stop checks: the stop checks the screens its changed list reaches, so an edit
   only to an ignored file on a branch with no other change is still nothing to check. A `.env`
