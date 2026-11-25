@@ -447,12 +447,21 @@
   trailing `/**`. A comparison with Node on generated trees found no file Node lists that the
   adapter does not. Other syntax, such as a character class or an extglob group, runs in Node
   only inside a bound: at most 1024 characters, no extglob group, at most one run of `*` in any
-  part, and at most 256 brace expansions. Past it the pattern is not run. Gate effect: config load
-  already refuses that syntax in every policy glob list. A `workspaces` pattern past the bound
-  makes the workspace root unreadable, so every changed file the workspace check tests is a
-  `not-covered` gap that names the pattern. Known limit: a folder name that usabl puts into a
-  pattern, such as the requirements folder or a workspace package folder, is still read by Node
-  as a pattern, and one with syntax past the bound is not listed there.
+  part, and at most 256 brace expansions. A pattern that is empty or starts with `/`, itself or in
+  a brace expansion, is past the bound too: the `workspaces` entry `{,zz}/**` becomes
+  `/**/package.json`, which Node walked across the whole machine for more than 30 seconds. Past
+  the bound the pattern is not run. A workspace package folder and the requirements folder are now
+  listed with the folder as the walk's start, so a name such as `pkg[1]` or `reqs[1]` is read as
+  plain text. Before, Node read it as a pattern: `reqs[1]` loaded the requirement files of
+  `reqs1`, and a package folder named `pkg[1]` listed no sources, so an undeclared import in it
+  was missed. Gate effect: config load already refuses the other syntax in every policy glob list,
+  and now also refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry with a brace expansion
+  that is empty or starts with `/`. A `workspaces` pattern past the bound, or one that starts with
+  `/`, makes the workspace root unreadable, so every changed file the workspace check tests is a
+  `not-covered` gap that names the pattern. Known limit: the local guard still puts the
+  requirements folder into its working-tree patterns as text, so a requirements folder named with
+  glob syntax lists the wrong folder there, and a new untracked file in it is not seen until it is
+  committed. That fix is in the guard, a guarded path.
 - Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
   in one flow or voice contract, 100 fields in one flow step, 100 obligations in one voice
   contract, and 100 `requiredTokens` in one obligation. The focus order keeps its limit of 200
