@@ -515,8 +515,8 @@
   setting instead of reading VERIFIED or allowing the stop as not configured; `usabl check` there
   fails with the same text. Listing changes: a rename that is not committed lists both names, and
   a change of line endings alone or of the executable bit alone is not listed (the tree still
-  moves, so no stored receipt answers for it). The history of main scans keeps the tree `git add
-  -A` gives. The tree a receipt binds is hashed fresh on every read; only the changed list uses
+  moves, so no stored receipt answers for it). The history of main scans keeps the tree from
+  `git add -A`. The tree a receipt binds is hashed fresh on every read; only the changed list uses
   the in-memory hash cache, because a write through a memory map can keep both file times. Cost,
   for the four reads of one stop that runs a check on 50,000 files: about two fresh tree reads more
   than with a cache for every read, a few seconds under load, and about the same in a sparse
