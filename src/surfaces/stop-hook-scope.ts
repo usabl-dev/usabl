@@ -17,6 +17,7 @@ import { boundField } from '../output/bounded-text.js';
 import { isSafeBranchName } from '../primitives/branch-name.js';
 import { firstLine } from '../primitives/first-line.js';
 import { listChangedFiles } from './cli.js';
+import { UnboundLinkError } from '../deps/worktree.js';
 import { frameUntrustedBlock } from './scrub.js';
 
 const execFileAsync = promisify(execFile);
@@ -561,8 +562,11 @@ async function configOnOtherBranch(
   return { held: false };
 }
 
+// The name a scope gap gives for the trusted branch when origin names none.
+const NO_TRUSTED_BRANCH_NAME = 'none (origin names no default branch)';
+
 /** Why a check could not tell which committed changes to check. */
-export type ScopeProblem = StartingCommitProblem | 'listing-failed';
+export type ScopeProblem = StartingCommitProblem | 'listing-failed' | 'link-not-bound';
 
 /**
  * What a check with the Stop hook's scope checks. `scan` carries the changed list (absent means
@@ -658,7 +662,32 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
   'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
   'listing-failed':
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
+  'link-not-bound':
+    'a link in this repository points at a folder, or at something else that is not a file, outside the files usabl hashes',
 };
+
+/**
+ * The first line of a scope gap, shared by the Stop hook and `usabl check --branch-scope`. `what`
+ * says what was checked: "on this stop", or nothing for a check.
+ */
+export function scopeGapHeadline(problem: ScopeProblem, what: string): string {
+  if (problem === 'link-not-bound') {
+    // The dev server serves the target's files through the link, but a receipt cannot bind them,
+    // so no wait and no fetch clears it.
+    return (
+      'NOT verified - not covered: a link in this repository (named under "link" in the untrusted text below) ' +
+      'points at a folder, or at something else that is not a file, outside the files usabl hashes. The dev server ' +
+      'serves what it points to, but usabl cannot bind that to a receipt or tell whether it changed, so it checked ' +
+      `nothing${what}.`
+    );
+  }
+  return (
+    'NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
+    `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[problem]}. ` +
+    `So it could not tell which committed changes CI will check, and it checked nothing${what}. ` +
+    'It did not fall back to the uncommitted changes alone or to the whole history.'
+  );
+}
 
 // The problems a fetch alone does not clear, because origin/HEAD itself names the wrong ref. After
 // a default branch rename, origin/HEAD still names the old branch, and a fetch does not move it.
@@ -683,6 +712,9 @@ export function scopeGapDetailPiece(scope: { problem: ScopeProblem; detail: stri
   if (scope.problem === 'tree-not-in-clone') {
     return `tree not in this clone: ${scope.detail}`;
   }
+  if (scope.problem === 'link-not-bound') {
+    return `link: ${scope.detail}`;
+  }
   return `error: ${scope.detail}`;
 }
 
@@ -691,6 +723,12 @@ export function scopeGapDetailPiece(scope: { problem: ScopeProblem; detail: stri
  * `then` says what to do after the fix: stop again, or run the check again.
  */
 export function scopeGapNextStep(problem: ScopeProblem, then: string): string {
+  if (problem === 'link-not-bound') {
+    return (
+      'Next: commit what the link points to, or replace the link with the files it points to ' +
+      `(a link to a single file outside the repository is fine), then ${then}.`
+    );
+  }
   // git fetch does not load trees in a treeless clone. git ls-tree reads the tree, so git loads it.
   if (problem === 'tree-not-in-clone') {
     return (
@@ -728,13 +766,7 @@ export function checkCommandFor(baseRevision: string | null): CheckCommand {
  * frame, because git prints text this repository controls.
  */
 export function branchScopeGapText(scope: Extract<BranchScope, { kind: 'gap' }>): string {
-  const lines = [
-    'usabl: NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
-      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
-      'So it could not tell which committed changes CI will check, and it checked nothing. ' +
-      'It did not fall back to the uncommitted changes alone or to the whole history.',
-    scopeGapNextStep(scope.problem, 'run usabl check --branch-scope again'),
-  ];
+  const lines = [`usabl: ${scopeGapHeadline(scope.problem, '')}`, scopeGapNextStep(scope.problem, 'run usabl check --branch-scope again')];
   const detail = scopeGapDetailPiece(scope);
   const pieces = [`trusted branch: ${scope.branch}`, ...(detail === null ? [] : [detail])];
   return [...lines, frameUntrustedBlock(pieces.map((piece) => boundField(piece, 'gapReason')))].join('\n');
@@ -770,6 +802,16 @@ export async function resolveBranchScope(
     return { kind: 'gap', problem: start.problem, branch: start.branch, detail: start.detail };
   }
   if (start.kind === 'no-trusted-branch') {
+    // The run lists the changes itself here, and a run that fails does not block a stop. A link no
+    // receipt can bind is found now, so the stop blocks and names it. Any other listing failure is
+    // left to the run, which reports it.
+    const link = await git.statusZ().then(
+      () => null,
+      (err: unknown) => (err instanceof UnboundLinkError ? err.link : null),
+    );
+    if (link !== null) {
+      return { kind: 'gap', problem: 'link-not-bound', branch: NO_TRUSTED_BRANCH_NAME, detail: firstLine(link) };
+    }
     return { kind: 'scan', baseRevision: null, policyRef: null, policyFromBranch: false, note: NO_TRUSTED_BRANCH_NOTE };
   }
   if (start.policy === 'branch-older-than-setup') {
@@ -779,6 +821,9 @@ export async function resolveBranchScope(
   try {
     changedFiles = await listChangedFiles(git, start.commit);
   } catch (err) {
+    if (err instanceof UnboundLinkError) {
+      return { kind: 'gap', problem: 'link-not-bound', branch: start.branch, detail: firstLine(err.link) };
+    }
     return { kind: 'gap', problem: 'listing-failed', branch: start.branch, detail: errorText(err) };
   }
   if (start.policy === 'branch-sets-usabl-up') {

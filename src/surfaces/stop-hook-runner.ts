@@ -36,7 +36,7 @@ import {
   NO_TRUSTED_BRANCH_NOTE,
   olderThanSetupLines,
   resolveBranchScope,
-  SCOPE_PROBLEM_REASONS,
+  scopeGapHeadline,
   scopeGapDetailPiece,
   scopeGapNextStep,
   scopeGit,
@@ -1149,12 +1149,7 @@ function scopeGapMessage(
   continuation: boolean,
   guardedPaths: readonly string[],
 ): string {
-  const lines = [
-    'NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
-      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
-      'So it could not tell which committed changes CI will check, and it checked nothing on this stop. ' +
-      'It did not fall back to the uncommitted changes alone or to the whole history.',
-  ];
+  const lines = [scopeGapHeadline(scope.problem, ' on this stop')];
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
   }
