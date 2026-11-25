@@ -40,8 +40,9 @@ export interface WorktreeOptions {
 }
 
 // Settings forced on every listing. git walks the folders itself and never asks the agent's
-// fsmonitor hook, and never trusts the untracked cache.
-const LISTING_SETTINGS = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
+// fsmonitor hook, and never trusts the untracked cache. An empty core.fsmonitor turns the hook off
+// in every git usabl supports: older git reads the value as a hook path, newer git as true or false.
+const LISTING_SETTINGS = ['-c', 'core.fsmonitor=', '-c', 'core.untrackedCache=false'];
 
 interface GitResult {
   code: number | null;
@@ -153,7 +154,7 @@ async function openRepository(cwd: string): Promise<Repository> {
   const lines = (
     await mustGit(
       cwd,
-      ['rev-parse', '--path-format=absolute', '--show-toplevel', '--show-object-format', '--git-path', 'info/sparse-checkout'],
+      ['rev-parse', '--show-toplevel', '--show-object-format', '--git-path', 'info/sparse-checkout'],
       'rev-parse',
     )
   )
@@ -182,7 +183,8 @@ async function openRepository(cwd: string): Promise<Repository> {
     top,
     topBytes: Buffer.from(`${top}/`),
     format: format.trim() === 'sha256' ? 'sha256' : 'sha1',
-    sparsePatterns,
+    // git prints the pattern file's path from the folder it ran in when it is not absolute.
+    sparsePatterns: isAbsolute(sparsePatterns) ? sparsePatterns : join(cwd, sparsePatterns),
     // git reads the executable bit unless core.fileMode is false. The bit changes no byte a check
     // reads, so the setting decides only the mode the tree records.
     fileMode: (await config('core.fileMode')) !== 'false',
