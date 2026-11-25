@@ -71,19 +71,40 @@ const rectSchema = z.object({
 // is allowed here.
 const idNumber = z.custom<number>((value) => typeof value === 'number' && !Number.isNaN(value), { abort: true });
 
-// A map from names to values. JSON.parse makes a key named "__proto__" an own key. The schema
-// library's version 4 skips such a key in a record before it checks the value. Earlier versions
-// checked the value, so a file whose "__proto__" entry did not match was not readable, and then
-// left the entry out. This keeps both: the value is checked here, and the record still leaves the
-// entry out, so it never reaches an object's prototype.
-function recordOf<Value extends z.ZodType>(value: Value) {
+// The most entries each list and map in a file may hold. A real design file is far below each. A
+// list or map past its limit is refused on its size alone, before any entry is read, so a huge
+// answer is refused fast. The words of each limit are kept, so a refusal can name the limit.
+const MAP_LIMIT = 100_000;
+const CHILDREN_LIMIT = 100_000;
+const ANNOTATIONS_LIMIT = 1000;
+
+const LIMIT_WORDS = new Set<string>();
+
+function limitWords(field: string, limit: number, items: string): string {
+  const words = `${field} can list at most ${limit.toLocaleString('en-US')} ${items}`;
+  LIMIT_WORDS.add(words);
+  return words;
+}
+
+// A map from names to values. Its size is checked first. JSON.parse makes a key named "__proto__"
+// an own key. The schema library's version 4 skips such a key in a record before it checks the
+// value. Earlier versions checked the value, so a file whose "__proto__" entry did not match was
+// not readable, and then left the entry out. This keeps both: the value is checked here, and the
+// record still leaves the entry out, so it never reaches an object's prototype.
+function recordOf<Value extends z.ZodType>(value: Value, field: string) {
   return z
-    .custom<unknown>((input) => {
-      if (typeof input !== 'object' || input === null || !Object.hasOwn(input, '__proto__')) {
-        return true;
-      }
-      return value.safeParse(Object.getOwnPropertyDescriptor(input, '__proto__')?.value).success;
-    }, { abort: true })
+    .custom<unknown>(
+      (input) => typeof input !== 'object' || input === null || Array.isArray(input) || Object.keys(input).length <= MAP_LIMIT,
+      { abort: true, error: limitWords(field, MAP_LIMIT, 'entries') },
+    )
+    .pipe(
+      z.custom<unknown>((input) => {
+        if (typeof input !== 'object' || input === null || !Object.hasOwn(input, '__proto__')) {
+          return true;
+        }
+        return value.safeParse(Object.getOwnPropertyDescriptor(input, '__proto__')?.value).success;
+      }, { abort: true }),
+    )
     .pipe(z.record(z.string(), value));
 }
 
@@ -110,13 +131,16 @@ const nodeSchema: z.ZodType<FigmaNode, unknown> = z.lazy(() =>
       id: z.string(),
       name: z.string(),
       type: z.string(),
-      children: z.array(nodeSchema).optional(),
+      children: z.array(nodeSchema).max(CHILDREN_LIMIT, limitWords('children', CHILDREN_LIMIT, 'nodes')).optional(),
       characters: z.string().optional(),
       absoluteBoundingBox: rectSchema.nullable().optional(),
       componentId: z.string().optional(),
-      componentProperties: recordOf(propertySchema).optional(),
+      componentProperties: recordOf(propertySchema, 'componentProperties').optional(),
       // Other annotation fields, such as measurements, are not read.
-      annotations: z.array(annotationSchema).optional(),
+      annotations: z
+        .array(annotationSchema)
+        .max(ANNOTATIONS_LIMIT, limitWords('annotations', ANNOTATIONS_LIMIT, 'notes'))
+        .optional(),
     })
     .transform((node) => {
       const out: FigmaNode = { id: node.id, name: node.name, type: node.type };
@@ -140,23 +164,40 @@ const fileSchema = z.object({
   version: z.string(),
   lastModified: z.string(),
   document: nodeSchema,
-  components: recordOf(z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() })),
-  componentSets: recordOf(z.object({ name: z.string() })).optional(),
+  components: recordOf(
+    z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() }),
+    'components',
+  ),
+  componentSets: recordOf(z.object({ name: z.string() }), 'componentSets').optional(),
 });
+
+/**
+ * The result of reading a network answer: the file, or why it is not one usabl can read. limit is
+ * the size limit the answer went over, in words that hold no text from the answer, or null when
+ * the answer is not readable for another reason.
+ */
+export type FigmaFileRead = { ok: true; file: FigmaFile } | { ok: false; limit: string | null };
 
 /**
  * The file a network answer holds, with only the fields usabl reads, or null when the answer is
  * not a Figma file usabl can read. A file nested too deeply to check is not one either.
  */
 export function readFigmaFile(value: unknown): FigmaFile | null {
+  const read = checkFigmaFile(value);
+  return read.ok ? read.file : null;
+}
+
+/** readFigmaFile, with the size limit named when the answer went over one. */
+export function checkFigmaFile(value: unknown): FigmaFileRead {
   let parsed: z.ZodSafeParseResult<z.infer<typeof fileSchema>>;
   try {
     parsed = fileSchema.safeParse(value);
   } catch {
-    return null;
+    return { ok: false, limit: null };
   }
   if (!parsed.success) {
-    return null;
+    const limit = parsed.error.issues.find((issue) => LIMIT_WORDS.has(issue.message));
+    return { ok: false, limit: limit?.message ?? null };
   }
   const { name, version, lastModified, document, components, componentSets } = parsed.data;
   const file: FigmaFile = {
@@ -178,5 +219,5 @@ export function readFigmaFile(value: unknown): FigmaFile | null {
   if (componentSets !== undefined) {
     file.componentSets = componentSets;
   }
-  return file;
+  return { ok: true, file };
 }
