@@ -18,6 +18,7 @@
 import { posix as path } from 'node:path';
 import yaml from 'js-yaml';
 import type { CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
+import { fsGlobBoundProblem } from '../deps/fs-glob-reading.js';
 import { loadAliasConfig } from './alias-config.js';
 import { mentionsPackage } from './import-graph.js';
 
@@ -81,6 +82,7 @@ async function workspacePatterns(read: (file: string) => Promise<string | null>)
     const workspaces = root['workspaces'];
     const listed = isRecord(workspaces) ? patternList(workspaces['packages']) : patternList(workspaces);
     if (listed === null) throw new UnreadableWorkspaceRoot('package.json', 'has a "workspaces" field that is not a list of patterns');
+    checkGlobBound('package.json', listed);
     patterns.push(...listed);
   }
   const pnpm = await read('pnpm-workspace.yaml');
@@ -95,6 +97,7 @@ async function workspacePatterns(read: (file: string) => Promise<string | null>)
     if (parsed !== undefined && parsed !== null) {
       const listed = isRecord(parsed) ? patternList(parsed['packages']) : null;
       if (listed === null) throw new UnreadableWorkspaceRoot('pnpm-workspace.yaml', 'does not hold a "packages" list of patterns');
+      checkGlobBound('pnpm-workspace.yaml', listed);
       patterns.push(...listed);
     }
   }
@@ -116,6 +119,32 @@ function isInstalledPath(file: string): boolean {
   return file.split('/').includes('node_modules');
 }
 
+// The glob that lists the package.json of each folder a workspace pattern names, or null for a
+// pattern that is never globbed. A leading ! is left out: it marks folders to remove.
+function manifestGlob(raw: string): string | null {
+  const trimmed = raw.trim();
+  const pattern = cleanPattern(trimmed.startsWith('!') ? trimmed.slice(1) : raw);
+  // A brace group can hold .. or an absolute path, such as {..,packages/*}, and the glob expands
+  // it, so a pattern with .. anywhere in a brace group is refused before it is globbed.
+  if (pattern === '' || pattern.startsWith('/') || pattern.split('/').includes('..')) return null;
+  if (/[{}]/u.test(pattern) && pattern.includes('..')) return null;
+  return `${pattern}/package.json`;
+}
+
+// The file system adapter does not run a glob past its bound (see deps/fs-glob-reading.ts), such
+// as one with an extglob group, which can take Node's fs.glob a very long time to match. The
+// packages such a pattern names are then unknown, so the root reads as one usabl cannot read,
+// never as one that names no package.
+function checkGlobBound(file: string, listed: readonly string[]): void {
+  for (const raw of listed) {
+    const glob = manifestGlob(raw);
+    const problem = glob === null ? null : fsGlobBoundProblem(glob);
+    if (problem !== null) {
+      throw new UnreadableWorkspaceRoot(file, `lists the workspace pattern "${raw.slice(0, 200)}", which usabl does not run because ${problem}`);
+    }
+  }
+}
+
 // The folders the workspace patterns name, each one that holds a package.json. A pattern that
 // starts with ! removes the folders it names, as npm, Yarn, and pnpm read it.
 async function workspaceDirs(fs: FsGlob, patterns: string[]): Promise<string[]> {
@@ -123,12 +152,9 @@ async function workspaceDirs(fs: FsGlob, patterns: string[]): Promise<string[]> 
   const excluded = new Set<string>();
   for (const raw of patterns) {
     const negated = raw.trim().startsWith('!');
-    const pattern = cleanPattern(negated ? raw.trim().slice(1) : raw);
-    // A brace group can hold .. or an absolute path, such as {..,packages/*}, and the glob expands
-    // it, so a pattern with .. anywhere in a brace group is refused before it is globbed.
-    if (pattern === '' || pattern.startsWith('/') || pattern.split('/').includes('..')) continue;
-    if (/[{}]/u.test(pattern) && pattern.includes('..')) continue;
-    for (const found of await fs.glob([`${pattern}/package.json`])) {
+    const glob = manifestGlob(raw);
+    if (glob === null) continue;
+    for (const found of await fs.glob([glob])) {
       // Whatever the pattern, a result outside the repository is never read.
       const manifest = insideRepository(found);
       if (manifest === null || isInstalledPath(manifest)) continue;
