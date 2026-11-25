@@ -6,8 +6,9 @@
  */
 import type { AffectedScreen, CoverageGap } from '../contracts/index.js';
 import type { DocsManifest } from './docs-manifest.js';
-import { matchGlob } from '../primitives/match-glob.js';
+import { GlobBudgetExhausted, GlobMatchBudget, globMatcher, RUN_GLOB_MATCH_STEPS } from '../primitives/match-glob.js';
 import { configError } from '../intake/config-error.js';
+import { budgetOrder, globBudgetGapReason } from './glob-budget.js';
 
 export function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
   const base = new URL(docsBaseUrl);
@@ -32,13 +33,6 @@ export interface DocsCoverage {
   nothingToCheck: boolean;
 }
 
-function isWideBlastFile(file: string, globs: string[]): boolean {
-  return globs.some((glob) => matchGlob(glob, file));
-}
-
-function isDocConcern(file: string, manifest: DocsManifest): boolean {
-  return file.endsWith('.adoc') || isWideBlastFile(file, manifest.sharedGlobs);
-}
 
 function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScreen): void {
   if (!target.has(candidate.screenId)) {
@@ -51,16 +45,35 @@ export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles:
     return { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
 
-  const docFiles = changedFiles.filter((file) => isDocConcern(file, manifest));
-  if (docFiles.length === 0) {
+  // This planner carries its own glob matching budget, the same size as the app planner's. A
+  // changed file usabl could not test against sharedGlobs before it ran out is a gap.
+  const budget = new GlobMatchBudget(RUN_GLOB_MATCH_STEPS);
+  const sharedMatchers = manifest.sharedGlobs.map((glob) => globMatcher(glob, { budget }));
+  const sharedFiles = new Set<string>();
+  const untested = new Set<string>();
+  // The files are tested in a fixed order, so the same set of changed files runs out at the same
+  // file in any order the caller gives. The lists below keep the caller's order.
+  for (const file of budgetOrder(changedFiles)) {
+    try {
+      if (sharedMatchers.some((matches) => matches(file))) sharedFiles.add(file);
+    } catch (err) {
+      if (!(err instanceof GlobBudgetExhausted)) throw err;
+      untested.add(file);
+    }
+  }
+  const untestedFiles = changedFiles.filter((file) => untested.has(file));
+  const docFiles = changedFiles.filter((file) => !untested.has(file) && (sharedFiles.has(file) || file.endsWith('.adoc')));
+  const isWideBlastFile = (file: string): boolean => sharedFiles.has(file);
+  if (docFiles.length === 0 && untestedFiles.length === 0) {
     return { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
 
   const affectedByScreen = new Map<string, AffectedScreen>();
-  const unresolvedFiles: string[] = [];
-  const gaps: CoverageGap[] = [];
+  const unresolvedFiles: string[] = [...untestedFiles];
+  const untestedReason = globBudgetGapReason('the sharedGlobs of usabl.docs.json');
+  const gaps: CoverageGap[] = untestedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: untestedReason }));
 
-  const hasWideBlast = docFiles.some((file) => isWideBlastFile(file, manifest.sharedGlobs));
+  const hasWideBlast = docFiles.some((file) => isWideBlastFile(file));
   if (hasWideBlast) {
     for (const page of manifest.pages) {
       addAffected(affectedByScreen, {
@@ -73,7 +86,7 @@ export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles:
   }
 
   for (const file of docFiles) {
-    const isWideBlastMatch = isWideBlastFile(file, manifest.sharedGlobs);
+    const isWideBlastMatch = isWideBlastFile(file);
     if (isWideBlastMatch) {
       continue;
     }
