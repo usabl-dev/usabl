@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { figmaApiBase, FigmaFetchError, fetchFigmaFile } from '../../../src/import/figma/fetch.js';
-import { readFigmaFile } from '../../../src/import/figma/types.js';
+import { checkFigmaFile, readFigmaFile } from '../../../src/import/figma/types.js';
 import { MOCK_TOKEN } from './mock-server.js';
 
 // Every list and map in a Figma file has a size limit far above what a real design file holds. A
@@ -70,13 +70,13 @@ describe('the size limits of a Figma file', () => {
     expect(readFigmaFile(overLimit)).toBeNull();
   }, 60_000);
 
-  // Entries that would each fail on their own still give one refusal, because the size is checked
-  // first.
+  // Entries that would each fail on their own still give the limit as the reason, because the size
+  // is checked first.
   it.each([
-    ['components', file(leaf(0), { components: entries(100_001, () => 5) })],
-    ['children', file({ ...leaf(0), children: list(100_001, () => ({})) })],
-  ])('refuses %s past the limit before it reads an entry', (_, overLimit) => {
-    expect(readFigmaFile(overLimit)).toBeNull();
+    ['components', file(leaf(0), { components: entries(100_001, () => 5) }), 'components can list at most 100,000 entries'],
+    ['children', file({ ...leaf(0), children: list(100_001, () => ({})) }), 'children can list at most 100,000 nodes'],
+  ])('refuses %s past the limit before it reads an entry', (_, overLimit, words) => {
+    expect(checkFigmaFile(overLimit)).toEqual({ ok: false, limit: words });
   });
 });
 
