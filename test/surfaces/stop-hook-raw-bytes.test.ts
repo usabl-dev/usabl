@@ -441,4 +441,3 @@ describe('core.worktree naming a parent repository that ignores this one', { tim
     }
   });
 });
-

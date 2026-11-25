@@ -579,4 +579,3 @@ describe('the tree a receipt binds', { timeout: REAL_PROCESS_BUDGET_MS }, () => 
     }
   });
 });
-
