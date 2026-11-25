@@ -654,6 +654,20 @@ describe('a check planned with another config leaves no receipt a stop can use',
     });
   }
 
+  // The same link with git listing it: a link to a folder outside the repository cannot be bound
+  // to a receipt, so the check refuses and names the link and the fix, and no receipt is saved.
+  it('refuses a plain check, naming the link, when git lists the link to the outside folder', async () => {
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '');
+    await write('src/App.tsx', 'export const App = 2;\n');
+
+    const ran = await check();
+    expect(ran.code).not.toBe(0);
+    expect(ran.scanned).toEqual([]);
+    expect(ran.stdout + ran.stderr).toMatch(/x is a link to .*outside the files usabl hashes.*replace the link/su);
+    expect(ran.stdout + ran.stderr).not.toContain('Wait until no editor');
+    await expect(readFile(join(repo, '.usabl', 'receipt.json'), 'utf8')).rejects.toThrow();
+  });
+
   it('still saves a receipt the stop answers from when the check reads the root config', async () => {
     state.drafts = {};
     await write('src/App.tsx', 'export const App = 2;\n');
