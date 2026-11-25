@@ -5827,14 +5827,22 @@ largest in this repository's tests and docs is a few KiB, with at most 5 require
 | `requiredTokens` in one obligation | 100 words |
 | `sequence` in one focus order | 200 names |
 
-The byte limit is checked before the file is parsed. The loader reads a file on disk only when its
-size is within the limit, so a huge file is never read; a file at the trusted ref is read by git,
-up to the 10 MiB git reads as text, and then checked. The message is `a requirement file can be at
-most 128 KiB; split it into smaller files`. Every caller of the normalizer gets the same check,
-the drafted file of `usabl import figma` included. The limit was picked by measurement: the
-densest bad file the list limits allow holds about 1.1 problems for each byte, so a file at
-128 KiB holds about 143,000 problems, and refusing it took about 0.9 seconds and 203 MB of peak
-memory on the build machine. At 256 KiB the same file took about 1.9 seconds and over 360 MB.
+The byte limit is checked before the file is parsed, and it counts the bytes of the file as stored.
+The loader reads a file on disk only when its size is within the limit, so the loader never reads a
+huge file whole. A file at the trusted ref is sized by git from the stored object first, and read
+only when it is within the limit. A file with bytes that are not valid UTF-8, such as Latin-1
+letters, is counted by those bytes too, as it is stored. The message is `a requirement file can be
+at most 128 KiB; split it into smaller files`. A caller that hands the normalizer text it holds in
+memory, such as `usabl import figma` with the file it drafts, gets the same limit counted as the
+UTF-8 bytes of that text, which are the bytes it writes. Known limit: in a local run the guard
+(section 10) still reads every guarded file whole to compare it, requirement files included, before
+the loader runs. A 512 MiB requirement file costs the guard about 2 seconds and 570 MB, and the
+loader then refuses it. A size check in the guard is a separate change to a guarded path.
+
+The limit was picked by measurement: the densest bad file the list limits allow holds about 1.1
+problems for each byte, so a file at 128 KiB holds about 143,000 problems, and refusing it took
+about 0.9 seconds and 203 MB of peak memory on the build machine. At 256 KiB the same file took
+about 1.9 seconds and over 360 MB.
 
 A list past its limit is refused on its length alone, before any entry is read, so a huge file
 is refused fast and with one message. The file is `approval_required`, like every file that does
@@ -5845,11 +5853,16 @@ A file over a limit is never cut short or read in part.
 Obligations and words are limited to 100 each because one requirement holds both lists, so a bad
 requirement can hold obligations times words problems. The schema library collects the problems
 of one list entry in a single call, and that call fails past about 123,000 problems. With these
-limits, one requirement holds at most about 12,500. If the call still fails, the file is refused
-with the reason `this file has too many problems to check, so it is refused; shorten or fix its
-longest list`.
+limits, one requirement holds at most about 12,500, so with Node's default settings no file within
+the limits reaches that point: the library's compiled object check adds the problems up one at a
+time. When code generation is turned off (for example `node --disallow-code-generation-from-strings`),
+the library checks objects another way, which collects every problem of the file's requirements in
+one call, and the densest files within the limits do reach it. Such a file is still refused, with
+the reason `this file has too many problems to check, so it is refused; shorten or fix its longest
+list` in place of the first 100 problems.
 
-A refusal lists the first 100 problems, in the order above, then says how many more the file has,
+A refusal lists the first 100 problems, in the order the schema reports them, then says how many
+more the file has,
 such as `; and 900 more problems`. An unknown-key message names the first five unknown keys,
 then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd', 'e', and 3
 more`. Each key name is file text, so its secrets are taken out first, and it is then cut to 60
@@ -6182,8 +6195,9 @@ at most 100,000 nodes, and the `annotations` of one node at most 1,000 notes. An
 limit is refused on its size, before any entry is read, and the failure names the limit, such as
 `Figma returned a file usabl cannot read: components can list at most 100,000 entries.` A file
 that `usabl import figma` drafts must load like any other, so it holds at most 1,000
-requirements and 128 KiB, about 300 drafted requirements; import the frames of a larger design
-into more than one file.
+requirements and 128 KiB, about 330 drafted requirements; import the frames of a larger design
+into more than one file. A draft over 128 KiB is not written, and the command says so. One frame
+that drafts more than about 330 requirements cannot be imported yet.
 
 `usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
 the current version of each of their files, once per file, in sorted order. It lists the
