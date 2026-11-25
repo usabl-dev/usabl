@@ -89,7 +89,7 @@ export interface TargetFinder {
  * - around-target: on the element or its shadow host. A removed element is replaced by its parent.
  * - screen: anywhere on the screen, for a rule that reports the page or the control that opens
  *   something rather than the thing that was changed. A rule that is not expected still counts
- *   only on the element or inside it.
+ *   only on the element or inside it, and for a removed element only on the element that held it.
  */
 export type ReportedOn = 'target' | 'inside-target' | 'around-target' | 'screen';
 

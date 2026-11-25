@@ -296,6 +296,35 @@ describe('measureEntry', () => {
     expect(await measureEntry(both.deps, titleEntry, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
   });
 
+  it('counts another rule only on the element that held a removed one, for an entry reported on the screen', async () => {
+    // The edit removes x-toolbar, so main stands in for it. Everything else in main sits inside
+    // the stand-in, and for a heading that sits straight in main that is the whole page.
+    const headingEntry = entry({
+      id: 'heading-one-removed',
+      expectedRules: ['page-has-heading-one'],
+      reportedOn: 'screen',
+      mutation: { target: { selector: 'x-toolbar' }, edit: { kind: 'remove-element' } },
+    });
+    const sibling = setup([secondLoadOnly('button-name', '#other')]);
+    expect(await measureEntry(sibling.deps, headingEntry, SCREEN)).toEqual({
+      entry: 'heading-one-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: ['button-name'],
+      reason:
+        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+    });
+    const parent = setup([secondLoadOnly('button-name', 'main')]);
+    expect(await measureEntry(parent.deps, headingEntry, SCREEN)).toMatchObject({
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+      reason: 'reported by button-name; expected page-has-heading-one',
+    });
+    // An expected rule still counts anywhere on the screen.
+    const expected = setup([secondLoadOnly('page-has-heading-one', '#other')]);
+    expect(await measureEntry(expected.deps, headingEntry, SCREEN)).toMatchObject({ outcome: 'caught', rules: ['page-has-heading-one'] });
+  });
+
   it('accepts a finding on the shadow host of the target for an entry reported around it, and no other ancestor', async () => {
     const { deps } = setup([namesProvider('button-name', 'x-toolbar')]);
     expect((await measureEntry(deps, entry({ reportedOn: 'around-target' }), SCREEN)).outcome).toBe('caught');

@@ -170,6 +170,19 @@ const OTHER_RULE_PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]
   screen: ['target', 'inside'],
 };
 
+/**
+ * Where a finding from another rule counts for this entry. A removed element leaves nothing behind,
+ * so the element that held it stands in as the target, and the rest of that element is not the
+ * change. For a level one heading that sits straight in main, that rest is the whole page. So for
+ * an entry reported on the screen, another rule counts only on the stand-in itself.
+ */
+function otherRulePlaces(entry: CatalogEntry): readonly ElementPlace[] {
+  if (entry.reportedOn === 'screen' && entry.mutation.edit.kind === 'remove-element') {
+    return ['target'];
+  }
+  return OTHER_RULE_PLACES_FOR[entry.reportedOn];
+}
+
 function expectedText(entry: CatalogEntry): string {
   return entry.expectedRules.length === 0 ? 'no shipped rule claims this defect' : `expected ${entry.expectedRules.join(' or ')}`;
 }
@@ -336,7 +349,7 @@ async function decide(
     if (expected.length > 0) {
       return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
     }
-    const byOther = at(OTHER_RULE_PLACES_FOR[entry.reportedOn]).filter((finding) => !isExpected(finding));
+    const byOther = at(otherRulePlaces(entry)).filter((finding) => !isExpected(finding));
     if (byOther.length > 0) {
       const rules = sortedUnique(byOther.map((finding) => finding.rule));
       return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
