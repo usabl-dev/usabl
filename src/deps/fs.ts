@@ -50,7 +50,8 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
   const cwd = options.cwd ?? process.cwd();
   // Node's fs.glob matches without regard to letter case on macOS and Windows. The platform is
   // injected in tests, so the rule is tested on any machine.
-  const nocase = nodeGlobIgnoresCase(options.platform ?? process.platform);
+  const platform = options.platform ?? process.platform;
+  const nocase = nodeGlobIgnoresCase(platform);
 
   return {
     async readFile(path) {
@@ -211,6 +212,13 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
       } finally {
         await handle.close();
       }
+    },
+    async globUnder(folder, patterns) {
+      // The folder is the walk's starting folder, so Node never parses its name. A folder that is
+      // missing lists nothing.
+      const under = folder.replace(/\/+$/u, '');
+      const found = await makeFsGlob({ cwd: resolve(cwd, under), platform }).glob(patterns);
+      return under === '' ? found : found.map((path) => `${under}/${path.split(sep).join('/')}`).sort();
     },
     async glob(patterns) {
       // Return files only. Node's `**` also matches directory nodes (including the

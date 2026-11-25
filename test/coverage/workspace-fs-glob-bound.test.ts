@@ -32,7 +32,7 @@ function tree(workspaces: string[]): Record<string, string> {
   };
 }
 
-describe('a workspaces pattern past the glob bound', { timeout: 60_000 }, () => {
+describe('a workspaces pattern past the glob bound', { timeout: 30_000 }, () => {
   let root = '';
 
   afterEach(async () => {
@@ -63,6 +63,20 @@ describe('a workspaces pattern past the glob bound', { timeout: 60_000 }, () => 
     expect(coverage.nothingToCheck).toBe(false);
     expect(coverage.unresolvedFiles).toEqual(['tools/x.ts']);
   });
+
+  // `{,zz}/**` expands to `/**`, which Node walks from the root of the machine.
+  for (const pattern of ['{,zz}/**', '{/,a}/**', '/packages/*']) {
+    it(`makes ${pattern}, which names a path from the machine root, a gap and never walks it`, async () => {
+      const start = performance.now();
+      const coverage = await coverageFor(['packages/admin', pattern], 'packages/ui/src/Button.tsx');
+      const ms = performance.now() - start;
+      expect(coverage.unresolvedFiles).toEqual(['packages/ui/src/Button.tsx']);
+      const reason = coverage.gaps[0]?.reason ?? '';
+      expect(reason).toContain('could not read the workspace packages');
+      expect(reason).toContain(pattern);
+      expect(ms).toBeLessThan(3000);
+    });
+  }
 
   it('reads a pattern inside the bound as before', async () => {
     const coverage = await coverageFor(['packages/admin', 'packages/[u]*'], 'packages/ui/src/Button.tsx');

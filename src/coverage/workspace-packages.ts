@@ -18,7 +18,7 @@
 import { posix as path } from 'node:path';
 import yaml from 'js-yaml';
 import type { CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
-import { fsGlobBoundProblem } from '../deps/fs-glob-reading.js';
+import { fsGlobBoundProblem, globUnderFolder } from '../deps/fs-glob-reading.js';
 import { loadAliasConfig } from './alias-config.js';
 import { mentionsPackage } from './import-graph.js';
 
@@ -126,7 +126,9 @@ function manifestGlob(raw: string): string | null {
   const pattern = cleanPattern(trimmed.startsWith('!') ? trimmed.slice(1) : raw);
   // A brace group can hold .. or an absolute path, such as {..,packages/*}, and the glob expands
   // it, so a pattern with .. anywhere in a brace group is refused before it is globbed.
-  if (pattern === '' || pattern.startsWith('/') || pattern.split('/').includes('..')) return null;
+  // A pattern that starts with /, itself or in a brace group, is past the glob bound, so the
+  // root reads as unreadable (see checkGlobBound). It is never globbed.
+  if (pattern === '' || pattern.split('/').includes('..')) return null;
   if (/[{}]/u.test(pattern) && pattern.includes('..')) return null;
   return `${pattern}/package.json`;
 }
@@ -285,6 +287,7 @@ function appPackages(config: UsablConfig, packages: readonly PackageManifest[]):
 }
 
 const SOURCE_EXTENSIONS = ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'vue', 'svelte'];
+const SOURCE_PATTERNS = SOURCE_EXTENSIONS.map((extension) => `**/*.${extension}`);
 
 // What a package links to without declaring it: the names its source files import, and the
 // folders its path aliases point into. With npm, Yarn classic, or Bun hoisting, a package can import
@@ -298,7 +301,10 @@ interface Undeclared {
 
 async function undeclaredLinks(fs: FsGlob, pkg: PackageManifest, workspace: readonly PackageManifest[]): Promise<Undeclared> {
   const prefix = pkg.dir === '' ? '' : `${pkg.dir}/`;
-  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+  // The folder comes from the disk, so its name is read as plain text, never as a pattern. A
+  // package whose sources cannot be listed that way may import any package.
+  const found = await globUnderFolder(fs, pkg.dir, SOURCE_PATTERNS);
+  if (found === null) return { sources: null, aliasTargets: [] };
   const sources: string[] = [];
   for (const raw of found) {
     const file = insideRepository(raw);
@@ -309,7 +315,11 @@ async function undeclaredLinks(fs: FsGlob, pkg: PackageManifest, workspace: read
     sources.push(text);
   }
   // The package's own configs, read the way init reads an app's, and the repository root's.
-  const scoped: FsGlob = { readFile: (file) => fs.readFile(`${prefix}${file}`), glob: (patterns) => fs.glob(patterns) };
+  const scoped: FsGlob = {
+    readFile: (file) => fs.readFile(`${prefix}${file}`),
+    glob: (patterns) => fs.glob(patterns),
+    ...(fs.globUnder === undefined ? {} : { globUnder: fs.globUnder.bind(fs) }),
+  };
   const aliasTargets = (await loadAliasConfig(scoped)).mappings.map(({ target }) => path.normalize(path.join(pkg.dir === '' ? '.' : pkg.dir, target)));
   if (pkg.dir !== '') aliasTargets.push(...(await loadAliasConfig(fs)).mappings.map(({ target }) => path.normalize(target)));
   return { sources, aliasTargets };
@@ -621,11 +631,12 @@ export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]>
 
 /**
  * The source files of one workspace package, sorted: every file with a source extension under its
- * folder, outside node_modules.
+ * folder, outside node_modules. The folder comes from the disk, so its name is read as plain text,
+ * never as a pattern. Null when the reader cannot list the folder that way.
  */
-export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[]> {
-  const prefix = dir === '' ? '' : `${dir}/`;
-  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[] | null> {
+  const found = await globUnderFolder(fs, dir, SOURCE_PATTERNS);
+  if (found === null) return null;
   const files = found.map(insideRepository).filter((file): file is string => file !== null && !isInstalledPath(file));
   return [...new Set(files)].sort();
 }

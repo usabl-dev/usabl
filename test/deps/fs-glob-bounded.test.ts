@@ -78,3 +78,25 @@ describe('syntax the filter does not read', { timeout: 120_000 }, () => {
     expect(ms).toBeLessThan(QUICK_MS);
   });
 });
+
+describe('a pattern that starts from the machine root', { timeout: 30_000 }, () => {
+  it('is not walked', async () => {
+    await write('zz/a.ts');
+    const { value, ms } = await timed(() => makeFsGlob({ cwd: root }).glob(['{,zz}/**', '/**/package.json']));
+    expect(value).toEqual([]);
+    expect(ms).toBeLessThan(QUICK_MS);
+  });
+});
+
+describe('listing under a folder', () => {
+  it('reads the folder name as text, never as a pattern', async () => {
+    const odd = 'pkg[1]{a,b}*?(x)';
+    await write(`${odd}/src/index.ts`);
+    await write(`${odd}/src/.hidden.ts`);
+    await write('pkg1/src/other.ts');
+    await write(`${odd}/README.md`);
+    const fs = makeFsGlob({ cwd: root });
+    expect(await fs.globUnder?.(odd, ['**/*.ts'])).toEqual([`${odd}/src/index.ts`]);
+    expect(await fs.globUnder?.('missing', ['**/*.ts'])).toEqual([]);
+  });
+});
