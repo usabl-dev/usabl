@@ -28,6 +28,68 @@ export type ParseBundleResult =
   | { ok: true; bundle: RequirementBundle }
   | { ok: false; verdict: 'approval_required'; reason: string };
 
+// The type name of a value, as the messages below print it.
+function receivedType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'number') return Number.isNaN(value) ? 'nan' : 'number';
+  if (value instanceof Date) return 'date';
+  if (value instanceof Map) return 'map';
+  if (value instanceof Set) return 'set';
+  return typeof value;
+}
+
+function quoteValues(values: readonly unknown[], separator = ' | '): string {
+  return values.map((value) => (typeof value === 'string' ? `'${value}'` : String(value))).join(separator);
+}
+
+function invalidTypeMessage(expected: string, input: unknown): string {
+  return input === undefined ? 'Required' : `Expected ${expected}, received ${receivedType(input)}`;
+}
+
+// The messages for the mistakes the schema library reports in its own words: a missing field, a
+// wrong type, an unknown key, or a value that is not one of the allowed ones. These are the words
+// usabl has always printed. The library's version 4 words them differently, so they are written
+// out here, and a library upgrade cannot change what a person reads. A schema's own message, such
+// as 'description is required', comes first. This map is used only where a schema has none.
+const issueMessage: z.core.$ZodErrorMap = (issue) => {
+  switch (issue.code) {
+    case 'invalid_type':
+      return invalidTypeMessage(issue.expected, issue.input);
+    case 'invalid_value': {
+      // An enum and a literal both report a value that is not allowed, in different words.
+      const def = issue.inst?._zod.def;
+      if (def !== undefined && 'type' in def && def.type === 'enum') {
+        return typeof issue.input === 'string'
+          ? `Invalid enum value. Expected ${quoteValues(issue.values)}, received '${issue.input}'`
+          : invalidTypeMessage(quoteValues(issue.values), issue.input);
+      }
+      return `Invalid literal value, expected ${issue.values.map((value) => JSON.stringify(value)).join(' | ')}`;
+    }
+    case 'unrecognized_keys':
+      return `Unrecognized key(s) in object: ${quoteValues(issue.keys, ', ')}`;
+    case 'invalid_union':
+      // Only a discriminated union names its discriminator, and then options lists its values.
+      return issue.discriminator !== undefined && 'options' in issue && Array.isArray(issue.options)
+        ? `Invalid discriminator value. Expected ${quoteValues(issue.options)}`
+        : 'Invalid input';
+    default:
+      return undefined;
+  }
+};
+
+// A number field. YAML can write an infinite number (.inf), and the schema library before its
+// version 4 took it as a number, so the field's own rule refused it with a message that names the
+// field's range. Version 4 refuses it sooner, as not a number. This keeps the old order: any
+// number but NaN passes here, and the field's rule then refuses Infinity in its own words. A value
+// that is not a number stops the field here, so no later rule reads it.
+function numberField(requiredMessage = 'Required') {
+  return z.custom<number>((value) => typeof value === 'number' && !Number.isNaN(value), {
+    abort: true,
+    error: (issue) => (issue.input === undefined ? requiredMessage : invalidTypeMessage('number', issue.input)),
+  });
+}
+
 const contentAssertionSchema = z
   .object({
     type: z.literal('content'),
@@ -60,16 +122,15 @@ const flowAssertionSchema = z
 function voiceStepSchema<Shape extends z.ZodRawShape>(kind: string, shape: Shape, write: string) {
   return z
     .object(shape, {
-      errorMap: (issue, ctx) =>
-        issue.code === z.ZodIssueCode.unrecognized_keys
-          ? { message: `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}` }
-          : { message: ctx.defaultError },
+      error: (issue) =>
+        issue.code === 'unrecognized_keys'
+          ? `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}`
+          : undefined,
     })
     .strict();
 }
 
-const requiredText = (message: string) =>
-  z.string({ required_error: message, invalid_type_error: message }).trim().min(1, message);
+const requiredText = (message: string) => z.string({ error: message }).trim().min(1, message);
 
 const PRESS_KEY_MESSAGE = 'a press step needs a key, such as key: Escape';
 const CLICK_SELECTOR_MESSAGE = "a click step needs a selector, such as selector: '#delete'";
@@ -83,17 +144,17 @@ const voiceStepsSchema = z.discriminatedUnion(
     voiceStepSchema('click', { do: z.literal('click'), selector: requiredText(CLICK_SELECTOR_MESSAGE) }, 'do: click and selector'),
   ],
   {
-    errorMap: (issue, ctx) =>
-      issue.code === z.ZodIssueCode.invalid_union_discriminator
-        ? { message: 'do must be tab, activate, press, or click; to press another key, write do: press with key, such as key: Escape' }
-        : { message: ctx.defaultError },
+    error: (issue) =>
+      issue.code === 'invalid_union'
+        ? 'do must be tab, activate, press, or click; to press another key, write do: press with key, such as key: Escape'
+        : undefined,
   },
 );
 
 const voiceObligationSchema = z
   .object({
     class: z.string().trim().min(1, 'class is required; name the kind of obligation, such as live-polite'),
-    afterStep: z.number(),
+    afterStep: numberField(),
     requiredTokens: z
       .array(z.string())
       .min(1, 'requiredTokens must list at least one word a screen reader user must hear'),
@@ -115,14 +176,14 @@ const voiceAssertionSchema = z
     obligations: z
       .array(voiceObligationSchema)
       .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear'),
-    maxTabPath: z.number().optional(),
+    maxTabPath: numberField().optional(),
   })
   .strict();
 
 // Rules for a voice assertion that need more than one field at a time, so they cannot live in the
 // object schema. The discriminated union needs plain object schemas, so these run from the
 // requirement refinement, with paths under assertion.
-function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, ctx: z.RefinementCtx): void {
+function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, ctx: z.core.$RefinementCtx): void {
   // An obligation is checked in the window after one step, so afterStep has to name a step that
   // exists. A window past the last step would never be reached, and the obligation would only
   // ever report that focus did not get there.
@@ -130,7 +191,7 @@ function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, c
   assertion.obligations.forEach((obligation, index) => {
     if (!Number.isInteger(obligation.afterStep) || obligation.afterStep < 0 || obligation.afterStep > lastStep) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['assertion', 'obligations', index, 'afterStep'],
         message: `afterStep must be a whole number from 0 to ${lastStep}, the position of a step in steps counted from 0`,
       });
@@ -140,7 +201,7 @@ function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, c
     obligation.requiredTokens.forEach((token, tokenIndex) => {
       if (normalizeToken(token).length === 0) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: ['assertion', 'obligations', index, 'requiredTokens', tokenIndex],
           message:
             'each requiredTokens entry must contain a letter or digit; a token of only spaces or punctuation would match any announcement',
@@ -150,7 +211,7 @@ function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, c
   });
   if (assertion.maxTabPath !== undefined && (!Number.isInteger(assertion.maxTabPath) || assertion.maxTabPath < 1)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['assertion', 'maxTabPath'],
       message: 'maxTabPath must be a positive whole number, the most focus stops the task may take, or left out',
     });
@@ -216,9 +277,7 @@ const headingAssertionSchema = z
   .object({
     type: z.literal('heading'),
     name: accessibleName('name'),
-    level: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)], {
-      errorMap: () => ({ message: 'level must be a whole number from 1 to 6' }),
-    }),
+    level: z.literal([1, 2, 3, 4, 5, 6], { error: 'level must be a whole number from 1 to 6' }),
   })
   .strict();
 
@@ -248,12 +307,18 @@ const targetSizeAssertionSchema = z
   .object({
     type: z.literal('target-size'),
     target: targetSchema,
-    minCssPx: z
-      .number({ required_error: 'minCssPx is required: the smallest width and height, in CSS pixels, such as 24' })
-      // The hit test needs a box at least 2 pixels on each side for its points, and skips a smaller
-      // one. A minimum of 2 or more fails such a box on size, so it can never pass without a hit test.
-      .min(2, 'minCssPx must be at least 2 CSS pixels')
-      .max(200, 'minCssPx must be at most 200 CSS pixels'),
+    minCssPx: numberField('minCssPx is required: the smallest width and height, in CSS pixels, such as 24').superRefine(
+      (minCssPx, ctx) => {
+        // The hit test needs a box at least 2 pixels on each side for its points, and skips a smaller
+        // one. A minimum of 2 or more fails such a box on size, so it can never pass without a hit test.
+        if (minCssPx < 2) {
+          ctx.addIssue({ code: 'custom', message: 'minCssPx must be at least 2 CSS pixels' });
+        }
+        if (minCssPx > 200) {
+          ctx.addIssue({ code: 'custom', message: 'minCssPx must be at most 200 CSS pixels' });
+        }
+      },
+    ),
   })
   .strict();
 
@@ -263,7 +328,7 @@ const sourceText = (describe: (value: string) => string | null) =>
   z.string().superRefine((value, ctx) => {
     const problem = describe(value);
     if (problem !== null) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+      ctx.addIssue({ code: 'custom', message: problem });
     }
   });
 
@@ -290,12 +355,12 @@ const assertionSchema = z.discriminatedUnion('type', [
 
 // A focus order names each stop once. A name listed twice could be either of two stops, and
 // checking it would be a guess about which one the design meant, so the file is refused instead.
-function refineFocusOrder(assertion: z.infer<typeof focusOrderAssertionSchema>, ctx: z.RefinementCtx): void {
+function refineFocusOrder(assertion: z.infer<typeof focusOrderAssertionSchema>, ctx: z.core.$RefinementCtx): void {
   const seen = new Set<string>();
   assertion.sequence.forEach((name, index) => {
     if (seen.has(name)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['assertion', 'sequence', index],
         message: 'this name repeats an earlier entry; list each name once, so the check never has to guess which stop is meant',
       });
@@ -326,7 +391,7 @@ const requirementSchema = z
       const problem = describeRequirementIdProblem(requirement[field]);
       if (problem !== null) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: 'custom',
           path: [field],
           message: problem,
         });
@@ -335,7 +400,7 @@ const requirementSchema = z
 
     if (requirement.kind !== requirement.assertion.type) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['kind'],
         message: 'kind must match assertion.type',
       });
@@ -357,7 +422,9 @@ const requirementBundleSchema = z
   })
   .strict();
 
-function formatIssuePath(path: Array<string | number>): string {
+// A path segment can be a symbol in the library's types. Parsed YAML has no symbol keys, so that
+// case only keeps the text readable if one ever appears.
+function formatIssuePath(path: readonly PropertyKey[]): string {
   if (path.length === 0) {
     return 'bundle';
   }
@@ -368,17 +435,60 @@ function formatIssuePath(path: Array<string | number>): string {
       formatted += `[${segment}]`;
       continue;
     }
-    formatted += formatted.length === 0 ? segment : `.${segment}`;
+    const name = String(segment);
+    formatted += formatted.length === 0 ? name : `.${name}`;
   }
   return formatted;
 }
 
-function formatValidationReason(issues: z.ZodIssue[]): string {
+function isSizeIssue(issue: z.core.$ZodIssue): boolean {
+  return issue.code === 'too_small' || issue.code === 'too_big';
+}
+
+function isUnder(path: readonly PropertyKey[], parent: readonly PropertyKey[]): boolean {
+  return path.length > parent.length && parent.every((segment, index) => path[index] === segment);
+}
+
+/**
+ * The issues in the order, and with the content, that usabl has always reported them. The schema
+ * library's version 4 differs from earlier versions in two ways, and both are undone here.
+ *
+ * It still runs a length rule on a value of the wrong type when that value has a length, such as a
+ * list written where text belongs. That adds a second message for the field after the one that
+ * says its type is wrong, and the second message only restates the first. Earlier versions stopped
+ * at the type message, so a length message for a field whose type was wrong is dropped.
+ *
+ * It checks the entries of a list before the list's own length, so a list that is too short and
+ * holds a bad entry reports the entry first. Earlier versions reported the length first, so the
+ * length message moves back in front of the messages for the list's entries.
+ */
+function inReportedOrder(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  const wrongType = new Set<string>();
+  const ordered: z.core.$ZodIssue[] = [];
+  for (const issue of issues) {
+    const where = formatIssuePath(issue.path);
+    if (issue.code === 'invalid_type') {
+      wrongType.add(where);
+    } else if (isSizeIssue(issue) && wrongType.has(where)) {
+      continue;
+    }
+    let at = ordered.length;
+    if (isSizeIssue(issue) && 'origin' in issue && issue.origin === 'array') {
+      while (at > 0 && isUnder(ordered[at - 1]?.path ?? [], issue.path)) {
+        at -= 1;
+      }
+    }
+    ordered.splice(at, 0, issue);
+  }
+  return ordered;
+}
+
+function formatValidationReason(issues: readonly z.core.$ZodIssue[]): string {
   if (issues.length === 0) {
     return 'requirement bundle did not match schema';
   }
 
-  return issues
+  return inReportedOrder(issues)
     .map((issue) => `${formatIssuePath(issue.path)}: ${issue.message}`)
     .join('; ');
 }
@@ -510,8 +620,27 @@ function toRequirementBundle(bundle: z.infer<typeof requirementBundleSchema>): R
   };
 }
 
+const TOO_MANY_PROBLEMS = 'this file has too many problems to check, so it is refused; shorten or fix its longest list';
+
+// The message the JavaScript engine gives when a call goes over its stack or argument limit.
+const STACK_LIMIT_MESSAGE = 'Maximum call stack size exceeded';
+
 export function parseBundle(raw: unknown): ParseBundleResult {
-  const parsed = requirementBundleSchema.safeParse(raw);
+  // The schema library collects the problems of a list entry with one function call that takes
+  // each problem as an argument. Past about 123,000 problems under one entry, that call goes over
+  // the engine's limit and throws a RangeError in place of returning them. The file is refused
+  // either way. This says why, and quotes nothing from the file, so the person is not told that
+  // valid YAML is invalid. Any other error, a RangeError with another message included, is a fault
+  // that says nothing about the file, so it is thrown on as before.
+  let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
+  try {
+    parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
+  } catch (error: unknown) {
+    if (error instanceof RangeError && error.message === STACK_LIMIT_MESSAGE) {
+      return { ok: false, verdict: 'approval_required', reason: TOO_MANY_PROBLEMS };
+    }
+    throw error;
+  }
 
   if (parsed.success) {
     return {

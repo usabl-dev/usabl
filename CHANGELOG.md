@@ -444,6 +444,51 @@
   with a false note. They now read as not held with the reason "an element the edit changed is no
   longer on the page", as the markup edits do, and such a row reads `unreadable`. Measurement
   only: no verdict and no receipt changes.
+- An edit to a tracked file marked assume-unchanged or skip-worktree is now a change. git status
+  and git diff do not compare such a file, so a stop whose only edit was one read "No UI files
+  changed, so there was nothing to check", and a stop with other edits did not plan the screens
+  only that file reaches. The status listing now reads the flags and adds each flagged file whose
+  working copy is not what the index holds, so the Stop hook, `usabl check` in each mode, the
+  overlay, and `usabl brief` plan and check it like any other edit. Names are read as the bytes
+  git stores, so a name that is not valid UTF-8 is compared as that file. A missing skip-worktree
+  file is not a change only when sparse checkout is on and `git sparse-checkout check-rules` says
+  it is outside the sparse set; otherwise it is a deletion. In a sparse checkout of 50,000 files
+  with 45,000 left out, the listing takes under one second. Gate effect: such a stop now scans the
+  screens the file reaches instead of reading as nothing to check. The CI gate's `--trusted-ref`
+  check lists the same way, and its result changes only if the CI checkout holds a flagged file
+  whose working copy differs from the index, which a fresh checkout does not. Known limit: a clean
+  filter, the `ident` attribute, or a `working-tree-encoding` attribute, set locally with no
+  tracked change, can still hide an edit to a flagged file, and the same attributes keep the
+  receipt's tree id the same. A follow-up change closes that case.
+- usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
+  `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
+  pattern's length times the path's length. Before, it built a regular expression, and a
+  committed `uiFileGlobs` entry with twelve wildcards and a changed file name of 38 letters made a
+  stop take 81.7 seconds, so the host could end the Stop hook with nothing checked. That one match
+  now takes under a millisecond. The answers are the same as before for both dot rules. Many
+  bounded matches can still add up: a list inside the policy bounds took about 24 seconds to rule
+  out one changed path of 3999 characters. So the app planner and the docs planner each carry a
+  budget of 100,000,000 matching steps for the changed files (20,000 changed files against four
+  common globs used about 3 million), and test-file placement carries 1,000,000,000 of its own (an
+  app of 20,000 test files and 40 ordinary `import.meta.glob` calls used 0.51 billion). All of them
+  together are at most about 60 seconds of matching on a loaded 8-core machine. Each planner tests
+  the changed files in a fixed order, so the same set of changed files gives the same gaps in any
+  order. `import.meta.glob` patterns, which
+  come from source code, have the size bounds of the policy glob lists for each call (a pattern
+  whose braces expand to one longer than 1024 characters, or more than 4096 patterns or 262,144
+  characters in all) and a budget of 65,536 characters across the run. A pattern that starts with
+  `/` is matched under every folder in one read of the path; before, one file 1000 folders deep
+  took 17 seconds. Gate effect: a changed file left untested when the step budget runs out is a
+  gap whose reason names the budget, so the run is `not_covered`, never nothing to check. A call
+  past a bound or the character budget, and every glob once the step budget is spent, may load any
+  file, so a changed test file it could reach is a gap. Known limits: the guard's own matching has
+  no budget, and a `guardedPaths` list inside the bounds took 9.2 seconds against one committed
+  path of 3999 characters. Node's `fs.glob` still backtracks. usabl hands it each `guardedPaths`
+  entry, in the guard's working-tree listing and in `usabl doctor`; `uiFileGlobs` and
+  `discovery.wideBlastGlobs` when a changed test file is placed; `workspaces` patterns; and
+  `uiFileGlobs` in `usabl baseline` and the docs output. A pattern with many wildcards and a long
+  file name there can still outlast the host's limit.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
@@ -515,8 +560,8 @@
   shorten the entry. Known limit: the bounds do not cover the number of wildcards. A committed glob
   with many wildcards can take long enough to match a long changed file name that the host ends
   the Stop hook before usabl answers, and the stop then goes on with nothing checked. usabl's own
-  deadline is a timer in the same process and cannot end a match that is running. A matcher that
-  does not backtrack is planned.
+  deadline is a timer in the same process and cannot end a match that is running. The matcher no
+  longer backtracks; see the entry on the glob matcher above.
 - `usabl check` and the Stop hook save a receipt only when it binds the config they planned with.
   A check read `usabl.config.json` to plan and the run read it again when it bound the root config
   into the receipt. Before, a second process that put the committed config back in between made the
@@ -2310,8 +2355,22 @@
   Gate effect: none.
 - Development dependencies move to fixed versions inside their major version: `vite` 6.4.3 to
   6.4.6 and `source-map-js` 1.2.1 to 1.2.4, which clears the `npm audit` advisories for them.
-  The advisories for `zod` (a runtime dependency), `vitest`, `tinypool`, and `uuid` need a major
-  version change and are still open. Gate effect: none.
+  The advisories for `vitest`, `tinypool`, and `uuid` need a major version change and are still
+  open. The `zod` advisory is fixed by the move to zod 4 below. Gate effect: none.
+- `zod`, a runtime dependency, moves from 3.25.76 to 4.6.7. This fixes advisory
+  GHSA-mrhx-c7xc-m3w5. zod 3 checked every entry of a list before the list's length limit, so a
+  very long list in a requirement file cost time and memory in proportion to its length. A focus
+  order of a million names took about 13 seconds and more than 1 GB of memory to refuse, and the
+  refusal held one message for each bad name. Now a list past its limit is refused on its length
+  alone. Every requirement file reads the same as before, and the message for a file that does
+  not match its schema is the same text, with two exceptions. A focus order with more than 200
+  names now gets only `sequence can list at most 200 names`, with no message for each name in it.
+  A file with one list entry that holds more than about 123,000 problems, such as 150,000 empty
+  flow steps, now gets one reason: the file has too many problems to check, so it is refused, and
+  the person should shorten or fix its longest list. Before, it got one message for each problem.
+  A Figma file still cannot be read when a map entry named `__proto__` does not match, as before. The deepest chain of nested Figma frames that can be read goes from
+  about 780 levels to about 600. A deeper file is refused as a file usabl cannot read.
+  `npm audit --omit=dev` now reports no advisory. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the
   repository GitHub reports as `admin` or `write`. It reads the permission once for each
