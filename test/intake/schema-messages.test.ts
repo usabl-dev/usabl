@@ -320,6 +320,7 @@ describe('a requirement file with more problems than the schema library can coll
     expect(reasonOf(bundle(requirement({ kind: 'flow', assertion: { type: 'flow', steps } })))).toBe(FLOW_STEPS_LIMIT);
   });
 
+  // As a file, it is 2.4 MB, so the loader refuses it on its byte limit before it is parsed.
   it('is refused by the loader with the file named and none of its text', async () => {
     const yaml = [
       'version: 1',
@@ -344,7 +345,7 @@ describe('a requirement file with more problems than the schema library can coll
       ok: false,
       verdict: 'approval_required',
       path: 'requirements/huge.yaml',
-      reason: `requirements path requirements/huge.yaml: ${FLOW_STEPS_LIMIT}`,
+      reason: 'requirements path requirements/huge.yaml: a requirement file can be at most 128 KiB; split it into smaller files',
     });
   });
 });
