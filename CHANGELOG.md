@@ -361,15 +361,19 @@
 ### Changed
 
 - `usabl install --branch-rule` exits 2 with "cannot verify" when the gate names one branch and
-  GitHub's default branch is another, even when the gate's branch is fully protected. It used to
-  exit 0 with "verified" and one line saying the gate covers only pull requests into its branch.
-  Pull requests into the default branch run no gate, so a setup script that read only the exit
-  code passed while they merged unchecked. The first line now says the default branch is not
-  gated and whether the branch rule on the gate's branch is set. The next lines say what that
-  protection reads, which line to change to gate the default branch, and how to gate both
-  branches instead. `usabl doctor` shows the same facts and the same next step, and its branch
-  protection line is never wired in this case. Gate effect: none for verdicts. A setup script
-  that relied on exit 0 here now gets 2.
+  GitHub's default branch is another, or when usabl cannot read GitHub's default branch, even
+  when the gate's branch is fully protected. It used to exit 0 with "verified", with one line
+  saying the gate covers only pull requests into its branch, or with no line at all when the
+  default branch could not be read. Pull requests into the default branch may run no gate, so a
+  setup script that read only the exit code passed while they merged unchecked. The first line
+  now says what usabl knows about the default branch, and whether the branch rule on the gate's
+  branch is set. When the docs gate runs on the default branch and the app gate does not, it says
+  the app's pull requests into it are not gated. The next lines say what that protection reads,
+  which line to change to gate the default branch, and how to gate both branches instead. The
+  line named is the line of the trigger in the gate file on disk, not in usabl's draft, so a gate
+  with lines added above its trigger is told the right line. `usabl doctor` shows the same facts
+  and the same next step, and its branch protection line is never wired in these cases. Gate
+  effect: none for verdicts. A setup script that relied on exit 0 here now gets 2.
 - The verdict summary splits the blocking count by confidence. A new failing finding reads
   `N accessibility barrier(s) found` and a new finding usabl could not decide reads
   `1 check undecided, needs a person to review`, or in the plural
@@ -447,7 +451,9 @@
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
   docs gate's branch or an assumed `main`, and could read wired. A file usabl has no permission
-  to read was already reported this way. Every other doctor line is unchanged. Gate effect: none.
+  to read was already reported this way. Doctor's reader for the gate path is now a required
+  input, so no caller can fall back to the old read. Every other doctor line is unchanged. Gate
+  effect: none.
 - `usabl verify sensitivity` no longer writes a catch it did not measure. For the five entries
   reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), a new
