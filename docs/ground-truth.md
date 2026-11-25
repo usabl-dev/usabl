@@ -4655,9 +4655,16 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     less, where it cannot match Node exactly (a file reached through a link to a folder, and a file
     named before a trailing `/**`). Other syntax, such as a character class or an extglob group,
     runs in Node only inside a bound: at most 1024 characters, no extglob group, at most one run
-    of `*` in any part, and at most 256 brace expansions. Past it the pattern is not run. Config
-    load refuses that syntax in every policy glob list, and a `workspaces` pattern past the bound
-    makes the workspace root unreadable, so every changed file the workspace check tests is a gap.
+    of `*` in any part, and at most 256 brace expansions. A pattern that is empty or starts with
+    `/`, itself or in a brace expansion such as `{,zz}/**`, is past the bound too, because Node
+    would walk it from the root of the machine. Past the bound the pattern is not run. Config load
+    refuses that syntax, and such brace expansions, in every policy glob list, and a `workspaces`
+    pattern past the bound makes the workspace root unreadable, so every changed file the
+    workspace check tests is a gap. A folder whose name usabl does not control (a workspace
+    package folder, the requirements folder the loader reads) is listed with the folder as the
+    walk's start, so its name is read as plain text, never as a pattern. The local guard's
+    working-tree patterns still hold the requirements folder as text, so a requirements folder
+    named with glob syntax lists the wrong folder there until a guarded change fixes it.
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -5662,8 +5669,9 @@ change in a repository with no workspaces, reads as before.
 
 When the root `package.json` or `pnpm-workspace.yaml` exists and does not parse, or holds its
 workspace field in a shape no package manager reads, or lists a pattern past the file system
-adapter's glob bound (such as one with an extglob group, which Node can take minutes to match),
-the workspace packages are unknown. Every
+adapter's glob bound (such as one with an extglob group, which Node can take minutes to match, or
+one that starts with `/` or has a brace expansion that does, such as `{,zz}/**`), the workspace
+packages are unknown. Every
 changed file that is not a test, not UI, and not Markdown is then a `not-covered` gap whose
 reason names the file usabl could not read. A workspace pattern with `..` in a brace group is
 refused, and a glob result that is absolute or leaves the repository is never read.

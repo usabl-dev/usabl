@@ -986,10 +986,24 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   ref as the literal folder above it. A `workspaces` pattern past the bound makes the workspace
   root unreadable, so every changed file usabl would test against the workspace packages is a gap
   that names the pattern, never a file outside every package.
-- Known limit: usabl also builds patterns from folder names, such as the requirements folder and a
-  workspace package folder, and Node reads those names as patterns. A folder name that holds such
-  syntax past the bound is not listed there, and one inside the bound is read the way Node reads
-  it, as before.
+- A pattern that is empty or starts with `/`, itself or in one of its brace expansions, is past the
+  bound whatever its syntax, because Node walks it from the root of the machine: the `workspaces`
+  entry `{,zz}/**` becomes `/**/package.json`, which Node had not finished after 30 seconds.
+  Config load refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry with such a brace
+  expansion, as it already did for `guardedPaths`. A `workspaces` entry like it, or one that starts
+  with `/`, makes the workspace root unreadable, so it is a gap, never a walk.
+- Node's glob has no escape, so a folder name put into a pattern is read as a pattern: `reqs[1]`
+  there means `reqs1`. usabl lists the files under a folder whose name it does not control with
+  that folder as the walk's start, so the name is read as plain text: the source files of each
+  workspace package folder, which the agent can name, and the requirements folder the loader
+  reads, on the working tree and at the trusted ref. A reader that cannot list a folder that way
+  reads a workspace package's sources as unknown (it may import any package, and its test files
+  keep their gaps), and fails the requirements load closed.
+- Known limit: the local guard still puts the requirements folder into its working-tree patterns
+  as text (`src/trust/guard.ts`, a guarded path). A requirements folder named with glob syntax,
+  such as `reqs[1]`, then lists the wrong folder on the working tree, so a new untracked file in it
+  is not seen until it is committed. The git listings at the trusted ref and at `HEAD` read the
+  folder as text. Such a name must be in committed policy, which a code owner approves.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
