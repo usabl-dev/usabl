@@ -4,6 +4,7 @@
  * It must fail closed on any malformed file because policy cannot be half-applied.
  */
 import type { BoundedTextRead, FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
+import { globUnderFolder } from '../deps/fs-glob-reading.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { boundedOperatorPath } from './config-error.js';
 import { REQUIREMENT_FILE_BYTE_LIMIT, REQUIREMENT_FILE_TOO_LARGE, textWithin } from './file-size.js';
@@ -64,7 +65,16 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
 
   let paths: string[];
   try {
-    paths = (await fs.glob([`${root}/**/*.yaml`, `${root}/**/*.yml`])).sort();
+    // The folder is a name from the config. Node's glob has no escape, so the name is read as
+    // plain text, never as a pattern: `reqs[1]` must not load the files of `reqs1`.
+    const listed = await globUnderFolder(fs, root, ['**/*.yaml', '**/*.yml']);
+    if (listed === null) {
+      return pathFailure(
+        root,
+        'the requirements folder name holds characters a glob reads as a pattern, and this reader cannot list it as plain text',
+      );
+    }
+    paths = listed.sort();
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return pathFailure(root, `failed to glob requirement files: ${message}`);

@@ -4,6 +4,7 @@
  * It must never decide verdicts or hide policy divergence.
  */
 import type { FsGlob, GitReader, UsablConfig } from '../contracts/index.js';
+import { globUnderFolder } from '../deps/fs-glob-reading.js';
 import { matchGlob } from '../primitives/match-glob.js';
 import { textWithin } from './file-size.js';
 
@@ -61,6 +62,31 @@ export function overlayRequirementsFs(
       }
 
       return [...matches].sort();
+    },
+    // The folder's name is read as plain text, never as a pattern. Under the requirements folder,
+    // the trusted ref's files are listed and matched against the patterns below the folder.
+    // Anywhere else the working tree is listed, with the requirements folder's files taken from the
+    // trusted ref, as glob does.
+    async globUnder(folder, patterns) {
+      const under = folder.replace(/\/+$/u, '');
+      const fromRef = async (): Promise<string[]> => {
+        const prefix = under === '' ? '' : `${under}/`;
+        return (await trustedFiles()).filter(
+          (path) => path.startsWith(prefix) && patterns.some((pattern) => matchGlob(pattern, path.slice(prefix.length))),
+        );
+      };
+      if (under !== '' && isWithinRoot(under, root)) {
+        return (await fromRef()).sort();
+      }
+      const working = await globUnderFolder(fs, under, patterns);
+      if (working === null) {
+        throw new Error('usabl cannot list this folder: its name holds characters a glob reads as a pattern');
+      }
+      const merged = new Set(working.filter((path) => !isWithinRoot(path, root)));
+      for (const path of await fromRef()) {
+        if (isWithinRoot(path, root)) merged.add(path);
+      }
+      return [...merged].sort();
     },
     async readFile(path) {
       if (isWithinRoot(path, root)) {
