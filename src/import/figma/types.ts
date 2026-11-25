@@ -57,12 +57,35 @@ export interface FigmaFile {
   componentSets?: Record<string, { name: string }>;
 }
 
+// A number in a box must be finite. The schema library's number refuses NaN and Infinity.
 const rectSchema = z.object({
-  x: z.number().finite(),
-  y: z.number().finite(),
-  width: z.number().finite(),
-  height: z.number().finite(),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
 });
+
+// An id number. JSON can write one too large for a double, such as 1e999, which reads as Infinity.
+// The schema library before its version 4 took that as a number, and a slot id is never read as a
+// size, so a file that holds one stays readable. Version 4 refuses Infinity, so any number but NaN
+// is allowed here.
+const idNumber = z.custom<number>((value) => typeof value === 'number' && !Number.isNaN(value), { abort: true });
+
+// A map from names to values. JSON.parse makes a key named "__proto__" an own key. The schema
+// library's version 4 skips such a key in a record before it checks the value. Earlier versions
+// checked the value, so a file whose "__proto__" entry did not match was not readable, and then
+// left the entry out. This keeps both: the value is checked here, and the record still leaves the
+// entry out, so it never reaches an object's prototype.
+function recordOf<Value extends z.ZodType>(value: Value) {
+  return z
+    .custom<unknown>((input) => {
+      if (typeof input !== 'object' || input === null || !Object.hasOwn(input, '__proto__')) {
+        return true;
+      }
+      return value.safeParse(Object.getOwnPropertyDescriptor(input, '__proto__')?.value).success;
+    }, { abort: true })
+    .pipe(z.record(z.string(), value));
+}
 
 const annotationSchema = z.object({
   label: z.string().optional(),
@@ -72,7 +95,7 @@ const annotationSchema = z.object({
 // Figma's published types allow a slot id as a value, so a file whose components use slots is
 // still a file usabl can read. Only the id fields are kept.
 const slotContentIdSchema = z
-  .object({ guid: z.object({ sessionID: z.number(), localID: z.number() }) })
+  .object({ guid: z.object({ sessionID: idNumber, localID: idNumber }) })
   .transform(({ guid }) => ({ guid: { sessionID: guid.sessionID, localID: guid.localID } }));
 
 const propertySchema = z.object({
@@ -81,7 +104,7 @@ const propertySchema = z.object({
 });
 
 // Unknown fields are dropped, so nothing usabl does not read is ever carried along.
-const nodeSchema: z.ZodType<FigmaNode, z.ZodTypeDef, unknown> = z.lazy(() =>
+const nodeSchema: z.ZodType<FigmaNode, unknown> = z.lazy(() =>
   z
     .object({
       id: z.string(),
@@ -91,7 +114,7 @@ const nodeSchema: z.ZodType<FigmaNode, z.ZodTypeDef, unknown> = z.lazy(() =>
       characters: z.string().optional(),
       absoluteBoundingBox: rectSchema.nullable().optional(),
       componentId: z.string().optional(),
-      componentProperties: z.record(propertySchema).optional(),
+      componentProperties: recordOf(propertySchema).optional(),
       // Other annotation fields, such as measurements, are not read.
       annotations: z.array(annotationSchema).optional(),
     })
@@ -117,10 +140,8 @@ const fileSchema = z.object({
   version: z.string(),
   lastModified: z.string(),
   document: nodeSchema,
-  components: z.record(
-    z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() }),
-  ),
-  componentSets: z.record(z.object({ name: z.string() })).optional(),
+  components: recordOf(z.object({ key: z.string().optional(), name: z.string(), componentSetId: z.string().optional() })),
+  componentSets: recordOf(z.object({ name: z.string() })).optional(),
 });
 
 /**
@@ -128,7 +149,7 @@ const fileSchema = z.object({
  * not a Figma file usabl can read. A file nested too deeply to check is not one either.
  */
 export function readFigmaFile(value: unknown): FigmaFile | null {
-  let parsed: z.SafeParseReturnType<unknown, z.infer<typeof fileSchema>>;
+  let parsed: z.ZodSafeParseResult<z.infer<typeof fileSchema>>;
   try {
     parsed = fileSchema.safeParse(value);
   } catch {

@@ -8,7 +8,16 @@
 import { builtinModules } from 'node:module';
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
-import { braceRangeIn, expandBraces, matchGlob, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import {
+  braceRangeIn,
+  countBraceExpansions,
+  expandBraces,
+  GlobBudgetExhausted,
+  globMatcher,
+  type GlobMatchBudget,
+  UNSUPPORTED_GLOB_CHARACTERS,
+} from '../primitives/match-glob.js';
+import { globListBoundProblem } from '../intake/glob-list-bounds.js';
 import { commentRanges, syntaxForFile } from '../primitives/source-ast.js';
 import {
   type AliasConfig,
@@ -59,9 +68,11 @@ export type UnresolvableImport =
       // none.
       underEveryFolder?: string[];
       // Why the patterns are null: the argument is not a string or a list of strings, the
-      // options set `base`, a pattern starts in a way usabl cannot resolve, or a pattern has a
-      // part usabl cannot read exactly (see braceAlternatives). Absent otherwise.
-      unread?: 'argument' | 'base' | 'start' | 'pattern';
+      // options set `base`, a pattern starts in a way usabl cannot resolve, a pattern has a
+      // part usabl cannot read exactly (see braceAlternatives), the patterns are past the size
+      // bounds of the policy glob lists (see globListBoundProblem), or the run's patterns are past
+      // its character budget (see GlobImportBudget). Absent otherwise.
+      unread?: 'argument' | 'base' | 'start' | 'pattern' | 'size' | 'budget';
       // The patterns, as written, that hold syntax the glob matcher does not evaluate, such as a
       // character class. Each is read as every file in the folder above that syntax, sorted.
       // Absent when there is none.
@@ -141,6 +152,8 @@ export interface ImportGraphOptions {
   // `exactExports` is followed to the one file that entry names, when that file is inside the
   // package folder. Read only when complete.
   workspacePackages?: readonly WorkspacePackageView[];
+  // The run's budget of import.meta.glob pattern characters. A call past it may load any file.
+  globImports?: GlobImportBudget;
 }
 
 // What the graph reads of a workspace package (see WorkspacePackage in workspace-packages.ts).
@@ -469,6 +482,7 @@ interface LoadContext {
   // Whether a glob pattern that starts with / is read under every folder. The complete reading does
   // this. Otherwise such a pattern may load any file.
   rootedUnderEveryFolder: boolean;
+  globImports: GlobImportBudget | undefined;
 }
 
 const BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
@@ -622,16 +636,9 @@ function belowEveryFolder(pattern: string): string {
   return below === '' || below === '.' ? '**' : below;
 }
 
-// Every path of a file below a folder at or above it, the repository root included:
-// a/b/c.tsx, b/c.tsx, and c.tsx for a/b/c.tsx.
-function pathsBelowEachFolder(file: string): string[] {
-  const segments = file.split('/');
-  return segments.map((_, index) => segments.slice(index).join('/'));
-}
-
 function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>, context: LoadContext): UnresolvableImport {
   const { aliases, baseUrlDirs, rootedUnderEveryFolder } = context;
-  const open = (unread: 'argument' | 'base' | 'start' | 'pattern'): UnresolvableImport => ({
+  const open = (unread: 'argument' | 'base' | 'start' | 'pattern' | 'size' | 'budget'): UnresolvableImport => ({
     importer,
     specifier: call.text,
     kind: 'glob-import',
@@ -639,6 +646,16 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
     unread,
   });
   if (call.patterns === null) return open(call.base === true ? 'base' : 'argument');
+  // The patterns come from source code, so they have the bounds of the policy glob lists, counted
+  // before anything is expanded. Past one, the call may load any file. A pattern whose braces
+  // usabl cannot read, or that has more than the cap of brace alternatives, is left to
+  // braceAlternatives below, which reads it as one that may load any file too.
+  const positive = call.patterns.filter((candidate) => !candidate.startsWith('!'));
+  const expandable = positive.filter((pattern) => {
+    const count = countBraceExpansions(pattern);
+    return count !== null && count <= MAX_BRACE_ALTERNATIVES;
+  });
+  if (globListBoundProblem(expandable) !== null) return open('size');
   const resolved: string[] = [];
   const rooted: string[] = [];
   const widened: string[] = [];
@@ -653,7 +670,7 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
     }
   };
   // A negative pattern only takes files away, so leaving it out can only name more files.
-  for (const pattern of call.patterns.filter((candidate) => !candidate.startsWith('!'))) {
+  for (const pattern of positive) {
     // The braces are expanded first, so a .. or an alias inside an alternative is resolved.
     const alternatives = braceAlternatives(pattern);
     if (alternatives === null) return open('pattern');
@@ -669,12 +686,16 @@ function globEntry(importer: string, call: Extract<LoaderCall, { kind: 'glob' }>
       for (const resolvedPath of paths) add(resolved, resolvedPath, pattern);
     }
   }
+  const patterns = [...new Set(resolved)].sort();
+  const underEveryFolder = [...new Set(rooted)].sort();
+  const characters = [...patterns, ...underEveryFolder].reduce((sum, pattern) => sum + pattern.length, 0);
+  if (context.globImports !== undefined && !context.globImports.fits(importer, call.text, characters)) return open('budget');
   return {
     importer,
     specifier: call.text,
     kind: 'glob-import',
-    patterns: [...new Set(resolved)].sort(),
-    ...(rooted.length === 0 ? {} : { underEveryFolder: [...new Set(rooted)].sort() }),
+    patterns,
+    ...(rooted.length === 0 ? {} : { underEveryFolder }),
     ...(widened.length === 0 ? {} : { widened: [...new Set(widened)].sort() }),
   };
 }
@@ -722,6 +743,73 @@ function loaderEntries(importer: string, calls: readonly LoaderCall[], context: 
   return entries;
 }
 
+interface BuiltGlobMatchers {
+  patterns: ((file: string) => boolean)[];
+  // The patterns read under every folder, each tested in one read of the path. One matches when
+  // the file's path below some folder at or above it matches, the repository root included: for
+  // a/b/c.tsx, that is a/b/c.tsx, b/c.tsx, or c.tsx.
+  below: ((file: string) => boolean)[];
+}
+
+// The matchers of a glob entry, built the first time the entry is tested and kept with it, so a
+// graph's entry builds each pattern once, not once for each file it tests. They are kept for each
+// budget they charge, so a test with no budget never charges one.
+const builtGlobMatchers = new WeakMap<object, Map<GlobMatchBudget | undefined, BuiltGlobMatchers>>();
+
+function globEntryMatchers(
+  entry: Extract<UnresolvableImport, { kind: 'glob-import' }>,
+  patterns: readonly string[],
+  budget: GlobMatchBudget | undefined,
+): BuiltGlobMatchers {
+  let byBudget = builtGlobMatchers.get(entry);
+  if (byBudget === undefined) {
+    byBudget = new Map();
+    builtGlobMatchers.set(entry, byBudget);
+  }
+  let built = byBudget.get(budget);
+  if (built === undefined) {
+    const options = budget === undefined ? {} : { budget };
+    built = {
+      patterns: patterns.map((pattern) => globMatcher(pattern, options)),
+      below: (entry.underEveryFolder ?? []).map((pattern) => globMatcher(pattern, { ...options, underEveryFolder: true })),
+    };
+    byBudget.set(budget, built);
+  }
+  return built;
+}
+
+/**
+ * The characters of import.meta.glob patterns usabl matches in one run, across every call, after
+ * the braces are expanded and each pattern is resolved. Each call is counted once, however many
+ * graphs read it. A call that does not fit, and every call after it, may load any file. With the
+ * glob matching budget, it keeps patterns written in source code from making a run slow.
+ */
+export class GlobImportBudget {
+  remaining: number;
+  // Each call read, by importer and call text, and whether it fit, so a call read again by a later
+  // graph gets the same answer.
+  readonly calls = new Map<string, boolean>();
+
+  constructor(readonly characters: number) {
+    this.remaining = characters;
+  }
+
+  fits(importer: string, text: string, characters: number): boolean {
+    const key = `${importer}\u0000${text}`;
+    const known = this.calls.get(key);
+    if (known !== undefined) return known;
+    const fits = this.remaining >= 0 && characters <= this.remaining;
+    // Past the budget, nothing more fits.
+    this.remaining = fits ? this.remaining - characters : -1;
+    this.calls.set(key, fits);
+    return fits;
+  }
+}
+
+// The characters of import.meta.glob patterns one run reads. A normal app holds a few calls of
+// under a hundred characters each.
+export const GLOB_IMPORT_CHARACTERS = 65_536;
+
 // Whether a path segment of a file starts with `start`: `tests/` names src/tests/Widget.tsx.
 function pathHasSegmentStart(file: string, start: string): boolean {
   return `/${file}`.includes(`/${start}`);
@@ -735,11 +823,23 @@ function pathHasSegmentStart(file: string, start: string): boolean {
  * importNames). It may also load any file below a folder of that name in `packageFolders`, the
  * folders the caller found a package.json in, and each file that package.json names.
  */
-export function importMayLoad(entry: UnresolvableImport, file: string, packageFolders: PackageFolders = new Map()): boolean {
+export function importMayLoad(
+  entry: UnresolvableImport,
+  file: string,
+  packageFolders: PackageFolders = new Map(),
+  // Charged for the glob matching. Once it is spent, a glob may load the file, so the file is a
+  // gap, never one nothing loads.
+  budget?: GlobMatchBudget,
+): boolean {
   if (entry.kind === 'glob-import') {
-    if (entry.patterns === null || entry.patterns.some((pattern) => matchGlob(pattern, file))) return true;
-    const below = entry.underEveryFolder ?? [];
-    return below.length > 0 && pathsBelowEachFolder(file).some((tail) => below.some((pattern) => matchGlob(pattern, tail)));
+    if (entry.patterns === null || budget?.exhausted === true) return true;
+    const { patterns, below } = globEntryMatchers(entry, entry.patterns, budget);
+    try {
+      return patterns.some((matches) => matches(file)) || below.some((matches) => matches(file));
+    } catch (err) {
+      if (err instanceof GlobBudgetExhausted) return true;
+      throw err;
+    }
   }
   if (entry.kind === 'dynamic-import') {
     return (
@@ -1225,7 +1325,7 @@ export async function buildImportGraph(
   const aliases = aliasConfig ?? NO_ALIASES;
   const packages = complete && options.declaredPackages !== undefined ? new Set(options.declaredPackages) : null;
   const workspacePackages = complete ? (options.workspacePackages ?? []) : [];
-  const context: LoadContext = { aliases, baseUrlDirs, packages, rootedUnderEveryFolder: complete };
+  const context: LoadContext = { aliases, baseUrlDirs, packages, rootedUnderEveryFolder: complete, globImports: options.globImports };
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -1347,7 +1447,13 @@ export async function inspectDirectImports(
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];
-  for (const entry of loaderEntries(file, findLoaderCallsInCode(source, file), { aliases, baseUrlDirs: [], packages: null, rootedUnderEveryFolder: false })) {
+  for (const entry of loaderEntries(file, findLoaderCallsInCode(source, file), {
+    aliases,
+    baseUrlDirs: [],
+    packages: null,
+    rootedUnderEveryFolder: false,
+    globImports: undefined,
+  })) {
     pushUniqueUnresolvable(unresolvable, entry);
   }
 

@@ -1748,6 +1748,9 @@ for a quoted name, is an `unresolved` gap that says why, never a file outside th
 file name of that shape is a gap too, and the reason says to rename it. A name such as `"draft".md`
 does not have that shape and is read as the file it names. The same listing reads the trusted
 requirement files and the guarded files at a ref, so a file there with such a name is read too.
+A changed file usabl could not test against `uiFileGlobs` and `discovery.wideBlastGlobs` before
+the run's glob matching budget ran out (100,000,000 steps, see the Stop hook deadline limit) is
+an `unresolved` gap whose reason names the budget, never a file outside the UI globs.
 
 New untracked files are listed one by one. Without `--untracked-files=all`, git status lists a new
 folder as the folder alone, which matches no file glob, and a user's
@@ -1901,9 +1904,18 @@ in this order:
      the folder above its first such segment, so `/src/pages/[id]/*.tsx` covers `src/pages/` and
      not a test folder beside it. Each of these may load any file, and the reason says which it
      was: a call whose argument is not a string or a list of strings, a pattern that starts with an
-     alias usabl cannot map, a call whose options may set `base`, and a pattern usabl cannot read
+     alias usabl cannot map, a call whose options may set `base`, a pattern usabl cannot read
      exactly (a nested or unbalanced brace, more than 64 brace alternatives, an escaped brace or
-     comma, or a `..` after a segment with glob syntax). The `base` option moves where the patterns
+     comma, or a `..` after a segment with glob syntax), a call past the size bounds of the
+     policy glob lists (a pattern whose braces expand to one longer than 1024 characters, or more
+     than 4096 patterns or 262,144 characters in the call, counted before the braces are
+     expanded), and a call past the run's budget of 65,536 pattern characters, with every call
+     after it (counted once for each call, after the braces are expanded and each pattern is
+     resolved). Each pattern is built once for each graph that reads it, not once for each file,
+     and its matching charges a budget of glob matching steps (test-file placement has its own
+     1,000,000,000); once that is spent, every glob may load any file. A pattern read under every
+     folder is matched in one read of the path.
+     The `base` option moves where the patterns
      start, and Vite evaluates the options as code, so a quoted key, a computed key, or a spread can
      set it. usabl reads the patterns only when the options are an object whose keys are `eager`,
      `import`, `query`, `as`, or `exhaustive`, plain or quoted, and whose values are a plain string,
@@ -4540,11 +4552,25 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
     runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
   - Limit: the deadline is a timer in the same process, so it fires only between steps that wait,
-    such as a browser call. It cannot end work that runs without waiting. A committed glob with
-    many wildcards can take long enough to match a long changed file name that the host ends the
-    hook before usabl answers, and the stop then goes on with nothing checked (threat model,
-    Threat 8). Such a pattern must be in committed policy, which a code owner approves. A matcher
-    that does not backtrack is planned.
+    such as a browser call. It cannot end work that runs without waiting. usabl's own glob
+    matcher does not backtrack, so one match takes at most the pattern's length times the path's
+    length. Many matches can still add up: a list inside the policy bounds took about 24 seconds
+    to rule out one changed path of 3999 characters. So the app planner and the docs planner each
+    carry a budget of 100,000,000 matching steps for the changed files, test-file placement
+    carries 1,000,000,000 of its own (an app of 20,000 test files and 40 ordinary calls used 0.51
+    billion), and `import.meta.glob` patterns have a budget of 65,536 characters for the run. All
+    the step budgets together are at most about 60 seconds of matching on a loaded 8-core machine.
+    Each planner tests the changed files in one fixed order, sorted by UTF-16 code units, so the
+    same set of changed files gives the same gaps in any order. A changed file left untested when
+    a budget runs out is a gap whose reason names the budget, never nothing to check. The guard's own matching carries no budget: a
+    `guardedPaths` list inside the bounds took 9.2 seconds against one committed path of 3999
+    characters. Node's `fs.glob` can still take long too. usabl hands it each `guardedPaths` entry,
+    to list new files on the working tree (the guard) and to sample the files under it (`usabl
+    doctor`); `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is placed; the
+    `workspaces` patterns of a `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs
+    output. A pattern with many wildcards and a long file name there, or a long guarded list and
+    many deep committed paths, can take long enough that the host ends the hook before usabl
+    answers, and the stop then goes on with nothing checked (threat model, Threat 8).
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
