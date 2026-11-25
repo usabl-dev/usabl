@@ -225,6 +225,7 @@ function doctorDeps(
     probePlaywrightChromium: async () => 'wired',
     probeChromiumSandbox: async () => 'available',
     env: NO_SESSION,
+    readWorkflow: (path) => base.fs.readFile(path),
     ...base,
   };
 }

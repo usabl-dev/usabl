@@ -45,6 +45,7 @@ function readOnlyFs(files: Record<string, string>): InstallFs {
 async function branchRule(files: Record<string, string>, gh: GhReader): Promise<SurfaceReport> {
   const all = await collectDoctorReport({
     fs: readOnlyFs(files),
+    readWorkflow: (path) => readOnlyFs(files).readFile(path),
     gh,
     configPath: 'usabl.config.json',
     env: {},

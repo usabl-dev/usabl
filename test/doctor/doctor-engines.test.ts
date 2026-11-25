@@ -36,6 +36,7 @@ function configWith(engines: unknown, extra: Record<string, unknown> = {}): stri
 function deps(files: Record<string, string>, extra: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
     fs: filesFs(files),
+    readWorkflow: (path) => filesFs(files).readFile(path),
     gh: { getJson: async () => null },
     configPath: 'usabl.config.json',
     env: {},

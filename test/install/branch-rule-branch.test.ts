@@ -263,6 +263,7 @@ describe('doctor checks the branch the gate names', () => {
   async function branchRule(files: Record<string, string>, gh: GhReader): Promise<SurfaceReport> {
     const reports = await collectDoctorReport({
       fs: readOnlyFs(files),
+      readWorkflow: (path) => readOnlyFs(files).readFile(path),
       gh,
       configPath: 'usabl.config.json',
       env: {},

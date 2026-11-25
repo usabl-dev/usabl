@@ -134,6 +134,7 @@ describe('doctor in a repository with only the docs gate', () => {
     };
     const all = await collectDoctorReport({
       fs,
+      readWorkflow: fs.readFile,
       gh,
       configPath: 'usabl.config.json',
       env: {},

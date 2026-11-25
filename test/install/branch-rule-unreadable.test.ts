@@ -73,7 +73,12 @@ describe('a gate workflow path usabl cannot read', () => {
   });
 
   it('gives doctor the same unknown branch, never a missing gate', async () => {
+    const readUnpermitted = async (path: string): Promise<string | null> => {
+      if (path === USABL_GATE_WORKFLOW_PATH) throw fsError('EACCES');
+      return null;
+    };
     const reports = await collectDoctorReport({
+      readWorkflow: readUnpermitted,
       fs: {
         readFile: async (path) => {
           if (path === USABL_GATE_WORKFLOW_PATH) throw fsError('EACCES');

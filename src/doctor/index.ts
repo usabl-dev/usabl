@@ -174,8 +174,9 @@ export interface DoctorDeps {
   // Reads a gate workflow for the branch rule check, the way "usabl install --branch-rule" reads
   // it: null only when nothing is at the path, and a throw for a folder or a file usabl cannot
   // read. fs.readFile reads a folder as no file, which would turn a gate usabl cannot read into a
-  // missing gate. The CLI always passes it. A caller that leaves it out reads through fs.readFile.
-  readWorkflow?: (path: string) => Promise<string | null>;
+  // missing gate, so it is required: a caller cannot fall back to that read by leaving it out. The
+  // CLI passes makeWorkflowReader.
+  readWorkflow: (path: string) => Promise<string | null>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -916,7 +917,7 @@ async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
     // The app gate's branch, or the docs gate's when there is no app gate. gateBranchTarget reads the
     // files itself, with the workflow reader, so a folder or a file it cannot read says so instead
     // of reading as missing, the same as in install --branch-rule.
-    target: await gateBranchTarget(deps.readWorkflow ?? ((path) => deps.fs.readFile(path))),
+    target: await gateBranchTarget(deps.readWorkflow),
   };
 }
 
