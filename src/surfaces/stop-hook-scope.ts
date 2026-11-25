@@ -290,7 +290,7 @@ async function configOnOtherBranch(
     answers.pop();
   }
   if (answers.length !== commits.length * 2) {
-    return unexpected(batch, `the tips of the branches of origin`);
+    return unexpected(batch, 'the tips of the branches of origin');
   }
   const heldRefs: string[] = [];
   for (const [index, commit] of commits.entries()) {
