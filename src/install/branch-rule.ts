@@ -20,8 +20,7 @@
  * an Enterprise feature, takes the workflow out of the pull request's hands.
  */
 import { REQUIRED_GATE_JOB, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW_PATH } from './ci.js';
-import { isSafeBranchName, workflowTriggerBranch } from './repo-git.js';
-import { branchLinesText, DOCS_GATE_BRANCHED, GATE_BRANCHED, type BranchedWorkflow } from './workflow-branch.js';
+import { isSafeBranchName, workflowTrigger } from './repo-git.js';
 
 // The gate triggers on pull requests into the branch its workflow file names, so that is the
 // branch to protect. main is the branch usabl checks when no gate workflow names one, and it
@@ -35,11 +34,12 @@ export const REQUIRED_CHECK = REQUIRED_GATE_JOB;
 /**
  * The branch the check reads. source is gate when the gate workflow on disk names it, docs-gate when
  * there is no gate workflow and the docs gate workflow names it, and assumed when usabl checks main
- * because it could not read one. An assumed target carries the reason, whether a gate file is there
- * at all, and the step that would let usabl read the branch.
+ * because it could not read one. A target a gate names carries the line of that file that names the
+ * branch, counted from 1. An assumed target carries the reason, whether a gate file is there at all,
+ * and the step that would let usabl read the branch.
  */
 export type BranchTarget =
-  | { name: string; source: 'gate' | 'docs-gate' }
+  | { name: string; source: 'gate' | 'docs-gate'; line: number }
   | { name: string; source: 'assumed'; reason: string; gatePresent: boolean; step: string };
 
 // The step when there is no gate workflow: install writes one for the default branch git names.
@@ -56,17 +56,19 @@ interface GateFile {
   source: 'gate' | 'docs-gate';
   path: string;
   command: string;
-  workflow: BranchedWorkflow;
   // The other usabl workflows that name the branch, for the step that says to change it.
   others: string;
 }
 const GATE_FILES: readonly GateFile[] = [
-  { source: 'gate', path: USABL_GATE_WORKFLOW_PATH, command: 'usabl install --ci', workflow: GATE_BRANCHED, others: 'the docs gate and history workflows if you have them' },
-  { source: 'docs-gate', path: USABL_DOCS_GATE_WORKFLOW_PATH, command: 'usabl install --docs-ci', workflow: DOCS_GATE_BRANCHED, others: 'the history workflow if you have it' },
+  { source: 'gate', path: USABL_GATE_WORKFLOW_PATH, command: 'usabl install --ci', others: 'the docs gate and history workflows if you have them' },
+  { source: 'docs-gate', path: USABL_DOCS_GATE_WORKFLOW_PATH, command: 'usabl install --docs-ci', others: 'the history workflow if you have it' },
 ];
 function gateFile(source: 'gate' | 'docs-gate'): GateFile {
   return GATE_FILES.find((file) => file.source === source) ?? GATE_FILES[0]!;
 }
+
+// A target a gate file names.
+type NamedTarget = Extract<BranchTarget, { source: 'gate' | 'docs-gate' }>;
 
 const ASSUMED_MAIN: BranchTarget = {
   name: PROTECTED_BRANCH,
@@ -116,8 +118,8 @@ export async function gateBranchTarget(readFile: (path: string) => Promise<strin
       };
     }
     if (raw === null) continue;
-    const name = workflowTriggerBranch(raw, 'pull_request');
-    if (name === null || !isPathSafeBranch(name)) {
+    const trigger = workflowTrigger(raw, 'pull_request');
+    if (trigger === null || !isPathSafeBranch(trigger.name)) {
       return {
         name: PROTECTED_BRANCH,
         source: 'assumed',
@@ -126,7 +128,7 @@ export async function gateBranchTarget(readFile: (path: string) => Promise<strin
         step: triggerFormStep(file.command),
       };
     }
-    return { name, source: file.source };
+    return { name: trigger.name, source: file.source, line: trigger.line };
   }
   return { name: PROTECTED_BRANCH, source: 'assumed', reason: `${USABL_GATE_WORKFLOW_PATH} is missing`, gatePresent: false, step: INSTALL_CI_STEP };
 }
@@ -717,10 +719,10 @@ function branchFacts(target: BranchTarget, defaultBranch: string | null): string
 // What to do when the gate names one branch and GitHub's default branch is another: move the gate to
 // the default branch, or gate both. Both names passed the safe name checks before they got here: the
 // gate's from its trigger, the default branch from GitHub's answer.
-function otherDefaultSteps(target: { name: string; source: 'gate' | 'docs-gate' }, defaultBranch: string): string[] {
+function otherDefaultSteps(target: NamedTarget, defaultBranch: string): string[] {
   const file = gateFile(target.source);
   return [
-    `To gate pull requests into ${defaultBranch}, put ${defaultBranch} in place of ${target.name} on ${branchLinesText(file.workflow, target.name)} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on ${defaultBranch}.`,
+    `To gate pull requests into ${defaultBranch}, put ${defaultBranch} in place of ${target.name} on line ${target.line} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on ${defaultBranch}.`,
     `To keep pull requests into ${target.name} gated too, add ${defaultBranch} to the pull_request trigger of ${file.path} instead, and protect both branches. usabl reads only a trigger that names one branch, so then check the protection on each branch by hand.`,
   ];
 }
@@ -730,7 +732,7 @@ function otherDefaultSteps(target: { name: string; source: 'gate' | 'docs-gate' 
 // gate's branch reads. The first line says that, and what the protection on the gate's branch reads.
 // rest is the setting to apply, or how to check by hand, when the gate's branch is not verified.
 function otherDefaultResult(
-  target: { name: string; source: 'gate' | 'docs-gate' },
+  target: NamedTarget,
   defaultBranch: string,
   gateBranch: { action: BranchRuleResult['action']; finding: string },
   rest: string[],
