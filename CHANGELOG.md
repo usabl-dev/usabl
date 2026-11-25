@@ -433,6 +433,26 @@
 
 ### Fixed
 
+- Node's `fs.glob` no longer gets a pattern part that can backtrack. usabl hands it each
+  `guardedPaths` entry (the guard's working-tree listing and `usabl doctor`), `uiFileGlobs` and
+  `discovery.wideBlastGlobs` (test-file placement, `usabl baseline`, and the docs output), and the
+  `workspaces` patterns of a `package.json`. Node tests a part with wildcards with a regular
+  expression, and `src/` then `*a` twelve times then `*b` took 11 seconds against one file name of
+  30 letters, so a stop could outlast the host's limit with nothing checked. The file system
+  adapter now lists each wildcard part as `*` and keeps the paths usabl's own matcher says the
+  written pattern matches. That pattern now takes about 50 milliseconds. The answer is Node's for
+  `*`, `**`, `?`, fixed text, and `{a,b}` groups, without regard to letter case on macOS and
+  Windows as Node does, and wider, never narrower, in two cases: a file reached through a link to
+  a folder where Node's walk does not follow the link, and a file named by the part before a
+  trailing `/**`. A comparison with Node on generated trees found no file Node lists that the
+  adapter does not. Other syntax, such as a character class or an extglob group, runs in Node
+  only inside a bound: at most 1024 characters, no extglob group, at most one run of `*` in any
+  part, and at most 256 brace expansions. Past it the pattern is not run. Gate effect: config load
+  already refuses that syntax in every policy glob list. A `workspaces` pattern past the bound
+  makes the workspace root unreadable, so every changed file the workspace check tests is a
+  `not-covered` gap that names the pattern. Known limit: a folder name that usabl puts into a
+  pattern, such as the requirements folder or a workspace package folder, is still read by Node
+  as a pattern, and one with syntax past the bound is not listed there.
 - Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
   in one flow or voice contract, 100 fields in one flow step, 100 obligations in one voice
   contract, and 100 `requiredTokens` in one obligation. The focus order keeps its limit of 200
@@ -544,13 +564,9 @@
   took 17 seconds. Gate effect: a changed file left untested when the step budget runs out is a
   gap whose reason names the budget, so the run is `not_covered`, never nothing to check. A call
   past a bound or the character budget, and every glob once the step budget is spent, may load any
-  file, so a changed test file it could reach is a gap. Known limits: the guard's own matching has
+  file, so a changed test file it could reach is a gap. Known limit: the guard's own matching has
   no budget, and a `guardedPaths` list inside the bounds took 9.2 seconds against one committed
-  path of 3999 characters. Node's `fs.glob` still backtracks. usabl hands it each `guardedPaths`
-  entry, in the guard's working-tree listing and in `usabl doctor`; `uiFileGlobs` and
-  `discovery.wideBlastGlobs` when a changed test file is placed; `workspaces` patterns; and
-  `uiFileGlobs` in `usabl baseline` and the docs output. A pattern with many wildcards and a long
-  file name there can still outlast the host's limit.
+  path of 3999 characters.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
