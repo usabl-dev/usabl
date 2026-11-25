@@ -154,11 +154,20 @@ function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
 }
 
+// Where a finding from an expected rule counts as a catch.
 const PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]>> = {
   target: ['target'],
   'inside-target': ['target', 'inside'],
   'around-target': ['target', 'around'],
   screen: ['target', 'inside', 'around', 'elsewhere', 'unresolved'],
+};
+
+// Where a finding from another rule counts as a catch by that rule. An entry reported on the screen
+// accepts its expected rules anywhere, but another rule only on the changed element or inside it.
+// A finding of another rule elsewhere on the screen can come from the two loads differing.
+const OTHER_RULE_PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]>> = {
+  ...PLACES_FOR,
+  screen: ['target', 'inside'],
 };
 
 function expectedText(entry: CatalogEntry): string {
@@ -314,25 +323,28 @@ async function decide(
     // mutated scan behind it.
     const pathsOf = definite.map(pathsBehind);
     const places = await record.edit.locate(pathsOf.flat());
-    const allowed = PLACES_FOR[entry.reportedOn];
     let next = 0;
-    const onTargetFlags = pathsOf.map((paths) => {
+    const placesOf = pathsOf.map((paths) => {
       const own = places.slice(next, next + paths.length);
       next += paths.length;
-      return own.some((place) => allowed.includes(place));
+      return own;
     });
-    const onTarget = definite.filter((_finding, index) => onTargetFlags[index] === true);
-    const expected = onTarget.filter((finding) => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule)));
+    const at = (allowed: readonly ElementPlace[]): Finding[] =>
+      definite.filter((_finding, index) => (placesOf[index] ?? []).some((place) => allowed.includes(place)));
+    const isExpected = (finding: Finding): boolean => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule));
+    const expected = at(PLACES_FOR[entry.reportedOn]).filter(isExpected);
     if (expected.length > 0) {
       return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
     }
-    if (onTarget.length > 0) {
-      const rules = sortedUnique(onTarget.map((finding) => finding.rule));
+    const byOther = at(OTHER_RULE_PLACES_FOR[entry.reportedOn]).filter((finding) => !isExpected(finding));
+    if (byOther.length > 0) {
+      const rules = sortedUnique(byOther.map((finding) => finding.rule));
       return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
     }
     // The clean and mutated scans are two loads of the page. A finding that is new away from the
     // change can come from the page itself differing between loads, so it says nothing about the
-    // defect either way.
+    // defect either way. For an entry reported on the screen, that is a finding of another rule
+    // away from the changed element.
     const rules = sortedUnique(definite.map((finding) => finding.rule));
     return result(
       entry,
