@@ -46,8 +46,8 @@ Review each requirement, set approved: true, and commit. Nothing blocks until th
 It never overwrites a file. If `--out` already exists, it stops and writes nothing. It refuses an
 unknown option, so a typo cannot drop a frame.
 
-One requirement file holds at most 1,000 requirements. If a design gives more, import its frames
-into more than one file. A Figma file whose lists are far larger than any real design, such as
+One requirement file holds at most 1,000 requirements and 128 KiB, about 300 drafted requirements.
+If a design gives more, import its frames into more than one file. A Figma file whose lists are far larger than any real design, such as
 more than 100,000 components, is refused, and the message names the limit.
 
 ## What the stamps become

@@ -5812,10 +5812,13 @@ add content and flow assertions that the engine enforces alongside the default s
 
 ### Size limits
 
-Every list in a requirement file has a size limit. A real file is far below each one.
+A requirement file, and every list in it, has a size limit. A real file is far below each one: the
+largest in this repository's tests and docs is a few KiB, with at most 5 requirements, 4 steps, and
+1 obligation of 1 word.
 
-| List | Limit |
+| What | Limit |
 |---|---|
+| One requirement file | 128 KiB |
 | `requirements` in one file | 1,000 requirements |
 | `steps` in one flow | 1,000 steps |
 | Fields in one flow step | 100 fields |
@@ -5823,6 +5826,15 @@ Every list in a requirement file has a size limit. A real file is far below each
 | `obligations` in one voice contract | 100 obligations |
 | `requiredTokens` in one obligation | 100 words |
 | `sequence` in one focus order | 200 names |
+
+The byte limit is checked before the file is parsed. The loader reads a file on disk only when its
+size is within the limit, so a huge file is never read; a file at the trusted ref is read by git,
+up to the 10 MiB git reads as text, and then checked. The message is `a requirement file can be at
+most 128 KiB; split it into smaller files`. Every caller of the normalizer gets the same check,
+the drafted file of `usabl import figma` included. The limit was picked by measurement: the
+densest bad file the list limits allow holds about 1.1 problems for each byte, so a file at
+128 KiB holds about 143,000 problems, and refusing it took about 0.9 seconds and 203 MB of peak
+memory on the build machine. At 256 KiB the same file took about 1.9 seconds and over 360 MB.
 
 A list past its limit is refused on its length alone, before any entry is read, so a huge file
 is refused fast and with one message. The file is `approval_required`, like every file that does
@@ -5835,8 +5847,13 @@ requirement can hold obligations times words problems. The schema library collec
 of one list entry in a single call, and that call fails past about 123,000 problems. With these
 limits, one requirement holds at most about 12,500. If the call still fails, the file is refused
 with the reason `this file has too many problems to check, so it is refused; shorten or fix its
-longest list`. The limits bound each list, not the whole file: a file with 1,000 requirements,
-each as bad as the limits allow, still holds about 12.5 million problems and is slow to refuse.
+longest list`.
+
+A refusal lists the first 100 problems, in the order above, then says how many more the file has,
+such as `; and 900 more problems`. An unknown-key message names the first five unknown keys,
+then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd', 'e', and 3
+more`. Each key name is file text, so its secrets are taken out first, and it is then cut to 60
+characters, with `...` after a cut name. A voice step's unknown fields are listed the same way.
 
 ### Mapping to checks
 
@@ -6165,7 +6182,8 @@ at most 100,000 nodes, and the `annotations` of one node at most 1,000 notes. An
 limit is refused on its size, before any entry is read, and the failure names the limit, such as
 `Figma returned a file usabl cannot read: components can list at most 100,000 entries.` A file
 that `usabl import figma` drafts must load like any other, so it holds at most 1,000
-requirements; import the frames of a larger design into more than one file.
+requirements and 128 KiB, about 300 drafted requirements; import the frames of a larger design
+into more than one file.
 
 `usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
 the current version of each of their files, once per file, in sorted order. It lists the
