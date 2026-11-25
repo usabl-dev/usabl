@@ -438,9 +438,17 @@
   changed, so there was nothing to check", and a stop with other edits did not plan the screens
   only that file reaches. The status listing now reads the flags and adds each flagged file whose
   working copy is not what the index holds, so the Stop hook, `usabl check` in each mode, the
-  overlay, and `usabl brief` plan and check it like any other edit. A skip-worktree file that a
-  sparse checkout left out is not a change. Gate effect: such a stop now scans the screens the
-  file reaches instead of reading as nothing to check. CI is not affected.
+  overlay, and `usabl brief` plan and check it like any other edit. Names are read as the bytes
+  git stores, so a name that is not valid UTF-8 is compared as that file. A missing skip-worktree
+  file is not a change only when sparse checkout is on and `git sparse-checkout check-rules` says
+  it is outside the sparse set; otherwise it is a deletion. In a sparse checkout of 50,000 files
+  with 45,000 left out, the listing takes under one second. Gate effect: such a stop now scans the
+  screens the file reaches instead of reading as nothing to check. The CI gate's `--trusted-ref`
+  check lists the same way, and its result changes only if the CI checkout holds a flagged file
+  whose working copy differs from the index, which a fresh checkout does not. Known limit: a clean
+  filter, the `ident` attribute, or a `working-tree-encoding` attribute, set locally with no
+  tracked change, can still hide an edit to a flagged file, and the same attributes keep the
+  receipt's tree id the same. A follow-up change closes that case.
 - usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
   `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
