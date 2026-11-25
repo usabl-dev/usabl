@@ -166,6 +166,48 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
         return code === 'ENOENT' || code === 'ENOTDIR' ? { kind: 'missing' } : { kind: 'other' };
       }
     },
+    async readTextUpTo(path, maxBytes) {
+      let handle;
+      try {
+        // O_NONBLOCK keeps a pipe at the path from holding the read open.
+        handle = await open(resolve(cwd, path), constants.O_RDONLY | constants.O_NONBLOCK);
+      } catch (err) {
+        if (isMissingFile(err)) {
+          return null;
+        }
+        throw err;
+      }
+      try {
+        const opened = await handle.stat();
+        if (opened.isDirectory()) {
+          return null;
+        }
+        // The size is checked before any byte is read, so a huge file, or a sparse one that costs
+        // nothing to make, is never read.
+        if (opened.isFile() && opened.size > maxBytes) {
+          return { kind: 'too-large' };
+        }
+        // Read in pieces and stopped one byte past the limit, so a file that grows while it is
+        // read, or anything that is not a regular file, is never held whole either.
+        const piece = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1));
+        const pieces: Buffer[] = [];
+        let total = 0;
+        for (;;) {
+          const { bytesRead } = await handle.read(piece, 0, piece.length, null);
+          if (bytesRead === 0) {
+            break;
+          }
+          total += bytesRead;
+          if (total > maxBytes) {
+            return { kind: 'too-large' };
+          }
+          pieces.push(Buffer.from(piece.subarray(0, bytesRead)));
+        }
+        return { kind: 'text', text: Buffer.concat(pieces).toString('utf8') };
+      } finally {
+        await handle.close();
+      }
+    },
     async glob(patterns) {
       // Return files only. Node's `**` also matches directory nodes (including the
       // base directory itself), and every caller reads a globbed path as a file, so
