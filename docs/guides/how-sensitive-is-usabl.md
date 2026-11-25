@@ -62,10 +62,13 @@ could not run, and 2 when a flag or the config is wrong.
   on the page or on the control that opens something (the level one heading, the page title, a
   dialog that does not take focus, and the flow and voice defects), it can be anywhere on the
   screen.
-- **caught by another rule**: a new, definite failure on the changed element, but from another
-  rule. It is counted apart from caught. For the defects that can be caught anywhere on the
-  screen, the failure from another rule must still be on the changed element or inside it. A
-  failure from another rule elsewhere on the screen makes the row unreadable.
+- **caught by another rule**: a new, definite failure from another rule, where the defect is
+  expected to be reported: on the changed element, inside it, or on its shadow host, by defect. It
+  is counted apart from caught. For the defects that can be caught anywhere on the screen, the
+  failure from another rule must still be on the changed element or inside it. When the change
+  removed an element (the level one heading, the page title), it must be on the element that held
+  the removed one, not inside it, because for a heading straight in `main` that would be the whole
+  page. A failure from another rule anywhere else on the screen makes the row unreadable.
 - **missed**: nothing new would block. The summary names the defect and what was expected. When the
   defect is a key that does nothing, and the checks never pressed that key on the element, the
   reason says so.
@@ -81,7 +84,8 @@ could not run, and 2 when a flag or the config is wrong.
   - every new finding that would block is one the checks could not confirm;
   - the only new findings are away from the change, so the page differed between its two loads.
     For the defects that can be caught anywhere on the screen, this means the only new findings
-    are from other rules and away from the changed element;
+    are from other rules and away from the changed element (for a removed element, anywhere but
+    the element that held it);
   - on your app, the design requirements could not be loaded, for the flow and voice defects.
 
 After the scan, the change is read back a second time. It did not hold through the scan when the
