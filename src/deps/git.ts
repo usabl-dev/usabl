@@ -49,18 +49,37 @@ export const NO_HEAD_MESSAGE =
 // The ref itself does not exist. Still an error, never a missing file: reading no policy at all
 // as "no policy" would let a run pass against nothing. The message names the fix, because a new
 // repository with no commits and a CI checkout without the trusted ref both land here.
-async function missingRefError(ref: string, stderr: string, listRemotes: () => Promise<string[]>): Promise<Error | null> {
+async function missingRefError(ref: string, stderr: string, listRemotes: () => Promise<string[]>, cwd: string): Promise<Error | null> {
   if (!/invalid object name/i.test(stderr)) {
     return null;
   }
-  return refNotFoundError(ref, listRemotes);
+  return refNotFoundError(ref, listRemotes, cwd);
+}
+
+/**
+ * The error for HEAD resolving to a commit git cannot read. git rejects a commit or tree object
+ * whose bytes do not hash to its id. Read as "no commits yet", it let the Stop hook through as a
+ * repository with nothing to compare, so it has its own text, and the stop blocks on it.
+ */
+export const DAMAGED_HEAD_MESSAGE =
+  'HEAD names a commit, but git cannot read it or its tree, so .git/objects holds a damaged or overwritten ' +
+  'object and usabl checked nothing. Run git fsck to find the damaged objects, then run usabl again.';
+
+// Whether HEAD resolves to an object id. It does not in a repository with no commits yet.
+async function headResolves(cwd: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ['rev-parse', '--verify', '-q', 'HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // The remote names are read only for a ref whose hint may name a remote: never for HEAD or a
 // commit id.
-async function refNotFoundError(ref: string, listRemotes: () => Promise<string[]>): Promise<Error> {
+async function refNotFoundError(ref: string, listRemotes: () => Promise<string[]>, cwd: string): Promise<Error> {
   if (ref === 'HEAD') {
-    return new Error(NO_HEAD_MESSAGE);
+    return new Error((await headResolves(cwd)) ? DAMAGED_HEAD_MESSAGE : NO_HEAD_MESSAGE);
   }
   if (COMMIT_ID.test(ref)) {
     return new Error(
@@ -325,7 +344,7 @@ async function readFailedBlob(
     if (await namesCommit(cwd, ref)) {
       return { kind: 'absent' };
     }
-    throw await refNotFoundError(ref, () => listRemotes(cwd));
+    throw await refNotFoundError(ref, () => listRemotes(cwd), cwd);
   }
   // cat-file blob refuses a folder and a submodule entry. So the guard reads a policy file that
   // became a folder, or the reverse, as a change an approval can clear.
@@ -338,7 +357,7 @@ async function readFailedBlob(
       return { kind: 'submodule', commit };
     }
   }
-  throw (await missingRefError(ref, stderr, () => listRemotes(cwd))) ?? err;
+  throw (await missingRefError(ref, stderr, () => listRemotes(cwd), cwd)) ?? err;
 }
 
 const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -456,7 +475,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         // A ref git cannot read is the same error show gives for it, never an empty listing that
         // would read as no guarded files.
         if (/not a valid object name|invalid object name|not a tree object|bad object/i.test(readErrorStderr(err))) {
-          throw await refNotFoundError(ref, () => listRemotes(cwd));
+          throw await refNotFoundError(ref, () => listRemotes(cwd), cwd);
         }
         throw err;
       }
