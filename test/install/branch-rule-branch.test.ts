@@ -108,14 +108,19 @@ describe('verifyBranchRule for a gate on trunk, in a repository whose default br
 });
 
 describe('the branch the check reads', () => {
-  it('says so in one line when GitHub reports another default branch', async () => {
+  it('is not verified, and says so in one line, when GitHub reports another default branch', async () => {
+    // The gate's branch is fully protected, but pull requests into the default branch run no gate,
+    // so exit 0 would let a setup script pass while they merge unchecked.
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['~ALL'], exclude: [] } });
     const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
-    expect(result.action).toBe('verified');
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.otherDefault).toBe('trunk');
     const lines = result.message.split('\n').filter((line) => line.includes('GitHub reports trunk as the default branch'));
     expect(lines).toEqual([
-      'GitHub reports trunk as the default branch, but the gate runs on pull requests into main, so it covers only pull requests into main.',
+      'cannot verify: the branch rule on main is set, but GitHub reports trunk as the default branch, and pull requests into trunk are not gated.',
     ]);
+    expect(result.message.split('\n')[0]).toBe(lines[0]);
   });
 
   it('does not count ~DEFAULT_BRANCH for a gate on main when the default branch is trunk', async () => {
