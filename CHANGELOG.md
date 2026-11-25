@@ -567,6 +567,14 @@
   `unverified` draft an alert gets in that state. Gate effect: a screen
   checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
   `not_covered`, unless the evidence floor or a waiver already holds that finding.
+- `pf-toast-live-region` no longer skips a toast group whose alert appeared while the rule ran.
+  The rule lists the page's alerts first and finds the toast groups later. An alert shown in
+  between, for example by the dialog's own save action, was never checked, and its group was
+  skipped because it held an alert, so the screen got no draft and no gap. Now a group is left to
+  the alert check only when it holds an alert the rule listed. A group that holds only alerts the
+  rule did not list is checked as an empty group, so behind an open modal it gets the
+  `unverified` draft. Gate effect: such a screen, which read `verified`, now reads `not_covered`,
+  unless the evidence floor or a waiver already holds that finding.
 - A screen kept in a test folder is a gap for every way an unresolved import can name it. An
   import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
   `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
