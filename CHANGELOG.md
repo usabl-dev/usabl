@@ -446,8 +446,15 @@
   answer is limited too: 100,000 entries in `components`, `componentSets`, and the
   `componentProperties` of one node, 100,000 `children` of one node, and 1,000 `annotations` of
   one node. Its failure names the limit. A file over a limit is never cut short or read in part.
-  Gate effect: a requirement file over a limit no longer loads, and is `approval_required` with
-  the limit named.
+  A requirement file can also be at most 128 KiB, checked before it is parsed: the loader reads a
+  file on disk only when its size is within the limit, so a huge file is never read, and the Figma
+  import checks the file it drafts the same way. A refusal now lists the first 100 problems and
+  then says how many more there are, and an unknown-key message names the first five keys, each
+  with its secrets taken out and cut to 60 characters, and then counts the rest. The worst bad
+  file under 128 KiB holds about 143,000 problems and is refused in about 0.9 seconds with 203 MB
+  of peak memory; before these caps the same file took 1.3 seconds and 266 MB and printed 9 MB of
+  messages. Gate effect: a requirement file over a limit no longer loads, and is
+  `approval_required` with the limit named.
 - A stale `origin/HEAD` no longer makes a configured repository read as a branch that sets usabl
   up. After a project moves its default branch, for example from `master` to `main`, a clone's
   `origin/HEAD` can still name the old branch, because a fetch does not move it. When that branch
