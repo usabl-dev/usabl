@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { GitReader, TreeEntry } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
-import { GIT_ENVIRONMENT } from './git-environment.js';
+import { GIT_ENVIRONMENT, gitProcessEnvironment } from './git-environment.js';
 import { makeWorktreeReader, NoHeadError } from './worktree.js';
 
 const execFileAsync = promisify(execFile);
@@ -145,6 +145,10 @@ function noHeadForTreeError(stderr: string): Error | null {
   if (!/not a valid object name|invalid object name/i.test(stderr)) {
     return null;
   }
+  return firstCommitError();
+}
+
+function firstCommitError(): Error {
   return new Error(
     'git cannot read HEAD, so usabl cannot read the working tree to check it. This repository has ' +
       'no commits yet, or the branch has none. Make a first commit, then run usabl again.',
@@ -203,7 +207,7 @@ async function runGit(
     cwd,
     encoding: 'utf8',
     maxBuffer,
-    env: { ...process.env, ...env, ...GIT_ENVIRONMENT },
+    env: { ...gitProcessEnvironment(), ...env, ...GIT_ENVIRONMENT },
   });
   return stdout;
 }
@@ -518,7 +522,7 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return await worktree.tree();
       } catch (err) {
         if (err instanceof NoHeadError) {
-          throw noHeadForTreeError(err.message) ?? err;
+          throw firstCommitError();
         }
         throw err;
       }

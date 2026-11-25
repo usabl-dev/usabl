@@ -1,13 +1,18 @@
 /**
  * The working tree as the checks see it: the bytes on disk, compared with the blobs HEAD stores.
  *
- * The tree a receipt binds and the list of changed files both come from one walk. git lists the
- * paths, usabl reads the kind and the bytes of each path itself, and the bytes are hashed with no
+ * The tree a receipt binds and the list of changed files both come from one walk. usabl reads the
+ * HEAD commit and its trees itself, checking each object's id, takes the index's names and the new
+ * files from git, reads the kind and the bytes of each path itself, and hashes the bytes with no
  * filter at all. git is never asked whether a file changed, and never asked to convert bytes for
- * that answer. So no setting or file the agent can write from inside the repository can make an
- * edited file read unchanged: not an index flag, the index's saved file info (core.trustctime,
- * core.ignoreStat), an fsmonitor hook, an attribute (ident, working-tree-encoding, filter), a filter
- * driver, or a sparse pattern for a file that is on disk. No filter program and no hook runs.
+ * that answer. None of these changes the answer: an index flag, the index's saved file info
+ * (core.trustctime, core.ignoreStat), an fsmonitor hook, core.ignorecase, an attribute (ident,
+ * working-tree-encoding, filter), a filter driver, a replace ref or a graft, a variable that points
+ * git elsewhere, or an object file overwritten with other bytes. No filter program and no hook
+ * runs. What it does not cover is stated in the threat model: new files that .git/info/exclude
+ * hides, a deletion under sparse patterns the agent wrote, and a submodule folder emptied of its
+ * repository. A tree usabl cannot build from the bytes the checks read (a name git will not store,
+ * or a link whose target the walk does not hash) is a tree id that never repeats.
  *
  * This unit reports repository facts only and never decides coverage or verdicts.
  */
@@ -18,7 +23,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
 import { operatorText } from '../intake/config-error.js';
-import { GIT_ENVIRONMENT } from './git-environment.js';
+import { GIT_ENVIRONMENT, gitProcessEnvironment } from './git-environment.js';
 
 /** One changed path, from the repository root, with a status letter like git status prints. */
 export interface WorktreeChange {
@@ -42,7 +47,10 @@ export interface WorktreeOptions {
 // Settings forced on every listing. git walks the folders itself and never asks the agent's
 // fsmonitor hook, and never trusts the untracked cache. An empty core.fsmonitor turns the hook off
 // in every git usabl supports: older git reads the value as a hook path, newer git as true or false.
-const LISTING_SETTINGS = ['-c', 'core.fsmonitor=', '-c', 'core.untrackedCache=false'];
+// core.ignorecase=false: with it true on a file system that tells case apart, git left out a new
+// file whose name differs from a tracked one only in case, and a folder named .GIT. On a file
+// system that does not tell case apart, false can only list more names, never fewer.
+const LISTING_SETTINGS = ['-c', 'core.fsmonitor=', '-c', 'core.untrackedCache=false', '-c', 'core.ignorecase=false'];
 
 interface GitResult {
   code: number | null;
@@ -59,7 +67,7 @@ function runGit(
   return new Promise((resolve) => {
     const child = spawn('git', [...args], {
       cwd,
-      env: { ...process.env, ...options.env, ...GIT_ENVIRONMENT },
+      env: { ...gitProcessEnvironment(), ...options.env, ...GIT_ENVIRONMENT },
       stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     const chunks: Buffer[] = [];
@@ -144,38 +152,58 @@ interface Repository {
   sparse: boolean;
 }
 
+const ELSEWHERE_MESSAGE =
+  'git reads the working tree from a folder other than the repository usabl runs in, so usabl would check files ' +
+  'the dev server does not serve and checked nothing. This most often means core.worktree is set in .git/config. ' +
+  'Remove it with git config --unset core.worktree, then run usabl again.';
+
+// A real path, or null when it cannot be resolved.
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The repository root, from git, as a physical path. The folder usabl was given must be the root
- * or a folder inside it. When it is not, a setting such as core.worktree has pointed git at another
- * folder, so git would list and hash files the dev server does not serve, and the reader stops with
- * an error rather than read them.
+ * The repository root, from git, as a physical path. Three checks keep git on the repository the
+ * folder usabl was given belongs to. That folder must be the root or a folder inside it. git run in
+ * the root must find the same repository as git run in that folder: core.worktree naming a parent
+ * folder that is a repository of its own passed the first check, and every read then listed the
+ * parent's files. And core.worktree, when it is set at all, must name the root. When any check
+ * fails, git would list and hash files the dev server does not serve, and the reader stops with an
+ * error rather than read them.
  */
 async function openRepository(cwd: string): Promise<Repository> {
   const lines = (
     await mustGit(
       cwd,
-      ['rev-parse', '--show-toplevel', '--show-object-format', '--git-path', 'info/sparse-checkout'],
+      ['rev-parse', '--show-toplevel', '--show-object-format', '--git-path', 'info/sparse-checkout', '--absolute-git-dir'],
       'rev-parse',
     )
   )
     .toString('utf8')
     .split('\n');
-  const [shownTop = '', format = '', sparsePatterns = ''] = lines;
-  let top: string;
-  let here: string;
-  try {
-    top = realpathSync.native(shownTop);
-    here = realpathSync.native(cwd);
-  } catch {
+  const [shownTop = '', format = '', sparsePatterns = '', shownGitDir = ''] = lines;
+  const top = realOrNull(shownTop);
+  const here = realOrNull(cwd);
+  if (top === null || here === null) {
     throw new Error(`usabl could not read the folder git names as the repository root, ${operatorText(shownTop)}.`);
   }
   const inside = relative(top, here);
   if (inside.startsWith('..') || isAbsolute(inside)) {
-    throw new Error(
-      'git reads the working tree from a folder outside the one usabl runs in, so usabl would check files the ' +
-        'dev server does not serve and checked nothing. This most often means core.worktree is set in .git/config. ' +
-        'Remove it with git config --unset core.worktree, then run usabl again.',
-    );
+    throw new Error(ELSEWHERE_MESSAGE);
+  }
+  const gitDir = realOrNull(shownGitDir);
+  const fromTop = await runGit(top, ['rev-parse', '--absolute-git-dir']);
+  if (gitDir === null || fromTop.code !== 0 || realOrNull(fromTop.stdout.toString('utf8').replace(/\n$/u, '')) !== gitDir) {
+    throw new Error(ELSEWHERE_MESSAGE);
+  }
+  // git reads a relative core.worktree from the repository folder.
+  const worktree = (await runGit(top, ['config', '--path', '--get', 'core.worktree'])).stdout.toString('utf8').replace(/\n$/u, '');
+  if (worktree.length > 0 && realOrNull(isAbsolute(worktree) ? worktree : join(gitDir, worktree)) !== top) {
+    throw new Error(ELSEWHERE_MESSAGE);
   }
   const config = async (key: string): Promise<string> =>
     (await runGit(top, ['config', '--bool', '--get', key])).stdout.toString('utf8').trim();
@@ -201,7 +229,9 @@ interface Entry {
   skipWorktree: boolean;
 }
 
-type Kind = 'missing' | 'file' | 'link' | 'folder' | 'other';
+// behindLink: a path with a link in its folder part. git never lists a path through a link, so a
+// file reached that way is not the file the tree records.
+type Kind = 'missing' | 'file' | 'link' | 'folder' | 'other' | 'behindLink';
 
 function kindOf(path: Buffer): { kind: Kind; stats?: BigIntStats } {
   try {
@@ -218,6 +248,9 @@ function kindOf(path: Buffer): { kind: Kind; stats?: BigIntStats } {
 }
 
 const TAB = 0x09;
+const LINK_MODE = '120000';
+const SUBMODULE_MODE = '160000';
+const TREE_MODE = '040000';
 const FULL_OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/u;
 
 /**
@@ -240,21 +273,10 @@ async function listPaths(repo: Repository, base: string | null, options: Worktre
     return entry;
   };
   if (base !== null) {
-    const listed = await runGit(repo.top, ['ls-tree', '-r', '-z', '--full-tree', '--end-of-options', base]);
-    if (listed.code !== 0) {
-      if (base === 'HEAD' && /not a valid object name|invalid object name/iu.test(listed.stderr)) {
-        throw new NoHeadError(listed.stderr);
-      }
-      throw new Error(`git ls-tree failed, so usabl could not read the working tree. ${firstLineOf(listed.stderr)}`.trim());
-    }
-    for (const record of splitNul(listed.stdout)) {
-      const tab = record.indexOf(TAB);
-      if (tab < 0) continue;
-      const [mode, , id] = record.subarray(0, tab).toString('latin1').split(' ');
-      if (mode === undefined || id === undefined || !FULL_OBJECT_ID.test(id)) continue;
-      const entry = entryFor(record.subarray(tab + 1));
-      entry.headMode = mode;
-      entry.headId = id;
+    for (const record of await readBaseTree(repo, base)) {
+      const entry = entryFor(record.raw);
+      entry.headMode = record.mode;
+      entry.headId = record.id;
     }
   }
   // "TAG MODE ID STAGE\tNAME". S, or a lower case s, is the skip-worktree tag.
@@ -287,8 +309,139 @@ async function listPaths(repo: Repository, base: string | null, options: Worktre
   return { entries, untracked };
 }
 
+function objectId(repo: Repository, type: string, bytes: Buffer): string {
+  return createHash(repo.format).update(`${type} ${String(bytes.length)}\0`).update(bytes).digest('hex');
+}
+
 function blobId(repo: Repository, bytes: Buffer): string {
-  return createHash(repo.format).update(`blob ${String(bytes.length)}\0`).update(bytes).digest('hex');
+  return objectId(repo, 'blob', bytes);
+}
+
+/** One object git cat-file --batch printed: its id, its type, and its bytes, or null when missing. */
+type StoredObject = { id: string; type: string; bytes: Buffer } | null;
+
+// Objects by name, in the order asked, as git stores them. git does not check an object's id
+// against its bytes when it reads it, so the caller checks.
+async function readObjects(repo: Repository, names: readonly string[]): Promise<StoredObject[]> {
+  if (names.length === 0) {
+    return [];
+  }
+  const read = await runGit(repo.top, ['cat-file', '--batch'], { input: Buffer.from(names.map((name) => `${name}\n`).join('')) });
+  if (read.code !== 0) {
+    throw new Error(`git cat-file failed, so usabl could not read the working tree. ${firstLineOf(read.stderr)}`.trim());
+  }
+  const objects: StoredObject[] = [];
+  let at = 0;
+  for (let index = 0; index < names.length; index += 1) {
+    const newline = read.stdout.indexOf(0x0a, at);
+    if (newline < 0) break;
+    const header = read.stdout.subarray(at, newline).toString('latin1').split(' ');
+    const [id = '', type = '', size = ''] = header;
+    if (header.length !== 3 || !FULL_OBJECT_ID.test(id) || !/^(0|[1-9][0-9]*)$/u.test(size)) {
+      objects.push(null);
+      at = newline + 1;
+      continue;
+    }
+    const length = Number(size);
+    objects.push({ id, type, bytes: Buffer.from(read.stdout.subarray(newline + 1, newline + 1 + length)) });
+    at = newline + 1 + length + 1;
+  }
+  if (objects.length !== names.length) {
+    throw new Error('git cat-file printed less than usabl asked for, so usabl could not read the working tree.');
+  }
+  return objects;
+}
+
+class ObjectMismatchError extends Error {
+  constructor(id: string) {
+    super(
+      `The object ${id} in .git/objects does not hold the bytes its id names, so usabl cannot tell what HEAD holds ` +
+        'and checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
+    );
+  }
+}
+
+// An object of the type asked for whose bytes hash to its id. Anything else stops the read.
+function verified(repo: Repository, object: StoredObject, type: string, what: string): { id: string; bytes: Buffer } {
+  if (object === null || object.type !== type) {
+    throw new Error(`git could not read ${what} as a ${type}, so usabl could not read the working tree.`);
+  }
+  if (objectId(repo, type, object.bytes) !== object.id) {
+    throw new ObjectMismatchError(object.id);
+  }
+  return object;
+}
+
+// The mode git prints for a tree entry: the kind of entry, and the executable bit of a file. Any
+// other mode reads as a submodule, as git reads it.
+function canonicalMode(octal: string): string {
+  const mode = Number.parseInt(octal, 8);
+  switch (mode & 0o170000) {
+    case 0o100000:
+      return (mode & 0o100) !== 0 ? '100755' : '100644';
+    case 0o120000:
+      return LINK_MODE;
+    case 0o040000:
+      return TREE_MODE;
+    default:
+      return SUBMODULE_MODE;
+  }
+}
+
+/**
+ * Every entry of a commit's tree, read in Node so that each object is checked against its id: the
+ * commit, and every tree below it. An object in .git/objects whose bytes do not hash to its id
+ * stops the read. Overwriting the HEAD tree with one that lists an edited blob made the edit read
+ * unchanged, because git ls-tree prints what a tree object holds without checking its id.
+ */
+async function readBaseTree(repo: Repository, base: string): Promise<Array<{ raw: Buffer; mode: string; id: string }>> {
+  const [commit] = await readObjects(repo, [base]);
+  if (commit === null || commit === undefined) {
+    if (base === 'HEAD') throw new NoHeadError('HEAD does not name a commit yet.');
+    throw new Error(`git could not read the commit ${operatorText(base)}, so usabl could not read the working tree.`);
+  }
+  const { bytes } = verified(repo, commit, 'commit', operatorText(base));
+  const treeLine = /^tree ([0-9a-f]{40}|[0-9a-f]{64})\n/u.exec(bytes.subarray(0, 80).toString('latin1'));
+  if (treeLine === null || treeLine[1] === undefined) {
+    throw new Error(`usabl could not find the tree of the commit ${commit.id}, so it could not read the working tree.`);
+  }
+  const idLength = repo.format === 'sha256' ? 32 : 20;
+  const entries: Array<{ raw: Buffer; mode: string; id: string }> = [];
+  let level: Array<{ id: string; prefix: Buffer }> = [{ id: treeLine[1], prefix: Buffer.alloc(0) }];
+  // One git process per level of folders. A tree shared by two folders is read once.
+  while (level.length > 0) {
+    const unique = [...new Set(level.map((tree) => tree.id))];
+    const objects = await readObjects(repo, unique);
+    const byId = new Map<string, Buffer>();
+    unique.forEach((id, index) => {
+      const object = verified(repo, objects[index] ?? null, 'tree', id);
+      if (object.id !== id) throw new ObjectMismatchError(id);
+      byId.set(id, object.bytes);
+    });
+    const next: typeof level = [];
+    for (const { id, prefix } of level) {
+      const tree = byId.get(id) ?? Buffer.alloc(0);
+      let at = 0;
+      while (at < tree.length) {
+        const space = tree.indexOf(0x20, at);
+        const nul = space < 0 ? -1 : tree.indexOf(0, space + 1);
+        if (space < 0 || nul < 0 || nul + 1 + idLength > tree.length) {
+          throw new Error(`usabl could not read the tree ${id}, so it could not read the working tree.`);
+        }
+        const mode = canonicalMode(tree.subarray(at, space).toString('latin1'));
+        const raw = Buffer.concat([prefix, tree.subarray(space + 1, nul)]);
+        const entryId = tree.subarray(nul + 1, nul + 1 + idLength).toString('hex');
+        at = nul + 1 + idLength;
+        if (mode === TREE_MODE) {
+          next.push({ id: entryId, prefix: Buffer.concat([raw, Buffer.from('/')]) });
+        } else {
+          entries.push({ raw, mode, id: entryId });
+        }
+      }
+    }
+    level = next;
+  }
+  return entries;
 }
 
 // Files hashed by one git process at most. Larger sets are split over a few processes at once.
@@ -384,7 +537,13 @@ async function readBlobs(repo: Repository, ids: readonly string[]): Promise<Map<
     const [shownId, type, size] = read.stdout.subarray(at, newline).toString('latin1').split(' ');
     const length = Number(size);
     if (shownId !== id || type !== 'blob' || !Number.isInteger(length)) break;
-    blobs.set(id, Buffer.from(read.stdout.subarray(newline + 1, newline + 1 + length)));
+    const bytes = Buffer.from(read.stdout.subarray(newline + 1, newline + 1 + length));
+    // git does not check a blob's id against its bytes when it reads it. A blob whose bytes are not
+    // the ones its id names, such as an object file overwritten with an LFS pointer to edited
+    // bytes, is never compared, and the file counts as changed.
+    if (blobId(repo, bytes) === id) {
+      blobs.set(id, bytes);
+    }
     at = newline + 1 + length + 1;
   }
   return blobs;
@@ -481,6 +640,9 @@ interface CachedHash {
 
 export type HashCache = Map<string, CachedHash>;
 
+/** How one walk uses the cache: the changed list reads and writes it, the tree only writes it. */
+type CacheView = Pick<HashCache, 'get' | 'set'>;
+
 const RACY_WINDOW_NS = 2_000_000_000n;
 
 function signatureOf(stats: BigIntStats): string {
@@ -497,11 +659,11 @@ interface TreeRecord {
 interface Walk {
   records: TreeRecord[];
   changes: Array<{ code: string; raw: Buffer }>;
+  // Each link on disk, by its name from the top repository and its path on disk.
+  links: Array<{ raw: Buffer; disk: Buffer }>;
 }
 
 const REGULAR_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
-const LINK_MODE = '120000';
-const SUBMODULE_MODE = '160000';
 // Submodules inside submodules are walked too, to this depth.
 const MAX_DEPTH = 8;
 
@@ -561,7 +723,7 @@ async function walk(
   repo: Repository,
   base: string | null,
   prefix: Buffer,
-  cache: HashCache,
+  cache: CacheView,
   options: WorktreeOptions,
   depth: number,
 ): Promise<Walk> {
@@ -569,23 +731,32 @@ async function walk(
   const { entries, untracked } = await listPaths(repo, base, options);
   const records: TreeRecord[] = [];
   const changes: Walk['changes'] = [];
+  const links: Walk['links'] = [];
   const named = (raw: Buffer): Buffer => (prefix.length === 0 ? raw : Buffer.concat([prefix, raw]));
   const onDisk = (raw: Buffer): Buffer => Buffer.concat([repo.topBytes, raw]);
 
-  // A folder found missing once answers for every file in it, as sparse checkout leaves whole
-  // folders out. Only a missing folder is kept: a folder that is there says nothing about the file.
-  const missingFolders = new Set<string>();
+  // What each folder on a path is, read once with lstat and kept: a folder, a link (so every path
+  // below it is reached through the link), missing (so every file below it is missing, as sparse
+  // checkout leaves whole folders out), or a path usabl cannot read.
+  const folders = new Map<string, 'folder' | 'link' | 'missing' | 'unknown'>();
+  const folderAt = (raw: Buffer): 'folder' | 'link' | 'missing' | 'unknown' => {
+    const key = raw.toString('latin1');
+    const known = folders.get(key);
+    if (known !== undefined) return known;
+    const slash = raw.lastIndexOf(0x2f);
+    let state = slash > 0 ? folderAt(raw.subarray(0, slash)) : 'folder';
+    if (state === 'folder') {
+      const kind = kindOf(onDisk(raw)).kind;
+      state = kind === 'folder' ? 'folder' : kind === 'link' ? 'link' : kind === 'other' ? 'unknown' : 'missing';
+    }
+    folders.set(key, state);
+    return state;
+  };
   const kindAt = (raw: Buffer): { kind: Kind; stats?: BigIntStats } => {
     const slash = raw.lastIndexOf(0x2f);
-    if (slash > 0) {
-      const folder = raw.subarray(0, slash).toString('latin1');
-      if (missingFolders.has(folder)) return { kind: 'missing' };
-      const found = kindOf(onDisk(raw));
-      if (found.kind === 'missing' && kindOf(onDisk(raw.subarray(0, slash))).kind === 'missing') {
-        missingFolders.add(folder);
-      }
-      return found;
-    }
+    const folder = slash > 0 ? folderAt(raw.subarray(0, slash)) : 'folder';
+    if (folder === 'link') return { kind: 'behindLink' };
+    if (folder === 'missing') return { kind: 'missing' };
     return kindOf(onDisk(raw));
   };
 
@@ -605,7 +776,11 @@ async function walk(
       const raw = listed[listed.length - 1] === 0x2f ? listed.subarray(0, listed.length - 1) : listed;
       const tracked = entry?.headId !== undefined;
       const found = kindAt(raw);
-      if (found.kind === 'missing') {
+      if (found.kind === 'behindLink') {
+        // Never hashed through the link. A committed file there is gone from the tree, as git sees
+        // it, and the link itself is a path of its own.
+        if (tracked) changes.push({ code: 'D', raw });
+      } else if (found.kind === 'missing') {
         if (!tracked) continue;
         if (entry !== null && entry.skipWorktree && repo.sparse) {
           missingSkipped.push(entry);
@@ -622,6 +797,7 @@ async function walk(
           id = unreadableId(repo);
         }
         records.push({ mode: LINK_MODE, id, raw: named(raw) });
+        links.push({ raw: named(raw), disk: onDisk(raw) });
         if (!(entry?.headMode === LINK_MODE && entry.headId === id)) {
           changes.push({ code: tracked ? 'M' : entry?.inIndex === true ? 'A' : '??', raw });
         }
@@ -722,9 +898,10 @@ async function walk(
   for (const { raw, entry } of nested) {
     const inner = await nestedWalk(repo, raw, entry, named(raw), cache, options, depth);
     records.push(...inner.records);
+    links.push(...inner.links);
     changes.push(...inner.changes.map((change) => ({ code: change.code, raw: Buffer.concat([raw, Buffer.from('/'), change.raw]) })));
   }
-  return { records, changes };
+  return { records, changes, links };
 }
 
 // The link text as the bytes the file system stores.
@@ -743,7 +920,7 @@ async function nestedWalk(
   raw: Buffer,
   entry: Entry | null,
   prefix: Buffer,
-  cache: HashCache,
+  cache: CacheView,
   options: WorktreeOptions,
   depth: number,
 ): Promise<Walk> {
@@ -758,7 +935,9 @@ async function nestedWalk(
   }
   if (!isRepository) {
     if (folderIsEmpty(folder)) {
-      return recorded === null ? { records: [], changes: [] } : { records: [{ mode: SUBMODULE_MODE, id: recorded, raw: prefix }], changes: [] };
+      return recorded === null
+        ? { records: [], changes: [], links: [] }
+        : { records: [{ mode: SUBMODULE_MODE, id: recorded, raw: prefix }], changes: [], links: [] };
     }
     throw new Error(
       `${operatorText(raw.toString('utf8'))} holds files but no git repository, so usabl cannot tell which of them ` +
@@ -786,21 +965,82 @@ function folderIsEmpty(folder: string): boolean {
 
 /** A reader of the working tree with a hash cache of its own, for the life of the git reader. */
 export interface WorktreeReader {
-  /** The tree id of the bytes on disk. */
+  /** The tree id of the bytes on disk, hashed fresh on every call. */
   tree(): Promise<string>;
   /** The paths whose content on disk is not what HEAD holds, from the repository root, sorted. */
   changes(): Promise<WorktreeChange[]>;
 }
 
+// A tree id that never matches any earlier read, for a tree usabl cannot build from the bytes the
+// checks read. No stored receipt answers for it, and a run that reads it twice sees two trees.
+function neverRepeatingTree(repo: Repository): string {
+  return objectId(repo, 'tree', Buffer.from(`usabl: a tree usabl could not build ${String(process.hrtime.bigint())} ${String(Math.random())}`));
+}
+
+/**
+ * Whether every link points at a path the walk hashes: a file it recorded, or a folder that holds
+ * one. A link to a file outside the repository, in an ignored folder, or in .git binds only its link
+ * text, while the dev server serves the target's bytes, so an edit to the target would change
+ * nothing the tree records. A link that cannot be resolved is not covered either.
+ */
+function linksStayInside(repo: Repository, walked: Walk): boolean {
+  if (walked.links.length === 0) {
+    return true;
+  }
+  const files = new Set<string>();
+  const folders = new Set<string>();
+  for (const record of walked.records) {
+    if (!REGULAR_MODES.has(record.mode)) continue;
+    const name = record.raw.toString('latin1');
+    files.add(name);
+    for (let slash = name.indexOf('/'); slash > 0; slash = name.indexOf('/', slash + 1)) {
+      folders.add(name.slice(0, slash));
+    }
+  }
+  return walked.links.every((link) => {
+    let target: Buffer;
+    try {
+      target = realpathSync.native(link.disk, { encoding: 'buffer' });
+    } catch {
+      return false;
+    }
+    if (target.equals(repo.topBytes.subarray(0, repo.topBytes.length - 1))) return true;
+    if (!target.subarray(0, repo.topBytes.length).equals(repo.topBytes)) return false;
+    const name = target.subarray(repo.topBytes.length).toString('latin1');
+    return files.has(name) || folders.has(name);
+  });
+}
+
+/**
+ * What git ls-files -s -z prints for an index that holds exactly these records: one line per name,
+ * with its mode, its id and stage 0, in git's index order, which is byte order of the names. A later
+ * record for a name replaces an earlier one, as git update-index does.
+ */
+function expectedListing(records: readonly TreeRecord[]): Buffer {
+  const byName = new Map<string, TreeRecord>();
+  for (const record of records) {
+    byName.set(record.raw.toString('latin1'), record);
+  }
+  const sorted = [...byName.values()].sort((a, b) => Buffer.compare(a.raw, b.raw));
+  return Buffer.concat(sorted.flatMap((record) => [Buffer.from(`${record.mode} ${record.id} 0\t`, 'latin1'), record.raw, Buffer.from([0])]));
+}
+
 export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
   const cache: HashCache = new Map();
-  const read = async (): Promise<{ repo: Repository; result: Walk }> => {
-    const repo = await openRepository(options.cwd);
-    return { repo, result: await walk(repo, 'HEAD', Buffer.alloc(0), cache, options, 0) };
-  };
   return {
     async tree() {
-      const { repo, result } = await read();
+      const repo = await openRepository(options.cwd);
+      // The tree a receipt binds is hashed fresh, never from the cache. A write through a memory map
+      // can change a file's bytes and keep both of its times, so only the changed list, which
+      // decides what to check and binds nothing, reads the cache. The tree read still fills it.
+      const writeOnly: CacheView = {
+        get: () => undefined,
+        set: (key, value) => cache.set(key, value),
+      };
+      const result = await walk(repo, 'HEAD', Buffer.alloc(0), writeOnly, options, 0);
+      if (!linksStayInside(repo, result)) {
+        return neverRepeatingTree(repo);
+      }
       const scratch = await mkdtemp(join(tmpdir(), 'usabl-index-'));
       try {
         const env = { GIT_INDEX_FILE: join(scratch, 'index') };
@@ -808,6 +1048,16 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
         const built = await runGit(repo.top, ['update-index', '-z', '--index-info'], { input, env });
         if (built.code !== 0) {
           throw new Error(`git update-index failed, so usabl could not read the working tree. ${firstLineOf(built.stderr)}`.trim());
+        }
+        const listed = await runGit(repo.top, ['ls-files', '-s', '-z'], { env });
+        if (listed.code !== 0) {
+          throw new Error(`git ls-files failed, so usabl could not read the working tree. ${firstLineOf(listed.stderr)}`.trim());
+        }
+        // git update-index --index-info skips a name it will not store, such as a folder named GIT~1
+        // or .GIT, prints a line, and exits 0. It also drops a record that clashes with another one.
+        // So the index must hold exactly the records sent, name by name, with each mode and id.
+        if (built.stderr.trim().length > 0 || !listed.stdout.equals(expectedListing(result.records))) {
+          return neverRepeatingTree(repo);
         }
         // Only tree objects are written. No blob is added to the repository.
         const written = await runGit(repo.top, ['write-tree', '--missing-ok'], { env });
