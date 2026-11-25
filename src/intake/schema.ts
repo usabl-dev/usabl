@@ -20,6 +20,7 @@ import type {
   VoiceAssertion,
 } from '../contracts/index.js';
 import { collapseWhiteSpace } from '../primitives/accessible-name.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { normalizeToken } from '../voicing/normalize.js';
 import { describeFileKeyProblem, describeNodeIdProblem, describeVersionProblem } from './design-source.js';
 import { describeRequirementIdProblem } from './requirement-ids.js';
@@ -41,6 +42,28 @@ function receivedType(value: unknown): string {
 
 function quoteValues(values: readonly unknown[], separator = ' | '): string {
   return values.map((value) => (typeof value === 'string' ? `'${value}'` : String(value))).join(separator);
+}
+
+// A count as a person reads it, such as 1,000.
+function count(limit: number): string {
+  return limit.toLocaleString('en-US');
+}
+
+// An unknown-key message names at most this many keys, and each name at most this many
+// characters. A key name is file text, so its secrets are taken out before it is cut, and a cut
+// can never leave part of a secret behind.
+const KEYS_SHOWN = 5;
+const KEY_NAME_CHARS = 60;
+
+function keyName(key: string): string {
+  const safe = [...scrubString(key)];
+  return safe.length > KEY_NAME_CHARS ? `${safe.slice(0, KEY_NAME_CHARS).join('')}...` : safe.join('');
+}
+
+function keyList(keys: readonly string[], quote: boolean): string {
+  const shown = keys.slice(0, KEYS_SHOWN).map((key) => (quote ? `'${keyName(key)}'` : keyName(key)));
+  const rest = keys.length - shown.length;
+  return rest > 0 ? `${shown.join(', ')}, and ${count(rest)} more` : shown.join(', ');
 }
 
 function invalidTypeMessage(expected: string, input: unknown): string {
@@ -67,7 +90,7 @@ const issueMessage: z.core.$ZodErrorMap = (issue) => {
       return `Invalid literal value, expected ${issue.values.map((value) => JSON.stringify(value)).join(' | ')}`;
     }
     case 'unrecognized_keys':
-      return `Unrecognized key(s) in object: ${quoteValues(issue.keys, ', ')}`;
+      return `Unrecognized key(s) in object: ${keyList(issue.keys, true)}`;
     case 'invalid_union':
       // Only a discriminated union names its discriminator, and then options lists its values.
       return issue.discriminator !== undefined && 'options' in issue && Array.isArray(issue.options)
@@ -112,11 +135,6 @@ const STEP_FIELDS_LIMIT = 100;
 const OBLIGATIONS_LIMIT = 100;
 const TOKENS_LIMIT = 100;
 
-// A count as a person reads it, such as 1,000.
-function count(limit: number): string {
-  return limit.toLocaleString('en-US');
-}
-
 function atMost(list: string, limit: number, items: string): string {
   return `${list} can list at most ${count(limit)} ${items}`;
 }
@@ -159,7 +177,7 @@ function voiceStepSchema<Shape extends z.ZodRawShape>(kind: string, shape: Shape
     .object(shape, {
       error: (issue) =>
         issue.code === 'unrecognized_keys'
-          ? `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}`
+          ? `${keyList(issue.keys, false)} is not a field of a ${kind} step; write only ${write}`
           : undefined,
     })
     .strict();
@@ -504,13 +522,19 @@ function isUnder(path: readonly PropertyKey[], parent: readonly PropertyKey[]): 
  * length message moves back in front of the messages for the list's entries.
  */
 function inReportedOrder(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  // Only a length problem is ever dropped, so only the paths of length problems are looked up. A
+  // file can hold over 100,000 type problems, and none of their paths is built unless it could
+  // match one.
+  const sizePaths = new Set(issues.filter(isSizeIssue).map((issue) => formatIssuePath(issue.path)));
   const wrongType = new Set<string>();
   const ordered: z.core.$ZodIssue[] = [];
   for (const issue of issues) {
-    const where = formatIssuePath(issue.path);
-    if (issue.code === 'invalid_type') {
-      wrongType.add(where);
-    } else if (isSizeIssue(issue) && wrongType.has(where)) {
+    if (sizePaths.size > 0 && issue.code === 'invalid_type') {
+      const where = formatIssuePath(issue.path);
+      if (sizePaths.has(where)) {
+        wrongType.add(where);
+      }
+    } else if (isSizeIssue(issue) && wrongType.has(formatIssuePath(issue.path))) {
       continue;
     }
     let at = ordered.length;
@@ -524,14 +548,22 @@ function inReportedOrder(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[
   return ordered;
 }
 
+// A refusal lists at most this many problems, then says how many more the file has. A file within
+// every limit can still hold over 100,000 problems, and the first ones are enough to start fixing.
+const PROBLEMS_SHOWN = 100;
+
 function formatValidationReason(issues: readonly z.core.$ZodIssue[]): string {
   if (issues.length === 0) {
     return 'requirement bundle did not match schema';
   }
 
-  return inReportedOrder(issues)
+  const ordered = inReportedOrder(issues);
+  const shown = ordered
+    .slice(0, PROBLEMS_SHOWN)
     .map((issue) => `${formatIssuePath(issue.path)}: ${issue.message}`)
     .join('; ');
+  const rest = ordered.length - PROBLEMS_SHOWN;
+  return rest > 0 ? `${shown}; and ${count(rest)} more ${rest === 1 ? 'problem' : 'problems'}` : shown;
 }
 
 function toContentAssertion(assertion: z.infer<typeof contentAssertionSchema>): ContentAssertion {
