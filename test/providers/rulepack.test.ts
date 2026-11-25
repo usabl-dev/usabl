@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  AncestorAttributesRead,
   AxNode,
   Draft,
   ElementRef,
   Page,
   ProfileName,
   ProviderContext,
+  ProviderOutput,
 } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -681,8 +683,9 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
   const TOAST_GROUP_SELECTOR = '[class~="pf-v6-c-alert-group"][class~="pf-m-toast"]';
   const group = element('.toast-group');
   const alertRef = element('.toast-alert');
+  const otherAlert = element('.page-alert');
   const modal = element('.open-modal');
-  const GROUP_ENTRY = { 'aria-live': 'polite', role: 'list', class: 'pf-v6-c-alert-group pf-m-toast' };
+  const GROUP_ENTRY ={ 'aria-live': 'polite', role: 'list', class: 'pf-v6-c-alert-group pf-m-toast' };
   const BODY = { 'aria-live': null, role: null };
   const HTML = { 'aria-live': null, role: null };
   const HIDDEN_PORTAL = { 'aria-live': null, role: null, 'aria-hidden': 'true' };
@@ -698,13 +701,34 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
     holdsAlert: boolean,
     strayBesideBody = false,
   ): Promise<Draft[]> {
+    const output = await groupOutput({ portal, modalOpen, holdsAlert, strayBesideBody });
+    expect(gapsOf(output)).toEqual([]);
+    return draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+  }
+
+  interface GroupPage {
+    portal: Record<string, string | null>;
+    modalOpen: boolean;
+    holdsAlert: boolean;
+    strayBesideBody?: boolean;
+    // The alerts the page lists when the rule first reads its alerts. Without it, the list holds
+    // the group's alert when holdsAlert is set, and nothing otherwise.
+    alertList?: ElementRef[];
+    // Replaces the ancestor read of the group, to model a read that fails or ends early.
+    groupRead?: () => Promise<AncestorAttributesRead>;
+  }
+
+  async function groupOutput(options: GroupPage): Promise<Draft[] | ProviderOutput> {
+    const { portal, modalOpen, holdsAlert, strayBesideBody = false } = options;
     const groupChain = [GROUP_ENTRY, portal, BODY, HTML];
+    const alertList = options.alertList ?? (holdsAlert ? [alertRef] : []);
     const queryPlan: Record<string, ElementRef[]> = {
       [TOAST_GROUP_SELECTOR]: [group],
       ':root > body': [element('body')],
       ...(strayBesideBody ? { ':root > :not(head):not(body)': [element('.stray')] } : {}),
       ...(modalOpen ? { '[aria-modal]': [modal] } : {}),
-      ...(holdsAlert ? { [SEL.alert]: [alertRef], [`${group.selector} ${SEL.alert}`]: [alertRef] } : {}),
+      ...(alertList.length > 0 ? { [SEL.alert]: alertList } : {}),
+      ...(holdsAlert ? { [`${group.selector} ${SEL.alert}`]: [alertRef] } : {}),
     };
     const axPlan: Record<string, AxNode | null> = modalOpen
       ? { [modal.selector]: { name: 'Edit cluster', role: 'dialog', states: {} } }
@@ -712,14 +736,19 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
     const ancestors: AncestorPlan = {
       [group.selector]: groupChain,
       [alertRef.selector]: [{ 'aria-live': null, role: null, class: 'pf-v6-c-alert' }, { 'aria-live': null, role: 'listitem' }, ...groupChain],
+      [otherAlert.selector]: [{ 'aria-live': null, role: null, class: 'pf-v6-c-alert' }, { 'aria-live': 'polite', role: null }, BODY, HTML],
     };
     const context = await makeContext(queryPlan, axPlan, undefined, ancestors);
     const modalAttributes: Record<string, string> = { role: 'dialog', 'aria-modal': 'true' };
     context.page.getAttribute = async (selector: string, name: string) =>
       selector === modal.selector ? (modalAttributes[name] ?? null) : null;
-    const output = await makeRulepackProvider().run(context);
-    expect(gapsOf(output)).toEqual([]);
-    return draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+    const groupRead = options.groupRead;
+    if (groupRead !== undefined) {
+      const ancestorRead = context.page.ancestorAttributes.bind(context.page);
+      context.page.ancestorAttributes = async (selector: string, names: readonly string[]) =>
+        selector === group.selector ? groupRead() : ancestorRead(selector, names);
+    }
+    return makeRulepackProvider().run(context);
   }
 
   it('reports one undecided draft on an empty toast group hidden by an open modal', async () => {
@@ -758,4 +787,54 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
   it('reports nothing for a hidden empty group with no modal open, even when it cannot name the body child', async () => {
     expect(await groupDrafts(HIDDEN_PORTAL, false, false, true)).toEqual([]);
   });
+
+  // An alert can appear in the group after the rule read the page's alerts, for example from the
+  // dialog's own save action. The group holds an alert, but the alert walk never saw it.
+  it('reports one undecided draft on a hidden group that holds only an alert the alert walk did not see', async () => {
+    const output = await groupOutput({ portal: HIDDEN_PORTAL, modalOpen: true, holdsAlert: true, alertList: [] });
+    expect(gapsOf(output)).toEqual([]);
+    const drafts = draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', elementPath: '.toast-group' });
+    expect(drafts[0]?.why).toContain('An open dialog hides the toast area from screen readers');
+  });
+
+  it('reports one undecided draft on the group when the alert walk saw only an alert outside it', async () => {
+    // The walked alert sits in a live region the modal does not hide, so it gets no draft.
+    const output = await groupOutput({
+      portal: HIDDEN_PORTAL,
+      modalOpen: true,
+      holdsAlert: true,
+      alertList: [otherAlert],
+    });
+    expect(gapsOf(output)).toEqual([]);
+    const drafts = draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', elementPath: '.toast-group' });
+  });
+
+  // The group's ancestors cannot always be read. Each such group is a gap that names it, so a
+  // group the rule could not check is never read as one it passed.
+  const groupGapCases: Array<[string, () => Promise<AncestorAttributesRead>, string]> = [
+    [
+      'the read throws',
+      async () => {
+        throw new Error('the page closed');
+      },
+      'its ancestors could not be read: the page closed',
+    ],
+    ['the group cannot be found again', async () => ({ kind: 'not-found' }), 'it could not be found again'],
+    ['the chain is too deep', async () => ({ kind: 'too-deep', limit: 512 }), 'it has more than 512 ancestors'],
+  ];
+  for (const [label, groupRead, why] of groupGapCases) {
+    it(`reports one gap naming the toast group when ${label}, while a modal is open`, async () => {
+      const output = await groupOutput({ portal: HIDDEN_PORTAL, modalOpen: true, holdsAlert: false, groupRead });
+      expect(draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region')).toEqual([]);
+      const gaps = gapsOf(output);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0]).toMatchObject({ ref: 'provider:pf-rulepack/pf-toast-live-region', state: 'not-covered' });
+      expect(gaps[0]?.reason).toContain('could not check toast group .toast-group');
+      expect(gaps[0]?.reason).toContain(why);
+    });
+  }
 });

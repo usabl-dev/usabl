@@ -228,13 +228,14 @@ async function chainHiding(
 /**
  * Empty toast groups that an open modal hides. PatternFly renders the toast group as soon as a
  * toast AlertGroup mounts, before any alert is in it, so a screen checked with a modal open often
- * has an empty group. The alert walk never reaches it. A group that holds an alert is left to the
- * alert walk, so it gets one draft, not two. A group hidden while a modal is open, where the chain
+ * has an empty group. The alert walk never reaches it. A group that holds an alert the walk saw is
+ * left to the alert walk, so it gets one draft, not two. A group hidden while a modal is open, where the chain
  * cannot name the body's child, gets the same undecided draft an alert gets in that state. A group
  * that is shown, or hidden in another way, gets nothing here.
  */
 async function checkEmptyToastGroups(
   ctx: ProviderContext,
+  walkedAlerts: ReadonlySet<string>,
   reads: ModalReads,
   drafts: Draft[],
   gaps: CoverageGap[],
@@ -249,7 +250,12 @@ async function checkEmptyToastGroups(
     return;
   }
   for (const groupRef of groups) {
-    if ((await ctx.page.queryAll(`${groupRef.selector} ${SEL.alert}`)).length > 0) {
+    // An alert can appear in the group after the alert list was read, for example from the
+    // dialog's own save action. The alert walk never saw that alert, so it gave no draft or gap.
+    // The group is left to the alert walk only when the walk saw an alert it holds. Otherwise it
+    // is checked as an empty group is.
+    const held = await ctx.page.queryAll(`${groupRef.selector} ${SEL.alert}`);
+    if (held.some((alertRef) => walkedAlerts.has(alertRef.selector))) {
       continue;
     }
     let read: AncestorAttributesRead;
@@ -393,6 +399,12 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
     });
   }
 
-  await checkEmptyToastGroups(ctx, reads, drafts, gaps);
+  await checkEmptyToastGroups(
+    ctx,
+    new Set(allAlerts.map((alertRef) => alertRef.selector)),
+    reads,
+    drafts,
+    gaps,
+  );
   return { drafts, gaps };
 }
