@@ -6,8 +6,9 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { glob, lstat, open, readFile, readlink } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
+import { nodeGlobIgnoresCase, nodeGlobReading } from './fs-glob-reading.js';
 
 function asBytes(buffer: Buffer): Uint8Array {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -45,8 +46,11 @@ export function makeWorkflowReader(cwd: string = process.cwd()): (path: string) 
   };
 }
 
-export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
+export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform } = {}): FsGlob {
   const cwd = options.cwd ?? process.cwd();
+  // Node's fs.glob matches without regard to letter case on macOS and Windows. The platform is
+  // injected in tests, so the rule is tested on any machine.
+  const nocase = nodeGlobIgnoresCase(options.platform ?? process.platform);
 
   return {
     async readFile(path) {
@@ -213,13 +217,31 @@ export function makeFsGlob(options: { cwd?: string } = {}): FsGlob {
       // base directory itself), and every caller reads a globbed path as a file, so
       // a directory in the result would later crash a readFile with EISDIR. Filter
       // with Dirent file types and rebuild the cwd-relative path each match carries.
+      //
+      // Node tests a part that holds wildcards with a regular expression that can backtrack, so
+      // a pattern is listed wide and filtered here with a matcher that does not (see
+      // fs-glob-reading.ts). Syntax that matcher does not read runs unchanged inside a bound,
+      // and not at all past it.
       const seen = new Set<string>();
       for (const pattern of patterns) {
-        for await (const entry of glob(pattern, { cwd, withFileTypes: true })) {
-          if (entry.isDirectory()) {
-            continue;
+        const reading = nodeGlobReading(pattern, { nocase });
+        if (reading.kind === 'past-bound') {
+          continue;
+        }
+        const listings =
+          reading.kind === 'unchanged' ? [{ pattern, base: '', matches: null }] : reading.listings;
+        for (const listing of listings) {
+          const base = resolve(cwd, listing.base);
+          for await (const entry of glob(listing.pattern, { cwd, withFileTypes: true })) {
+            if (entry.isDirectory()) {
+              continue;
+            }
+            const found = resolve(entry.parentPath, entry.name);
+            if (listing.matches !== null && !listing.matches(relative(base, found).split(sep).join('/'))) {
+              continue;
+            }
+            seen.add(relative(cwd, found));
           }
-          seen.add(relative(cwd, resolve(entry.parentPath, entry.name)));
         }
       }
       return [...seen].sort();
