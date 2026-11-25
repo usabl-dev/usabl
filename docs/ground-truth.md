@@ -1754,6 +1754,21 @@ folder as the folder alone, which matches no file glob, and a user's
 `status.showUntrackedFiles=no` hides new files completely. A listing longer than usabl reads (10
 MB of output) stops the run with an error that says so, never a short list read as complete.
 
+Files git hides with an index flag are listed too. git status never compares a tracked file
+marked assume-unchanged or skip-worktree with the index, so an edit to one is not in its output.
+The status listing reads the flags with `git ls-files -v -s -z` (a lower case tag for
+assume-unchanged, `S` for skip-worktree) and adds each flagged file whose working copy is not what
+the index holds, by its path from the repository root. A regular file is compared by the blob id
+`git hash-object` gives it, through the same filters `git add` uses, so a line ending change that
+a filter removes is no edit. A symbolic link is compared by its link text. A file usabl cannot
+read, a folder, a pipe, a submodule, and a file that turned into a link or back are listed as
+changed, and a file that is gone is listed as deleted. A skip-worktree file that is not there in a
+sparse checkout (`core.sparseCheckout` is true) is not listed, because sparse checkout removes the
+files outside its set on purpose. A change of the executable bit alone is not compared. That
+listing covers every tracked file, so it is read as a stream and has no size limit. Every surface
+that lists changes uses this listing, so an edit hidden this way is planned and checked like any
+other.
+
 A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
 a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
 the files that import it, and the router file or `usabl.routes.json` when a route names it. An

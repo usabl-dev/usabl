@@ -425,6 +425,21 @@ passing bundle from another run.
   the stop. To bind such a file, list its path from the repository root in `localFiles` in
   `usabl.config.json` (ground truth, section 22). A folder or a glob cannot be listed, so list
   each file. CI is not affected, because ignored files are not in the pull request.
+- git status and git diff do not compare a tracked file marked assume-unchanged or
+  skip-worktree with the index. An agent can set either flag with `git update-index`, a developer
+  may mark a local settings file this way, and sparse checkout sets skip-worktree. So an edit to
+  such a file was in no changed list, and a stop whose only edit it was read "nothing to check".
+  The tree a receipt binds is built from a fresh index with no flags, so a stored receipt never
+  answered for it. The status listing now reads the flags (`git ls-files -v`) and adds each
+  flagged file whose working copy is not what the index holds: content that hashes to another
+  blob id through the filters `git add` uses, a different link text, a change of kind, a file
+  usabl cannot read, or a file that is gone. Each surface that lists changes reads this listing:
+  the Stop hook with and without a starting commit, `usabl check` in each mode, the overlay, and
+  `usabl brief`. The file is then planned and checked like any other edit, from the bytes on
+  disk. Limits: a skip-worktree file that is not there in a sparse checkout is not a change,
+  because sparse checkout removes the files outside its set on purpose; a change of the
+  executable bit alone is not compared. CI is not affected, because it lists commits, and the
+  pull request diff holds the file.
 - Limits of the local files binding. It makes a stored receipt stop matching, and it does not
   widen what the stop checks: the stop checks the screens its changed list reaches, so an edit
   only to an ignored file on a branch with no other change is still nothing to check. A `.env`
