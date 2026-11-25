@@ -91,7 +91,8 @@ describe('usabl debt ledger', () => {
     const late = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
     const unseen = entryFor(dialogAt(1, { rule: 'aria-required-attr' }), 1);
     const later = floorOf([OPEN, COUNTED, late, unseen]);
-    const scan = recordOf(later, [fullScreen('clusters', [[OPEN, 1], [late, 1]])], { commit: commitAt(12), sourceTree: 'tree-12' });
+    // The scan is of the head commit, so a row it saw is counted with no doubt about its end.
+    const scan = recordOf(later, [fullScreen('clusters', [[OPEN, 1], [late, 1]])], { commit: commitAt(41), sourceTree: 'tree-41' });
     const history = makeFakeHistory({
       refs: { 'origin/usabl/history': 'h1' },
       commits: { h1: { '2026-01.jsonl': `${serializeRecord(scan)}\n` } },

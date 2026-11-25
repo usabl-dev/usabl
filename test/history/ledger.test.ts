@@ -322,11 +322,16 @@ describe('buildLedger', () => {
   it('takes the median and the longest over exact rows only', () => {
     const D = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
     const later = floorOf([A, B, C, D]);
-    // A is in the first floor. B, C, and D are floored at c10 and seen by scans of main.
+    // A is in the first floor. B, C, and D are floored at c10 and seen by scans of main, the last of
+    // them a scan of the head commit.
     const ledger = buildLedger(
       input(
         [snap(0, floorOf([A])), snap(10, later)],
-        historyOn([scanAt(12, later, [[A, 1], [B, 1], [C, 1], [D, 1]]), scanAt(14, later, [[A, 1], [B, 1], [C, 1]])]),
+        historyOn([
+          scanAt(12, later, [[A, 1], [B, 1], [C, 1], [D, 1]]),
+          scanAt(14, later, [[A, 1], [B, 1], [C, 1]]),
+          scanAt(41, later, [[A, 1], [B, 1], [C, 1], [D, 1]]),
+        ]),
       ),
     );
     expect(ledger.rows.map((row) => [row.rule, row.mayBeMore, row.mayBeLess])).toEqual([
@@ -342,8 +347,12 @@ describe('buildLedger', () => {
     const J = entryFor(dialogAt(1, { screenId: 'jobs' }), 1);
     const late = entryFor(dialogAt(1, { rule: 'aria-hidden-focus' }), 1);
     const floor = floorOf([A, B, J, late]);
+    // The one scan is of the head commit, c12.
     const ledger = buildLedger(
-      input([snap(0, floorOf([A])), snap(10, floor)], historyOn([scanAt(12, floor, [[A, 1], [B, 1]])])),
+      input([snap(0, floorOf([A])), snap(10, floor)], historyOn([scanAt(12, floor, [[A, 1], [B, 1]])]), {
+        head: commitAt(12),
+        headDate: dayAt(12),
+      }),
     );
     // Seen by a scan and in the first floor: the true number may only be larger.
     expect(rowFor(ledger, A)).toMatchObject({ mayBeMore: true, mayBeLess: false, lastSeen: { commit: commitAt(12), date: dayAt(12) } });
