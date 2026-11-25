@@ -9,9 +9,11 @@
  * use: buildDeps is replaced so no browser starts, and the check runner records what it scanned.
  */
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Deps, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
@@ -154,12 +156,21 @@ async function expectChecked(screen: string): Promise<void> {
 beforeEach(async () => {
   originalCwd = process.cwd();
   home = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-stop-home-')));
-  for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM']) {
+  // usabl gives git no GIT_CONFIG_* variable, so the test's own global config is the one in its own
+  // HOME, for usabl's git calls and the test's alike.
+  for (const key of ['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_COMMITTER_DATE', 'GIT_AUTHOR_DATE']) {
     savedEnv[key] = process.env[key];
   }
-  await writeFile(join(home, 'gitconfig'), '[core]\n\thooksPath = /dev/null\n');
-  process.env['GIT_CONFIG_GLOBAL'] = join(home, 'gitconfig');
+  await writeFile(join(home, '.gitconfig'), '[core]\n\thooksPath = /dev/null\n');
+  process.env['HOME'] = home;
+  process.env['XDG_CONFIG_HOME'] = join(home, '.config');
+  delete process.env['GIT_CONFIG_GLOBAL'];
   process.env['GIT_CONFIG_NOSYSTEM'] = '1';
+  // One fixed date for every commit. The graft tests make a cycle of parents, and the merge base
+  // git finds in a cycle depends on commit dates, so a commit that lands in another second would
+  // change what the precondition reads.
+  process.env['GIT_COMMITTER_DATE'] = '2026-01-01T00:00:00Z';
+  process.env['GIT_AUTHOR_DATE'] = '2026-01-01T00:00:00Z';
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-stop-')));
   process.chdir(repo);
   const capture = (() => true) as typeof process.stdout.write;
@@ -311,3 +322,123 @@ describe('an edit a local git setting hides, after a verified stop', { timeout: 
     expect(block.reason).toMatch(/core\.worktree/u);
   });
 });
+
+/** The block a stop prints on stdout, or an empty object when it printed none. */
+function blockOf(stdout: string): { decision?: string; reason?: string } {
+  return stdout.trim() === '' ? {} : (JSON.parse(stdout) as { decision?: string; reason?: string });
+}
+
+describe('a change git would leave out of the tree, after a verified stop', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('is never answered from the stored receipt for a new file under a GIT~1 folder', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/pages/GIT~1/Admin.tsx', 'export const Admin = () => <input />;\n');
+    const next = await stop();
+    expect(next.stderr).not.toContain(FAST_PATH);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+  });
+
+  posixOnly('is never answered from the stored receipt when a screen folder is swapped for a link', async () => {
+    await setUp(async () => {
+      await write('src/pages/Home.tsx', 'export const Home = 1;\n');
+    });
+    await verifiedStop();
+    const outside = join(home, 'pages');
+    await mkdir(outside);
+    await rename(join(repo, 'src/pages/Home.tsx'), join(outside, 'Home.tsx'));
+    await rm(join(repo, 'src/pages'), { recursive: true });
+    await symlink(outside, join(repo, 'src/pages'));
+    await writeFile(join(outside, 'Admin.tsx'), 'export const Admin = () => <input />;\n');
+    const next = await stop();
+    expect(next.stderr).not.toContain(FAST_PATH);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+  });
+
+  it('checks the edited screen when its HEAD blob is forged as an LFS pointer to the edited bytes', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    const disk = await readFile(join(repo, 'src/App.tsx'));
+    const id = git('rev-parse', 'HEAD:src/App.tsx').trim();
+    const pointer = Buffer.from(
+      `version https://git-lfs.github.com/spec/v1\noid sha256:${createHash('sha256').update(disk).digest('hex')}\nsize ${String(disk.length)}\n`,
+    );
+    const object = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
+    await chmod(object, 0o644);
+    await writeFile(object, deflateSync(Buffer.concat([Buffer.from(`blob ${String(pointer.length)}\0`), pointer])));
+    await expectChecked('home');
+  });
+});
+
+describe('a forged tree in .git/objects, after a verified stop', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks the stop and names the damaged object', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    const edited = git('hash-object', '-w', 'src/App.tsx').trim();
+    const srcTree = git('rev-parse', 'HEAD:src').trim();
+    const forged = git('ls-tree', srcTree).replace(/^(100644 blob )[0-9a-f]+(\tApp\.tsx)$/mu, `$1${edited}$2`);
+    const made = execFileSync('git', ['mktree'], { cwd: repo, input: forged, encoding: 'utf8' }).trim();
+    const raw = execFileSync('git', ['cat-file', 'tree', made], { cwd: repo });
+    const object = join(repo, '.git/objects', srcTree.slice(0, 2), srcTree.slice(2));
+    await chmod(object, 0o644);
+    await writeFile(object, deflateSync(Buffer.concat([Buffer.from(`tree ${String(raw.length)}\0`), raw])));
+    const next = await stop();
+    expect(next.stderr).not.toContain(FAST_PATH);
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    const block = blockOf(next.stdout);
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/git fsck/u);
+  });
+});
+
+describe('core.worktree naming a parent repository that ignores this one', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks the stop and fails usabl check, both naming the setting', async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-stop-parent-')));
+    const project = repo;
+    try {
+      gitIn(parent, 'init', '-q', '-b', 'main');
+      await write('.gitignore', 'r/\n', parent);
+      await write('NOTES.md', 'notes\n', parent);
+      gitIn(parent, 'add', '-A');
+      gitIn(parent, 'commit', '-q', '-m', 'parent');
+      repo = join(parent, 'r');
+      await mkdir(repo);
+      process.chdir(repo);
+      await setUp();
+      await verifiedStop();
+      git('config', 'core.worktree', parent);
+      await write('src/App.tsx', APP_EDITED);
+
+      const next = await stop();
+      expect(next.stderr).not.toContain(FAST_PATH);
+      expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+      const block = blockOf(next.stdout);
+      expect(block.decision).toBe('block');
+      expect(block.reason).toMatch(/core\.worktree/u);
+
+      const printed: string[] = [];
+      const capture = ((text: string | Uint8Array) => {
+        printed.push(String(text));
+        return true;
+      }) as typeof process.stdout.write;
+      const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(capture);
+      const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(capture);
+      let code: number;
+      try {
+        code = await main(['check']);
+      } finally {
+        outSpy.mockRestore();
+        errSpy.mockRestore();
+      }
+      expect(code).not.toBe(0);
+      expect(printed.join('')).not.toMatch(/nothing to check/iu);
+      expect(printed.join('')).toMatch(/core\.worktree/u);
+    } finally {
+      process.chdir(originalCwd);
+      await rm(parent, { recursive: true, force: true });
+      repo = project;
+    }
+  });
+});
+

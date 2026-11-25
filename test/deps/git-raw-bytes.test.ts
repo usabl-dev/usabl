@@ -9,11 +9,13 @@
  * Real git in a temporary folder, with a global config of the test's own, so the developer's
  * global config (which may define a real LFS filter) never changes the result.
  */
-import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeGitReader } from '../../src/deps/git.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
@@ -74,12 +76,21 @@ const APP_EDITED = APP.replace(LABEL, `<b>${'x'.repeat(LABEL.length - 7)}</b>`);
 
 beforeEach(async () => {
   home = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-bytes-home-')));
-  for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM']) {
+  // usabl gives git no GIT_CONFIG_* variable, so the test's own global config is the one in its own
+  // HOME, for usabl's git calls and the test's alike.
+  for (const key of ['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_COMMITTER_DATE', 'GIT_AUTHOR_DATE']) {
     savedEnv[key] = process.env[key];
   }
-  await writeFile(join(home, 'gitconfig'), '[core]\n\thooksPath = /dev/null\n');
-  process.env['GIT_CONFIG_GLOBAL'] = join(home, 'gitconfig');
+  await writeFile(join(home, '.gitconfig'), '[core]\n\thooksPath = /dev/null\n');
+  process.env['HOME'] = home;
+  process.env['XDG_CONFIG_HOME'] = join(home, '.config');
+  delete process.env['GIT_CONFIG_GLOBAL'];
   process.env['GIT_CONFIG_NOSYSTEM'] = '1';
+  // One fixed date for every commit. The graft tests make a cycle of parents, and the merge base
+  // git finds in a cycle depends on commit dates, so a commit that lands in another second would
+  // change what the precondition reads.
+  process.env['GIT_COMMITTER_DATE'] = '2026-01-01T00:00:00Z';
+  process.env['GIT_AUTHOR_DATE'] = '2026-01-01T00:00:00Z';
   repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-bytes-')));
   await newRepo(repo);
   await write('src/App.tsx', APP);
@@ -235,7 +246,7 @@ describe('honest filters read an unchanged file as unchanged', { timeout: REAL_P
       [`oid=$(sed -n 's/^oid sha256:\\([0-9a-f]*\\)$/\\1/p')`, `cat "${store}/$oid"`].join('\n'),
     );
     await writeFile(
-      join(home, 'gitconfig'),
+      join(home, '.gitconfig'),
       `[core]\n\thooksPath = /dev/null\n[filter "lfsstyle"]\n\tclean = ${clean}\n\tsmudge = ${smudge}\n\trequired = true\n`,
     );
     await write('.gitattributes', '*.bin filter=lfsstyle\n');
@@ -360,3 +371,212 @@ describe('a sparse pattern file git cannot answer from', { timeout: REAL_PROCESS
     expect(await paths()).toEqual(['src/App.tsx']);
   });
 });
+
+// Overwrites the loose object file of an id with other bytes of the given type. git does not check
+// an object's id against its bytes when it reads it.
+async function forgeObject(id: string, type: 'blob' | 'tree', content: Buffer): Promise<void> {
+  const path = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
+  await chmod(path, 0o644);
+  await writeFile(path, deflateSync(Buffer.concat([Buffer.from(`${type} ${String(content.length)}\0`), content])));
+}
+
+describe('paths git would leave out of the tree', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  for (const folder of ['GIT~1', '.GIT']) {
+    it(`moves the tree, on every read, for a new file in a folder named ${folder}`, async () => {
+      const before = await tree();
+      await write(`src/pages/${folder}/Admin.tsx`, 'export const Admin = () => <input />;\n');
+      const first = await tree();
+      expect(first).not.toBe(before);
+      expect(await tree()).not.toBe(first);
+      expect(await paths()).toContain(`src/pages/${folder}/Admin.tsx`);
+    });
+  }
+
+  posixOnly('never hashes a file through a link in its folder, and lists the committed file as gone', async () => {
+    await write('src/pages/Home.tsx', 'export const Home = 1;\n');
+    await commitAll('pages');
+    const before = await tree();
+    const outside = join(home, 'pages');
+    await mkdir(outside);
+    await rename(join(repo, 'src/pages/Home.tsx'), join(outside, 'Home.tsx'));
+    await rm(join(repo, 'src/pages'), { recursive: true });
+    await symlink(outside, join(repo, 'src/pages'));
+    await writeFile(join(outside, 'Admin.tsx'), 'export const Admin = () => <input />;\n');
+    const first = await tree();
+    expect(first).not.toBe(before);
+    expect(await tree()).not.toBe(first);
+    expect(await paths()).toEqual(['src/pages', 'src/pages/Home.tsx']);
+  });
+});
+
+describe('objects the agent can overwrite in .git/objects', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('reads an edit whose HEAD blob is forged as an LFS pointer to the edited bytes', async () => {
+    await write('src/App.tsx', APP_EDITED);
+    const disk = await readFile(join(repo, 'src/App.tsx'));
+    const id = (await git('rev-parse', 'HEAD:src/App.tsx')).trim();
+    const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${createHash('sha256').update(disk).digest('hex')}\nsize ${String(disk.length)}\n`;
+    await forgeObject(id, 'blob', Buffer.from(pointer));
+    expect(await paths()).toEqual(['src/App.tsx']);
+  });
+
+  it('refuses to read when the HEAD tree is forged to hold the edited blob', async () => {
+    await write('src/App.tsx', APP_EDITED);
+    const edited = (await git('hash-object', '-w', 'src/App.tsx')).trim();
+    const srcTree = (await git('rev-parse', 'HEAD:src')).trim();
+    const listing = await git('ls-tree', srcTree);
+    const forgedListing = listing.replace(/^(100644 blob )[0-9a-f]+(\tApp\.tsx)$/mu, `$1${edited}$2`);
+    const made = await new Promise<string>((resolve, reject) => {
+      const child = execFile('git', ['mktree'], { cwd: repo, encoding: 'utf8' }, (err, stdout) => (err ? reject(err) : resolve(stdout.trim())));
+      child.stdin?.end(forgedListing);
+    });
+    const { stdout: raw } = await execFileAsync('git', ['cat-file', 'tree', made], { cwd: repo, encoding: 'buffer' });
+    await forgeObject(srcTree, 'tree', raw);
+    // git ls-tree -r HEAD reads the forged tree without checking its id.
+    expect((await git('ls-tree', '-r', 'HEAD')).includes(edited)).toBe(true);
+    const reader = makeGitReader({ cwd: repo });
+    await expect(reader.statusZ()).rejects.toThrow(/does not hold the bytes its id names/u);
+    await expect(reader.writeTree()).rejects.toThrow(/git fsck/u);
+  });
+});
+
+describe('settings and variables that point git elsewhere', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('refuses to read when core.worktree names a parent repository that ignores this one', async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'usabl-raw-bytes-parent-')));
+    try {
+      await newRepo(parent);
+      await write('.gitignore', 'project/\n', parent);
+      await commitAll('parent', parent);
+      const project = join(parent, 'project');
+      await newRepo(project);
+      await write('src/App.tsx', APP, project);
+      await commitAll('base', project);
+      await gitIn(project, 'config', 'core.worktree', parent);
+      await write('src/App.tsx', APP_EDITED, project);
+      const reader = makeGitReader({ cwd: project });
+      await expect(reader.statusZ()).rejects.toThrow(/core\.worktree/u);
+      await expect(reader.writeTree()).rejects.toThrow(/core\.worktree/u);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores GIT_DIR and GIT_WORK_TREE in its own environment', async () => {
+    const decoy = join(home, 'decoy');
+    await newRepo(decoy);
+    await write('src/App.tsx', APP, decoy);
+    await commitAll('decoy', decoy);
+    await write('src/App.tsx', APP_EDITED);
+    const saved = { dir: process.env['GIT_DIR'], tree: process.env['GIT_WORK_TREE'] };
+    process.env['GIT_DIR'] = join(decoy, '.git');
+    process.env['GIT_WORK_TREE'] = decoy;
+    try {
+      expect(await paths()).toEqual(['src/App.tsx']);
+    } finally {
+      if (saved.dir === undefined) delete process.env['GIT_DIR'];
+      else process.env['GIT_DIR'] = saved.dir;
+      if (saved.tree === undefined) delete process.env['GIT_WORK_TREE'];
+      else process.env['GIT_WORK_TREE'] = saved.tree;
+    }
+  });
+
+  it('reads a new file whose name differs from a tracked one only in case when core.ignorecase is true', async () => {
+    const before = await tree();
+    await git('config', 'core.ignorecase', 'true');
+    await write('src/app.tsx', 'export const app = () => <input />;\n');
+    expect(await paths()).toEqual(['src/app.tsx']);
+    expect(await tree()).not.toBe(before);
+  });
+
+  it('reads a new file in a .GIT folder when core.ignorecase is true', async () => {
+    const before = await tree();
+    await git('config', 'core.ignorecase', 'true');
+    await write('src/.GIT/x.tsx', 'export const x = () => <input />;\n');
+    expect(await paths()).toEqual(['src/.GIT/x.tsx']);
+    expect(await tree()).not.toBe(before);
+  });
+});
+
+describe('links whose target the walk does not hash', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  posixOnly('never repeats the tree for a link to a file outside the repository', async () => {
+    await writeFile(join(home, 'Shared.tsx'), APP);
+    await symlink(join(home, 'Shared.tsx'), join(repo, 'src/Shared.tsx'));
+    await commitAll('link out');
+    const first = await tree();
+    expect(await tree()).not.toBe(first);
+  });
+
+  posixOnly('never repeats the tree for a new link into an ignored folder', async () => {
+    await write('.gitignore', 'build/\n');
+    await commitAll('ignore build');
+    await write('build/App.tsx', APP);
+    await symlink('../build/App.tsx', join(repo, 'src/Built.tsx'));
+    const first = await tree();
+    expect(await tree()).not.toBe(first);
+  });
+
+  posixOnly('keeps the tree for a link to a tracked file in the repository', async () => {
+    await symlink('App.tsx', join(repo, 'src/Alias.tsx'));
+    await commitAll('alias');
+    const first = await tree();
+    expect(await tree()).toBe(first);
+    expect(await paths()).toEqual([]);
+  });
+});
+
+// A python3 that can map a file, for the memory map test. Without one the test is skipped.
+const hasPython = ((): boolean => {
+  try {
+    execFileSync('python3', ['-c', 'import mmap'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const withMemoryMap = process.platform === 'win32' || !hasPython ? it.skip : it;
+
+describe('the tree a receipt binds', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  withMemoryMap('is hashed fresh, so a second write through a memory map that keeps both file times still moves it', async () => {
+    const path = join(repo, 'src/Mapped.tsx');
+    await writeFile(path, 'A'.repeat(4096));
+    // Maps the file and writes one byte, then writes a second byte on a line from stdin. The page is
+    // already dirty, so the second write moves neither the modification time nor the change time.
+    const mapper = spawn(
+      'python3',
+      ['-c', 'import mmap,os,sys\nfd=os.open(sys.argv[1],os.O_RDWR)\nm=mmap.mmap(fd,4096)\nm[0:1]=b"B"\nprint("ready",flush=True)\nsys.stdin.readline()\nm[1:2]=b"C"\nprint("done",flush=True)\nsys.stdin.readline()', path],
+      { stdio: ['pipe', 'pipe', 'ignore'] },
+    );
+    const lines: string[] = [];
+    const nextLine = (): Promise<string> =>
+      new Promise((resolve) => {
+        const check = (): void => {
+          const line = lines.shift();
+          if (line !== undefined) resolve(line);
+          else setTimeout(check, 20);
+        };
+        check();
+      });
+    mapper.stdout.on('data', (chunk: Buffer) => lines.push(...chunk.toString('utf8').split('\n').filter((line) => line.length > 0)));
+    try {
+      expect(await nextLine()).toBe('ready');
+      // Past the two-second window, so the changed list keeps the hash in its cache.
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const reader = makeGitReader({ cwd: repo });
+      await reader.statusZ();
+      const before = await reader.writeTree();
+      const times = await stat(path, { bigint: true });
+      mapper.stdin.write('\n');
+      expect(await nextLine()).toBe('done');
+      const after = await stat(path, { bigint: true });
+      expect(String(after.mtimeNs)).toBe(String(times.mtimeNs));
+      expect(String(after.ctimeNs)).toBe(String(times.ctimeNs));
+      expect((await readFile(path, 'latin1')).slice(0, 2)).toBe('BC');
+      const moved = await reader.writeTree();
+      expect(moved).not.toBe(before);
+      expect(moved).toBe(await tree());
+    } finally {
+      mapper.stdin.end('\n');
+      mapper.kill();
+    }
+  });
+});
+
