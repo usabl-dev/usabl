@@ -5748,6 +5748,34 @@ Requirement files are guarded paths. Changing them triggers `approval_required`.
 cannot weaken checks; only engineering + code owners change rule modules. Design can
 add content and flow assertions that the engine enforces alongside the default stack.
 
+### Size limits
+
+Every list in a requirement file has a size limit. A real file is far below each one.
+
+| List | Limit |
+|---|---|
+| `requirements` in one file | 1,000 requirements |
+| `steps` in one flow | 1,000 steps |
+| Fields in one flow step | 100 fields |
+| `steps` in one voice contract | 1,000 steps |
+| `obligations` in one voice contract | 100 obligations |
+| `requiredTokens` in one obligation | 100 words |
+| `sequence` in one focus order | 200 names |
+
+A list past its limit is refused on its length alone, before any entry is read, so a huge file
+is refused fast and with one message. The file is `approval_required`, like every file that does
+not load, and the message names the list and its limit, such as `requirements: requirements can
+list at most 1,000 requirements; put the rest in another file`. It quotes no text from the file.
+A file over a limit is never cut short or read in part.
+
+Obligations and words are limited to 100 each because one requirement holds both lists, so a bad
+requirement can hold obligations times words problems. The schema library collects the problems
+of one list entry in a single call, and that call fails past about 123,000 problems. With these
+limits, one requirement holds at most about 12,500. If the call still fails, the file is refused
+with the reason `this file has too many problems to check, so it is refused; shorten or fix its
+longest list`. The limits bound each list, not the whole file: a file with 1,000 requirements,
+each as bad as the limits allow, still holds about 12.5 million problems and is slow to refuse.
+
 ### Mapping to checks
 
 - `content` requirements become content-matcher providers (compare element text or
@@ -6069,6 +6097,13 @@ surface cannot have, before it writes anything. It exits 0 when it wrote the fil
 Both commands read an answer from Figma up to 256 MiB; an answer that states or reaches a larger
 size is a fetch failure that says so. The cap bounds the size of the answer, not peak memory:
 reading, joining, decoding, and parsing one answer under the cap can need several times its size.
+Each list and map in the answer has a size limit too: `components`, `componentSets`, and the
+`componentProperties` of one node hold at most 100,000 entries each, the `children` of one node
+at most 100,000 nodes, and the `annotations` of one node at most 1,000 notes. An answer past a
+limit is refused on its size, before any entry is read, and the failure names the limit, such as
+`Figma returned a file usabl cannot read: components can list at most 100,000 entries.` A file
+that `usabl import figma` drafts must load like any other, so it holds at most 1,000
+requirements; import the frames of a larger design into more than one file.
 
 `usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
 the current version of each of their files, once per file, in sorted order. It lists the
