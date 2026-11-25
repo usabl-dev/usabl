@@ -63,7 +63,9 @@ could not run, and 2 when a flag or the config is wrong.
   dialog that does not take focus, and the flow and voice defects), it can be anywhere on the
   screen.
 - **caught by another rule**: a new, definite failure on the changed element, but from another
-  rule. It is counted apart from caught.
+  rule. It is counted apart from caught. For the defects that can be caught anywhere on the
+  screen, the failure from another rule must still be on the changed element or inside it. A
+  failure from another rule elsewhere on the screen makes the row unreadable.
 - **missed**: nothing new would block. The summary names the defect and what was expected. When the
   defect is a key that does nothing, and the checks never pressed that key on the element, the
   reason says so.
@@ -77,12 +79,17 @@ could not run, and 2 when a flag or the config is wrong.
   - the change did not hold through the scan, and nothing was caught: see below;
   - the gate did not verify the changed scan, and no new finding explains why;
   - every new finding that would block is one the checks could not confirm;
-  - the only new findings are away from the change, so the page differed between its two loads;
+  - the only new findings are away from the change, so the page differed between its two loads.
+    For the defects that can be caught anywhere on the screen, this means the only new findings
+    are from other rules and away from the changed element;
   - on your app, the design requirements could not be loaded, for the flow and voice defects.
 
 After the scan, the change is read back a second time. It did not hold through the scan when the
-page put it back, a key got to the page before the change could cancel it, or focus reached the
-element in a way the change does not stop. Then a **caught** or **caught by another rule** result
+page put it back, the page replaced the changed element with a new one (as a page that renders
+again can do), a key got to the page before the change could cancel it, or focus reached the
+element in a way the change does not stop. A replaced element counts for every change that keeps
+the element on the page, including a key that does nothing and a focus call that does nothing: the
+new element does not carry the change. Then a **caught** or **caught by another rule** result
 stands, because the new definite failure was found where the rule reports it, while the defect was
 there.
 Its reason says the change did not hold to the end of the scan, and why. Any other result becomes
