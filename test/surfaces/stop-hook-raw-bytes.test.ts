@@ -127,7 +127,7 @@ async function verifiedStop(): Promise<void> {
   expect(first.stderr).toContain(FAST_PATH);
 }
 
-async function stop(): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
+async function stop(input = '{}'): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
   const out: string[] = [];
   const decision: string[] = [];
   state.scanned = [];
@@ -141,7 +141,7 @@ async function stop(): Promise<{ stdout: string; stderr: string; scanned: string
       out.push(text);
     },
   };
-  await runStopHookFromStdin('{}', ports);
+  await runStopHookFromStdin(input, ports);
   return { stdout: decision.join(''), stderr: out.join(''), scanned: [...state.scanned] };
 }
 
@@ -439,5 +439,126 @@ describe('core.worktree naming a parent repository that ignores this one', { tim
       await rm(parent, { recursive: true, force: true });
       repo = project;
     }
+  });
+});
+
+// The text of the gap for files that changed during a check. Waiting never clears a link.
+const WAIT = 'Wait until no editor, build, or agent is writing files';
+
+/** A plain usabl check, with what it printed. */
+async function checkOutput(...args: string[]): Promise<{ code: number; printed: string }> {
+  const printed: string[] = [];
+  const capture = ((text: string | Uint8Array) => {
+    printed.push(String(text));
+    return true;
+  }) as typeof process.stdout.write;
+  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(capture);
+  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(capture);
+  try {
+    return { code: await main(['check', ...args]), printed: printed.join('') };
+  } finally {
+    outSpy.mockRestore();
+    errSpy.mockRestore();
+  }
+}
+
+describe('a screen file that is a link out of the hashed files', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  posixOnly('verifies a committed link into an ignored dist folder, and checks the screen after the target changes', async () => {
+    await setUp(async () => {
+      await write('.gitignore', '.usabl/\ndist/\n');
+      await write('dist/App.tsx', APP);
+      await rm(join(repo, 'src/App.tsx'));
+      await symlink('../dist/App.tsx', join(repo, 'src/App.tsx'));
+    });
+    await verifiedStop();
+    const again = await stop();
+    expect(again.stderr).toContain(FAST_PATH);
+    await write('dist/App.tsx', APP_EDITED);
+    await expectChecked('home');
+  });
+
+  posixOnly('verifies a committed link that points nowhere, stop after stop', async () => {
+    await setUp(async () => {
+      await rm(join(repo, 'src/App.tsx'));
+      await symlink('../dist/App.tsx', join(repo, 'src/App.tsx'));
+    });
+    await verifiedStop();
+    expect((await stop()).stderr).toContain(FAST_PATH);
+  });
+
+  posixOnly('checks the screen when a link to a file outside the repository is edited there', async () => {
+    await setUp();
+    await verifiedStop();
+    const copy = join(home, 'App.tsx');
+    await writeFile(copy, APP);
+    await rm(join(repo, 'src/App.tsx'));
+    await symlink(copy, join(repo, 'src/App.tsx'));
+    await expectChecked('home');
+    await verifiedStop();
+    await writeFile(copy, APP_EDITED);
+    await expectChecked('home');
+  });
+
+  posixOnly('blocks every stop with a gap that names a link to a folder outside, and never says to wait', async () => {
+    await setUp(async () => {
+      await write('src/pages/Home.tsx', 'export const Home = 1;\n');
+    });
+    await verifiedStop();
+    const outside = join(home, 'pages');
+    await mkdir(outside);
+    await rename(join(repo, 'src/pages/Home.tsx'), join(outside, 'Home.tsx'));
+    await rm(join(repo, 'src/pages'), { recursive: true });
+    await symlink(outside, join(repo, 'src/pages'));
+    for (const input of ['{"session_id":"s1"}', '{"session_id":"s1","stop_hook_active":true}']) {
+      const next = await stop(input);
+      expect(next.scanned).toEqual([]);
+      expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+      expect(next.stderr + next.stdout).not.toContain(WAIT);
+      const text = input.includes('stop_hook_active') ? next.stderr : blockOf(next.stdout).reason ?? '';
+      if (!input.includes('stop_hook_active')) expect(blockOf(next.stdout).decision).toBe('block');
+      expect(text).toMatch(/^NOT verified - not covered: a link in this repository/mu);
+      expect(text).toMatch(/link: src\/pages/u);
+      expect(text).toMatch(/replace the link with/u);
+    }
+    const checked = await checkOutput();
+    expect(checked.code).not.toBe(0);
+    expect(checked.printed).toMatch(/src\/pages is a link/u);
+    expect(checked.printed).not.toContain(WAIT);
+  });
+});
+
+describe('a link to a folder outside, with no trusted branch', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  posixOnly('blocks the stop with the gap that names the link, never a failed run that does not block', async () => {
+    await setUp();
+    git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD');
+    git('update-ref', '-d', 'refs/remotes/origin/main');
+    await mkdir(join(home, 'assets'));
+    await writeFile(join(home, 'assets', 'logo.svg'), '<svg/>');
+    await symlink(join(home, 'assets'), join(repo, 'src/assets'));
+    const next = await stop();
+    expect(next.stderr).not.toContain('is not blocking this stop');
+    const block = blockOf(next.stdout);
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/^NOT verified - not covered: a link in this repository/mu);
+    expect(block.reason).toMatch(/link: src\/assets/u);
+  });
+});
+
+describe('a HEAD commit object overwritten with other bytes, after a verified stop', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks the stop with a reason that names git fsck', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    const id = git('rev-parse', 'HEAD').trim();
+    const object = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
+    const text = execFileSync('git', ['cat-file', 'commit', id], { cwd: repo });
+    await chmod(object, 0o644);
+    await writeFile(object, deflateSync(Buffer.concat([Buffer.from(`commit ${String(text.length + 1)}\0`), text, Buffer.from('\n')])));
+    const next = await stop();
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    expect(next.stderr).not.toContain('is not blocking this stop');
+    const block = blockOf(next.stdout);
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/git fsck/u);
   });
 });

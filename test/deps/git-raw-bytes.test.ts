@@ -374,7 +374,7 @@ describe('a sparse pattern file git cannot answer from', { timeout: REAL_PROCESS
 
 // Overwrites the loose object file of an id with other bytes of the given type. git does not check
 // an object's id against its bytes when it reads it.
-async function forgeObject(id: string, type: 'blob' | 'tree', content: Buffer): Promise<void> {
+async function forgeObject(id: string, type: 'blob' | 'tree' | 'commit', content: Buffer): Promise<void> {
   const path = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
   await chmod(path, 0o644);
   await writeFile(path, deflateSync(Buffer.concat([Buffer.from(`${type} ${String(content.length)}\0`), content])));
@@ -394,6 +394,20 @@ describe('paths git would leave out of the tree', { timeout: REAL_PROCESS_BUDGET
 
   posixOnly('never hashes a file through a link in its folder, and lists the committed file as gone', async () => {
     await write('src/pages/Home.tsx', 'export const Home = 1;\n');
+    await write('lib/pages/Home.tsx', 'export const Home = 2;\n');
+    await commitAll('pages');
+    const before = await tree();
+    // A link to a folder the walk hashes: the files below it are bound through their real paths.
+    await rm(join(repo, 'src/pages'), { recursive: true });
+    await symlink('../lib/pages', join(repo, 'src/pages'));
+    const first = await tree();
+    expect(first).not.toBe(before);
+    expect(await tree()).toBe(first);
+    expect(await paths()).toEqual(['src/pages', 'src/pages/Home.tsx']);
+  });
+
+  posixOnly('refuses to list, naming the link, when a screen folder is swapped for a link to a folder outside', async () => {
+    await write('src/pages/Home.tsx', 'export const Home = 1;\n');
     await commitAll('pages');
     const before = await tree();
     const outside = join(home, 'pages');
@@ -405,7 +419,7 @@ describe('paths git would leave out of the tree', { timeout: REAL_PROCESS_BUDGET
     const first = await tree();
     expect(first).not.toBe(before);
     expect(await tree()).not.toBe(first);
-    expect(await paths()).toEqual(['src/pages', 'src/pages/Home.tsx']);
+    await expect(paths()).rejects.toThrow(/src\/pages is a link to .*outside the files usabl hashes.*replace the link/su);
   });
 });
 
@@ -436,6 +450,23 @@ describe('objects the agent can overwrite in .git/objects', { timeout: REAL_PROC
     const reader = makeGitReader({ cwd: repo });
     await expect(reader.statusZ()).rejects.toThrow(/does not hold the bytes its id names/u);
     await expect(reader.writeTree()).rejects.toThrow(/git fsck/u);
+  });
+});
+
+describe('a HEAD commit object overwritten with other bytes', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('reads as damaged objects that name git fsck, never as a repository with no commits', async () => {
+    const id = (await git('rev-parse', 'HEAD')).trim();
+    const text = Buffer.from(await git('cat-file', 'commit', id), 'utf8');
+    await forgeObject(id, 'commit', Buffer.concat([text, Buffer.from('\n')]));
+    const reader = makeGitReader({ cwd: repo });
+    const error = await reader.listEntries('HEAD', ['src/App.tsx'], { recursive: false }).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/git fsck/u);
+    expect((error as Error).message).not.toMatch(/no commits yet/u);
+    await expect(reader.statusZ()).rejects.toThrow(/git fsck/u);
   });
 });
 
@@ -497,21 +528,48 @@ describe('settings and variables that point git elsewhere', { timeout: REAL_PROC
 });
 
 describe('links whose target the walk does not hash', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
-  posixOnly('never repeats the tree for a link to a file outside the repository', async () => {
+  posixOnly('binds a link to a file outside the repository by its text and the file, and always lists it', async () => {
     await writeFile(join(home, 'Shared.tsx'), APP);
     await symlink(join(home, 'Shared.tsx'), join(repo, 'src/Shared.tsx'));
     await commitAll('link out');
     const first = await tree();
+    expect(await tree()).toBe(first);
+    // HEAD holds only the link text, so nothing says the target is the one checked before.
+    expect(await paths()).toEqual(['src/Shared.tsx']);
+    await writeFile(join(home, 'Shared.tsx'), APP_EDITED);
+    const edited = await tree();
+    expect(edited).not.toBe(first);
+    expect(await tree()).toBe(edited);
+    expect(await paths()).toEqual(['src/Shared.tsx']);
+  });
+
+  posixOnly('binds a committed link into an ignored dist folder by the file it serves', async () => {
+    await write('.gitignore', 'dist/\n');
+    await symlink('../dist/App.js', join(repo, 'src/Built.js'));
+    await commitAll('built link');
+    await write('dist/App.js', 'export const App = 1;\n');
+    const first = await tree();
+    expect(await tree()).toBe(first);
+    expect(await paths()).toEqual(['src/Built.js']);
+    await write('dist/App.js', 'export const App = 2;\n');
     expect(await tree()).not.toBe(first);
   });
 
-  posixOnly('never repeats the tree for a new link into an ignored folder', async () => {
-    await write('.gitignore', 'build/\n');
-    await commitAll('ignore build');
-    await write('build/App.tsx', APP);
-    await symlink('../build/App.tsx', join(repo, 'src/Built.tsx'));
+  posixOnly('binds a link that points nowhere by its text alone', async () => {
+    await symlink('../dist/Missing.js', join(repo, 'src/Missing.js'));
+    await commitAll('dangling link');
+    const first = await tree();
+    expect(await tree()).toBe(first);
+    expect(await paths()).toEqual([]);
+  });
+
+  posixOnly('refuses to list, naming the link and the fix, for a new link to a folder outside the repository', async () => {
+    await mkdir(join(home, 'assets'));
+    await writeFile(join(home, 'assets', 'logo.svg'), '<svg/>');
+    await symlink(join(home, 'assets'), join(repo, 'src/assets'));
     const first = await tree();
     expect(await tree()).not.toBe(first);
+    await expect(paths()).rejects.toThrow(/src\/assets is a link to .*outside the files usabl hashes.*Commit what it points to, or replace the link/su);
   });
 
   posixOnly('keeps the tree for a link to a tracked file in the repository', async () => {
@@ -538,43 +596,54 @@ describe('the tree a receipt binds', { timeout: REAL_PROCESS_BUDGET_MS }, () => 
   withMemoryMap('is hashed fresh, so a second write through a memory map that keeps both file times still moves it', async () => {
     const path = join(repo, 'src/Mapped.tsx');
     await writeFile(path, 'A'.repeat(4096));
-    // Maps the file and writes one byte, then writes a second byte on a line from stdin. The page is
-    // already dirty, so the second write moves neither the modification time nor the change time.
+    // Maps the file and writes one byte at an offset for each line "<offset> <letter>" on stdin.
+    // Once a page is dirty, a second write to it moves neither the modification time nor the
+    // change time, until the kernel writes the page back.
     const mapper = spawn(
       'python3',
-      ['-c', 'import mmap,os,sys\nfd=os.open(sys.argv[1],os.O_RDWR)\nm=mmap.mmap(fd,4096)\nm[0:1]=b"B"\nprint("ready",flush=True)\nsys.stdin.readline()\nm[1:2]=b"C"\nprint("done",flush=True)\nsys.stdin.readline()', path],
+      [
+        '-c',
+        'import mmap,os,sys\nfd=os.open(sys.argv[1],os.O_RDWR)\nm=mmap.mmap(fd,4096)\nfor line in sys.stdin:\n  at,letter=line.split()\n  m[int(at):int(at)+1]=letter.encode()\n  print("ok",flush=True)',
+        path,
+      ],
       { stdio: ['pipe', 'pipe', 'ignore'] },
     );
     const lines: string[] = [];
-    const nextLine = (): Promise<string> =>
-      new Promise((resolve) => {
+    mapper.stdout.on('data', (chunk: Buffer) => lines.push(...chunk.toString('utf8').split('\n').filter((line) => line.length > 0)));
+    const mapWrite = async (at: number, letter: string): Promise<void> => {
+      mapper.stdin.write(`${String(at)} ${letter}\n`);
+      await new Promise<void>((resolve) => {
         const check = (): void => {
-          const line = lines.shift();
-          if (line !== undefined) resolve(line);
+          if (lines.shift() !== undefined) resolve();
           else setTimeout(check, 20);
         };
         check();
       });
-    mapper.stdout.on('data', (chunk: Buffer) => lines.push(...chunk.toString('utf8').split('\n').filter((line) => line.length > 0)));
+    };
     try {
-      expect(await nextLine()).toBe('ready');
-      // Past the two-second window, so the changed list keeps the hash in its cache.
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      const reader = makeGitReader({ cwd: repo });
-      await reader.statusZ();
-      const before = await reader.writeTree();
-      const times = await stat(path, { bigint: true });
-      mapper.stdin.write('\n');
-      expect(await nextLine()).toBe('done');
-      const after = await stat(path, { bigint: true });
-      expect(String(after.mtimeNs)).toBe(String(times.mtimeNs));
-      expect(String(after.ctimeNs)).toBe(String(times.ctimeNs));
-      expect((await readFile(path, 'latin1')).slice(0, 2)).toBe('BC');
-      const moved = await reader.writeTree();
-      expect(moved).not.toBe(before);
-      expect(moved).toBe(await tree());
+      let shown = false;
+      // The kernel can write the page back between the two writes, which moves the times. Then
+      // the case did not happen, so it is tried again on a new pair of bytes.
+      for (let attempt = 0; attempt < 3 && !shown; attempt += 1) {
+        await mapWrite(attempt * 2, 'B');
+        // Past the two-second window, so the changed list keeps the hash in its cache.
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        const reader = makeGitReader({ cwd: repo });
+        await reader.statusZ();
+        const before = await reader.writeTree();
+        const times = await stat(path, { bigint: true });
+        await mapWrite(attempt * 2 + 1, 'C');
+        const after = await stat(path, { bigint: true });
+        if (after.mtimeNs !== times.mtimeNs || after.ctimeNs !== times.ctimeNs) continue;
+        shown = true;
+        expect((await readFile(path, 'latin1')).slice(attempt * 2, attempt * 2 + 2)).toBe('BC');
+        const moved = await reader.writeTree();
+        expect(moved).not.toBe(before);
+        expect(moved).toBe(await tree());
+      }
+      expect(shown, 'a second write through the map kept both file times in one of three tries').toBe(true);
     } finally {
-      mapper.stdin.end('\n');
+      mapper.stdin.end();
       mapper.kill();
     }
   });
