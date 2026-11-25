@@ -397,7 +397,16 @@ function canonicalMode(octal: string): string {
 async function readBaseTree(repo: Repository, base: string): Promise<Array<{ raw: Buffer; mode: string; id: string }>> {
   const [commit] = await readObjects(repo, [base]);
   if (commit === null || commit === undefined) {
-    if (base === 'HEAD') throw new NoHeadError('HEAD does not name a commit yet.');
+    if (base === 'HEAD') {
+      // HEAD that resolves to an id git cannot read is a damaged object, never a new repository.
+      if ((await runGit(repo.top, ['rev-parse', '--verify', '-q', 'HEAD'])).code === 0) {
+        throw new Error(
+          'HEAD names a commit that git cannot read, so .git/objects holds a damaged or overwritten object and usabl ' +
+            'checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
+        );
+      }
+      throw new NoHeadError('HEAD does not name a commit yet.');
+    }
     throw new Error(`git could not read the commit ${operatorText(base)}, so usabl could not read the working tree.`);
   }
   const { bytes } = verified(repo, commit, 'commit', operatorText(base));
@@ -659,8 +668,9 @@ interface TreeRecord {
 interface Walk {
   records: TreeRecord[];
   changes: Array<{ code: string; raw: Buffer }>;
-  // Each link on disk, by its name from the top repository and its path on disk.
-  links: Array<{ raw: Buffer; disk: Buffer }>;
+  // Each link on disk, by its name from the top repository and its path on disk, and whether HEAD
+  // holds that name.
+  links: Array<{ raw: Buffer; disk: Buffer; tracked: boolean }>;
 }
 
 const REGULAR_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
@@ -797,7 +807,7 @@ async function walk(
           id = unreadableId(repo);
         }
         records.push({ mode: LINK_MODE, id, raw: named(raw) });
-        links.push({ raw: named(raw), disk: onDisk(raw) });
+        links.push({ raw: named(raw), disk: onDisk(raw), tracked });
         if (!(entry?.headMode === LINK_MODE && entry.headId === id)) {
           changes.push({ code: tracked ? 'M' : entry?.inIndex === true ? 'A' : '??', raw });
         }
@@ -977,37 +987,74 @@ function neverRepeatingTree(repo: Repository): string {
   return objectId(repo, 'tree', Buffer.from(`usabl: a tree usabl could not build ${String(process.hrtime.bigint())} ${String(Math.random())}`));
 }
 
+/** Thrown when a link points at something outside the files usabl hashes that it cannot bind. */
+export class UnboundLinkError extends Error {
+  override name = 'UnboundLinkError';
+  /** The link's name from the repository root. It comes from the repository, so it is untrusted. */
+  readonly link: string;
+  constructor(link: string) {
+    super(
+      `${operatorText(link)} is a link to a folder, or to something else that is not a file, outside the files usabl ` +
+        'hashes, so usabl cannot bind what the dev server serves through it and checked nothing. ' +
+        'Commit what it points to, or replace the link with the files it points to, then run usabl again.',
+    );
+    this.link = link;
+  }
+}
+
 /**
- * Whether every link points at a path the walk hashes: a file it recorded, or a folder that holds
- * one. A link to a file outside the repository, in an ignored folder, or in .git binds only its link
- * text, while the dev server serves the target's bytes, so an edit to the target would change
- * nothing the tree records. A link that cannot be resolved is not covered either.
+ * What each link on disk points at, against the files the walk hashes. A link binds its link text,
+ * and the dev server serves its target's bytes, so the target must be bound too:
+ * - a link that points nowhere serves nothing, and its text binds it;
+ * - a link to a file the walk hashes, or to a folder that holds one, is bound by that file's own
+ *   record;
+ * - a link to any other file (outside the repository, in an ignored folder, or in .git) is bound
+ *   by its text and the file's bytes, hashed fresh;
+ * - a link to anything else (a folder outside the hashed files, or a pipe) cannot be bound.
  */
-function linksStayInside(repo: Repository, walked: Walk): boolean {
+type LinkTarget = { kind: 'bound' } | { kind: 'file'; target: Buffer } | { kind: 'unbound' };
+
+// realpath's codes for a link that points nowhere: a missing path, a path below a file, or a loop.
+const POINTS_NOWHERE: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ELOOP']);
+
+function linkTargets(repo: Repository, walked: Walk): LinkTarget[] {
   if (walked.links.length === 0) {
-    return true;
+    return [];
   }
-  const files = new Set<string>();
-  const folders = new Set<string>();
-  for (const record of walked.records) {
-    if (!REGULAR_MODES.has(record.mode)) continue;
-    const name = record.raw.toString('latin1');
-    files.add(name);
-    for (let slash = name.indexOf('/'); slash > 0; slash = name.indexOf('/', slash + 1)) {
-      folders.add(name.slice(0, slash));
+  // The names the walk hashes, built only when a link points inside the repository.
+  let hashed: { files: Set<string>; folders: Set<string> } | null = null;
+  const hashedNames = (): { files: Set<string>; folders: Set<string> } => {
+    if (hashed !== null) return hashed;
+    const files = new Set<string>();
+    const folders = new Set<string>();
+    for (const record of walked.records) {
+      if (!REGULAR_MODES.has(record.mode)) continue;
+      const name = record.raw.toString('latin1');
+      files.add(name);
+      for (let slash = name.indexOf('/'); slash > 0; slash = name.indexOf('/', slash + 1)) {
+        folders.add(name.slice(0, slash));
+      }
     }
-  }
-  return walked.links.every((link) => {
+    hashed = { files, folders };
+    return hashed;
+  };
+  const root = repo.topBytes.subarray(0, repo.topBytes.length - 1);
+  return walked.links.map((link): LinkTarget => {
     let target: Buffer;
     try {
       target = realpathSync.native(link.disk, { encoding: 'buffer' });
-    } catch {
-      return false;
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : null;
+      return typeof code === 'string' && POINTS_NOWHERE.has(code) ? { kind: 'bound' } : { kind: 'unbound' };
     }
-    if (target.equals(repo.topBytes.subarray(0, repo.topBytes.length - 1))) return true;
-    if (!target.subarray(0, repo.topBytes.length).equals(repo.topBytes)) return false;
-    const name = target.subarray(repo.topBytes.length).toString('latin1');
-    return files.has(name) || folders.has(name);
+    if (target.equals(root)) return { kind: 'bound' };
+    if (target.subarray(0, repo.topBytes.length).equals(repo.topBytes)) {
+      const name = target.subarray(repo.topBytes.length).toString('latin1');
+      const { files, folders } = hashedNames();
+      if (files.has(name) || folders.has(name)) return { kind: 'bound' };
+    }
+    const found = kindOf(target);
+    return found.kind === 'file' ? { kind: 'file', target } : { kind: 'unbound' };
   });
 }
 
@@ -1038,8 +1085,25 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
         set: (key, value) => cache.set(key, value),
       };
       const result = await walk(repo, 'HEAD', Buffer.alloc(0), writeOnly, options, 0);
-      if (!linksStayInside(repo, result)) {
+      const targets = linkTargets(repo, result);
+      if (targets.some((target) => target.kind === 'unbound')) {
+        // changes(), which every stop and check reads, names the link. No receipt answers here.
         return neverRepeatingTree(repo);
+      }
+      // A link to a file outside the hashed files is recorded by its text and the file's bytes,
+      // hashed fresh on every read and never taken from the cache.
+      const outside = result.links.flatMap((link, index) => {
+        const target = targets[index];
+        return target?.kind === 'file' ? [{ raw: link.raw, target: target.target }] : [];
+      });
+      if (outside.length > 0) {
+        const ids = await rawIds(repo, outside.map((link) => link.target));
+        const byName = new Map(outside.map((link, index) => [link.raw.toString('latin1'), ids[index] ?? null]));
+        for (const record of result.records) {
+          if (record.mode !== LINK_MODE || !byName.has(record.raw.toString('latin1'))) continue;
+          const id = byName.get(record.raw.toString('latin1')) ?? null;
+          record.id = id === null ? unreadableId(repo) : blobId(repo, Buffer.from(`usabl: link ${record.id} to a file ${id}`));
+        }
       }
       const scratch = await mkdtemp(join(tmpdir(), 'usabl-index-'));
       try {
@@ -1079,9 +1143,20 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
         if (!(err instanceof NoHeadError)) throw err;
         result = await walk(repo, null, Buffer.alloc(0), cache, options, 0);
       }
+      const targets = linkTargets(repo, result);
+      const unbound = result.links.filter((_, index) => targets[index]?.kind === 'unbound');
+      if (unbound.length > 0) {
+        const first = unbound.map((link) => link.raw).sort(Buffer.compare)[0] ?? Buffer.alloc(0);
+        throw new UnboundLinkError(first.toString('utf8'));
+      }
+      // HEAD holds only the text of a link to a file outside the hashed files, so nothing says its
+      // target is the file checked before. Such a link is always in the list.
+      const linkChanges = result.links.flatMap((link, index) =>
+        targets[index]?.kind === 'file' ? [{ code: link.tracked ? 'M' : '??', raw: link.raw }] : [],
+      );
       const seen = new Set<string>();
       const changes: WorktreeChange[] = [];
-      for (const change of result.changes) {
+      for (const change of [...result.changes, ...linkChanges]) {
         const key = change.raw.toString('latin1');
         if (seen.has(key)) continue;
         seen.add(key);
