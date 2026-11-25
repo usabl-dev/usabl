@@ -240,38 +240,81 @@ async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boole
 // One line of git cat-file --batch-check for a tree that is there.
 const TREE_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}) tree \d+$/;
 
+const LOCAL_BRANCHES = 'refs/heads/';
+
+/**
+ * Branch names that are a project's default branch so often that a config at their tip on origin
+ * always counts as usabl set up elsewhere, even when this branch is named after one of them or
+ * tracks one.
+ */
+const ALWAYS_COUNTED: ReadonlySet<string> = new Set(['main', 'master', 'trunk', 'develop']);
+
+// One line of the listing: object id, ref, "*" for the branch checked out here or a space, and the
+// upstream git records for a local branch, or nothing. git forbids a tab in a ref name.
+const LISTING_LINE = /^((?:[0-9a-f]{40}|[0-9a-f]{64}))\t(refs\/[^\t]+)\t([* ])\t((?:refs\/[^\t]+)?)$/;
+
 /**
  * Whether the tip of any branch of origin other than the trusted one holds usabl.config.json at
  * the root, and the first such branch with a plain name, in name order.
  *
- * It reads local refs only, never the network. git lists the branches once, and one batch lookup
- * asks each tip for its tree and for the config, so a clone with many branches costs two git
- * calls. A tree that is missing, a line git was not expected to print, and a call that fails are
- * a git failure, never "no config". Anything at the config path counts as held, as in holdsConfig.
- * A branch name reaches output only when it is a plain name.
+ * It reads local refs only, never the network. git lists the branches of origin and the local
+ * branches once, and one batch lookup asks each tip for its tree and for the config, so a clone
+ * with many branches costs two git calls. A tree that is missing, a line git was not expected to
+ * print, and a call that fails are a git failure, never "no config". Anything at the config path
+ * counts as held, as in holdsConfig. A branch name reaches output only when it is a plain name,
+ * and no branch name is ever passed to git.
+ *
+ * This branch's own copy on origin is not evidence that usabl is set up elsewhere, so a branch
+ * that sets usabl up and is pushed still reads as one. The branch of origin with the current
+ * branch's name, and the current branch's upstream when it is a branch of origin, are skipped,
+ * unless the name on origin is one of ALWAYS_COUNTED. With a detached HEAD nothing is skipped.
  */
 async function configOnOtherBranch(
   git: ScopeGit,
   trustedTip: string,
 ): Promise<{ held: false } | { held: true; name: string | null } | { failed: ScopeGitResult }> {
-  const listed = await git(['for-each-ref', '--format=%(objectname) %(refname)', ORIGIN_BRANCHES]);
+  const listed = await git([
+    'for-each-ref',
+    '--format=%(objectname)%09%(refname)%09%(HEAD)%09%(upstream)',
+    ORIGIN_BRANCHES,
+    LOCAL_BRANCHES,
+  ]);
   if (listed.code !== 0) {
     return { failed: listed };
   }
   const unexpected = (result: ScopeGitResult, what: string) => ({ failed: { ...result, stderr: `git printed an unexpected line for ${what}` } });
-  const refsByCommit = new Map<string, string[]>();
+  const originRefs: { commit: string; ref: string }[] = [];
+  const ownCopies = new Set<string>();
   for (const line of listed.stdout.split('\n')) {
     if (line.length === 0) {
       continue;
     }
-    const space = line.indexOf(' ');
-    const commit = line.slice(0, space);
-    const ref = line.slice(space + 1);
-    if (space === -1 || !COMMIT_ID.test(commit) || !ref.startsWith(ORIGIN_BRANCHES)) {
-      return unexpected(listed, 'the branches of origin');
+    const match = LISTING_LINE.exec(line);
+    if (match === null) {
+      return unexpected(listed, 'the branches');
     }
+    const [, commit = '', ref = '', head = '', upstream = ''] = match;
+    if (ref.startsWith(LOCAL_BRANCHES)) {
+      if (head === '*') {
+        ownCopies.add(ORIGIN_BRANCHES + ref.slice(LOCAL_BRANCHES.length));
+        if (upstream.startsWith(ORIGIN_BRANCHES)) {
+          ownCopies.add(upstream);
+        }
+      }
+      continue;
+    }
+    if (!ref.startsWith(ORIGIN_BRANCHES)) {
+      return unexpected(listed, 'the branches');
+    }
+    originRefs.push({ commit, ref });
+  }
+  const refsByCommit = new Map<string, string[]>();
+  for (const { commit, ref } of originRefs) {
     // The trusted branch's tip was asked already, and origin/HEAD names it.
     if (ref === TRUSTED_BRANCH_POINTER || commit === trustedTip) {
+      continue;
+    }
+    if (ownCopies.has(ref) && !ALWAYS_COUNTED.has(ref.slice(ORIGIN_BRANCHES.length))) {
       continue;
     }
     refsByCommit.set(commit, [...(refsByCommit.get(commit) ?? []), ref]);

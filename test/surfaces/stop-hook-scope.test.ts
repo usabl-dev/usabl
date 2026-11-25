@@ -546,8 +546,9 @@ describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_P
     });
   }
 
-  // Leaves repo set to the clone, on a feature branch made from origin/main with one UI commit.
-  async function cloneWithStaleHead(options: { configOnMain: boolean }): Promise<void> {
+  // Leaves repo set to the clone, on a branch made from origin/main with one UI commit. The branch
+  // is named `feature` unless the test names it.
+  async function cloneWithStaleHead(options: { configOnMain: boolean; branch?: string }): Promise<void> {
     const work = repo;
     const root = await realpath(await mkdtemp(join(tmpdir(), 'usabl-stale-head-')));
     made.push(root);
@@ -570,7 +571,8 @@ describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_P
 
     repo = clone;
     git('fetch', '-q', 'origin');
-    git('switch', '-q', '-c', 'feature', 'origin/main');
+    // git's default: the new branch tracks origin/main, so its upstream is origin/main.
+    git('switch', '-q', '-c', options.branch ?? 'feature', 'origin/main');
     if (!options.configOnMain) {
       await write('usabl.config.json', CONFIG_TEXT);
     }
@@ -652,6 +654,77 @@ describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_P
     await runStopHookFromStdin('{}', h.ports);
     expect(blockReason(h.stdout())).toContain(STALE_REASON);
     expect(h.scanned).toEqual([]);
+  });
+
+  // The branch of origin that is this branch's own copy is not evidence that usabl is set up
+  // elsewhere: the copy with the same name, and the branch's configured upstream, are skipped.
+  // main, master, trunk, and develop always count, so the common stale origin/HEAD still blocks.
+  describe('the branch of origin that is this branch', () => {
+    async function expectSetupPath(): Promise<void> {
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+        kind: 'found',
+        branch: 'origin/master',
+        policy: 'branch-sets-usabl-up',
+      });
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      expect(h.scanned).toEqual(['home']);
+      expect(h.stderr()).toContain('Note: this branch sets usabl up.');
+    }
+
+    async function expectStaleGap(named: string): Promise<void> {
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+        kind: 'not-found',
+        branch: 'origin/master',
+        problem: 'trusted-branch-may-be-stale',
+        detail: named,
+      });
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(blockReason(h.stdout())).toContain(STALE_REASON);
+      expect(h.scanned).toEqual([]);
+    }
+
+    it('takes the setup path again for a pushed setup branch with the same name on origin', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'feature/setup' });
+      git('push', '-q', 'origin', 'feature/setup');
+      expect(commitOf('origin/feature/setup')).toBe(commitOf('HEAD'));
+      await expectSetupPath();
+    });
+
+    it('still blocks a local main when origin/HEAD names master and origin/main has a config', async () => {
+      await cloneWithStaleHead({ configOnMain: true, branch: 'main' });
+      expect(git('symbolic-ref', 'HEAD').trim()).toBe('refs/heads/main');
+      await expectStaleGap('origin/main');
+    });
+
+    it('skips the upstream of a branch whose upstream has another name', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'work' });
+      // Pushed under another name, with no upstream recorded yet: that branch of origin counts.
+      git('push', '-q', 'origin', 'work:setup-usabl');
+      await expectStaleGap('origin/setup-usabl');
+
+      git('branch', '-q', '--set-upstream-to=origin/setup-usabl');
+      await expectSetupPath();
+    });
+
+    it('blocks a pushed setup branch named develop, because develop always counts', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'develop' });
+      git('push', '-q', '-u', 'origin', 'develop');
+      await expectStaleGap('origin/develop');
+    });
+
+    it('skips nothing on a detached HEAD', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'feature/setup' });
+      git('push', '-q', 'origin', 'feature/setup');
+      git('switch', '-q', '--detach');
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+        kind: 'not-found',
+        problem: 'trusted-branch-may-be-stale',
+        detail: 'origin/feature/setup',
+      });
+    });
   });
 
   it('names the other branch inside the frame in the check text too', () => {
@@ -805,8 +878,11 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
   type ConfigAnswer = 'held' | 'absent' | 'tree-missing' | ScopeGitResult;
   // The other branches of origin, as for-each-ref lists them, and what a batch lookup of their
   // tips answers: 'held', 'absent', or 'tree-missing'. `listing` and `batch` replace git's answer.
+  // `heads` are the local branches: the one checked out is marked current, and each may have an
+  // upstream ref.
   interface OtherBranches {
     refs?: { name: string; commit: string; answer: 'held' | 'absent' | 'tree-missing' }[];
+    heads?: { name: string; current?: boolean; upstream?: string }[];
     listing?: ScopeGitResult;
     batch?: ScopeGitResult;
   }
@@ -820,8 +896,14 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
       if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { code: 0, stdout: '', stderr: '' } : ok(COMMIT);
       if (args[0] === 'for-each-ref') {
         if (others.listing !== undefined) return others.listing;
-        const listed = [`${TIP} refs/remotes/origin/HEAD`, `${TIP} refs/remotes/origin/main`, ...refs.map((ref) => `${ref.commit} refs/remotes/origin/${ref.name}`)];
-        return { code: 0, stdout: listed.map((line) => `${line}\n`).join(''), stderr: '' };
+        const line = (commit: string, ref: string, head = ' ', upstream = '') => `${commit}\t${ref}\t${head}\t${upstream}\n`;
+        const listed = [
+          line(TIP, 'refs/remotes/origin/HEAD'),
+          line(TIP, 'refs/remotes/origin/main'),
+          ...refs.map((ref) => line(ref.commit, `refs/remotes/origin/${ref.name}`)),
+          ...(others.heads ?? []).map((head) => line(COMMIT, `refs/heads/${head.name}`, head.current === true ? '*' : ' ', head.upstream ?? '')),
+        ];
+        return { code: 0, stdout: listed.join(''), stderr: '' };
       }
       if (args[0] === 'cat-file' && args[1] === '--batch-check') {
         if (others.batch !== undefined) return others.batch;
@@ -1000,6 +1082,56 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
       problem: 'trusted-branch-may-be-stale',
       detail: null,
     });
+  });
+
+  // This branch's own copy on origin is skipped: the same name, and the configured upstream.
+  // main, master, trunk, and develop always count. With no current branch nothing is skipped.
+  const setupPath = { kind: 'found', policy: 'branch-sets-usabl-up' };
+  const staleGap = (name: string) => ({ kind: 'not-found', problem: 'trusted-branch-may-be-stale', detail: `origin/${name}` });
+  const pushed = (name: string, heads: NonNullable<OtherBranches['heads']>) =>
+    withConfigAt({ start: 'absent', tip: 'absent', others: { refs: [{ name, commit: OTHER, answer: 'held' }], heads } });
+
+  it('skips the branch of origin with the name of the current branch', async () => {
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup', current: true }]))).resolves.toMatchObject(setupPath);
+    // The same name on a branch that is not checked out is not skipped.
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup' }, { name: 'other', current: true }]))).resolves.toMatchObject(staleGap('setup'));
+  });
+
+  it('skips the upstream of the current branch, and only an upstream on origin', async () => {
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', current: true, upstream: 'refs/remotes/origin/setup-usabl' }])),
+    ).resolves.toMatchObject(setupPath);
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', current: true, upstream: 'refs/remotes/fork/setup-usabl' }])),
+    ).resolves.toMatchObject(staleGap('setup-usabl'));
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', upstream: 'refs/remotes/origin/setup-usabl' }, { name: 'x', current: true }])),
+    ).resolves.toMatchObject(staleGap('setup-usabl'));
+  });
+
+  it('never skips main, master, trunk, or develop', async () => {
+    for (const name of ['main', 'master', 'trunk', 'develop']) {
+      const sameName = withConfigAt({
+        start: 'absent',
+        tip: 'absent',
+        // origin/main is the trusted branch in this fake, so a held main is listed as a second ref.
+        others: { refs: [{ name, commit: OTHER, answer: 'held' }], heads: [{ name, current: true, upstream: `refs/remotes/origin/${name}` }] },
+      });
+      await expect(findStartingCommit(sameName)).resolves.toMatchObject(staleGap(name));
+      const asUpstream = pushed(name, [{ name: 'work', current: true, upstream: `refs/remotes/origin/${name}` }]);
+      await expect(findStartingCommit(asUpstream)).resolves.toMatchObject(staleGap(name));
+    }
+  });
+
+  it('skips nothing on a detached HEAD', async () => {
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup' }]))).resolves.toMatchObject(staleGap('setup'));
+  });
+
+  it('reads a local branch line it cannot parse as a git failure', async () => {
+    for (const stdout of [`${OTHER}\trefs/heads/x\t?\t\n`, `${OTHER}\trefs/heads/x\t*\tnot-a-ref\n`, `${OTHER}\trefs/heads/x\t*\n`]) {
+      const git = withConfigAt({ start: 'absent', tip: 'absent', others: { listing: { code: 0, stdout, stderr: '' } } });
+      await expect(findStartingCommit(git)).resolves.toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+    }
   });
 });
 
