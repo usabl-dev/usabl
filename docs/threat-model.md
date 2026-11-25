@@ -865,16 +865,59 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
-- Known limit: a committed glob with many wildcards can take long enough to match a long changed
-  file name that the host ends the hook before usabl answers, and the stop then goes on with
-  nothing checked. The regular expression engine tries each way the wildcards can split the name,
-  and the time grows fast with the name's length: `src/` then `*a` twelve times then `*b`, 30
-  characters, took 2.4 seconds against a name of 34 characters, and a stop with a name of 38
-  letters took 81.7 seconds against a 30 second limit. usabl's own Stop hook deadline does not
-  help here: it is a timer in the same process, and no timer can fire while a match runs. The
-  size bounds on each policy glob list do not bound this either. Such a pattern must be in
-  committed policy, which a code owner approves; the file name is the agent's choice. A matcher
-  that does not backtrack is planned.
+- usabl's own glob matcher does not backtrack. With the default dot rule it reads the path once
+  and keeps the set of places a match can be at. With Node's dot rule, as the guard reads
+  `guardedPaths`, it matches part by part between slashes. Either way, the time to match one
+  pattern is at most the pattern's length times the path's length. It matches the policy lists
+  (`uiFileGlobs`, `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git
+  listings, and `sharedGlobs`), the `import.meta.glob` patterns, and `CODEOWNERS` patterns. Before,
+  it built a regular expression, and the engine tried each way the wildcards could split a name:
+  `src/` then `*a` twelve times then `*b` against a changed file name of 38 letters made a stop
+  take 81.7 seconds against a 30 second limit, and the host could end the hook with nothing
+  checked. That match now takes under a millisecond. The answers are the same as before for both
+  dot rules, and a test compares the two on generated patterns and paths.
+- A bound on each match is not enough by itself: a list inside the policy bounds (256 entries of
+  1024 characters) took about 24 seconds to rule out one changed path of 3999 characters, and
+  about 25 such paths pass the Stop hook deadline. So a run carries budgets of matching steps,
+  where a step is one pattern position tested at one path position. The app planner and the docs
+  planner each carry 100,000,000 steps for the changed files; 20,000 changed files against four
+  common globs used about 3 million. Test-file placement, which tests every test file of the app
+  against every `import.meta.glob` pattern, carries 1,000,000,000 steps of its own: an app of
+  20,000 test files about 60 characters deep with 40 calls of three ordinary patterns used 0.51
+  billion, and one of 5000 test files used 0.13 billion. The worst shapes ran at 20 to 35 million
+  steps a second on a loaded 8-core machine, so all three budgets together, 1.2 billion steps, are
+  at most about 60 seconds of matching at the slowest rate measured; the worst placement shape
+  spent its budget in 38 seconds. Each planner tests the changed files in one fixed order, sorted
+  by UTF-16 code units, so the same set of changed files runs out at the same file whatever order
+  the caller lists them in. A changed file usabl could not test against `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, or `sharedGlobs` before the budget ran out is a gap whose reason names
+  the budget, so the run is `not_covered`, never nothing to check. Once the placement budget is
+  spent, every `import.meta.glob` call may load any file, so a changed test file such a call could
+  reach is a gap too.
+- `import.meta.glob` patterns come from source code the agent writes. They have the size bounds
+  of the policy lists for each call, counted on the longest brace expansion of each pattern: a
+  call with a pattern that expands to one longer than 1024 characters, or with more than 4096
+  patterns or 262,144 characters in all, may load any file. Across the whole run they also have a
+  budget of 65,536 characters, counted once for each call after the braces are expanded and each
+  pattern is resolved. The call that does not fit, and every call after it, may load any file, a
+  gap whose reason names the budget. A pattern that starts with `/` is read under every folder in
+  one read of the path, with the answers of testing each tail on its own. Before, each tail was
+  matched again, which took 17 seconds for one file 1000 folders deep.
+- Known limit: the guard in `src/trust/guard.ts` carries no matching budget. It tests each
+  `guardedPaths` entry against every path at the trusted ref and at `HEAD`. Each match is bounded,
+  but a list inside the bounds (256 entries of `**/a/` parts) took 9.2 seconds against one
+  committed path of 3999 characters and 0.3 seconds against one of 199. Such a list must be in
+  committed policy, which a code owner approves, and the paths must be in a commit.
+- Known limit: Node's `fs.glob` still turns a pattern into a regular expression that can
+  backtrack. usabl hands it these patterns: each `guardedPaths` entry, to list new files on the
+  working tree (the guard) and to sample the files under it (`usabl doctor`); `uiFileGlobs` and
+  `discovery.wideBlastGlobs` when a changed test file is placed; the `workspaces` patterns of a
+  `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs output. The pattern `src/`
+  then `*a` twelve times then `*b` took Node 1.1 seconds against a file name of 26 letters and 9.2
+  seconds against one of 30. usabl's Stop hook deadline is a timer in the same process, so it
+  cannot end such a match, and the host can end the hook before usabl answers. A policy pattern
+  must be in committed policy, which a code owner approves; a `workspaces` pattern is in the
+  working tree, and the file name is the agent's choice. A later change replaces these calls.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
