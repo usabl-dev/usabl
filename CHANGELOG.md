@@ -443,9 +443,14 @@
   checks nothing, says `origin/HEAD` may be stale, names the first such branch with a plain name
   inside the untrusted frame, and gives the step `git remote set-head origin --auto` first;
   `usabl check --branch-scope` prints the same and exits 4. The lookup reads local refs only, in
-  two git calls, and a git failure in it is a gap, never "no config". Known limit: a branch that
-  sets usabl up and is pushed to origin has the config at the tip of its own branch of origin, so
-  after that push its stops are this gap until the setup merges.
+  two git calls, and a git failure in it is a gap, never "no config". This branch's own copy on
+  origin does not count, so a setup branch still reads as one after it is pushed: the branch of
+  origin with the current branch's name and the current branch's upstream are skipped, except
+  that a branch of origin named `main`, `master`, `trunk`, or `develop` always counts. A detached
+  HEAD skips nothing. Known limits: a setup branch named one of those four is this gap after its
+  push, until the setup merges. When a project renamed its default branch to a name outside the
+  four and `origin/HEAD` is stale, a branch named after the new default branch, or one that
+  tracks it, still reads as a setup branch; CI still reads policy at the real base and blocks.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
