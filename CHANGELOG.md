@@ -433,6 +433,25 @@
 
 ### Fixed
 
+- `usabl debt ledger` no longer calls a row exact, or "at least N", for days no scan saw. An open
+  row was counted to the head commit as exact even when no full scan of main saw it after an
+  earlier date, or the scan of the head commit saw none there. The part of a span after its last
+  sighting now sets `mayBeLess` with the reason `not-seen-since`, for a span open now and for one
+  that ended at a gap in the floor history. Such a row prints "at most N", or "not known (N by the
+  floor)" when it may also be older, and it is left out of the median and the longest. A span open
+  now is exact only when the scan of the head commit saw it. Measurement only: no verdict reads
+  the ledger.
+- The silent change evidence never shows the value of a slider, a spin button, a progress bar, a
+  meter, a select, or a list box. A row built from its contents took that value as its name, so
+  an added row with a range input at 417 showed `["417","Age"]`, and an option's name is a choice
+  a person made. These controls now count as fields in the tree read: a name built from contents
+  that hold one is left out, an option inside one has no name, and the control keeps its own
+  author-given name. The design checks read the same tree, so a button, link, or heading named
+  from contents that hold such a control is not found by that name. Gate effect: none for the
+  silent change rule, which is preview; a design requirement that named such an element by its
+  contents now reads it as missing.
+- The ground truth module map lists today's source folders, `src/judge/`, `src/app/`, and
+  `src/import/` among them, one line each.
 - Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
   in one flow or voice contract, 100 fields in one flow step, 100 obligations in one voice
   contract, and 100 `requiredTokens` in one obligation. The focus order keeps its limit of 200
