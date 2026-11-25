@@ -5081,10 +5081,16 @@ default branch. When GitHub reports another default branch, or cannot say which 
 result is "cannot verify": it names both branches when it can, and the next step. A default
 branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
 `~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. When a gate
-names one branch and GitHub's default branch is another, the output says in one line that the
-gate covers only pull requests into the branch it names, and names the line to change. Each part
-that is off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, with the branch lines in the next step; a verified branch that
-is not GitHub's default branch reads as drifted, not wired. It also reports `workflow-owners`: wired only when the last
+names one branch and GitHub's default branch is another, pull requests into the default branch
+are not gated, so the result is "cannot verify" (exit 2) whatever the protection on the gate's
+branch reads. Its first line says that, and whether the branch rule on the gate's branch is set;
+the next lines say what that protection reads, the line to change to gate the default branch,
+and how to gate both branches instead. Otherwise each part that is off is "not applied", and
+each it cannot read is "cannot verify". `usabl doctor` reports the same facts and the same next
+step. It reads the gate path the way `install --branch-rule` does, so a folder or a file it
+cannot read there is never a missing gate. Its branch protection line is wired only when
+`install --branch-rule` is verified; when GitHub's default branch is not the gate's branch it is
+drifted, missing, or unknown, as the protection on the gate's branch reads. It also reports `workflow-owners`: wired only when the last
 `CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
 rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
 email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate

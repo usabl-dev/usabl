@@ -128,10 +128,26 @@ reports `main` as the default branch. When GitHub reports another default branch
 say which one it is, the check is not verified and exits 2: it names both branches when it
 can, and the next step.
 
-When the gate names one branch and GitHub reports another as the default branch, they say so
-in one line: the gate then covers only pull requests into the branch it names. The next line
-says which line to change to gate the default branch. `usabl doctor` then reads the branch
-protection as drifted, not wired.
+When the gate names one branch and GitHub reports another as the default branch, pull
+requests into the default branch are not gated. `usabl install --branch-rule` then exits 2
+with "cannot verify", even when the branch the gate names is fully protected, so a setup
+script that reads only the exit code does not pass. The first line says the default branch is
+not gated and whether the branch rule on the gate's branch is set. The next lines say what
+that protection reads, which line to change to gate the default branch, and how to gate both
+branches instead. `usabl doctor` reports the same facts and the same next step. Its branch
+protection line is never wired then: it is drifted when the gate's branch is protected,
+missing when it is not, and unknown when usabl cannot read its protection.
+
+This table shows the branch question alone, with the branch usabl checks fully protected.
+A part of the protection that is off is "not applied" (exit 2, and missing in `usabl doctor`)
+in every row except the second, which is "cannot verify" whatever the protection reads.
+
+| What usabl reads                                   | `usabl install --branch-rule`          | `usabl doctor` branch protection |
+| -------------------------------------------------- | -------------------------------------- | -------------------------------- |
+| The gate names GitHub's default branch             | exit 0, verified                       | wired                            |
+| The gate names a branch that is not the default    | exit 2, cannot verify                  | drifted                          |
+| No gate file, and GitHub reports `main` as default | exit 0, verified (`main` assumed)      | wired                            |
+| A folder or an unreadable file at the gate path    | exit 2, cannot verify (`main` assumed) | unknown                          |
 
 ## After an earlier 0.3.0 build
 
