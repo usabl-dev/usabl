@@ -1133,6 +1133,10 @@ export type ListedText = 'none' | 'links' | 'blobs';
 export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
+  // The size in bytes of the object at the path at the ref, as git stores it, without reading it.
+  // Null when git names no object there or the size cannot be read; show then says what is there.
+  // It is optional: a reader without it is sized from the text show returns.
+  blobSize?(ref: string, path: string): Promise<number | null>;
   // The tree entries at the ref for the paths, by path. With recursive, every file, symbolic link,
   // and submodule that is one of the paths or under one, in one listing; an empty path stands for
   // the whole tree. Without it, the entry each path names itself, a folder included. A path that

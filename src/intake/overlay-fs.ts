@@ -22,7 +22,7 @@ function patternTargetsRoot(pattern: string, root: string): boolean {
 
 export function overlayRequirementsFs(
   fs: FsGlob,
-  git: Pick<GitReader, 'lsFiles' | 'show'>,
+  git: Pick<GitReader, 'lsFiles' | 'show'> & Partial<Pick<GitReader, 'blobSize'>>,
   config: Pick<UsablConfig, 'requirements'>,
   trustedRef: string | undefined,
 ): FsGlob {
@@ -68,11 +68,19 @@ export function overlayRequirementsFs(
       }
       return fs.readFile(path);
     },
-    // git reads a blob at the trusted ref whole, up to the most it reads as text, so the limit is
-    // checked on the text it returns.
+    // A file at the trusted ref is sized from what git stores, before it is read, so the limit
+    // counts the same bytes as on disk. A git reader with no size read is sized from its text.
     async readTextUpTo(path, maxBytes) {
       if (isWithinRoot(path, root)) {
-        return textWithin(await git.show(trustedRef, path), maxBytes);
+        const size = git.blobSize === undefined ? null : await git.blobSize(trustedRef, path);
+        if (size === null) {
+          return textWithin(await git.show(trustedRef, path), maxBytes);
+        }
+        if (size > maxBytes) {
+          return { kind: 'too-large' };
+        }
+        const text = await git.show(trustedRef, path);
+        return text === null ? null : { kind: 'text', text };
       }
       return fs.readTextUpTo !== undefined ? fs.readTextUpTo(path, maxBytes) : textWithin(await fs.readFile(path), maxBytes);
     },

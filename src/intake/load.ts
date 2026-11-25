@@ -104,7 +104,7 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
       return pathFailure(path, REQUIREMENT_FILE_TOO_LARGE);
     }
 
-    const normalized = normalize(read.text);
+    const normalized = normalize(read.text, { sizeChecked: true });
     if (!normalized.ok) {
       // Intake is policy input. A single bad file means the full set is untrusted.
       return pathFailure(path, normalized.reason);
