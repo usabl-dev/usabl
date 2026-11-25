@@ -330,6 +330,65 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
     expect(await toastDraftsForBody(`${APP_ROOT}${emptyGroup(false)}${OPEN_MODAL}`)).toEqual([]);
   });
 
+  // The page changes after the rule read its alerts. The script runs when the rule asks for the
+  // toast groups, which it does once, after the alert walk, so the change lands at a fixed point.
+  const GROUP_QUERY = '[class~="pf-v6-c-alert-group"][class~="pf-m-toast"]';
+  async function draftsWithChangeBeforeGroupQuery(body: string, script: string): Promise<Draft[]> {
+    const pw = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    try {
+      await pw.setContent(`<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>${body}</body></html>`, {
+        waitUntil: 'domcontentloaded',
+      });
+      const adopted = await adoptPage(pw);
+      const page: Page = {
+        ...adopted,
+        async queryAll(selector: string) {
+          if (selector === GROUP_QUERY) {
+            await pw.evaluate(script);
+          }
+          return adopted.queryAll(selector);
+        },
+      };
+      const ctx: ProviderContext = { config: testConfig(), screen: { id: 'toast', url: 'http://127.0.0.1:5173/toast' }, page };
+      const { drafts, gaps } = await checkPfToastLiveRegion(ctx);
+      expect(gaps).toEqual([]);
+      return drafts;
+    } finally {
+      await pw.close();
+    }
+  }
+  const SAVE_ALERT = '<div id="save-alert" class="pf-v6-c-alert pf-m-success"><h4 class="pf-v6-c-alert__title">Saved</h4></div>';
+  const MODAL_WITH_INLINE_ALERT = `<div class="pf-v6-c-backdrop"><div role="dialog" aria-modal="true" aria-label="Edit cluster"><button type="button">Close</button><div aria-live="polite">${SAVE_ALERT}</div></div></div>`;
+  const GROUP_DRAFT_TEXT = 'While the open dialog is shown, a screen reader may not announce an alert shown in this toast area.';
+
+  it('reports one undecided draft on the group when a listed alert that passed moves into the hidden group', async () => {
+    const drafts = await draftsWithChangeBeforeGroupQuery(
+      `${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`,
+      `(() => { const li = document.createElement('li'); li.appendChild(document.getElementById('save-alert')); document.querySelector('${GROUP_QUERY}').appendChild(li); })()`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
+  });
+
+  it('reports one undecided draft on the group when a new toast reuses the id of a listed alert that passed', async () => {
+    const drafts = await draftsWithChangeBeforeGroupQuery(
+      `${APP_ROOT}${emptyGroup(true)}${MODAL_WITH_INLINE_ALERT}`,
+      `(() => { document.getElementById('save-alert').remove(); const li = document.createElement('li'); li.innerHTML = ${JSON.stringify(SAVE_ALERT)}; document.querySelector('${GROUP_QUERY}').appendChild(li); })()`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
+  });
+
+  it('reports one undecided draft on the group when it is hidden after its alert was read and passed', async () => {
+    const shownHolding = `<div><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
+    const drafts = await draftsWithChangeBeforeGroupQuery(
+      `${APP_ROOT}${shownHolding}${OPEN_MODAL}`,
+      `document.querySelectorAll('body > div')[1].setAttribute('aria-hidden', 'true')`,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
+  });
+
   it('reports unverified, naming the open modal, when it cannot tell which element is the child of the body', async () => {
     // The hidden group is put straight under the html element, beside the body, so the top of its
     // chain is not the body the rule expects. The alert check gives the same draft for an alert.
