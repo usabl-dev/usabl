@@ -1030,13 +1030,14 @@ async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promis
   const result = await verifyBranchRule(deps.gh, target);
   const label = branchRuleLabel(target);
   const note = result.branchNote;
-  // When GitHub's default branch is not the gate's branch, install --branch-rule is not verified,
-  // whatever the protection on the gate's branch reads. The state here says what that protection
-  // reads, and the next step says what install says: pull requests into the default branch are not
-  // gated, and how to fix it. None of these states is wired.
+  // When GitHub's default branch is not the gate's branch, or cannot be read, install --branch-rule
+  // is not verified, whatever the protection on the gate's branch reads. The state here says what
+  // that protection reads, and the next step says what install says about the default branch, and
+  // how to fix it. None of these states is wired. A protected gate branch is drifted when GitHub
+  // reports another default branch, and unknown when usabl could not read which one it is.
   const gateBranch = result.gateBranch;
   if (gateBranch !== null && gateBranch.action === 'verified') {
-    return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
+    return { id: 'branch-rule', label, state: result.otherDefault === null ? 'unknown' : 'drifted', nextStep: note ?? '' };
   }
   if (gateBranch !== null && gateBranch.action === 'cannot-verify') {
     return { id: 'branch-rule', label, state: 'unknown', nextStep: `usabl cannot confirm branch protection: ${gateBranch.finding}. ${note ?? ''}`.trimEnd() };

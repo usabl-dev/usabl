@@ -171,9 +171,10 @@ export interface BranchRuleResult {
   // into the default branch then run no gate, so the result is cannot-verify whatever the protection
   // on the branch checked reads.
   otherDefault: string | null;
-  // When the gate names its branch and GitHub's default branch is another one: what the protection
-  // on the gate's branch reads by itself, and the finding in words. doctor shows it, so the two
-  // commands report the same facts. null otherwise, and for a branch usabl only assumed.
+  // When the gate names its branch and GitHub's default branch is another one, or cannot be read
+  // (otherDefault is then null): what the protection on the gate's branch reads by itself, and the
+  // finding in words. doctor shows it, so the two commands report the same facts. null otherwise,
+  // and for a branch usabl only assumed.
   gateBranch: { action: BranchRuleResult['action']; finding: string } | null;
 }
 
@@ -756,6 +757,36 @@ function otherDefaultResult(
   };
 }
 
+// The result when the gate names its branch and GitHub's answer gives no default branch usabl can
+// use: the read failed, or it named no plain branch. usabl then cannot confirm that pull requests
+// into the default branch are gated, so this is never verified, whatever the protection on the
+// gate's branch reads. rest is as for otherDefaultResult.
+function unknownDefaultResult(target: NamedTarget, gateBranch: { action: BranchRuleResult['action']; finding: string }, rest: string[]): BranchRuleResult {
+  const file = gateFile(target.source);
+  const unknown = "usabl could not read GitHub's default branch, so it cannot confirm that pull requests into the default branch are gated.";
+  const headline =
+    gateBranch.action === 'verified'
+      ? `cannot verify: the branch rule on ${target.name} is set, but ${unknown}`
+      : gateBranch.action === 'not-applied'
+        ? `cannot verify: ${unknown} The branch rule on ${target.name} is not set either.`
+        : `cannot verify: ${unknown} usabl could not confirm the branch rule on ${target.name} either.`;
+  const finding = gateBranch.action === 'cannot-verify' ? `usabl cannot verify the protection on ${target.name}: ${gateBranch.finding}.` : `${gateBranch.finding}.`;
+  const why =
+    'usabl reads the default branch with "gh api repos/{owner}/{repo}". The read failed, or its answer named no branch usabl takes (only letters, digits, and . _ - / are taken).';
+  const steps = [
+    `The gate runs on pull requests into ${target.name}. If GitHub's default branch is ${target.name}, run "usabl install --branch-rule" again once usabl can read it.`,
+    `If it is another branch, put that branch in place of ${target.name} on line ${target.line} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on that branch.`,
+  ];
+  return {
+    exitCode: 2,
+    action: 'cannot-verify',
+    message: [headline, finding, why, ...steps, ...rest].join('\n'),
+    branchNote: [unknown, why, ...steps].join(' '),
+    otherDefault: null,
+    gateBranch,
+  };
+}
+
 // Whether the branch checked is known to be the one that matters: a gate names it, or there is no
 // gate file and GitHub reports it as the default branch. A branch usabl only assumed is never enough
 // for a verified result.
@@ -797,11 +828,14 @@ export async function verifyBranchRule(gh: GhReader, target: BranchTarget = ASSU
   const branch: CheckedBranch = { name, isDefault: defaultBranch === null ? null : defaultBranch === name };
   const facts = branchFacts(target, defaultBranch);
   // finding is what the protection on this branch reads, in words, without the action prefix. When
-  // the gate names this branch and GitHub's default branch is another one, the result is that case,
-  // whatever the protection reads.
+  // the gate names this branch and GitHub's default branch is another one, or cannot be read, the
+  // result is that case, whatever the protection reads.
   const outcome = (exitCode: 0 | 2, action: BranchRuleResult['action'], finding: string, first: string, rest: string[]): BranchRuleResult => {
     if (target.source !== 'assumed' && otherDefault !== null) {
       return otherDefaultResult(target, otherDefault, { action, finding }, rest);
+    }
+    if (target.source !== 'assumed' && defaultBranch === null) {
+      return unknownDefaultResult(target, { action, finding }, rest);
     }
     return {
       exitCode,
