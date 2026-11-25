@@ -63,7 +63,12 @@ describe('install --branch-rule when GitHub gives no default branch usabl can us
   }
 
   it('names both problems when the gate branch is not protected either', async () => {
-    const gh: GhReader = { getJson: async (endpoint) => (endpoint.includes('/rulesets') ? ok('[]') : { code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }) };
+    const gh: GhReader = {
+      getJson: async (endpoint) => {
+        if (endpoint === 'repos/{owner}/{repo}') return { code: 1, stdout: '', stderr: 'gh: Server Error (HTTP 502)' };
+        return endpoint.includes('/rulesets') ? ok('[]') : { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+      },
+    };
     const result = await verifyBranchRule(gh, { name: 'trunk', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.action).toBe('cannot-verify');

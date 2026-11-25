@@ -21,6 +21,11 @@ import {
 // usabl only assumed main, and an assumed main is never verified unless GitHub confirms it.
 const GATE_MAIN = { name: PROTECTED_BRANCH, source: 'gate', line: 8 } as const;
 
+// The repository read, answering main as the default branch: the branch GATE_MAIN names. A gate on a
+// branch is verified only when GitHub confirms it is the default branch.
+const DEFAULT_MAIN: GhResult = { code: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' };
+const REPOSITORY = 'repos/{owner}/{repo}';
+
 function recordingGh(reply: (endpoint: string) => GhResult | null): {
   reader: GhReader;
   calls: string[];
@@ -130,6 +135,7 @@ describe('verifyBranchRule', () => {
 
   it('verifies when the check is classic protection and code-owner review is a ruleset', async () => {
     const gh = recordingGh((endpoint) => {
+      if (endpoint === REPOSITORY) return DEFAULT_MAIN;
       if (endpoint.endsWith('/rulesets/7')) {
         return {
           code: 0,
@@ -159,7 +165,7 @@ describe('verifyBranchRule', () => {
   });
 
   it('reports verified when the aggregate is a required check, using two read-only GETs', async () => {
-    const gh = recordingGh(() => ({ code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
+    const gh = recordingGh((endpoint) => (endpoint === REPOSITORY ? DEFAULT_MAIN : { code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
     const result = await verifyBranchRule(gh.reader, GATE_MAIN);
 
     expect(result.exitCode).toBe(0);
@@ -203,8 +209,11 @@ describe('verifyBranchRule', () => {
 
   // Builds a gh mock: no classic protection, one active branch ruleset (id 7) whose full body is
   // rulesetBody. Any other endpoint (the repo, extra pages) 404s.
-  function ghWithRuleset(rulesetBody: unknown): ReturnType<typeof recordingGh> {
+  // repository is the answer to the repository read. By default it fails like every read with no
+  // protection, so GitHub's default branch is unknown.
+  function ghWithRuleset(rulesetBody: unknown, repository?: GhResult): ReturnType<typeof recordingGh> {
     return recordingGh((endpoint) => {
+      if (endpoint === REPOSITORY && repository !== undefined) return repository;
       if (endpoint.endsWith('/rulesets/7')) {
         return { code: 0, stdout: JSON.stringify(rulesetBody), stderr: '' };
       }
@@ -235,7 +244,7 @@ describe('verifyBranchRule', () => {
       enforcement: 'active',
       conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
       rules: [codeOwnerRule, requiredCheckRule],
-    });
+    }, DEFAULT_MAIN);
     const result = await verifyBranchRule(gh.reader, GATE_MAIN);
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('verified');
@@ -316,6 +325,7 @@ describe('verifyBranchRule', () => {
       if (endpoint.endsWith('&page=1')) {
         return { code: 0, stdout: JSON.stringify(fullFirstPage), stderr: '' };
       }
+      if (endpoint === REPOSITORY) return DEFAULT_MAIN;
       return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
     });
     const result = await verifyBranchRule(gh.reader, GATE_MAIN);
