@@ -155,6 +155,75 @@ describe('axTreeFromCdp', () => {
     });
   });
 
+  describe('a control whose value is user data', () => {
+    // Shaped as Chromium gives them. A cell built from its contents takes the value of a slider,
+    // a spin button, a progress bar, or the option a select shows. An option's name is its text.
+    const contents = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label' }, { type: 'contents', value: { value } }] });
+    const labelled = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label', value: { value } }, { type: 'contents', superseded: true, value: { value: 'x' } }] });
+    const node = (nodeId: number, parentId: number, role: string, name: unknown, properties: unknown[] = []): unknown => ({
+      nodeId: String(nodeId),
+      backendDOMNodeId: nodeId,
+      ignored: false,
+      role: { value: role },
+      name,
+      parentId: String(parentId),
+      childIds: [],
+      properties,
+    });
+    const VALUES = {
+      nodes: [
+        { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Rows' }, childIds: [] },
+        // A slider.
+        node(50, 1, 'row', contents('417')),
+        node(51, 50, 'cell', contents('417')),
+        node(52, 51, 'slider', labelled('Age'), [prop('valuetext', '417', 'string')]),
+        // A select: the combobox, its popup, and its options.
+        node(60, 1, 'cell', contents('alice@example.com')),
+        node(61, 60, 'combobox', labelled('Owner'), [prop('expanded', false)]),
+        node(62, 61, 'MenuListPopup', { value: '' }),
+        node(63, 62, 'option', contents('alice@example.com'), [prop('selected', true)]),
+        // A list box, an option with an author-given name, and a checkbox inside it.
+        node(70, 1, 'cell', contents('bob@example.com')),
+        node(71, 70, 'listbox', labelled('Owners')),
+        node(72, 71, 'option', labelled('carol@example.com'), [prop('selected', true)]),
+        node(73, 72, 'StaticText', contents('carol@example.com')),
+        node(74, 71, 'checkbox', labelled('Pick all')),
+        // A combobox that shows its value as text, and a combobox named from its contents.
+        node(80, 1, 'combobox', labelled('Team'), [prop('expanded', false)]),
+        node(81, 80, 'StaticText', contents('dave@example.com')),
+        node(82, 1, 'combobox', contents('erin@example.com')),
+        // A spin button and a progress bar that are not editable.
+        node(90, 1, 'cell', contents('417')),
+        node(91, 90, 'spinbutton', labelled('Count')),
+        node(92, 1, 'cell', contents('417')),
+        node(93, 92, 'progressbar', labelled('Upload')),
+        // A button away from any control keeps a name from its contents.
+        node(99, 1, 'button', contents('Save')),
+      ],
+    };
+    const read = axTreeFromCdp(VALUES);
+    const nameOf = (nodeId: number): string | null | undefined => read.nodes.find((entry) => entry.nodeId === nodeId)?.name;
+
+    it('keeps the value out of every name: the cells that hold the control, its options, and the text inside it', () => {
+      for (const nodeId of [50, 51, 60, 63, 70, 72, 73, 81, 82, 90, 92]) expect(nameOf(nodeId)).toBeNull();
+      expect(JSON.stringify(read)).not.toContain('example.com');
+      expect(JSON.stringify(read)).not.toContain('417');
+    });
+
+    it('keeps each control, its own name, and the nodes under it with their states', () => {
+      expect(nameOf(52)).toBe('Age');
+      expect(nameOf(61)).toBe('Owner');
+      expect(nameOf(71)).toBe('Owners');
+      expect(nameOf(74)).toBe('Pick all');
+      expect(nameOf(80)).toBe('Team');
+      expect(nameOf(91)).toBe('Count');
+      expect(nameOf(93)).toBe('Upload');
+      expect(nameOf(99)).toBe('Save');
+      expect(read.nodes.find((entry) => entry.nodeId === 63)).toMatchObject({ role: 'option', parentId: 62, states: { selected: 'true' } });
+      expect(read.nodes.find((entry) => entry.nodeId === 72)).toMatchObject({ role: 'option', parentId: 71, states: { selected: 'true' } });
+    });
+  });
+
   it('reads nothing from a response that is not a tree', () => {
     expect(axTreeFromCdp(null)).toEqual({ documentNodeId: null, nodes: [] });
     expect(axTreeFromCdp({ nodes: 'x' })).toEqual({ documentNodeId: null, nodes: [] });

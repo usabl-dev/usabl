@@ -1385,8 +1385,9 @@ What it reads, per action step:
    that was removed was not deselected, and the panel it controlled is not exempt. So a disclosure that shows its
    panel, a tab that shows its panel, and a sort header that re-orders its rows are the control
    speaking for itself, and the voicing tier already checks that speech. Values never count and
-   are never read: a field's value, and the text inside an editable field, are left out of the
-   read.
+   are never read: a field's value, the text inside an editable field, and the value of a
+   slider, a spin button, a progress bar, a meter, a select, or a list box, with the names of its
+   options, are left out of the read.
 2. Was anything heard. The step's own drain, with the same hidden and modal rules as every
    announcement check (section 11.6), so a region in a dialog the step closed, or outside an
    open modal, is not heard. Each record carries the live region that wrote it and whether the
@@ -1563,7 +1564,15 @@ contents, and those contents include the field's value. When the browser says su
 comes from its contents, or does not say where it comes from, the read leaves that name out: it is
 never shown in evidence, a change of it never counts as a page change, and focus that moves to
 that node does not count as a move to a named control. An author-given name, such as
-`aria-label`, is kept. A name built through `aria-labelledby` from a field can still hold that
+`aria-label`, is kept. A control that holds a value without being editable (role `slider`,
+`spinbutton`, `progressbar`, `meter`, `scrollbar`, `combobox`, or `listbox`) counts as a field
+here: the node that holds it loses a name built from its contents, and so do the control itself
+and every node inside it. An option inside one has no name at all, because its text is a choice
+a person may have made. The control keeps an author-given name, and its options stay in the tree
+with their states, so a slider or a select in an added row shows only the control's own name.
+The design checks read the same tree, so a button, link, or heading named from contents that
+hold such a control has no name there either, and a design requirement cannot find it by that
+name. A name built through `aria-labelledby` from a field can still hold that
 field's value, and the rule does not take a name apart. Background announcements are found only from
 the drain taken before the first step: a ticker that first writes inside a step's window, or
 between two steps, reads as speech that step caused. A live region that is drawn again, as a new

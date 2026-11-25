@@ -41,6 +41,11 @@
       //                  the browser's own query matches only the document button.
       //   field-row      Add row adds a row whose only cell holds a field with an email address as
       //                  its value. Nothing announces it.
+      //   slider-row, select-row, listbox-row, spin-row, combobox-row, progress-row
+      //                  Add row adds a row whose only cell holds a control with a value: a range
+      //                  input at 417, a select showing an email address, a multiple select with an
+      //                  email address chosen, a spin button at 417, a combobox that shows an email
+      //                  address as text, or a progress bar at 417. Nothing announces it.
       //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
       //                  the dialog in a later step.
       //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
@@ -193,6 +198,19 @@
         draw('<button type="button" id="add">Add row</button><table><thead><tr><th>Email</th></tr></thead><tbody id="rows"></tbody></table>');
         on('add', () => {
           document.getElementById('rows').insertAdjacentHTML('beforeend', '<tr><td><input aria-label="Email" value="alice@example.com" /></td></tr>');
+        });
+      } else if (which.endsWith('-row') && which !== 'field-row') {
+        const controls = {
+          'slider-row': '<input type="range" aria-label="Age" min="0" max="999" value="417" />',
+          'select-row': '<select aria-label="Owner"><option>alice@example.com</option><option>bob@example.com</option></select>',
+          'listbox-row': '<select aria-label="Owners" multiple><option selected>alice@example.com</option><option>bob@example.com</option></select>',
+          'spin-row': '<div role="spinbutton" tabindex="0" aria-label="Count" aria-valuemin="0" aria-valuemax="999" aria-valuenow="417"></div>',
+          'combobox-row': '<div role="combobox" tabindex="0" aria-label="Team" aria-expanded="false">alice@example.com</div>',
+          'progress-row': '<progress aria-label="Upload" max="999" value="417"></progress>',
+        };
+        draw('<button type="button" id="add">Add row</button><table><thead><tr><th>Value</th></tr></thead><tbody id="rows"></tbody></table>');
+        on('add', () => {
+          document.getElementById('rows').insertAdjacentHTML('beforeend', `<tr><td>${controls[which] ?? ''}</td></tr>`);
         });
       } else if (which === 'dialog-heard') {
         draw(

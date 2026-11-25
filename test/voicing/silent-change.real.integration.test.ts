@@ -335,6 +335,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(shown).not.toContain('alice');
       expect(shown).not.toContain('example.com');
     });
+
+    // The browser builds the cell's name from its contents, and those contents include the value of
+    // the control in it. Only the control's own name may reach the evidence.
+    it.each([
+      ['slider-row', 'Age'],
+      ['select-row', 'Owner'],
+      ['listbox-row', 'Owners'],
+      ['spin-row', 'Count'],
+      ['combobox-row', 'Team'],
+      ['progress-row', 'Upload'],
+    ])('never shows the value of the control in an added row: %s', async (which, name) => {
+      const drafts = await flow(which, click('#add'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toEqual([name]);
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('417');
+      expect(shown).not.toContain('example.com');
+    });
   });
 
   describe('determinism', () => {
