@@ -12,14 +12,15 @@
  *                          maps to stopHookActive to prevent recursive loops.
  */
 import { execFileSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
+import { gitProcessEnvironment } from '../deps/git-environment.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, pinsAreCurrent, type SessionPins } from '../trust/guard.js';
@@ -35,7 +36,7 @@ import {
   NO_TRUSTED_BRANCH_NOTE,
   olderThanSetupLines,
   resolveBranchScope,
-  SCOPE_PROBLEM_REASONS,
+  scopeGapHeadline,
   scopeGapDetailPiece,
   scopeGapNextStep,
   scopeGit,
@@ -736,15 +737,50 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
       cwd: startDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: gitProcessEnvironment(),
     });
     const root = out.replace(/\r?\n$/, '');
     if (root.length > 0) {
+      // git names a work tree that does not hold the hook's folder, or one where git finds another
+      // repository, when a setting such as core.worktree points it at another folder. Reading that
+      // folder would check files the dev server does not serve. The hook then works in its own
+      // folder, where the git reader refuses to read such a work tree, so the stop blocks and says
+      // so.
+      if (!holds(root, startDir) || gitDirOf(root) !== gitDirOf(startDir)) {
+        return { root: resolve(startDir), inRepository: true };
+      }
       return { root: resolve(root), inRepository: true };
     }
   } catch {
     // Not a repository, or git is missing. Both mean there is no last commit to compare with.
   }
   return { root: resolve(startDir), inRepository: false };
+}
+
+// The repository git finds from a folder, as a real path, or null when it finds none.
+function gitDirOf(folder: string): string | null {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+      cwd: folder,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: gitProcessEnvironment(),
+    });
+    return realpathSync.native(out.replace(/\r?\n$/, ''));
+  } catch {
+    return null;
+  }
+}
+
+// Whether the folder is the root or inside it, by real paths. A path that cannot be resolved is
+// not held.
+function holds(root: string, folder: string): boolean {
+  try {
+    const inside = relative(realpathSync.native(root), realpathSync.native(folder));
+    return !inside.startsWith('..') && !isAbsolute(inside);
+  } catch {
+    return false;
+  }
 }
 
 async function readWorkingConfig(root: string): Promise<FileBytes> {
@@ -765,7 +801,7 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
   }
   try {
     // A repository with no commits has no HEAD, so it has no committed config either.
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore', env: gitProcessEnvironment() });
   } catch {
     return { status: 'missing' };
   }
@@ -1113,12 +1149,7 @@ function scopeGapMessage(
   continuation: boolean,
   guardedPaths: readonly string[],
 ): string {
-  const lines = [
-    'NOT verified - not covered: usabl could not find where this branch left the trusted branch ' +
-      `(named under "trusted branch" in the untrusted text below), because ${SCOPE_PROBLEM_REASONS[scope.problem]}. ` +
-      'So it could not tell which committed changes CI will check, and it checked nothing on this stop. ' +
-      'It did not fall back to the uncommitted changes alone or to the whole history.',
-  ];
+  const lines = [scopeGapHeadline(scope.problem, ' on this stop')];
   if (continuation) {
     lines.push('usabl let this stop through without blocking again (continuation already active).');
   }

@@ -1660,6 +1660,7 @@ function makeDeps(): Deps {
     },
     git: {
       writeTree: async () => 'tree',
+      indexedTree: async () => 'tree',
       show: async () => null,
       listEntries: async () => new Map(),
       statusZ: async () => [],

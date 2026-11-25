@@ -18,6 +18,7 @@
 import { execFile } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { gitProcessEnvironment } from './git-environment.js';
 import { promisify } from 'node:util';
 
 export const STORAGE_STATE_ENV_VAR = 'USABL_STORAGE_STATE';
@@ -52,7 +53,7 @@ function exitCodeOf(error: unknown): number | null {
 export async function gitIgnoreState(cwd: string, path: string): Promise<GitIgnoreState> {
   let root: string;
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', env: gitProcessEnvironment() });
     root = stdout.trim();
   } catch {
     return 'unknown';
@@ -65,7 +66,7 @@ export async function gitIgnoreState(cwd: string, path: string): Promise<GitIgno
   // A tracked file is never reported by check-ignore, so ask about tracking first. That way the
   // message can name the command that untracks it, not only the .gitignore line.
   try {
-    await execFileAsync('git', ['ls-files', '--error-unmatch', '--', fromRoot], { cwd: root });
+    await execFileAsync('git', ['ls-files', '--error-unmatch', '--', fromRoot], { cwd: root, env: gitProcessEnvironment() });
     return 'tracked';
   } catch (error) {
     if (exitCodeOf(error) !== 1) {
@@ -73,7 +74,7 @@ export async function gitIgnoreState(cwd: string, path: string): Promise<GitIgno
     }
   }
   try {
-    await execFileAsync('git', ['check-ignore', '--quiet', '--', fromRoot], { cwd: root });
+    await execFileAsync('git', ['check-ignore', '--quiet', '--', fromRoot], { cwd: root, env: gitProcessEnvironment() });
     return 'ignored';
   } catch (error) {
     return exitCodeOf(error) === 1 ? 'not-ignored' : 'unknown';

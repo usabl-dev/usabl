@@ -122,7 +122,7 @@ describe('git status listing and files git hides with index flags', { timeout: R
     expect(await statusPaths(join(repo, 'docs'))).toEqual(['src/App.tsx']);
   });
 
-  it('reads a flagged file through the filters git add uses, so a line ending change alone is no edit', async () => {
+  it('reads a change of line endings alone to a flagged file as no edit', async () => {
     await write('.gitattributes', '*.tsx text eol=lf\n');
     await git('add', '.gitattributes');
     await git('commit', '-q', '-m', 'attributes');

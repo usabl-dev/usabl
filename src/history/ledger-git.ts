@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EvidenceFloor, HistoryReader } from '../contracts/index.js';
 import { assertReadableRef } from '../deps/git.js';
+import { gitProcessEnvironment } from '../deps/git-environment.js';
 import { EVIDENCE_FLOOR_PATH, parseEvidenceFloor } from '../evidence/floor.js';
 import { InputRefusedError } from '../intake/input-refusal.js';
 import { identityKey } from '../primitives/identity.js';
@@ -66,7 +67,12 @@ export function makeLedgerGit(options: { cwd?: string; maxBuffer?: number } = {}
   async function git(args: string[]): Promise<string> {
     try {
       // Replace refs are local and can show another history in place of the real one, so they are off.
-      const { stdout } = await execFileAsync('git', ['--no-replace-objects', ...args], { cwd, encoding: 'utf8', maxBuffer });
+      const { stdout } = await execFileAsync('git', ['--no-replace-objects', ...args], {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer,
+        env: gitProcessEnvironment(),
+      });
       return stdout;
     } catch (err) {
       if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
