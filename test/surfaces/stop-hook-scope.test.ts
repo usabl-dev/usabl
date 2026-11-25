@@ -635,6 +635,25 @@ describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_P
     expect(h.stderr()).toContain('Note: this branch sets usabl up.');
   });
 
+  // The known cost of the rule: once the setup branch is pushed, its own branch of origin holds the
+  // config, so its stops are the gap until the setup merges. The gap checks nothing; it is never a
+  // pass.
+  it('reads a setup branch pushed to origin as the stale origin/HEAD gap', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    git('push', '-q', 'origin', 'feature');
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+      kind: 'not-found',
+      branch: 'origin/master',
+      problem: 'trusted-branch-may-be-stale',
+      detail: 'origin/feature',
+    });
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(blockReason(h.stdout())).toContain(STALE_REASON);
+    expect(h.scanned).toEqual([]);
+  });
+
   it('names the other branch inside the frame in the check text too', () => {
     const text = branchScopeGapText({ kind: 'gap', problem: 'trusted-branch-may-be-stale', branch: 'origin/master', detail: 'origin/main' });
     expect(text).toContain(STALE_REASON);
