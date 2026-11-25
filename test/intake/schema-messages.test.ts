@@ -307,16 +307,17 @@ describe('an oversized focus order', () => {
   });
 });
 
-describe('a requirement file with too many problems to check', () => {
-  // The schema library stops with an error, not a list of problems, when one list in a file holds
-  // more than about 123,000 of them. The file is still refused, and the refusal says why, in place
-  // of a parser message that would call valid YAML invalid.
-  const TOO_MANY = 'this file has too many problems to check, so it is refused; shorten or fix its longest list';
+describe('a requirement file with more problems than the schema library can collect', () => {
+  // The schema library stops with an error, not a list of problems, when one list entry in a file
+  // holds more than about 123,000 of them. Such a file is now refused on the length of its list,
+  // before any entry is read, with one message that names the limit. parseBundle still catches
+  // that error, and schema-errors.test.ts covers the catch.
+  const FLOW_STEPS_LIMIT = 'requirements[0].assertion.steps: flow steps can list at most 1,000 steps';
   const emptySteps = 150_000;
 
-  it('is refused with a reason that says so', () => {
+  it('is refused on the length of its list, with one message', () => {
     const steps = Array.from({ length: emptySteps }, () => ({ do: '' }));
-    expect(reasonOf(bundle(requirement({ kind: 'flow', assertion: { type: 'flow', steps } })))).toBe(TOO_MANY);
+    expect(reasonOf(bundle(requirement({ kind: 'flow', assertion: { type: 'flow', steps } })))).toBe(FLOW_STEPS_LIMIT);
   });
 
   it('is refused by the loader with the file named and none of its text', async () => {
@@ -343,7 +344,7 @@ describe('a requirement file with too many problems to check', () => {
       ok: false,
       verdict: 'approval_required',
       path: 'requirements/huge.yaml',
-      reason: `requirements path requirements/huge.yaml: ${TOO_MANY}`,
+      reason: `requirements path requirements/huge.yaml: ${FLOW_STEPS_LIMIT}`,
     });
   });
 });
