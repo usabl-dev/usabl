@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { InstallFs } from './index.js';
 import { CONFIG_PATH } from './app-origin.js';
+import { isSafeBranchName } from '../primitives/branch-name.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,14 +37,9 @@ export function gitRunner(cwd: string): InstallGit {
 // The judge reads both files at the base commit. The routes file is a fixed sidecar name.
 export const ROUTES_PATH = 'usabl.routes.json';
 
-// A branch name goes into a workflow file, so only a plain name is taken: letters, digits, and
-// . _ - /. Anything else is treated as not found, never escaped and written. Every workflow usabl
-// writes takes its branch through this one rule.
-const SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
-
-export function isSafeBranchName(name: string): boolean {
-  return SAFE_BRANCH.test(name);
-}
+// A branch name goes into a workflow file, so only a plain name is taken. Every workflow usabl
+// writes takes its branch through this one rule, which the Stop hook shares.
+export { isSafeBranchName };
 
 // The one trigger form usabl writes: the event line, then its branch filter naming one quoted name.
 const TRIGGER_BRANCH_LINE = /^ {4}branches: \["([^"]*)"\]$/;
