@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { gateBranchTarget, REQUIRED_CHECK, verifyBranchRule } from '../../src/install/branch-rule.js';
 import { USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
-import { makeWorkflowReader } from '../../src/deps/fs.js';
+import { makeFsGlob, makeWorkflowReader } from '../../src/deps/fs.js';
 import { collectDoctorReport } from '../../src/doctor/index.js';
 
 const fullProtection = JSON.stringify({
@@ -73,7 +73,12 @@ describe('a gate workflow path usabl cannot read', () => {
   });
 
   it('gives doctor the same unknown branch, never a missing gate', async () => {
+    const readUnpermitted = async (path: string): Promise<string | null> => {
+      if (path === USABL_GATE_WORKFLOW_PATH) throw fsError('EACCES');
+      return null;
+    };
     const reports = await collectDoctorReport({
+      readWorkflow: readUnpermitted,
       fs: {
         readFile: async (path) => {
           if (path === USABL_GATE_WORKFLOW_PATH) throw fsError('EACCES');
@@ -93,5 +98,34 @@ describe('a gate workflow path usabl cannot read', () => {
     const branchRule = reports.find((report) => report.id === 'branch-rule');
     expect(branchRule?.state).toBe('unknown');
     expect(branchRule?.nextStep).toContain(`${USABL_GATE_WORKFLOW_PATH} could not be read`);
+  });
+
+  it('gives doctor, with the real file readers, the same unknown branch for a folder', async () => {
+    // The doctor file port reads a folder as no file, which is right for the other surfaces. The
+    // branch rule reads the gate path with the workflow reader, as install --branch-rule does.
+    const root = mkdtempSync(join(tmpdir(), 'usabl-doctor-gate-folder-'));
+    mkdirSync(join(root, USABL_GATE_WORKFLOW_PATH), { recursive: true });
+    const globber = makeFsGlob({ cwd: root });
+    const reports = await collectDoctorReport({
+      fs: {
+        readFile: globber.readFile,
+        glob: globber.glob,
+        writeFile: async () => {
+          throw new Error('doctor must never write');
+        },
+      },
+      readWorkflow: makeWorkflowReader(root),
+      gh: ghMainProtected,
+      configPath: 'usabl.config.json',
+      env: {},
+      probePlaywrightChromium: async () => 'wired',
+      probeChromiumSandbox: async () => 'available',
+    });
+    const branchRule = reports.find((report) => report.id === 'branch-rule');
+    expect(branchRule?.state).toBe('unknown');
+    expect(branchRule?.label).toBe(`branch protection (main, assumed, requires ${REQUIRED_CHECK})`);
+    expect(branchRule?.nextStep).toContain(`${USABL_GATE_WORKFLOW_PATH} could not be read (it is a folder)`);
+    // The ci line still reads the folder as no gate, as it did before.
+    expect(reports.find((report) => report.id === 'ci')?.state).toBe('missing');
   });
 });

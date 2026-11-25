@@ -65,7 +65,7 @@ export async function recordMainScan(
   const guarded = await expandConfigGuardedSet(deps, config);
   const [commit, sourceTree, policyHash] = await Promise.all([
     deps.git.headRef(),
-    deps.git.writeTree(),
+    deps.git.indexedTree(),
     computePolicyHash(deps, guarded),
   ]);
   const record = buildRecord({

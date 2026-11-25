@@ -21,6 +21,7 @@ const emptyFs: InstallFs = {
 function deps(extra: Partial<DoctorDeps>): DoctorDeps {
   return {
     fs: emptyFs,
+    readWorkflow: (path) => emptyFs.readFile(path),
     gh: { getJson: async () => null },
     configPath: 'usabl.config.json',
     env: {},

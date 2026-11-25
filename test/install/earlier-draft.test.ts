@@ -130,6 +130,7 @@ describe('doctor and an earlier draft', () => {
   it('reads it as drifted and says install rewrites it', async () => {
     const files: Record<string, string> = { [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(EARLIER_GATE_BYTES, OTHER_SHA) };
     const reports = await collectDoctorReport({
+      readWorkflow: async (path) => files[path] ?? null,
       fs: {
         readFile: async (path) => files[path] ?? null,
         glob: async () => [],

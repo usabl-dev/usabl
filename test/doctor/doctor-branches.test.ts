@@ -32,6 +32,7 @@ function readOnlyFs(files: Record<string, string>): InstallFs {
 async function reports(files: Record<string, string>): Promise<SurfaceReport[]> {
   return collectDoctorReport({
     fs: readOnlyFs(files),
+    readWorkflow: (path) => readOnlyFs(files).readFile(path),
     gh: { getJson: async () => null },
     configPath: 'usabl.config.json',
     env: {},

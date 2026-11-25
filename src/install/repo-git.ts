@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import type { InstallFs } from './index.js';
 import { CONFIG_PATH } from './app-origin.js';
 import { isSafeBranchName } from '../primitives/branch-name.js';
+import { gitProcessEnvironment } from '../deps/git-environment.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,7 @@ export function gitRunner(cwd: string): InstallGit {
   return {
     run: async (args) => {
       try {
-        const { stdout } = await execFileAsync('git', [...args], { cwd, encoding: 'utf8' });
+        const { stdout } = await execFileAsync('git', [...args], { cwd, encoding: 'utf8', env: gitProcessEnvironment() });
         return stdout;
       } catch {
         return null;
@@ -50,13 +51,23 @@ const TRIGGER_BRANCH_LINE = /^ {4}branches: \["([^"]*)"\]$/;
  * is not a plain name. A file whose trigger is in any other form names no branch usabl can read.
  */
 export function workflowTriggerBranch(raw: string | null, event: 'pull_request' | 'push'): string | null {
+  return workflowTrigger(raw, event)?.name ?? null;
+}
+
+/**
+ * The same branch, with the line of the file that names it, counted from 1. A file can have lines
+ * above the trigger that usabl's draft does not, so a step that says which line to change takes the
+ * line from here, never from the draft.
+ */
+export function workflowTrigger(raw: string | null, event: 'pull_request' | 'push'): { name: string; line: number } | null {
   if (raw === null) return null;
   const lines = raw.split('\n');
   const at = lines.indexOf(`  ${event}:`);
   if (at === -1) return null;
   const match = TRIGGER_BRANCH_LINE.exec(lines[at + 1] ?? '');
   const name = match?.[1] ?? '';
-  return isSafeBranchName(name) ? name : null;
+  // at is the event line's index from 0, so the branch line below it is line at + 2.
+  return isSafeBranchName(name) ? { name, line: at + 2 } : null;
 }
 
 export type DefaultBranch = { kind: 'found'; name: string } | { kind: 'unknown'; reason: string };

@@ -198,6 +198,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     },
     git: {
       writeTree: async () => spec.writeTree,
+      indexedTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
       async listEntries(ref, paths, options) {
         return listTextEntries(this, ref, paths, options);
