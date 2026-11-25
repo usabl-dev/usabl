@@ -1777,9 +1777,17 @@ asked to convert bytes for that answer:
    --stdin-paths`: no filter, no attribute, and no line ending rule. More than 2000 files are split
    over four git processes. Each name goes to git in its C quoting, so a name with a newline
    arrives whole, and each name is kept as the bytes git stores, so a name that is not valid UTF-8
-   is read as that file. A symbolic link is hashed from its link text. A link whose target, with
-   every link on the way resolved, is not a file the walk hashes or a folder that holds one makes
-   the tree id one that never repeats (see step 7).
+   is read as that file. A symbolic link is hashed from its link text. Its target, with every link
+   on the way resolved, decides the rest:
+   - a link that points nowhere, or to a file the walk hashes or a folder that holds one, is
+     recorded by its text alone;
+   - a link to any other file (outside the repository, in an ignored folder, or in `.git`) is
+     recorded by its text and the file's raw blob id, hashed fresh on every tree read, and is
+     always in the changed list, because HEAD holds only its text;
+   - a link to a folder outside the hashed files, or to something else that is not a file, cannot
+     be bound: the changed list stops with an error that names the link and says to commit what it
+     points to or replace the link with the files, and the tree id never repeats (see step 7). The
+     Stop hook shows that error as a scope gap that names the link and blocks.
 4. A file is unchanged when its id is the id HEAD holds. When it is not, three forms still count as
    the committed content. Each follows from the blob alone, so each accepts one content only:
    - the same text with each CR LF read as LF. git computes this id in a scratch repository whose
@@ -1811,9 +1819,14 @@ asked to convert bytes for that answer:
    then `git write-tree --missing-ok`), and the index is read back (`git ls-files -s -z`). It must
    hold exactly the records sent, name by name, with each mode and id, because `--index-info`
    skips a name it will not store, such as a folder named `GIT~1` or `.GIT`, and exits 0. On any
-   difference, or for a link from step 3, the tree id is one that never repeats: no stored receipt
-   answers for it, and a run that reads it twice ends with the not-covered gap for files that
-   changed during the check.
+   difference, or for a link from step 3 that cannot be bound, the tree id is one that never
+   repeats: no stored receipt answers for it. For a name git will not store, a run that reads it
+   twice ends with the not-covered gap for files that changed during the check.
+
+A HEAD that `git rev-parse --verify -q HEAD` resolves but git cannot read, such as a commit object
+overwritten with other bytes, is a damaged object, never a repository with no commits: the reads
+name `git fsck`, and the Stop hook blocks. Only a HEAD that does not resolve gives the "make a first
+commit" text.
 
 Settings the walk ignores, because none of them changes a byte the dev server serves: the index's
 assume-unchanged and skip-worktree flags and its saved file info, `core.trustctime`,
@@ -1835,7 +1848,13 @@ attribute source: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRE
 `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_QUARANTINE_PATH`, `GIT_SHALLOW_FILE`,
 `GIT_NAMESPACE`, the pathspec variables, and every `GIT_CONFIG_*` and `GIT_ATTR_*` variable. The
 reader sets its own `GIT_INDEX_FILE` for the temporary index, and its own `GIT_DIR` and
-`GIT_WORK_TREE` for the scratch repository of step 4.
+`GIT_WORK_TREE` for the scratch repository of step 4. So no git setting passed through the
+environment reaches usabl's git: not `GIT_CONFIG_GLOBAL` (git reads `~/.gitconfig` instead of the
+file it names), `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_PARAMETERS`, or `GIT_CONFIG_COUNT` with
+`GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n`. A CI container that sets `safe.directory` through those
+variables makes usabl's git stop with "dubious ownership", and the run fails. Settings in the
+repository's config, in `~/.gitconfig` or `$XDG_CONFIG_HOME/git/config`, and in the system config
+still apply, so `git config --global --add safe.directory <path>` works.
 
 The reader refuses a work tree other than the repository it runs in. The repository root is the one
 git names (`git rev-parse --show-toplevel`, a physical path), so a folder reached through a link
@@ -1869,7 +1888,8 @@ The first column was measured on another day, with less load. On the same runs i
 50,000-file repositories, a tree read after the first took 1.8 to 5.1 s with the cache and 3.1 to
 7.1 s fresh, so a stop that runs a check pays
 about two fresh tree reads more: a few seconds on 50,000 files. Reading HEAD's trees in Node costs
-nothing measurable (1,001 trees). The changed list costs more than git status did (about 1.6 s
+nothing measurable (1,001 trees). Neither does the link rule: with no link it reads nothing, and
+one link to a file outside the repository gave 15.4 and 16.9 s against 14.1 and 20.1 s with none. The changed list costs more than git status did (about 1.6 s
 against 0.2 s on 50,000 files), because git status trusted the index's saved file info, which is
 exactly what an agent could set.
 
@@ -1883,14 +1903,19 @@ Known limits:
   receipt answers, but a stop whose only change it is reads "nothing to check". The same holds for
   a submodule whose folder the agent empties, its `.git` included: it reads as never set up, so
   its files' deletion is not listed, and the tree keeps the recorded commit.
-- A link out of the files the walk hashes, such as one committed to point outside the repository,
-  makes every tree read differ, so every run ends with the not-covered gap for files that changed
-  during the check, and that gap's text tells the person to wait rather than naming the link. So
-  does a name git will not store.
+- A link to a folder outside the hashed files, such as `public/assets` pointing into an ignored
+  `dist/`, blocks every stop and fails every check until what it points to is committed or the
+  link is replaced with the files. A link to a single file outside them is always in the changed
+  list, so a stop that cannot answer from a receipt checks the screens it reaches.
+- A name git will not store makes every tree read differ, so every run ends with the not-covered
+  gap for files that changed during the check, and that gap's text tells the person to wait
+  rather than naming the file.
 - Only HEAD's commit and trees are checked against their ids. Other reads take objects as stored:
   the merge-base diff, the Stop hook's search for the starting commit, and the guard's policy
-  reads at the trusted ref. Locally, an agent that can write `.git/objects` can also write a
-  receipt; in CI, git computes the id of every object it fetches.
+  reads at the trusted ref. Until the merge-base diff is built from checked trees, an agent that
+  overwrites a tree object only the trusted side holds, so that it lists the blob of a committed
+  edit, hides that edit from the changed list, and a full run says VERIFIED. In CI, git computes
+  the id of every object it fetches, so this does not apply there.
 - `.git/info/exclude` and a local `core.excludesFile` still hide a new file, as the threat model
   says for ignored files.
 

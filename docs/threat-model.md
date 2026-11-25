@@ -493,11 +493,19 @@ passing bundle from another run.
   other screens and read VERIFIED. Now the walk reads the HEAD commit and every tree below it in
   Node and checks each id; one that does not match stops the read with an error that names the
   object and `git fsck`, and the Stop hook blocks. A HEAD blob read for the LFS or `$Id$` form is
-  used only when its bytes hash to its id; otherwise the file is changed. Limit: other reads take
-  objects as stored, among them the merge-base diff (a tree object only the trusted commit's side
-  holds) and the guard's policy reads at the trusted ref. Locally that is inside the stated limit
-  that a user with a shell can write a receipt that verifies. In CI the runner fetches the objects,
-  and git computes each fetched object's id from its bytes.
+  used only when its bytes hash to its id; otherwise the file is changed. A HEAD commit object
+  overwritten with other bytes made git refuse to read HEAD, and the guard read that as a
+  repository with no commits, which the Stop hook lets through as a hook error. Now a HEAD that
+  `git rev-parse --verify -q HEAD` resolves but git cannot read is a damaged object: the guard's
+  error names `git fsck`, and the stop blocks. Only a HEAD that does not resolve reads as no
+  commits yet.
+- Limit, stated plainly, until the merge-base diff is built from checked trees: other reads take
+  objects as stored, among them the merge-base diff and the guard's policy reads at the trusted
+  ref. An agent that overwrites a tree object only the trusted side holds, so that it lists the
+  blob of a committed edit, hides that edit from `git diff <trusted>...HEAD`. The edit is not in
+  the changed list, the stop checks only the other screens, and a full run says VERIFIED. No
+  receipt is involved. In CI this does not apply: the runner fetches the objects, and git computes
+  each fetched object's id from its bytes.
 - A name git will not store is never silently left out of the tree. `git update-index
   --index-info` skips a name such as a folder named `GIT~1` or `.GIT` (rejected on every platform),
   prints a line, and exits 0, and it drops a record that clashes with another one. A new screen file
@@ -509,13 +517,24 @@ passing bundle from another run.
 - A file is never hashed through a link in its folder part. With `src/pages` swapped for a link to
   a folder elsewhere, `lstat` followed the link for each committed file below it, so the tree held
   those files and new files in the target were never listed. Now a committed file below a link is
-  `D`, as git sees it, and the link is a path of its own.
-- A link binds its link text, and the dev server serves its target's bytes. So a link, committed or
-  new, whose target is outside the files the walk hashes (outside the repository, in an ignored
-  folder, in `.git`, or not there at all) makes the tree id one that never repeats, and no stored receipt answers. A link to a file the walk hashes, or to a folder
-  that holds one, is bound by its text and its target's own record. Cost: a repository that commits
-  a link out of the repository never verifies a run, because each run reads two trees; the gap
-  says files changed during the check.
+  `D`, as git sees it, and the link is a path of its own, bound by the rule below.
+- A link binds its link text, and the dev server serves its target's bytes. With the target edited
+  outside the files git lists, the tree kept the text alone, so every later stop answered from the
+  stored receipt. Now the target decides how a link is bound, committed or new:
+  - a link that points nowhere serves nothing, so its text binds it;
+  - a link to a file the walk hashes, or to a folder that holds one, is bound by its text and that
+    file's own record;
+  - a link to any other file (outside the repository, in an ignored folder such as `dist/`, or in
+    `.git`) is bound by its text and the file's raw blob id, hashed fresh on every read and never
+    from the cache. HEAD holds only the link text, so such a link is always in the changed list,
+    and every stop that cannot answer from a receipt checks the screens it reaches;
+  - a link to a folder outside the hashed files, or to something else that is not a file, cannot
+    be bound. The changed list stops with an error that names the link, so the stop, which reads
+    that list first, blocks with a gap that names the link (inside the untrusted frame) and says
+    to commit what it points to or replace the link with the files. `usabl check` fails with the
+    same text. With no trusted branch, the stop reads the list for this before the run, because a
+    run that fails does not block a stop. The tree id for such a repository never repeats, so no
+    receipt answers.
 - Settings the two reads ignore, and why that is safe: the index's flags and saved file info,
   `core.trustctime`, `core.checkStat`, `core.ignoreStat`, `core.fsmonitor`,
   `core.untrackedCache`, `core.ignorecase` (with it true on a file system that tells case apart,
@@ -568,7 +587,14 @@ passing bundle from another run.
   drops `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, the other variables that point git at
   another repository, and every `GIT_CONFIG_*` and `GIT_ATTR_*` variable from its environment, so a
-  `usabl check` run with them set reads the repository in its folder.
+  `usabl check` run with them set reads the repository in its folder. What that drops: every git
+  setting passed through the environment, among them `GIT_CONFIG_GLOBAL` (so git reads
+  `~/.gitconfig` instead of the file it names), `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_PARAMETERS`
+  (`git -c` from a parent git), and `GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_n` and
+  `GIT_CONFIG_VALUE_n`. A CI container that sets `safe.directory` that way makes usabl's git calls
+  stop with git's "dubious ownership" error, and a run fails rather than passes. Settings in the
+  repository's own config, in `~/.gitconfig` or `$XDG_CONFIG_HOME/git/config`, and in the system
+  config still apply, so `git config --global --add safe.directory <path>` works.
 - One reader keeps the hashes of its changed lists in memory, for one process. An entry is used
   only while usabl's own `lstat` gives the same device, inode, size, modification time, and change
   time, to the nanosecond, and a file changed within two seconds of a read is never kept. A process
