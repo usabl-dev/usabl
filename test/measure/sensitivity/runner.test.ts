@@ -1,6 +1,6 @@
 /**
  * The sensitivity runner on fake pages, through the real check runner and the real gate. Each
- * outcome is reached here: caught, caught by another rule (on the element and elsewhere), missed,
+ * outcome is reached here: caught (on the element and elsewhere), caught by another rule, missed,
  * preview only, not applicable, and unreadable. The clean scan is never mutated, the edit lands
  * before any provider runs, and every page the runner opens is closed.
  */
@@ -42,7 +42,7 @@ function freshDom() {
       { path: '#save', parent: 'x-toolbar', host: 'x-toolbar', role: 'button', name: 'Save', text: 'Save' },
       { path: '#other', parent: 'main', role: 'button', name: 'Other', text: 'Other' },
     ],
-    selectors: { button: ['#save', '#other'] },
+    selectors: { button: ['#save', '#other'], 'x-toolbar': ['x-toolbar'] },
   });
 }
 
@@ -245,6 +245,84 @@ describe('measureEntry', () => {
   it('accepts a finding anywhere on the screen for an entry reported on the screen', async () => {
     const { deps } = setup([namesProvider('button-name', '#other')]);
     expect((await measureEntry(deps, entry({ reportedOn: 'screen' }), SCREEN)).outcome).toBe('caught');
+  });
+
+  // Reports `rule` on `reportAt` on the second load only: noise between the two loads, such as an
+  // extra list row, that the edit did not cause.
+  function secondLoadOnly(rule: string, reportAt: string): Provider {
+    let loads = 0;
+    return {
+      id: `second-load-${rule}`,
+      layer: 'axe',
+      capabilities: ['live'],
+      async run(ctx) {
+        loads += 1;
+        return loads === 2 ? [draft(ctx, rule, reportAt)] : [];
+      },
+    };
+  }
+
+  const titleEntry = entry({ id: 'page-title-removed', expectedRules: ['document-title'], reportedOn: 'screen' });
+
+  it('is unreadable, not caught by another rule, when another rule is new away from the change for an entry reported on the screen', async () => {
+    for (const reportAt of ['#other', 'x-toolbar', '#gone']) {
+      const { deps } = setup([secondLoadOnly('button-name', reportAt)]);
+      expect(await measureEntry(deps, titleEntry, SCREEN)).toEqual({
+        entry: 'page-title-removed',
+        screen: 'basic',
+        outcome: 'unreadable',
+        rules: ['button-name'],
+        reason:
+          'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+      });
+    }
+  });
+
+  it('is caught by another rule when another rule is new on the changed element or inside it, for an entry reported on the screen', async () => {
+    const onTarget = setup([namesProvider('button-name', '#save')]);
+    expect(await measureEntry(onTarget.deps, titleEntry, SCREEN)).toEqual({
+      entry: 'page-title-removed',
+      screen: 'basic',
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+      reason: 'reported by button-name; expected document-title',
+    });
+    // #save sits inside x-toolbar, the changed element here.
+    const inside = setup([secondLoadOnly('button-name', '#save')]);
+    const onToolbar = { ...titleEntry, mutation: { target: { selector: 'x-toolbar' }, edit: { kind: 'set-attribute', name: 'aria-label', value: '' } } } as CatalogEntry;
+    expect(await measureEntry(inside.deps, onToolbar, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
+    // A finding of another rule away from the change does not join the rules of a catch on the element.
+    const both = setup([namesProvider('button-name', '#save'), secondLoadOnly('color-contrast', '#other')]);
+    expect(await measureEntry(both.deps, titleEntry, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
+  });
+
+  it('counts another rule only on the element that held a removed one, for an entry reported on the screen', async () => {
+    // The edit removes x-toolbar, so main stands in for it. Everything else in main sits inside
+    // the stand-in, and for a heading that sits straight in main that is the whole page.
+    const headingEntry = entry({
+      id: 'heading-one-removed',
+      expectedRules: ['page-has-heading-one'],
+      reportedOn: 'screen',
+      mutation: { target: { selector: 'x-toolbar' }, edit: { kind: 'remove-element' } },
+    });
+    const sibling = setup([secondLoadOnly('button-name', '#other')]);
+    expect(await measureEntry(sibling.deps, headingEntry, SCREEN)).toEqual({
+      entry: 'heading-one-removed',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: ['button-name'],
+      reason:
+        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+    });
+    const parent = setup([secondLoadOnly('button-name', 'main')]);
+    expect(await measureEntry(parent.deps, headingEntry, SCREEN)).toMatchObject({
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+      reason: 'reported by button-name; expected page-has-heading-one',
+    });
+    // An expected rule still counts anywhere on the screen.
+    const expected = setup([secondLoadOnly('page-has-heading-one', '#other')]);
+    expect(await measureEntry(expected.deps, headingEntry, SCREEN)).toMatchObject({ outcome: 'caught', rules: ['page-has-heading-one'] });
   });
 
   it('accepts a finding on the shadow host of the target for an entry reported around it, and no other ancestor', async () => {

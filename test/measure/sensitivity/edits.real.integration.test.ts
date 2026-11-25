@@ -252,6 +252,37 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('sensitivity edits in Chr
     });
   });
 
+  // A page that renders again can draw the element as a new node. The old node keeps the edit, and
+  // the new one works as normal, so the edit no longer holds on the page.
+  const replaceElement = async (page: Page, selector: string): Promise<void> => {
+    await (playwrightPageOf(page) as PwPage).evaluate((target) => {
+      const old = document.querySelector(target);
+      if (old === null) throw new Error('no element to replace');
+      old.replaceWith(old.cloneNode(true));
+    }, selector);
+  };
+  const gone = { held: false, reason: 'an element the edit changed is no longer on the page' };
+
+  it('reads a key edit as not held when the page replaced the changed element with a new one', async () => {
+    await withEdit({ selector: '#first' }, { kind: 'swallow-key', key: 'Enter' }, async (page, applied) => {
+      await replaceElement(page, '#first');
+      await page.click('#first');
+      await page.press('Enter');
+      expect(await page.activeElementIs('#first')).toBe(true);
+      expect(await applied.check()).toEqual(gone);
+    });
+  });
+
+  it('reads a focus edit as not held when the page replaced the changed element with a new one', async () => {
+    await withEdit({ selector: '#last' }, { kind: 'ignore-focus-calls' }, async (page, applied) => {
+      await replaceElement(page, '#last');
+      // The page's own focus() call reaches the new node, which the edit never stubbed.
+      await page.click('#jump');
+      expect(await page.activeElementIs('#last')).toBe(true);
+      expect(await applied.check()).toEqual(gone);
+    });
+  });
+
   it('fails when the page does not keep the change', async () => {
     const page = await driver.open(url);
     try {
