@@ -269,12 +269,19 @@ re-baseline to green.
   read the branch as one that sets usabl up. It is a not-covered gap that checks nothing, says
   `origin/HEAD` may be stale, and names `git remote set-head origin --auto`. Before, that clone
   read as a setup branch, and a waiver the branch committed was taken as policy. The check reads
-  local refs only. Its cost: a branch that sets usabl up and is pushed to origin has the config at
-  the tip of its own branch of origin, so after that push its stops are this gap until the setup
-  merges. A session that moves `origin/HEAD`, or the branch it names, to a commit from before the
-  setup, and also moves or deletes every other branch of origin that holds the config, turns a
-  configured branch into a setup branch on the stop (the limit above), so the stop reads its own
-  policy, and its verdict line says so. A ref moved to a
+  local refs only. This branch's own copy on origin does not count, so a pushed setup branch
+  still reads as one: the branch of origin with the current branch's name and the current
+  branch's upstream are skipped, unless that name on origin is `main`, `master`, `trunk`, or
+  `develop`, which always count. A detached HEAD skips nothing. Its costs: a setup branch named one
+  of those four is this gap after its push, until the setup merges. And a narrow honest case still
+  reads as a setup branch: the project renamed its default branch to a name outside the four,
+  `origin/HEAD` is stale, and the developer works on a branch named after the new default branch
+  or one that tracks it, which git sets up by default for a branch made from it. CI still reads
+  policy at the real base of the pull request and blocks there. A session that moves
+  `origin/HEAD`, or the branch it names, to a commit from before the setup, and also moves or
+  deletes every other branch of origin that holds the config, or sets its branch's upstream to
+  that branch, turns a configured branch into a setup branch on the stop (the limit above), so
+  the stop reads its own policy, and its verdict line says so. A ref moved to a
   commit the session made is the limit above, and there the line can read plain VERIFIED. CI
   checks the pull request against its real base in every case. A config at the
   starting commit that is gone from the working tree and the last commit is a removal, which CI

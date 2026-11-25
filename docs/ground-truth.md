@@ -4387,9 +4387,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     step first. The first such branch in name order whose name is a plain name (letters, digits,
     and `. _ - /`, the rule `usabl install` uses for a branch name) is named inside the untrusted
     frame as "branch with usabl.config.json: origin/<name>"; a branch with any other name is not
-    named. Known limit: a branch that sets usabl up and is pushed to origin has the config at the
-    tip of its own branch of origin, so after that push its stops are this gap until the setup
-    merges, as every stop on such a branch was before the setup path existed.
+    named. This branch's own copy on origin does not count, so a branch that sets usabl up still
+    reads as one after it is pushed: the lookup also lists the local branches (`refs/heads/`, with
+    `%(HEAD)` and `%(upstream)` in the same `for-each-ref` call, so no branch name is passed to
+    git), and skips the branch of origin with the name of the branch checked out here and that
+    branch's upstream when it is a branch of origin (git's reading of `branch.<name>.remote` and
+    `branch.<name>.merge`). A branch of origin named `main`, `master`, `trunk`, or `develop` is
+    never skipped. With a detached HEAD nothing is skipped. Known limits: a setup branch named
+    one of those four, once pushed, is this gap until the setup merges. When the project renamed
+    its default branch to a name outside the four and `origin/HEAD` is stale, a branch named
+    after the new default branch, or one that tracks it (git sets that upstream by default for a
+    branch made from `origin/<name>`), skips that branch, so a configured repository still reads
+    as a setup branch there. CI still reads policy at the real base of the pull request and
+    blocks.
   - A branch made before usabl was set up: the tip of the trusted branch holds
     `usabl.config.json` but the starting commit does not, whether or not this branch has a config
     of its own. The stop checks nothing and blocks once with "NOT verified - usabl is set up on
@@ -4442,8 +4452,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     at a ref outside `refs/remotes/origin/` is the gap above, so that form does not shrink it.
     Moving it, or the branch it names, to a commit from before usabl was set up, while the tip of
     another branch of origin still holds the config, is the stale `origin/HEAD` gap above. When no
-    other branch of origin holds one, for example after the session moves or deletes those refs
-    too, the move makes a configured branch read as a branch that sets usabl up: the stop then
+    other branch of origin that counts holds one, for example after the session moves or deletes
+    those refs too, or sets its branch's upstream to the one that holds it, the move makes a configured branch read as a branch that sets usabl up: the stop then
     reads the branch's own policy, and its verdict line says "policy from this branch, not
     approved yet". Rebuilding the
     branch on such a commit while the trusted branch keeps its config is the older-branch block
