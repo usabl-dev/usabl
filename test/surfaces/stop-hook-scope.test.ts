@@ -637,23 +637,22 @@ describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_P
     expect(h.stderr()).toContain('Note: this branch sets usabl up.');
   });
 
-  // The known cost of the rule: once the setup branch is pushed, its own branch of origin holds the
-  // config, so its stops are the gap until the setup merges. The gap checks nothing; it is never a
-  // pass.
-  it('reads a setup branch pushed to origin as the stale origin/HEAD gap', async () => {
+  // Once the setup branch is pushed, its own branch of origin holds the config. That copy is
+  // skipped, so the branch still reads as one that sets usabl up.
+  it('keeps the setup path for a setup branch pushed to origin', async () => {
     await cloneWithStaleHead({ configOnMain: false });
     git('push', '-q', 'origin', 'feature');
-    await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
-      kind: 'not-found',
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+      kind: 'found',
       branch: 'origin/master',
-      problem: 'trusted-branch-may-be-stale',
-      detail: 'origin/feature',
+      policy: 'branch-sets-usabl-up',
     });
 
     const h = hook();
     await runStopHookFromStdin('{}', h.ports);
-    expect(blockReason(h.stdout())).toContain(STALE_REASON);
-    expect(h.scanned).toEqual([]);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    expect(h.scanned).toEqual(['home']);
+    expect(h.stderr()).toContain('Note: this branch sets usabl up.');
   });
 
   // The branch of origin that is this branch's own copy is not evidence that usabl is set up
