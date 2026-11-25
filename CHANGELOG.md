@@ -433,6 +433,14 @@
 
 ### Fixed
 
+- An edit to a tracked file marked assume-unchanged or skip-worktree is now a change. git status
+  and git diff do not compare such a file, so a stop whose only edit was one read "No UI files
+  changed, so there was nothing to check", and a stop with other edits did not plan the screens
+  only that file reaches. The status listing now reads the flags and adds each flagged file whose
+  working copy is not what the index holds, so the Stop hook, `usabl check` in each mode, the
+  overlay, and `usabl brief` plan and check it like any other edit. A skip-worktree file that a
+  sparse checkout left out is not a change. Gate effect: such a stop now scans the screens the
+  file reaches instead of reading as nothing to check. CI is not affected.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's
