@@ -63,9 +63,18 @@ describe('doctor and the default branch GitHub reports', () => {
     const report = await branchRule(TRUNK_GATE, ghProtecting('trunk', 'main'));
     expect(report.state).toBe('drifted');
     expect(report.nextStep).toBe(
-      'GitHub reports main as the default branch, but the gate runs on pull requests into trunk, so it covers only pull requests into trunk. ' +
-        `To gate pull requests into main, put main in place of trunk on line 8 of ${USABL_GATE_WORKFLOW_PATH}, and the same in the docs gate and history workflows if you have them. Then run "usabl install --branch-rule" to check the protection on main.`,
+      'GitHub reports main as the default branch, but the gate runs on pull requests into trunk, so pull requests into main are not gated. ' +
+        `To gate pull requests into main, put main in place of trunk on line 8 of ${USABL_GATE_WORKFLOW_PATH}, and the same in the docs gate and history workflows if you have them. Then run "usabl install --branch-rule" to check the protection on main. ` +
+        `To keep pull requests into trunk gated too, add main to the pull_request trigger of ${USABL_GATE_WORKFLOW_PATH} instead, and protect both branches. usabl reads only a trigger that names one branch, so then check the protection on each branch by hand.`,
     );
+  });
+
+  it('is missing, and says the default branch is not gated, when trunk is not protected either', async () => {
+    const report = await branchRule(TRUNK_GATE, ghProtecting('nothing', 'main'));
+    expect(report.state).toBe('missing');
+    expect(report.nextStep).toContain('The trunk branch does not require all of');
+    expect(report.nextStep).toContain('so pull requests into main are not gated.');
+    expect(report.nextStep).toContain(`To gate pull requests into main, put main in place of trunk on line 8 of ${USABL_GATE_WORKFLOW_PATH}`);
   });
 
   it('prints the same next step from install --branch-rule, which does not verify trunk', async () => {

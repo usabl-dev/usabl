@@ -1030,15 +1030,21 @@ async function collectBranchRule(deps: DoctorDeps, target: BranchTarget): Promis
   const result = await verifyBranchRule(deps.gh, target);
   const label = branchRuleLabel(target);
   const note = result.branchNote;
+  // When GitHub's default branch is not the gate's branch, install --branch-rule is not verified,
+  // whatever the protection on the gate's branch reads. The state here says what that protection
+  // reads, and the next step says what install says: pull requests into the default branch are not
+  // gated, and how to fix it. None of these states is wired.
+  const gateBranch = result.gateBranch;
+  if (gateBranch !== null && gateBranch.action === 'verified') {
+    return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
+  }
+  if (gateBranch !== null && gateBranch.action === 'cannot-verify') {
+    return { id: 'branch-rule', label, state: 'unknown', nextStep: `usabl cannot confirm branch protection: ${gateBranch.finding}. ${note ?? ''}`.trimEnd() };
+  }
   if (result.action === 'verified') {
-    // Protection on a branch that is not GitHub's default branch still leaves pull requests into the
-    // default branch without a gate, so the surface is not wired.
-    if (result.otherDefault !== null) {
-      return { id: 'branch-rule', label, state: 'drifted', nextStep: note ?? '' };
-    }
     return { id: 'branch-rule', label, state: 'wired', nextStep: '' };
   }
-  if (result.action === 'not-applied') {
+  if (result.action === 'not-applied' || gateBranch?.action === 'not-applied') {
     const branch = target.source === 'assumed' ? `${target.name} branch, which usabl assumed,` : `${target.name} branch`;
     return {
       id: 'branch-rule',

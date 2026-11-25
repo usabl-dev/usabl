@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { branchRuleSetting, gateBranchTarget, REQUIRED_CHECK, verifyBranchRule } from '../../src/install/branch-rule.js';
-import { gateWorkflowFor, pinEngineRef, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
+import { gateWorkflowFor, pinEngineRef, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
 import { collectDoctorReport, type SurfaceReport } from '../../src/doctor/index.js';
 import type { InstallFs } from '../../src/install/index.js';
 
@@ -121,6 +121,56 @@ describe('the branch the check reads', () => {
       'cannot verify: the branch rule on main is set, but GitHub reports trunk as the default branch, and pull requests into trunk are not gated.',
     ]);
     expect(result.message.split('\n')[0]).toBe(lines[0]);
+  });
+
+  it('names both problems when the gate branch is not protected and GitHub reports another default branch', async () => {
+    const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/trunk'], exclude: [] } });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.gateBranch?.action).toBe('not-applied');
+    const lines = result.message.split('\n');
+    expect(lines[0]).toBe(
+      'cannot verify: GitHub reports trunk as the default branch, and pull requests into trunk are not gated. The branch rule on main is not set either.',
+    );
+    expect(lines[1]).toMatch(/^main does not require usabl-required as a required status check or .*, by classic branch protection or by an active ruleset\.$/);
+    expect(result.message).toContain(
+      `To gate pull requests into trunk, put trunk in place of main on line 8 of ${USABL_GATE_WORKFLOW_PATH}, and the same in the docs gate and history workflows if you have them.`,
+    );
+    expect(result.message).toContain('Apply this branch protection on the "main" branch:');
+  });
+
+  it('says it could not confirm the gate branch either when its protection cannot be read', async () => {
+    const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/ma*'], exclude: [] } });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.gateBranch?.action).toBe('cannot-verify');
+    const lines = result.message.split('\n');
+    expect(lines[0]).toBe(
+      'cannot verify: GitHub reports trunk as the default branch, and pull requests into trunk are not gated. usabl could not confirm the branch rule on main either.',
+    );
+    expect(lines[1]).toBe('usabl cannot verify the protection on main: a ruleset sets part of the protection but usabl cannot confirm it targets main.');
+  });
+
+  it('names both ways to fix it, for the gate file that names the branch', async () => {
+    const gh = ghWithRuleset('trunk', { ref_name: { include: ['~ALL'], exclude: [] } });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'docs-gate' });
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain(`put trunk in place of main on line 8 of ${USABL_DOCS_GATE_WORKFLOW_PATH}, and the same in the history workflow if you have it.`);
+    expect(result.message).toContain(
+      `To keep pull requests into main gated too, add trunk to the pull_request trigger of ${USABL_DOCS_GATE_WORKFLOW_PATH} instead, and protect both branches. usabl reads only a trigger that names one branch, so then check the protection on each branch by hand.`,
+    );
+  });
+
+  it('is verified with exit 0, and says nothing about the default branch, when GitHub reports the gate branch', async () => {
+    const gh = ghWithRuleset('main', { ref_name: { include: ['~ALL'], exclude: [] } });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    expect(result.exitCode).toBe(0);
+    expect(result.action).toBe('verified');
+    expect(result.otherDefault).toBeNull();
+    expect(result.gateBranch).toBeNull();
+    expect(result.message).not.toContain('default branch');
   });
 
   it('does not count ~DEFAULT_BRANCH for a gate on main when the default branch is trunk', async () => {
