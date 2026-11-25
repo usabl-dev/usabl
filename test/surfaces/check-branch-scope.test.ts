@@ -601,6 +601,9 @@ describe('a check planned with another config leaves no receipt a stop can use',
     await writeFile(join(outside, 'usabl.config.json'), JSON.stringify(elsewhere, null, 2) + '\n');
     // x/../usabl.config.json names the root file on paper, and the outside file once x is followed.
     await symlink(join(outside, 'sub'), join(repo, 'x'));
+    // git ignores the link, as a link a developer keeps out of the repository is. A link git lists
+    // whose target is outside the repository makes every tree read differ, so no run would verify.
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '/x\n', { flag: 'a' });
     state.drafts = { home: [homeBarrier] };
   });
 
