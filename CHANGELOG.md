@@ -437,8 +437,10 @@
   reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), a new
   definite finding of a rule that is not expected counted as `caught by another rule` anywhere on
-  the screen. It now counts only on the changed element or inside it. Elsewhere it makes the row
-  `unreadable`, because the two page loads differ. An expected rule anywhere on the screen still
+  the screen. It now counts only on the changed element or inside it. When the edit removed an
+  element (`heading-one-removed`, `page-title-removed`), it counts only on the element that held
+  the removed one, not inside it, because for a heading straight in `main` that is the whole page.
+  Elsewhere it makes the row `unreadable`, because the two page loads differ. An expected rule anywhere on the screen still
   counts as `caught`. The key and focus edits (`swallow-key` and `ignore-focus-calls`) also read
   as held when the page replaced the changed element with a new one, so a row could read `missed`
   with a false note. They now read as not held with the reason "an element the edit changed is no
