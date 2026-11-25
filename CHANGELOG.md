@@ -447,8 +447,35 @@
   check lists the same way, and its result changes only if the CI checkout holds a flagged file
   whose working copy differs from the index, which a fresh checkout does not. Known limit: a clean
   filter, the `ident` attribute, or a `working-tree-encoding` attribute, set locally with no
-  tracked change, can still hide an edit to a flagged file, and the same attributes keep the
-  receipt's tree id the same. A follow-up change closes that case.
+  tracked change, could still hide an edit to a flagged file, and the same attributes kept the
+  receipt's tree id the same. The next entry closes that case.
+- The tree a receipt binds and the changed list now come from the bytes on disk, the bytes the dev
+  server serves and the checks read. Before, both went through git's normal path, so a setting or
+  file the agent can write from inside the repository, with no tracked change, could make an
+  edited file read unchanged: a clean filter in `.git/config`, the `ident` or
+  `working-tree-encoding` attribute in `.git/info/attributes`, `core.trustctime=false` with the
+  modification time restored, a `core.fsmonitor` hook that answers "nothing changed", sparse
+  patterns that leave a present file out, a replace ref, a graft, or `core.worktree` pointing at a
+  copy of the committed files. With a filter, an attribute, or sparse patterns, the tree stayed the
+  one a stored receipt bound, so the stop answered "VERIFIED (exit 0, stored receipt, not
+  re-scanned)" for bytes no check saw. With the others the stop could read "nothing to check". Now
+  usabl hashes every file with `git hash-object --no-filters` and compares it with HEAD. A file
+  still reads unchanged when only its line endings differ, when it is the content an LFS pointer
+  names, or when checkout expanded its `$Id$` markers. No filter program and no hook runs. git
+  reads objects and parents as stored (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`) on
+  every read, the Stop hook's search for the starting commit and the guard's policy reads
+  included. An edit inside a submodule is listed by its path in the outer repository. The reader
+  refuses a work tree outside its folder, and an empty sparse pattern file, or a folder in its
+  place, no longer hides a deleted skip-worktree file. Gate effect: each of those stops now scans
+  the screens the edit reaches, and a stop under a `core.worktree` decoy blocks instead of reading
+  VERIFIED. Listing changes: a rename that is not committed lists both names, and a change of line
+  endings alone or of the executable bit alone is not listed (the tree still moves, so no stored
+  receipt answers for it). The history of main scans keeps the tree `git add -A` gives. Cost, for
+  the four reads of one stop on 50,000 files: about the same as before with no filters, less with
+  `eol=crlf`, and about 2 seconds more in a sparse checkout with 45,000 files left out. Known
+  limits: a file under a filter driver that is not LFS, or a `working-tree-encoding` file, reads as
+  changed on every stop while its bytes differ from the blob, and a deletion under sparse patterns
+  the agent wrote is not listed, though the tree moves.
 - usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
   `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
