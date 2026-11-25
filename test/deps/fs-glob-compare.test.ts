@@ -167,8 +167,10 @@ function makePattern(next: () => number, tree: Tree): string {
  * - file-before-trailing-globstar: a pattern that ends with a slash and `**` names a file the
  *   part before them matches. Node lists that file only in some walks (when that part is fixed
  *   text it reaches with no `**` before it), and the adapter always lists it.
+ * - dot-part-after-wildcard: a `..` that Node keeps after `**`, or a `.` at the end. The filter
+ *   does not read how Node walks those, so the wide listing is kept whole.
  */
-const WIDER_CASES = ['through-link', 'file-before-trailing-globstar'] as const;
+const WIDER_CASES = ['through-link', 'file-before-trailing-globstar', 'dot-part-after-wildcard'] as const;
 
 async function widerCase(root: string, tree: Tree, pattern: string, path: string): Promise<(typeof WIDER_CASES)[number] | null> {
   const names = parts(path);
@@ -176,7 +178,9 @@ async function widerCase(root: string, tree: Tree, pattern: string, path: string
     const above = names.slice(0, index + 1).join('/');
     if (tree.links.some((link) => link.path === above)) return 'through-link';
   }
-  if (pattern.endsWith('/**') && (await nodeAnswer(root, pattern.slice(0, -3))).includes(path)) {
+  if (/\*\*\/\.\.(?:\/|$)|\/\.$/u.test(pattern.replace(/\\/gu, '/'))) return 'dot-part-after-wildcard';
+  // Node reads a run of `/**` at the end as one.
+  if (pattern.endsWith('/**') && (await nodeAnswer(root, pattern.replace(/(?:\/\*\*)+$/u, ''))).includes(path)) {
     return 'file-before-trailing-globstar';
   }
   return null;

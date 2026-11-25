@@ -15,7 +15,7 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, expandBraces, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { checkGlobListBounds } from './glob-list-bounds.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
@@ -93,7 +93,24 @@ function checkGuardedPathCounts(entries: readonly string[]): void {
 function expectBoundedGlobArray(value: unknown, label: string): string[] {
   const globs = expectGlobArray(value, label);
   checkGlobListBounds(globs, label);
+  for (const glob of globs) {
+    checkNoExpansionFromRoot(glob, label);
+  }
   return globs;
+}
+
+// A brace group can leave an expansion empty or starting with /, as `{,src}/**` gives `/**`. Node's
+// glob walks such a pattern from the root of the machine, so the file system adapter never runs
+// it, and the files its other expansions name would then be left out of every listing. Refuse it.
+// The count of expansions is already inside the bounds above.
+function checkNoExpansionFromRoot(glob: string, label: string): void {
+  if (!glob.includes('{') || glob.startsWith('/')) {
+    return;
+  }
+  const expansions = expandBraces(glob) ?? [];
+  if (expansions.some((expansion) => expansion === '' || expansion.startsWith('/'))) {
+    throw configError`${label} pattern "${glob}" has a brace expansion that is empty or starts with /, so it names no path from the repository root. Write each alternative as a path from the repository root.`;
+  }
 }
 
 // A guarded entry with white space at the start or end names a path no file has, so it would

@@ -34,6 +34,14 @@ describe('the bound on syntax the filter does not read', () => {
     expect(fsGlobBoundProblem('x'.repeat(64 * 1024 + 1))).toContain('Node refuses');
   });
 
+  it('names a pattern or an expansion that is empty or starts from the machine root', () => {
+    for (const pattern of ['', '/x/*', '//x', '\\x', '{,zz}/**', '{/,a}/**', '{,}', '{,/}x/[a]']) {
+      expect(fsGlobBoundProblem(pattern), JSON.stringify(pattern)).toContain('root');
+    }
+    expect(fsGlobBoundProblem('a/{,zz}/**')).toBeNull();
+    expect(fsGlobBoundProblem('{,a}b/**')).toBeNull();
+  });
+
   it('names braces it cannot count', () => {
     expect(fsGlobBoundProblem('src/{a,{b,c}}/x')).toContain('brace');
     expect(fsGlobBoundProblem('src/{1..3}/x')).toContain('brace');
@@ -61,7 +69,8 @@ describe('the listing', () => {
     expect(listed('src/{a,b}/*.{ts,tsx}')).toEqual(['src/a/*', 'src/b/*']);
     expect(listed('{x}/k')).toEqual(['{x}/k']);
     expect(listed('${a,b}')).toEqual(['${a,b}']);
-    expect(listed('{,a}')).toEqual(['a']);
+    expect(listed('{,a}/x')).toEqual(['past-bound']);
+    expect(listed('x{,a}')).toEqual(['x', 'xa']);
   });
 
   it('also widens fixed parts with a letter on a platform that ignores case', () => {

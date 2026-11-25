@@ -21,6 +21,7 @@
  *
  * This unit reads patterns only. It must never decide a verdict.
  */
+import type { FsGlob } from '../contracts/index.js';
 import { wildcardNameMatcher } from '../primitives/match-glob.js';
 
 /**
@@ -32,7 +33,9 @@ import { wildcardNameMatcher } from '../primitives/match-glob.js';
  * when it is at most `length` characters long, holds no extglob group, has at most
  * `starRunsPerPart` runs of `*` in any part, and has braces the filter can expand (at most
  * `expansions` of them). A part that is `**` alone is not a run of `*`: Node walks it without a
- * regular expression.
+ * regular expression. Any pattern that is empty or starts with `/`, itself or in one of its brace
+ * expansions, is past the bound too, whatever its syntax: Node would walk it from the root of the
+ * machine.
  */
 export const FS_GLOB_BOUND = { length: 1024, starRunsPerPart: 1, expansions: 256 } as const;
 
@@ -44,7 +47,7 @@ export interface FsGlobListing {
   // The pattern handed to Node's fs.glob.
   pattern: string;
   // The folder the pattern starts from, relative to the adapter's folder: '' for that folder, or
-  // a path such as '..' or '/' when the pattern starts there.
+  // a path such as '..' when the pattern starts there.
   base: string;
   // Whether a path, relative to base and with '/' between its parts, is one the written pattern
   // matches. Null when Node lists exactly what the written pattern names, so no path is tested.
@@ -81,8 +84,8 @@ const NODE_EXPANDS_BRACES = /\{(?:(?!\{).)*\}/u;
  * The brace expansions of a pattern as Node makes them, or null when the braces are of a form this
  * unit does not expand: a nested group, a `}` with no `{`, a `{` with no `}`, or a group with no
  * comma whose body holds `..`, which Node may read as a range such as `{1..3}`. A group right after
- * a `$` is text, as Node keeps `${a,b}`. A group with no comma is text, braces included. An
- * expansion that is empty is dropped, as Node drops it. Returns 'too-many' past the bound.
+ * a `$` is text, as Node keeps `${a,b}`. A group with no comma is text, braces included. An empty
+ * expansion is kept, so the caller can see it. Returns 'too-many' past the bound.
  */
 function expandBracesAsNode(pattern: string): string[] | null | 'too-many' {
   if (!NODE_EXPANDS_BRACES.test(pattern)) return [pattern];
@@ -112,7 +115,18 @@ function expandBracesAsNode(pattern: string): string[] | null | 'too-many' {
     }
     i = close + 1;
   }
-  return forms.filter((form) => form !== '');
+  return forms;
+}
+
+// A pattern, or one of its brace expansions, that is empty or starts with `/` names no path under
+// the folder it is listed from: Node walks it from the root of the machine, as `{,zz}/**` becomes
+// `/**`, which can take minutes.
+const FROM_ROOT_REASON =
+  'it or one of its brace expansions is empty or starts with /, so it names no path in the repository and Node would walk it from the root of the machine';
+
+function fromRoot(written: string, forms: readonly string[] | null | 'too-many'): boolean {
+  if (written === '' || written.startsWith('/')) return true;
+  return Array.isArray(forms) && forms.some((form) => form === '' || form.startsWith('/'));
 }
 
 /**
@@ -163,10 +177,10 @@ function nodeParts(form: string): string[] {
   return parts;
 }
 
-// The leading parts that name the folder a pattern starts from: an empty first part (the root),
-// then any run of `.` and `..`.
+// The leading parts that name the folder a pattern starts from: a run of `.` and `..`. A pattern
+// that starts from the root of the machine never gets here (see fromRoot).
 function leadingCount(parts: readonly string[]): number {
-  let count = parts[0] === '' && parts.length > 1 ? 1 : 0;
+  let count = 0;
   while (count < parts.length - 1 && (parts[count] === '.' || parts[count] === '..')) count += 1;
   return count;
 }
@@ -305,6 +319,7 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
   if (pattern.length > NODE_MAX_PATTERN_LENGTH) return { kind: 'unchanged' };
   const written = pattern.replace(/\\/gu, '/');
   const forms = expandBracesAsNode(written);
+  if (fromRoot(written, forms)) return { kind: 'past-bound', reason: FROM_ROOT_REASON };
   if (!Array.isArray(forms) || CLASS_CHARACTER.test(written) || EXTGLOB_OPEN.test(written)) {
     const problem = boundProblem(written, forms);
     return problem === null ? { kind: 'unchanged' } : { kind: 'past-bound', reason: problem };
@@ -318,7 +333,7 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
   const listings = new Map<string, { base: string; tests: Array<((path: string) => boolean) | null> }>();
   const add = (base: string[], listed: string[], test: ((path: string) => boolean) | null): void => {
     const key = [...base, ...listed].join('/');
-    const entry = listings.get(key) ?? { base: base.join('/') || (base[0] === '' ? '/' : ''), tests: [] };
+    const entry = listings.get(key) ?? { base: base.join('/'), tests: [] };
     entry.tests.push(test);
     listings.set(key, entry);
   };
@@ -369,4 +384,22 @@ export function fsGlobBoundProblem(pattern: string): string | null {
   }
   const reading = nodeGlobReading(pattern, { nocase: false });
   return reading.kind === 'past-bound' ? reading.reason : null;
+}
+
+// A character Node's glob reads as syntax in a name, or `\`, which it reads as `/`.
+const NODE_GLOB_SYNTAX = /[*?[\]{}()\\]/u;
+
+/**
+ * The files the patterns match under one folder, with the folder's name read as plain text, or
+ * null when the reader cannot list them that way. A reader with globUnder lists them with the
+ * folder as the walk's start. A reader without it, such as a wrapper that passes glob through, is
+ * given the folder in the pattern only when its name holds nothing Node reads as syntax, so the
+ * answer is the same. Otherwise the caller must read the folder as one it could not list.
+ */
+export async function globUnderFolder(fs: FsGlob, folder: string, patterns: readonly string[]): Promise<string[] | null> {
+  const under = folder.replace(/\/+$/u, '');
+  if (fs.globUnder !== undefined) return fs.globUnder(under, [...patterns]);
+  if (under === '') return fs.glob([...patterns]);
+  if (NODE_GLOB_SYNTAX.test(under)) return null;
+  return fs.glob(patterns.map((pattern) => `${under}/${pattern}`));
 }
