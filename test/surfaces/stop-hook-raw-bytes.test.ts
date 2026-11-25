@@ -125,19 +125,22 @@ async function verifiedStop(): Promise<void> {
   expect(first.stderr).toContain(FAST_PATH);
 }
 
-async function stop(): Promise<{ stderr: string; scanned: string[] }> {
+async function stop(): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
   const out: string[] = [];
+  const decision: string[] = [];
   state.scanned = [];
   const ports = {
     ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
     pins: memoryPinStore(),
-    stdoutWrite: async () => {},
+    stdoutWrite: async (text: string) => {
+      decision.push(text);
+    },
     stderrWrite: async (text: string) => {
       out.push(text);
     },
   };
   await runStopHookFromStdin('{}', ports);
-  return { stderr: out.join(''), scanned: [...state.scanned] };
+  return { stdout: decision.join(''), stderr: out.join(''), scanned: [...state.scanned] };
 }
 
 /** The next stop checks the screen the hidden edit reaches. */
@@ -302,5 +305,9 @@ describe('an edit a local git setting hides, after a verified stop', { timeout: 
     expect(next.stderr).not.toContain(FAST_PATH);
     expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
     expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    // The stop blocks once, and says the working tree could not be read.
+    const block = JSON.parse(next.stdout) as { decision?: string; reason?: string };
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/core\.worktree/u);
   });
 });
