@@ -511,17 +511,27 @@
   HEAD's commit and trees are read in Node and each id is checked, because git does not check an
   object's id when it reads it: an object file overwritten to list an edited blob now stops the
   read with an error that names `git fsck`, and a HEAD blob overwritten as an LFS pointer to edited
-  bytes no longer passes. The reader reads back the index it builds, so a new file under a folder
+  bytes no longer passes. A HEAD that resolves but that git cannot read, such as a commit object
+  overwritten with other bytes, now names `git fsck` and blocks the stop, where it read as a
+  repository with no commits and let the stop through. The reader reads back the index it builds, so a new file under a folder
   git will not store, such as `GIT~1` or `.GIT`, no longer keeps the tree of the last receipt. A
-  file below a link in its folder part is never hashed through the link. A link whose target is
-  outside the files the walk hashes (outside the repository, in an ignored folder, or in `.git`)
-  gives a tree id that never repeats. Listings run with `core.ignorecase` false, so a new file
+  file below a link in its folder part is never hashed through the link. A link is bound by its
+  target: a link that points nowhere by its text, and a link to a file outside the hashed files
+  (outside the repository, in an ignored folder such as `dist/`, or in `.git`) by its text and the
+  file's bytes, hashed fresh, so an edit there moves the tree, and such a link is always listed. A
+  link to a folder outside the hashed files cannot be bound: the stop blocks with a gap that names
+  the link and says to commit what it points to or replace the link with the files, and
+  `usabl check` fails with the same text. Listings run with `core.ignorecase` false, so a new file
   whose name differs from a tracked one only in case is listed. An edit inside a submodule is
   listed by its path in the outer repository. The reader refuses a work tree other than the
   repository it runs in: outside its folder, or a folder where git finds another repository, as
   with `core.worktree` naming a parent repository that ignores the project. Every git call drops
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, the object store variables, and every
-  `GIT_CONFIG_*` and `GIT_ATTR_*` variable. An empty sparse pattern file, or a folder in its place,
+  `GIT_CONFIG_*` and `GIT_ATTR_*` variable. So git settings passed through the environment no
+  longer reach usabl's git, `GIT_CONFIG_GLOBAL` included (git reads `~/.gitconfig` instead), and a
+  CI container that sets `safe.directory` through `GIT_CONFIG_COUNT` fails with git's "dubious
+  ownership" error; settings in the repository's config, the global config file, and the system
+  config still apply. An empty sparse pattern file, or a folder in its place,
   no longer hides a deleted skip-worktree file. Gate effect: each of those stops now scans the
   screens the edit reaches, or never answers from a stored receipt, and a stop under a
   `core.worktree` decoy, a sibling copy or a parent repository, blocks with a reason that names the
@@ -537,9 +547,11 @@
   an LFS pointer with extension lines, or a `working-tree-encoding` file reads as changed on every
   stop while its bytes differ from the blob. A deletion under sparse patterns the agent wrote, and
   the deletion of a submodule's files by emptying its folder, are not listed, though the tree
-  moves. A repository that keeps a link out of the hashed files never verifies a run, and the gap
-  says files changed during the check. Reads other than HEAD's trees, such as the merge-base diff
-  and the guard's policy reads, take objects as stored.
+  moves. A link to a folder outside the hashed files blocks every stop until it is fixed. Reads
+  other than HEAD's trees, such as the merge-base diff and the guard's policy reads, take objects
+  as stored: until the merge-base diff reads checked trees, an agent that overwrites a tree object
+  only the trusted side holds can hide a committed edit from the changed list, and a full run can
+  say VERIFIED.
 - usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
   `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
