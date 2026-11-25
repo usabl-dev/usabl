@@ -3,8 +3,8 @@
  * This unit reports repository facts only and must never decide coverage or verdicts.
  * Missing HEAD blobs return null so the guard can disclose not-covered work honestly.
  */
-import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { lstat, mkdtemp, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -179,6 +179,188 @@ function parseStatus(output: string): Array<{ code: string; path: string }> {
   }
 
   return parsed;
+}
+
+/**
+ * A tracked file whose working copy git status and git diff never compare with the index. The
+ * assume-unchanged flag (`git update-index --assume-unchanged`, or core.ignoreStat) and the
+ * skip-worktree flag (`git update-index --skip-worktree`, or sparse checkout) both make git skip
+ * the file, so an edit to it was in no changed list, and a stop whose only edit it was read
+ * "nothing to check". The tree a receipt binds is built from a fresh index with no flags, so it
+ * always saw the edit.
+ */
+interface FlaggedEntry {
+  path: string;
+  mode: string;
+  id: string;
+  skipWorktree: boolean;
+}
+
+// `git ls-files -v -s -z` prints "TAG MODE ID STAGE\tNAME\0". The tag is S for skip-worktree and a
+// lower case letter for assume-unchanged. A file with both flags gets the lower case tag, so it
+// reads as assume-unchanged here, which never leaves it out (see hiddenIndexEdits). An entry in a
+// merge conflict has a stage above 0, and git status lists it already.
+function parseFlaggedEntry(record: string): FlaggedEntry | null {
+  const tag = record.slice(0, 1);
+  if (tag !== 'S' && !/^[a-z]$/u.test(tag)) {
+    return null;
+  }
+  const tab = record.indexOf('\t');
+  if (tab < 0) {
+    return null;
+  }
+  const [mode, id, stage] = record.slice(2, tab).split(' ');
+  if (mode === undefined || id === undefined || stage !== '0' || !FULL_OBJECT_ID.test(id)) {
+    return null;
+  }
+  return { path: record.slice(tab + 1), mode, id, skipWorktree: tag === 'S' || tag === 's' };
+}
+
+// Every tracked file is listed, so in a large repository the listing can be far longer than the
+// buffer the other listings use. It is read as a stream, and only the flagged entries are kept.
+// A git failure rejects, so the run stops with an error and never reads a short list as complete.
+function listFlaggedEntries(top: string): Promise<FlaggedEntry[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['ls-files', '-v', '-s', '-z'], {
+      cwd: top,
+      env: { ...process.env, ...GIT_ENVIRONMENT },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const flagged: FlaggedEntry[] = [];
+    let rest = Buffer.alloc(0);
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      let data = rest.length === 0 ? chunk : Buffer.concat([rest, chunk]);
+      let end = data.indexOf(0);
+      while (end >= 0) {
+        const entry = parseFlaggedEntry(data.subarray(0, end).toString('utf8'));
+        if (entry !== null) {
+          flagged.push(entry);
+        }
+        data = data.subarray(end + 1);
+        end = data.indexOf(0);
+      }
+      rest = Buffer.from(data);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(flagged);
+      } else {
+        reject(new Error(`git ls-files failed, so usabl could not list the files git hides from git status. ${firstLineOf(stderr)}`.trim()));
+      }
+    });
+  });
+}
+
+function firstLineOf(text: string): string {
+  return operatorText(text.split('\n')[0] ?? '');
+}
+
+async function isSparseCheckout(top: string): Promise<boolean> {
+  try {
+    return (await runGit(top, ['config', '--bool', '--get', 'core.sparseCheckout'])).trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// The blob ids git add would store for these regular files, read through the same filters, such
+// as line ending rules in .gitattributes. Each path is an argument after --, so a name with a
+// newline or a leading dash is read as that file. A failure, such as a file removed in between,
+// gives null, and every file in the call then counts as changed.
+async function hashFiles(top: string, paths: readonly string[]): Promise<Array<string | null>> {
+  const ids: Array<string | null> = [];
+  for (let i = 0; i < paths.length; i += HASH_BATCH) {
+    const batch = paths.slice(i, i + HASH_BATCH);
+    try {
+      const lines = (await runGit(top, ['hash-object', '--', ...batch])).split('\n');
+      ids.push(...batch.map((_, index) => lines[index] ?? null));
+    } catch {
+      ids.push(...batch.map(() => null));
+    }
+  }
+  return ids;
+}
+
+const HASH_BATCH = 200;
+
+// The link text the index stores for a symbolic link, as bytes, or null when git cannot read it.
+async function blobBytes(top: string, id: string): Promise<Buffer | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['cat-file', 'blob', id], {
+      cwd: top,
+      encoding: 'buffer',
+      env: { ...process.env, ...GIT_ENVIRONMENT },
+    });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+const REGULAR_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
+const LINK_MODE = '120000';
+
+/**
+ * The flagged files whose working copy is not what the index holds, as status entries: M for a
+ * file whose content or kind changed, D for one that is gone. Paths are from the repository
+ * root, as git status prints them, wherever usabl runs.
+ *
+ * A file is compared by the blob id git add would give it, and a symbolic link by its link text,
+ * so a flagged file written again with the same bytes is no change. A file usabl cannot read, a
+ * folder, a pipe, a submodule, or a file that turned into a link or back counts as changed, so a
+ * file usabl could not compare is never left out. A skip-worktree file that is not there is left
+ * out only in a sparse checkout, where git removes the files outside the sparse set on purpose.
+ * Anywhere else it is a deleted file. A change of the executable bit alone is not compared.
+ */
+async function hiddenIndexEdits(cwd: string): Promise<Array<{ code: string; path: string }>> {
+  const top = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).replace(/\n$/u, '');
+  const flagged = await listFlaggedEntries(top);
+  if (flagged.length === 0) {
+    return [];
+  }
+  const sparse = await isSparseCheckout(top);
+  const edits: Array<{ code: string; path: string }> = [];
+  const toHash: FlaggedEntry[] = [];
+  for (const entry of flagged) {
+    let stats: Awaited<ReturnType<typeof lstat>>;
+    try {
+      stats = await lstat(join(top, entry.path));
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        if (!(entry.skipWorktree && sparse)) {
+          edits.push({ code: 'D', path: entry.path });
+        }
+      } else {
+        edits.push({ code: 'M', path: entry.path });
+      }
+      continue;
+    }
+    if (stats.isFile() && REGULAR_MODES.has(entry.mode)) {
+      toHash.push(entry);
+    } else if (stats.isSymbolicLink() && entry.mode === LINK_MODE) {
+      const stored = await blobBytes(top, entry.id);
+      const current = await readlink(join(top, entry.path), { encoding: 'buffer' }).catch(() => null);
+      if (stored === null || current === null || !stored.equals(current)) {
+        edits.push({ code: 'M', path: entry.path });
+      }
+    } else {
+      edits.push({ code: 'M', path: entry.path });
+    }
+  }
+  const ids = await hashFiles(top, toHash.map((entry) => entry.path));
+  toHash.forEach((entry, index) => {
+    if (ids[index] !== entry.id) {
+      edits.push({ code: 'M', path: entry.path });
+    }
+  });
+  // Plain code-unit order, so the list never depends on the order the checks finished in.
+  return edits.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 // `git ls-tree -z` prints "MODE TYPE SHA\tNAME\0". The name is everything after the first tab.
@@ -419,7 +601,16 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       // the folder alone, and a user's status.showUntrackedFiles=no hides new files completely, so
       // a new screen file would match no UI glob and read as nothing to check.
       const output = await runListing(cwd, ['status', '--porcelain', '-z', '--untracked-files=all'], maxBuffer);
-      return parseStatus(output);
+      const listed = parseStatus(output);
+      // git status never compares a file marked assume-unchanged or skip-worktree, so an edit to
+      // one is added here. Every surface that lists changes reads this listing.
+      const seen = new Set(listed.map((entry) => entry.path));
+      for (const edit of await hiddenIndexEdits(cwd)) {
+        if (!seen.has(edit.path)) {
+          listed.push(edit);
+        }
+      }
+      return listed;
     },
     async diffNameOnly(ref) {
       assertReadableRef(ref);
