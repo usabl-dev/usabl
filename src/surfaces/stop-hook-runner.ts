@@ -36,6 +36,7 @@ import {
   olderThanSetupLines,
   resolveBranchScope,
   SCOPE_PROBLEM_REASONS,
+  scopeGapDetailPiece,
   scopeGapNextStep,
   scopeGit,
   type BranchScope,
@@ -1127,9 +1128,10 @@ function scopeGapMessage(
     lines.push(guarded.line);
   }
   lines.push(APPROVAL_REQUIRED_HUMAN_LEVER);
+  const detail = scopeGapDetailPiece(scope);
   return framedMessage(lines, [
     `trusted branch: ${scope.branch}`,
-    ...(scope.detail === null ? [] : [`error: ${scope.detail}`]),
+    ...(detail === null ? [] : [detail]),
     ...(guarded === null ? [] : [guarded.piece]),
   ]);
 }

@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
 import { boundField } from '../output/bounded-text.js';
+import { isSafeBranchName } from '../primitives/branch-name.js';
 import { firstLine } from '../primitives/first-line.js';
 import { listChangedFiles } from './cli.js';
 import { frameUntrustedBlock } from './scrub.js';
@@ -28,6 +29,7 @@ export type StartingCommitProblem =
   | 'branch-missing'
   | 'no-common-commit'
   | 'not-ancestor'
+  | 'trusted-branch-may-be-stale'
   | 'git-failed';
 
 /**
@@ -35,7 +37,7 @@ export type StartingCommitProblem =
  *
  * `starting-commit`: the starting commit holds a config, so policy is read and guarded there, as
  * CI reads it at the base of the pull request. `branch-sets-usabl-up`: neither the starting commit
- * nor the tip of the trusted branch holds one, so this branch is the one that sets usabl up, and
+ * nor the tip of any branch of origin holds one, so this branch is the one that sets usabl up, and
  * its own policy is the only policy there is. The check reads it, and says it is not approved yet.
  * `branch-older-than-setup`: the trusted branch holds a config but the starting commit does not,
  * so the branch left the trusted branch before usabl was set up there, and checks nothing until it
@@ -48,7 +50,9 @@ export type PolicySource = 'starting-commit' | 'branch-sets-usabl-up' | 'branch-
  * origin/main), the full commit id where HEAD left it, where policy is read, and whether the tip of
  * the trusted branch holds a config. `no-trusted-branch`
  * means git records no default branch for origin. `not-found` means a trusted branch is named and
- * its starting commit could not be found or used; `detail` is git's first line for a git failure.
+ * its starting commit could not be found or used; `detail` is git's first line for a git failure,
+ * and for `trusted-branch-may-be-stale` the other branch of origin that holds a config, or null
+ * when no such branch has a plain name.
  */
 export type StartingCommit =
   | { kind: 'found'; branch: string; commit: string; policy: PolicySource; configOnTrustedBranch: boolean }
@@ -62,20 +66,28 @@ export interface ScopeGitResult {
   stderr: string;
 }
 
-export type ScopeGit = (args: readonly string[]) => Promise<ScopeGitResult>;
+/** One git call. `input`, when given, is written to git's standard input. */
+export type ScopeGit = (args: readonly string[], input?: string) => Promise<ScopeGitResult>;
 
 // usabl reads git's exit codes here, never its words, but the detail it prints is kept in English.
 const ENGLISH_MESSAGES = { LC_ALL: 'C' };
 
 /** git, run in `cwd` with an argument list, never a shell string. */
 export function scopeGit(cwd: string): ScopeGit {
-  return async (args) => {
+  return async (args, input) => {
     try {
-      const { stdout, stderr } = await execFileAsync('git', [...args], {
+      const pending = execFileAsync('git', [...args], {
         cwd,
         encoding: 'utf8',
         env: { ...process.env, ...ENGLISH_MESSAGES },
       });
+      if (input !== undefined) {
+        // A git that stops before it reads all of its input reports that with its exit code. The
+        // broken pipe on this side is not a second error.
+        pending.child.stdin?.on('error', () => {});
+        pending.child.stdin?.end(input);
+      }
+      const { stdout, stderr } = await pending;
       return { code: 0, stdout, stderr };
     } catch (err) {
       const code: unknown = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : null;
@@ -174,6 +186,18 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
   if ('failed' in atTip) {
     return gitFailed(branch, atTip.failed);
   }
+  if (!atStart.held && !atTip.held) {
+    // origin/HEAD can name an old branch after the project moves its default branch, because a
+    // fetch does not move it. A config at the tip of any other branch of origin means usabl is set
+    // up in this repository, so this branch is not read as the one that sets it up.
+    const elsewhere = await configOnOtherBranch(git, tipCommit);
+    if ('failed' in elsewhere) {
+      return gitFailed(branch, elsewhere.failed);
+    }
+    if (elsewhere.held) {
+      return { kind: 'not-found', branch, problem: 'trusted-branch-may-be-stale', detail: elsewhere.name };
+    }
+  }
   const policy: PolicySource = atStart.held
     ? 'starting-commit'
     : atTip.held
@@ -211,6 +235,77 @@ async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boole
     return { held: true };
   }
   return { failed: { ...listed, stderr: `git listed an unexpected entry for ${CONFIG_FILE}` } };
+}
+
+// One line of git cat-file --batch-check for a tree that is there.
+const TREE_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}) tree \d+$/;
+
+/**
+ * Whether the tip of any branch of origin other than the trusted one holds usabl.config.json at
+ * the root, and the first such branch with a plain name, in name order.
+ *
+ * It reads local refs only, never the network. git lists the branches once, and one batch lookup
+ * asks each tip for its tree and for the config, so a clone with many branches costs two git
+ * calls. A tree that is missing, a line git was not expected to print, and a call that fails are
+ * a git failure, never "no config". Anything at the config path counts as held, as in holdsConfig.
+ * A branch name reaches output only when it is a plain name.
+ */
+async function configOnOtherBranch(
+  git: ScopeGit,
+  trustedTip: string,
+): Promise<{ held: false } | { held: true; name: string | null } | { failed: ScopeGitResult }> {
+  const listed = await git(['for-each-ref', '--format=%(objectname) %(refname)', ORIGIN_BRANCHES]);
+  if (listed.code !== 0) {
+    return { failed: listed };
+  }
+  const unexpected = (result: ScopeGitResult, what: string) => ({ failed: { ...result, stderr: `git printed an unexpected line for ${what}` } });
+  const refsByCommit = new Map<string, string[]>();
+  for (const line of listed.stdout.split('\n')) {
+    if (line.length === 0) {
+      continue;
+    }
+    const space = line.indexOf(' ');
+    const commit = line.slice(0, space);
+    const ref = line.slice(space + 1);
+    if (space === -1 || !COMMIT_ID.test(commit) || !ref.startsWith(ORIGIN_BRANCHES)) {
+      return unexpected(listed, 'the branches of origin');
+    }
+    // The trusted branch's tip was asked already, and origin/HEAD names it.
+    if (ref === TRUSTED_BRANCH_POINTER || commit === trustedTip) {
+      continue;
+    }
+    refsByCommit.set(commit, [...(refsByCommit.get(commit) ?? []), ref]);
+  }
+  const commits = [...refsByCommit.keys()].sort();
+  if (commits.length === 0) {
+    return { held: false };
+  }
+  const input = commits.map((commit) => `${commit}^{tree}\n${commit}:${CONFIG_FILE}\n`).join('');
+  const batch = await git(['cat-file', '--batch-check'], input);
+  if (batch.code !== 0) {
+    return { failed: batch };
+  }
+  const answers = batch.stdout.split('\n');
+  if (answers.at(-1) === '') {
+    answers.pop();
+  }
+  if (answers.length !== commits.length * 2) {
+    return unexpected(batch, `the tips of the branches of origin`);
+  }
+  const heldRefs: string[] = [];
+  for (const [index, commit] of commits.entries()) {
+    if (!TREE_LINE.test(answers[index * 2] ?? '')) {
+      return { failed: { ...batch, stderr: `git could not read the tree of ${commit}` } };
+    }
+    if (answers[index * 2 + 1] !== `${commit}:${CONFIG_FILE} missing`) {
+      heldRefs.push(...(refsByCommit.get(commit) ?? []));
+    }
+  }
+  if (heldRefs.length === 0) {
+    return { held: false };
+  }
+  const plain = heldRefs.map(branchName).filter(isSafeBranchName).sort();
+  return { held: true, name: plain[0] ?? null };
 }
 
 /** Why a check could not tell which committed changes to check. */
@@ -299,6 +394,11 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
   'no-common-commit':
     'this branch and the trusted branch share no commit in this clone, which happens in a shallow clone or on a branch with unrelated history',
   'not-ancestor': 'the commit git found is not an ancestor of HEAD, so it cannot be where this branch started',
+  'trusted-branch-may-be-stale':
+    'neither that branch nor the commit where this branch left it has usabl.config.json, but another branch of origin has one at its tip, ' +
+    'so origin/HEAD may be stale: after a project moves its default branch, a fetch does not move origin/HEAD. ' +
+    'usabl does not read this branch as one that sets usabl up while another branch of origin has a config ' +
+    '(the first such branch with a plain name is under "branch with usabl.config.json" in the untrusted text below)',
   'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
   'listing-failed':
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
@@ -306,7 +406,23 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
 
 // The problems a fetch alone does not clear, because origin/HEAD itself names the wrong ref. After
 // a default branch rename, origin/HEAD still names the old branch, and a fetch does not move it.
-const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>(['not-remote-branch', 'branch-missing']);
+const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>([
+  'not-remote-branch',
+  'branch-missing',
+  'trusted-branch-may-be-stale',
+]);
+
+/**
+ * The untrusted line for a scope gap's detail, or null when it has none: git's error, or the
+ * other branch of origin that holds a config. Both come from the repository, so the caller prints
+ * it inside the untrusted frame.
+ */
+export function scopeGapDetailPiece(scope: { problem: ScopeProblem; detail: string | null }): string | null {
+  if (scope.detail === null) {
+    return null;
+  }
+  return scope.problem === 'trusted-branch-may-be-stale' ? `branch with ${CONFIG_FILE}: ${scope.detail}` : `error: ${scope.detail}`;
+}
 
 /**
  * The next step for a scope gap, shared by the Stop hook and `usabl check --branch-scope`.
@@ -350,7 +466,8 @@ export function branchScopeGapText(scope: Extract<BranchScope, { kind: 'gap' }>)
       'It did not fall back to the uncommitted changes alone or to the whole history.',
     scopeGapNextStep(scope.problem, 'run usabl check --branch-scope again'),
   ];
-  const pieces = [`trusted branch: ${scope.branch}`, ...(scope.detail === null ? [] : [`error: ${scope.detail}`])];
+  const detail = scopeGapDetailPiece(scope);
+  const pieces = [`trusted branch: ${scope.branch}`, ...(detail === null ? [] : [detail])];
   return [...lines, frameUntrustedBlock(pieces.map((piece) => boundField(piece, 'gapReason')))].join('\n');
 }
 
