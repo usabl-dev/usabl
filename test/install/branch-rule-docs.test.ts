@@ -96,7 +96,30 @@ describe('the branch rule check in a repository with only the docs gate', () => 
 describe('the branch rule check with both gates', () => {
   it('checks the branch the app gate names', async () => {
     const both = { [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('main'), SHA), ...docsGate('trunk') };
-    expect(await gateBranchTarget(files(both))).toEqual({ name: 'main', source: 'gate', line: 8 });
+    expect(await gateBranchTarget(files(both))).toEqual({ name: 'main', source: 'gate', line: 8, docsGateBranch: 'trunk' });
+  });
+
+  it('says only the app pull requests are not gated when the docs gate runs on the default branch', async () => {
+    const both = { [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('trunk'), SHA), ...docsGate('main') };
+    const target = await gateBranchTarget(files(both));
+    expect(target).toEqual({ name: 'trunk', source: 'gate', line: 8, docsGateBranch: 'main' });
+    const result = await verifyBranchRule(ghProtecting('trunk', 'main').reader, target);
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.message.split('\n')[0]).toBe(
+      "cannot verify: the branch rule on trunk is set, but GitHub reports main as the default branch, and the app's pull requests into main are not gated: the docs gate runs on them, but the app gate runs only on pull requests into trunk.",
+    );
+    expect(result.message).not.toContain('and pull requests into main are not gated');
+    expect(result.branchNote).toContain("the app's pull requests into main are not gated");
+    expect(result.branchNote).not.toContain('so pull requests into main are not gated');
+  });
+
+  it('keeps saying pull requests into the default branch are not gated when the docs gate runs elsewhere', async () => {
+    const both = { [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('trunk'), SHA), ...docsGate('trunk') };
+    const result = await verifyBranchRule(ghProtecting('trunk', 'main').reader, await gateBranchTarget(files(both)));
+    expect(result.message.split('\n')[0]).toBe(
+      'cannot verify: the branch rule on trunk is set, but GitHub reports main as the default branch, and pull requests into main are not gated.',
+    );
   });
 });
 
