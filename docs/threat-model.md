@@ -269,9 +269,13 @@ re-baseline to green.
   read the branch as one that sets usabl up. It is a not-covered gap that checks nothing, says
   `origin/HEAD` may be stale, and names `git remote set-head origin --auto`. Before, that clone
   read as a setup branch, and a waiver the branch committed was taken as policy. The check reads
-  local objects only: it reads each tip's root tree, never the config's own object, with lazy
-  fetch off, so a partial clone does not fetch from origin inside a stop, and a tree the clone
-  does not have is a gap, never "no config". This branch's own copy on origin does not count, so a pushed setup branch
+  local objects only: it reads each tip's root tree, never the config's own object. Every git
+  call that finds the starting commit and where policy is read, this check included, runs with
+  lazy fetch off, so in a partial clone that step does not fetch from origin, with the
+  developer's remote settings and credential helper, inside a stop. A tree the clone does not
+  have is a gap, never "no config": in a treeless clone it names `git ls-tree` and the branch to
+  load, so after a fetch that moves the trusted branch, or on the setup path while another
+  branch's tree is not local, the stop is that gap until the person loads the tree. This branch's own copy on origin does not count, so a pushed setup branch
   still reads as one: the branch of origin with the current branch's name and the current
   branch's upstream are skipped, unless that name on origin is `main`, `master`, `trunk`, or
   `develop`, which always count. A detached HEAD skips nothing. Its costs: a setup branch named one

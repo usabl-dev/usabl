@@ -4405,21 +4405,39 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     `git ls-tree --full-tree --name-only -z <commit> -- usabl.config.json`: the name in the listing
     means held, an empty listing with exit 0 means absent, and any other answer is a git failure.
     A git failure is the not-covered gap below, never "no config". A starting commit that holds
-    anything at that path reads policy there, as above. When neither commit holds it, the hook
-    also asks the tip of every other branch of origin, from local objects only. It makes two git
-    calls, both with `GIT_NO_LAZY_FETCH=1` in their environment, so a partial clone never
-    fetches from origin inside a stop (git 2.45 and later honor it; an older git may still fetch,
-    and a fetch that fails is a git failure). The first is one `git for-each-ref
+    anything at that path reads policy there, as above. Every git call that finds the starting
+    commit and where policy is read runs with `GIT_NO_LAZY_FETCH=1` in its environment, so in a
+    partial clone this step never fetches from origin (git 2.45 and later honor it; an older git
+    may still fetch, and a fetch that fails is a git failure). This sentence covers this step
+    only, not the other git calls of a stop. When neither commit holds it, the hook also asks the
+    tip of every other branch of origin, from local objects only, in two git calls. The first is
+    one `git for-each-ref
     --format=%(objectname)%09%(refname)%09%(HEAD)%09%(upstream) refs/remotes/origin/ refs/heads/`,
     which lists the branches of origin and the local branches, with the branch checked out here
     and each local branch's upstream. The second is one `git cat-file --batch` that reads the root
     tree of each distinct tip (`<commit>^{tree}`), read one character per byte. Whether the
     config is there comes from the entry names in that tree, never from the config's own object,
-    which a blob-less partial clone does not have. A tree git does not have (a treeless partial
-    clone), an answer git was not expected to print (a second branch checked out here, a header
-    that is not a tree, a size or an entry cut short), or a call that fails is a git failure, and
-    anything at the config path counts as held. git may print up to 64 MiB on each call; past
-    that the gap's error says git printed more than usabl reads.
+    which a blob-less partial clone does not have. A config found at any tip is the answer, even
+    when other trees are missing. An answer git was not expected to print (a second branch
+    checked out here, a header that is not a tree, a size or an entry cut short), or a call that
+    fails, is a git failure, and anything at the config path counts as held. git may print up to
+    64 MiB on each call; past that the gap's error says git printed more than usabl reads.
+  - A tree the clone does not have, at the starting commit, at the trusted tip, or at another
+    branch of origin: the hook asks git for each object's type (one `git cat-file --batch-check`)
+    and whether this is a partial clone (`git config --get-regexp` for `extensions.partialclone`
+    or a `remote.<name>.promisor`). A commit whose tree is missing in a partial clone, which is
+    what a treeless clone (`--filter=tree:0`) leaves after a fetch, is the not-covered gap below
+    with the reason "this is a partial clone that does not have the tree of a commit usabl needs
+    to read ...". Its next step is "Next: run git ls-tree once with each name under "tree not in
+    this clone" in the untrusted text below ...", not a fetch: `git fetch` does not load trees in
+    a treeless clone, and `git ls-tree <name>` reads the tree, so git loads it. The names go
+    inside the untrusted frame as "tree not in this clone: ...": a branch with a plain name, else
+    the commit id, at most 10 and then the count of the rest. In a treeless clone this gap can
+    follow every `git fetch` that moves the trusted branch, and on the setup path it follows
+    while any other branch of origin has a tree that is not local, until those trees are loaded.
+    A branch of origin that names a blob or a tree is a git failure that says "<branch> names a
+    blob, not a commit, so it has no tree to read". A missing commit, or a missing tree outside a
+    partial clone, is a git failure that says so.
   - A branch that sets usabl up: neither the starting commit nor the tip of any branch of origin
     holds `usabl.config.json`. There is no trusted policy to read, so the stop checks the same
     changes (every change since the starting commit, and the receipt binds that commit), reads the
@@ -4473,7 +4491,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     that is not `refs/remotes/origin/<name>` (a local branch under `refs/heads/`, a tag, a branch
     of another remote, or `origin/HEAD` itself), git has no commit for the
     branch, the branch and HEAD share no commit in this clone (a shallow clone, or unrelated
-    history), the commit is not an ancestor of HEAD, `origin/HEAD` may be stale (above), git
+    history), the commit is not an ancestor of HEAD, `origin/HEAD` may be stale (above), a
+    partial clone does not have a tree it needs (above, with its own `git ls-tree` step), git
     fails while it looks, or git cannot list the files changed since it. The stop is a not-covered
     gap: it checks nothing and blocks with
     "NOT verified - not covered: usabl could not find where this branch left the trusted branch
