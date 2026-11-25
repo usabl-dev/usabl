@@ -704,9 +704,12 @@ export function parseBundle(raw: unknown): ParseBundleResult {
   // the engine's limit and throws a RangeError in place of returning them. The file is refused
   // either way. This says why, and quotes nothing from the file, so the person is not told that
   // valid YAML is invalid. Any other error, a RangeError with another message included, is a fault
-  // that says nothing about the file, so it is thrown on as before. The list limits above keep one
-  // requirement under about 13,000 problems, so no file within them reaches this today. The catch
-  // stays in case a later change or a much smaller stack lets one through.
+  // that says nothing about the file, so it is thrown on as before. With Node's default settings,
+  // no file within the limits reaches this: the list limits keep one requirement under about
+  // 13,000 problems, and the library's compiled object check adds them up one at a time. When code
+  // generation is turned off, the library checks objects another way, which collects all the
+  // problems of the file's requirements in one call, so the densest files within the limits reach
+  // this. They are still refused, with this reason.
   let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
   try {
     parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
