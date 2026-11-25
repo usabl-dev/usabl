@@ -281,7 +281,7 @@ describe('honest filters read an unchanged file as unchanged', { timeout: REAL_P
     const first = await tree();
     expect(await paths()).toEqual([]);
     expect(await tree()).toBe(first);
-    await write('src/App.tsx', APP_EDITED.replace('\n', '\r\n'));
+    await write('src/App.tsx', APP_EDITED.replaceAll('\n', '\r\n'));
     expect(await paths()).toEqual(['src/App.tsx']);
     expect(await tree()).not.toBe(first);
   });
