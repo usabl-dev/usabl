@@ -21,16 +21,19 @@ const FULL_PROTECTION = JSON.stringify({
   required_pull_request_reviews: { require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1 },
 });
 
-// A stand-in for gh: GitHub reports defaultBranch as the default branch, classic protection on
-// each protected branch, no rulesets, and no protection anywhere else.
-function fakeGhScript(defaultBranch: string, protectedBranches: string[]): string {
+// A stand-in for gh: GitHub reports defaultBranch as the default branch, or the repository read
+// fails when it is null, classic protection on each protected branch, no rulesets, and no
+// protection anywhere else.
+function fakeGhScript(defaultBranch: string | null, protectedBranches: string[]): string {
   const protectedCases = protectedBranches.map(
     (branch) => `  'repos/{owner}/{repo}/branches/${branch}/protection') printf '%s\\n' '${FULL_PROTECTION}' ;;`,
   );
   return [
     '#!/bin/sh',
     'case "$2" in',
-    `  'repos/{owner}/{repo}') printf '%s\\n' '{"default_branch":"${defaultBranch}"}' ;;`,
+    defaultBranch === null
+      ? `  'repos/{owner}/{repo}') printf 'gh: Server Error (HTTP 502)\\n' >&2; exit 1 ;;`
+      : `  'repos/{owner}/{repo}') printf '%s\\n' '{"default_branch":"${defaultBranch}"}' ;;`,
     ...protectedCases,
     `  *rulesets*) printf '[]\\n' ;;`,
     `  *) printf 'gh: Branch not protected (HTTP 404)\\n' >&2; exit 1 ;;`,
@@ -78,7 +81,7 @@ describe('install --branch-rule and doctor agree on the branch rule', () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  async function useGh(defaultBranch: string, protectedBranches: string[]): Promise<void> {
+  async function useGh(defaultBranch: string | null, protectedBranches: string[]): Promise<void> {
     const bin = join(workspace, '.fake-bin');
     await mkdir(bin, { recursive: true });
     await writeFile(join(bin, 'gh'), fakeGhScript(defaultBranch, protectedBranches), { encoding: 'utf8', mode: 0o755 });
@@ -206,6 +209,21 @@ describe('install --branch-rule and doctor agree on the branch rule', () => {
       expect(answer.doctorStep).toContain('The trunk branch does not require all of');
       expect(answer.doctorStep).toContain('GitHub reports main as the default branch, but the gate runs on pull requests into trunk, so pull requests into main are not gated.');
       expect(answer.doctorStep).toContain(fixLine);
+    });
+
+    it('is not verified in either when GitHub cannot say which branch is the default', async () => {
+      await useGh(null, ['trunk']);
+      await writeWorkflow(USABL_GATE_WORKFLOW_PATH, pinEngineRef(gateWorkflowFor('trunk'), SHA));
+
+      const answer = await answers();
+
+      expect(answer.installCode).toBe(2);
+      expect(answer.installText.split('\n')[0]).toBe(
+        "cannot verify: the branch rule on trunk is set, but usabl could not read GitHub's default branch, so it cannot confirm that pull requests into the default branch are gated.",
+      );
+      expect(answer.doctorState).toBe('unknown');
+      expect(answer.doctorStep).toContain("usabl could not read GitHub's default branch, so it cannot confirm that pull requests into the default branch are gated.");
+      expect(answer.doctorStep).toContain(`put that branch in place of trunk on line 8 of ${USABL_GATE_WORKFLOW_PATH}`);
     });
 
     it('is verified and wired in both when the default branch is the gate branch', async () => {
