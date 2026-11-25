@@ -30,6 +30,7 @@ export type StartingCommitProblem =
   | 'no-common-commit'
   | 'not-ancestor'
   | 'trusted-branch-may-be-stale'
+  | 'tree-not-in-clone'
   | 'git-failed';
 
 /**
@@ -163,8 +164,13 @@ function branchName(ref: string): string {
  *
  * Each step reads one git exit code. Exit 1 is git's answer "no" for each of these commands, and
  * every other failure is a git failure, never read as "no".
+ *
+ * Every git call here runs with lazy fetch off, so in a partial clone this lookup never fetches
+ * from origin over the network inside a stop. A tree the clone does not have is the
+ * `tree-not-in-clone` gap, which names what to load, never "no config".
  */
-export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit> {
+export async function findStartingCommit(run: ScopeGit): Promise<StartingCommit> {
+  const git: ScopeGit = (args, options = {}) => run(args, { ...options, env: { ...options.env, ...NO_LAZY_FETCH } });
   const pointer = await git(['symbolic-ref', '--quiet', TRUSTED_BRANCH_POINTER]);
   if (pointer.code === 1) {
     return { kind: 'no-trusted-branch' };
@@ -210,13 +216,19 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
 
   // Where policy is read. Both commits are asked, and a lookup that fails is a git failure, never
   // "no config".
-  const atStart = await holdsConfig(git, commit);
+  const atStart = await holdsConfig(git, commit, commit);
   if ('failed' in atStart) {
     return gitFailed(branch, atStart.failed);
   }
-  const atTip = await holdsConfig(git, tipCommit);
+  if ('notInClone' in atStart) {
+    return notInClone(branch, atStart.notInClone);
+  }
+  const atTip = await holdsConfig(git, tipCommit, isSafeBranchName(branch) ? branch : tipCommit);
   if ('failed' in atTip) {
     return gitFailed(branch, atTip.failed);
+  }
+  if ('notInClone' in atTip) {
+    return notInClone(branch, atTip.notInClone);
   }
   if (!atStart.held && !atTip.held) {
     // origin/HEAD can name an old branch after the project moves its default branch, because a
@@ -225,6 +237,9 @@ export async function findStartingCommit(git: ScopeGit): Promise<StartingCommit>
     const elsewhere = await configOnOtherBranch(git, tipCommit);
     if ('failed' in elsewhere) {
       return gitFailed(branch, elsewhere.failed);
+    }
+    if ('notInClone' in elsewhere) {
+      return notInClone(branch, elsewhere.notInClone);
     }
     if (elsewhere.held) {
       return { kind: 'not-found', branch, problem: 'trusted-branch-may-be-stale', detail: elsewhere.name };
@@ -250,11 +265,14 @@ const CONFIG_FILE = 'usabl.config.json';
  * runs. A listing that names the file means held, an empty listing with exit 0 means absent, and
  * every other answer is a git failure, never "no config". Anything at that path, a file, a link, a
  * folder, or a submodule, counts as held, so a strange entry keeps the strict reading.
+ *
+ * A tree a partial clone does not have is `notInClone`, with `loadName`, the name a person passes
+ * to git ls-tree to load it: a branch with a plain name, or the commit id.
  */
-async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boolean } | { failed: ScopeGitResult }> {
+async function holdsConfig(git: ScopeGit, commit: string, loadName: string): Promise<{ held: boolean } | LookupFailure> {
   const tree = await git(['cat-file', '-e', `${commit}^{tree}`]);
   if (tree.code !== 0) {
-    return { failed: tree };
+    return (await whyTreesMissing(git, [{ commit, name: loadName }])) ?? { failed: tree };
   }
   const listed = await git(['ls-tree', '--full-tree', '--name-only', '-z', commit, '--', CONFIG_FILE]);
   if (listed.code !== 0) {
@@ -272,30 +290,113 @@ async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boole
 // The header git cat-file --batch prints before a tree it has: the tree's id, "tree", its size.
 const TREE_HEADER = /^([0-9a-f]{40}|[0-9a-f]{64}) tree (\d+)$/;
 
-// Every git call in the lookup of the other branches runs with lazy fetch off. In a partial clone
-// git would otherwise fetch a missing object from origin over the network inside the stop. git
-// 2.45 and later honor it; an older git may still fetch, and a fetch that fails is a git failure.
+// Every git call in findStartingCommit runs with lazy fetch off. In a partial clone git would
+// otherwise fetch a missing object from origin over the network inside the stop. git 2.45 and
+// later honor it; an older git may still fetch, and a fetch that fails is a git failure.
 const NO_LAZY_FETCH = { GIT_NO_LAZY_FETCH: '1' } as const;
+
+/**
+ * Why a lookup has no answer: git failed or printed what usabl does not read, or this partial
+ * clone does not have some trees, listed by the names a person passes to git ls-tree to load them.
+ */
+type LookupFailure = { failed: ScopeGitResult } | { notInClone: string[] };
+
+// A failure in usabl's own words, carried as git's error so the gap prints it in the frame.
+function failure(detail: string): { failed: ScopeGitResult } {
+  return { failed: { code: null, stdout: '', stderr: detail } };
+}
+
+// The most names the gap lists for trees to load. The count of the rest follows them.
+const MAX_LOAD_NAMES = 10;
+
+function notInClone(branch: string, names: readonly string[]): StartingCommit {
+  const sorted = [...new Set(names)].sort();
+  const shown = sorted.slice(0, MAX_LOAD_NAMES).join(', ');
+  const more = sorted.length > MAX_LOAD_NAMES ? `, and ${sorted.length - MAX_LOAD_NAMES} more` : '';
+  return { kind: 'not-found', branch, problem: 'tree-not-in-clone', detail: shown + more };
+}
+
+// One line of git cat-file --batch-check: the object's id, its type, and its size.
+const OBJECT_LINE = /^([0-9a-f]{40}|[0-9a-f]{64}) ([a-z]+) \d+$/;
+
+/**
+ * Why git has no tree for these commits, asked only after a tree read failed. Each object is
+ * asked for its type, with lazy fetch off. A commit whose tree is missing in a partial clone is
+ * `notInClone`: the tree is on origin, and git ls-tree with the item's name loads it. A ref that
+ * names a blob or a tree has no commit to read, and a missing commit, or a missing tree outside
+ * a partial clone, is a broken repository; each of those is a failure that says so. Null when the
+ * answer is not one usabl reads, so the caller keeps git's own error.
+ */
+async function whyTreesMissing(git: ScopeGit, items: readonly { commit: string; name: string }[]): Promise<LookupFailure | null> {
+  const types = await git(['cat-file', '--batch-check'], { input: items.map((item) => `${item.commit}\n`).join('') });
+  if (types.code !== 0) {
+    return null;
+  }
+  const lines = types.stdout.split('\n');
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  if (lines.length !== items.length) {
+    return null;
+  }
+  const commits: { commit: string; name: string }[] = [];
+  for (const [index, item] of items.entries()) {
+    const line = lines[index] ?? '';
+    if (line === `${item.commit} missing`) {
+      return failure(`git does not have commit ${item.commit} in this clone`);
+    }
+    const match = OBJECT_LINE.exec(line);
+    if (match === null || match[1] !== item.commit) {
+      return null;
+    }
+    const type = match[2] ?? '';
+    if (type === 'blob' || type === 'tree') {
+      return failure(`${item.name} names a ${type}, not a commit, so it has no tree to read`);
+    }
+    if (type !== 'commit') {
+      return null;
+    }
+    commits.push(item);
+  }
+  // A commit is there and its tree is not. Only a partial clone leaves a tree on origin.
+  const partial = await git(['config', '--get-regexp', '^(extensions\\.partialclone|remote\\..*\\.promisor)$']);
+  if (partial.code === 1) {
+    return failure(`git cannot read the tree of ${commits[0]?.commit ?? ''}, and this is not a partial clone`);
+  }
+  if (partial.code !== 0) {
+    return null;
+  }
+  const promisor = partial.stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .some((line) => !line.endsWith(' false'));
+  if (!promisor) {
+    return failure(`git cannot read the tree of ${commits[0]?.commit ?? ''}, and this is not a partial clone`);
+  }
+  return { notInClone: commits.map((item) => item.name) };
+}
 
 /**
  * Whether each root tree in the answer of `git cat-file --batch` holds an entry named
  * usabl.config.json, in the order asked, or null when the answer is not what git prints for those
- * trees. A tree git does not have, a header that is not a tree, a size longer than the answer, and
- * an entry cut short are all null. The answer is read one character per byte (latin1), so sizes
- * and the raw ids inside a tree line up with its characters. Anything at that name, a file, a
- * link, a folder, or a submodule, counts as held, as in holdsConfig.
+ * trees. A tree git does not have is 'missing'. A header that is not a tree, a size longer than
+ * the answer, and an entry cut short are all null. The answer is read one character per byte
+ * (latin1), so sizes and the raw ids inside a tree line up with its characters. Anything at that
+ * name, a file, a link, a folder, or a submodule, counts as held, as in holdsConfig.
  */
-function rootTreesHoldConfig(answer: string, count: number): boolean[] | 'missing' | null {
-  const held: boolean[] = [];
+function rootTreesHoldConfig(answer: string, inputs: readonly string[]): (boolean | 'missing')[] | null {
+  const held: (boolean | 'missing')[] = [];
   let at = 0;
-  for (let index = 0; index < count; index += 1) {
+  for (const input of inputs) {
     const end = answer.indexOf('\n', at);
     if (end === -1) {
       return null;
     }
     const header = answer.slice(at, end);
-    if (header.endsWith(' missing')) {
-      return 'missing';
+    if (header === `${input} missing`) {
+      held.push('missing');
+      at = end + 1;
+      continue;
     }
     const match = TREE_HEADER.exec(header);
     if (match === null) {
@@ -350,9 +451,10 @@ const LISTING_LINE = /^((?:[0-9a-f]{40}|[0-9a-f]{64}))\t(refs\/[^\t]+)\t([* ])\t
  * lists the branches of origin and the local branches once, and one batch read returns each tip's
  * root tree, so a clone with many branches costs two git calls. Whether the config is there comes
  * from the entry names in that tree, never from the config's own object, which a partial clone may
- * not have. A tree that is missing, an answer git was not expected to print, and a call that fails
- * are a git failure, never "no config". A branch name reaches output only when it is a plain name,
- * and no branch name is ever passed to git.
+ * not have. A tree a partial clone does not have is `notInClone`, named for git ls-tree. A ref that
+ * names something other than a commit, an answer git was not expected to print, and a call that
+ * fails are a git failure, never "no config". A branch name reaches output only when it is a plain
+ * name, and no branch name is ever passed to git.
  *
  * This branch's own copy on origin is not evidence that usabl is set up elsewhere, so a branch
  * that sets usabl up and is pushed still reads as one. The branch of origin with the current
@@ -362,7 +464,7 @@ const LISTING_LINE = /^((?:[0-9a-f]{40}|[0-9a-f]{64}))\t(refs\/[^\t]+)\t([* ])\t
 async function configOnOtherBranch(
   git: ScopeGit,
   trustedTip: string,
-): Promise<{ held: false } | { held: true; name: string | null } | { failed: ScopeGitResult }> {
+): Promise<{ held: false } | { held: true; name: string | null } | LookupFailure> {
   const listed = await git(
     ['for-each-ref', '--format=%(objectname)%09%(refname)%09%(HEAD)%09%(upstream)', ORIGIN_BRANCHES, LOCAL_BRANCHES],
     { env: NO_LAZY_FETCH },
@@ -421,26 +523,36 @@ async function configOnOtherBranch(
   if (batch.code !== 0) {
     return { failed: batch };
   }
-  const trees = rootTreesHoldConfig(batch.stdout, commits.length);
-  if (trees === 'missing') {
-    return {
-      failed: { ...batch, stderr: 'git does not have the tree of a branch of origin in this clone, and usabl does not fetch it' },
-    };
-  }
+  const trees = rootTreesHoldConfig(
+    batch.stdout,
+    commits.map((commit) => `${commit}^{tree}`),
+  );
   if (trees === null) {
     return unexpected(batch, 'the trees of the branches of origin');
   }
   const heldRefs: string[] = [];
+  const missing: { commit: string; name: string }[] = [];
   for (const [index, commit] of commits.entries()) {
+    const refs = refsByCommit.get(commit) ?? [];
     if (trees[index] === true) {
-      heldRefs.push(...(refsByCommit.get(commit) ?? []));
+      heldRefs.push(...refs);
+    } else if (trees[index] === 'missing') {
+      // The name a person passes to git ls-tree: the first plain branch name, or the commit id.
+      missing.push({ commit, name: refs.map(branchName).filter(isSafeBranchName).sort()[0] ?? commit });
     }
   }
-  if (heldRefs.length === 0) {
-    return { held: false };
+  // A config found is the answer, even when some other trees are missing.
+  if (heldRefs.length > 0) {
+    const plain = heldRefs.map(branchName).filter(isSafeBranchName).sort();
+    return { held: true, name: plain[0] ?? null };
   }
-  const plain = heldRefs.map(branchName).filter(isSafeBranchName).sort();
-  return { held: true, name: plain[0] ?? null };
+  if (missing.length > 0) {
+    return (
+      (await whyTreesMissing(git, missing)) ??
+      failure('git does not have the tree of a branch of origin in this clone, and usabl does not fetch it')
+    );
+  }
+  return { held: false };
 }
 
 /** Why a check could not tell which committed changes to check. */
@@ -534,6 +646,9 @@ export const SCOPE_PROBLEM_REASONS: Record<ScopeProblem, string> = {
     'so origin/HEAD may be stale: after a project moves its default branch, a fetch does not move origin/HEAD. ' +
     'usabl does not read this branch as one that sets usabl up while another branch of origin has a config ' +
     '(the first such branch with a plain name is under "branch with usabl.config.json" in the untrusted text below)',
+  'tree-not-in-clone':
+    'this is a partial clone that does not have the tree of a commit usabl needs to read ' +
+    '(a treeless clone leaves trees on origin until git needs them), and usabl does not fetch from origin inside a check',
   'git-failed': 'git failed while it looked for that commit (its error is under "error" in the untrusted text below)',
   'listing-failed':
     'git could not list the files changed since that commit (its error is under "error" in the untrusted text below)',
@@ -548,15 +663,21 @@ const SET_HEAD_FIRST: ReadonlySet<ScopeProblem> = new Set<ScopeProblem>([
 ]);
 
 /**
- * The untrusted line for a scope gap's detail, or null when it has none: git's error, or the
- * other branch of origin that holds a config. Both come from the repository, so the caller prints
- * it inside the untrusted frame.
+ * The untrusted line for a scope gap's detail, or null when it has none: git's error, the other
+ * branch of origin that holds a config, or the names whose trees a partial clone does not have.
+ * Each comes from the repository, so the caller prints it inside the untrusted frame.
  */
 export function scopeGapDetailPiece(scope: { problem: ScopeProblem; detail: string | null }): string | null {
   if (scope.detail === null) {
     return null;
   }
-  return scope.problem === 'trusted-branch-may-be-stale' ? `branch with ${CONFIG_FILE}: ${scope.detail}` : `error: ${scope.detail}`;
+  if (scope.problem === 'trusted-branch-may-be-stale') {
+    return `branch with ${CONFIG_FILE}: ${scope.detail}`;
+  }
+  if (scope.problem === 'tree-not-in-clone') {
+    return `tree not in this clone: ${scope.detail}`;
+  }
+  return `error: ${scope.detail}`;
 }
 
 /**
@@ -564,6 +685,13 @@ export function scopeGapDetailPiece(scope: { problem: ScopeProblem; detail: stri
  * `then` says what to do after the fix: stop again, or run the check again.
  */
 export function scopeGapNextStep(problem: ScopeProblem, then: string): string {
+  // git fetch does not load trees in a treeless clone. git ls-tree reads the tree, so git loads it.
+  if (problem === 'tree-not-in-clone') {
+    return (
+      'Next: run git ls-tree once with each name under "tree not in this clone" in the untrusted text below, ' +
+      `for example git ls-tree origin/main, so git loads that tree from origin, then ${then}.`
+    );
+  }
   const fetch =
     'fetch the trusted branch with the history this branch grew from, for example git fetch origin, ' +
     'or git fetch --unshallow in a shallow clone';
