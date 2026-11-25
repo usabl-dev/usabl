@@ -244,8 +244,8 @@ re-baseline to green.
   choose the policy a local stop reads: when that commit holds a weakened config, waiver, or
   floor, the guard against it is clean, so a local VERIFIED can rest on weakened policy. CI reads
   policy at the real base of the pull request, so only CI is authoritative there.
-- A branch that sets usabl up. When neither the starting commit nor the tip of the trusted
-  branch holds `usabl.config.json`, there is no trusted policy to read at that commit. Before,
+- A branch that sets usabl up. When neither the starting commit nor the tip of any branch of
+  origin holds `usabl.config.json`, there is no trusted policy to read at that commit. Before,
   every stop on such a branch read approval required until the branch merged, so a team could
   not use usabl while it set usabl up. Now the stop checks the same changes, reads the branch's
   own policy, guards it against HEAD as a stop with no trusted branch does, and puts "policy from
@@ -262,9 +262,19 @@ re-baseline to green.
   own. A branch whose starting commit has no config while the trusted branch has one
   left the trusted branch before usabl was set up there. That stop checks nothing and blocks once
   with the step to update the branch from the trusted branch, and lets one continuation through,
-  before any receipt fast path. A session that moves `origin/HEAD`, or the branch it names, to a
-  commit from before the setup turns a configured branch into a setup branch on the stop (the
-  limit above), so the stop reads its own policy, and its verdict line says so. A ref moved to a
+  before any receipt fast path. After a project moves its default branch, for example from
+  `master` to `main`, an honest clone's `origin/HEAD` can still name the old branch, because a
+  fetch does not move it. When that old branch and the starting commit have no config but the tip
+  of another branch of origin has one, usabl is set up in this repository, so the stop does not
+  read the branch as one that sets usabl up. It is a not-covered gap that checks nothing, says
+  `origin/HEAD` may be stale, and names `git remote set-head origin --auto`. Before, that clone
+  read as a setup branch, and a waiver the branch committed was taken as policy. The check reads
+  local refs only. Its cost: a branch that sets usabl up and is pushed to origin has the config at
+  the tip of its own branch of origin, so after that push its stops are this gap until the setup
+  merges. A session that moves `origin/HEAD`, or the branch it names, to a commit from before the
+  setup, and also moves or deletes every other branch of origin that holds the config, turns a
+  configured branch into a setup branch on the stop (the limit above), so the stop reads its own
+  policy, and its verdict line says so. A ref moved to a
   commit the session made is the limit above, and there the line can read plain VERIFIED. CI
   checks the pull request against its real base in every case. A config at the
   starting commit that is gone from the working tree and the last commit is a removal, which CI

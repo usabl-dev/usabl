@@ -1072,8 +1072,8 @@ type StopScope =
  * changed config are read from it. A policy change committed on the branch is then a guarded
  * change, as it is in CI. Without one, the run keeps the last commit as the reference.
  *
- * On a branch that sets usabl up, neither the starting commit nor the trusted branch has a config,
- * so there is no trusted policy to read. The run checks the same changes, reads the branch's own
+ * On a branch that sets usabl up, neither the starting commit nor any branch of origin has a
+ * config, so there is no trusted policy to read. The run checks the same changes, reads the branch's own
  * policy, and compares it with the last commit, as with no trusted branch, and the stop says on
  * its verdict line that this policy is not approved yet. CI still asks a code owner to approve it.
  */

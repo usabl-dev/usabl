@@ -4361,8 +4361,13 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     `git ls-tree --full-tree --name-only -z <commit> -- usabl.config.json`: the name in the listing
     means held, an empty listing with exit 0 means absent, and any other answer is a git failure.
     A git failure is the not-covered gap below, never "no config". A starting commit that holds
-    anything at that path reads policy there, as above.
-  - A branch that sets usabl up: neither the starting commit nor the tip of the trusted branch
+    anything at that path reads policy there, as above. When neither commit holds it, the hook
+    also asks the tip of every other branch of origin, from local refs only: one `git
+    for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/` and one `git cat-file
+    --batch-check` that asks each tip for its tree and for `usabl.config.json`. A missing tree, a
+    line git was not expected to print, or a call that fails is a git failure, and anything at the
+    config path counts as held.
+  - A branch that sets usabl up: neither the starting commit nor the tip of any branch of origin
     holds `usabl.config.json`. There is no trusted policy to read, so the stop checks the same
     changes (every change since the starting commit, and the receipt binds that commit), reads the
     branch's own policy, and guards it against HEAD only, as a stop with no trusted branch does.
@@ -4373,6 +4378,18 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     owner to approve the new config. Before the config is committed, the guard reports it against
     HEAD, so the stop reads approval required until the commit. Before, every stop on such a
     branch read approval required until the branch merged.
+  - A stale `origin/HEAD`: neither the starting commit nor the tip of the trusted branch holds
+    `usabl.config.json`, but the tip of another branch of origin does. After a project moves its
+    default branch (for example from `master` to `main`), `origin/HEAD` can still name the old
+    branch, and a fetch does not move it. So the stop does not read this branch as one that sets
+    usabl up. It is the not-covered gap below, with the reason "... another branch of origin has
+    one at its tip, so origin/HEAD may be stale ..." and the `git remote set-head origin --auto`
+    step first. The first such branch in name order whose name is a plain name (letters, digits,
+    and `. _ - /`, the rule `usabl install` uses for a branch name) is named inside the untrusted
+    frame as "branch with usabl.config.json: origin/<name>"; a branch with any other name is not
+    named. Known limit: a branch that sets usabl up and is pushed to origin has the config at the
+    tip of its own branch of origin, so after that push its stops are this gap until the setup
+    merges, as every stop on such a branch was before the setup path existed.
   - A branch made before usabl was set up: the tip of the trusted branch holds
     `usabl.config.json` but the starting commit does not, whether or not this branch has a config
     of its own. The stop checks nothing and blocks once with "NOT verified - usabl is set up on
@@ -4391,15 +4408,16 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     that is not `refs/remotes/origin/<name>` (a local branch under `refs/heads/`, a tag, a branch
     of another remote, or `origin/HEAD` itself), git has no commit for the
     branch, the branch and HEAD share no commit in this clone (a shallow clone, or unrelated
-    history), the commit is not an ancestor of HEAD, git fails while it looks, or git cannot list
-    the files changed since it. The stop is a not-covered gap: it checks nothing and blocks with
+    history), the commit is not an ancestor of HEAD, `origin/HEAD` may be stale (above), git
+    fails while it looks, or git cannot list the files changed since it. The stop is a not-covered
+    gap: it checks nothing and blocks with
     "NOT verified - not covered: usabl could not find where this branch left the trusted branch
     ...", the reason, "It did not fall back to the uncommitted changes alone or to the whole
     history.", and the step to fetch the branch with its history (`git fetch origin`, or `git
     fetch --unshallow` in a shallow clone). When `origin/HEAD` names a ref that is not a branch
-    of origin, or a branch this clone has no commit for, the step names `git remote set-head
-    origin --auto` first: after a default branch rename `origin/HEAD` still names the old branch,
-    and a fetch does not move it. The branch name and git's error are inside the
+    of origin, a branch this clone has no commit for, or a branch that may be stale, the step
+    names `git remote set-head origin --auto` first: after a default branch rename `origin/HEAD`
+    still names the old branch, and a fetch does not move it. The branch name and git's error are inside the
     untrusted frame, and changed guarded files are named there too. It never reads as nothing
     to check, and it lets one continuation through, marked NOT verified.
   - No trusted branch at all (`refs/remotes/origin/HEAD` is not set, for example a repository with
@@ -4422,9 +4440,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     the stop's scope to the uncommitted changes, and usabl cannot tell this from a fetch. CI,
     which checks the pull request against its real base, is the backstop. Pointing `origin/HEAD`
     at a ref outside `refs/remotes/origin/` is the gap above, so that form does not shrink it.
-    Moving it, or the branch it names, to a commit from before usabl was set up makes a
-    configured branch read as a branch that sets usabl up: the stop then reads the branch's own
-    policy, and its verdict line says "policy from this branch, not approved yet". Rebuilding the
+    Moving it, or the branch it names, to a commit from before usabl was set up, while the tip of
+    another branch of origin still holds the config, is the stale `origin/HEAD` gap above. When no
+    other branch of origin holds one, for example after the session moves or deletes those refs
+    too, the move makes a configured branch read as a branch that sets usabl up: the stop then
+    reads the branch's own policy, and its verdict line says "policy from this branch, not
+    approved yet". Rebuilding the
     branch on such a commit while the trusted branch keeps its config is the older-branch block
     above. Moving the ref to a commit the session made, one that holds a weakened config, waiver,
     or floor, also chooses the policy the stop reads: the guard against that commit is clean, and
