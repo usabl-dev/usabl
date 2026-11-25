@@ -216,7 +216,7 @@ describe('the branch the check reads', () => {
 
   it('reads the branch from the gate on disk, pinned or not', async () => {
     for (const raw of [gateWorkflowFor('trunk'), pinEngineRef(gateWorkflowFor('trunk'), SHA)]) {
-      expect(await gateBranchTarget(async () => raw)).toEqual(TRUNK);
+      expect(await gateBranchTarget(async (path) => (path === USABL_GATE_WORKFLOW_PATH ? raw : null))).toEqual(TRUNK);
     }
   });
 
