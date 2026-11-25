@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
+import { gitProcessEnvironment } from '../deps/git-environment.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, pinsAreCurrent, type SessionPins } from '../trust/guard.js';
@@ -736,14 +737,16 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
       cwd: startDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: gitProcessEnvironment(),
     });
     const root = out.replace(/\r?\n$/, '');
     if (root.length > 0) {
-      // git names a work tree that does not hold the hook's folder when a setting such as
-      // core.worktree points it at another folder. Reading that folder would check files the dev
-      // server does not serve. The hook then works in its own folder, where the git reader
-      // refuses to read such a work tree, so the stop checks nothing and says so.
-      if (!holds(root, startDir)) {
+      // git names a work tree that does not hold the hook's folder, or one where git finds another
+      // repository, when a setting such as core.worktree points it at another folder. Reading that
+      // folder would check files the dev server does not serve. The hook then works in its own
+      // folder, where the git reader refuses to read such a work tree, so the stop blocks and says
+      // so.
+      if (!holds(root, startDir) || gitDirOf(root) !== gitDirOf(startDir)) {
         return { root: resolve(startDir), inRepository: true };
       }
       return { root: resolve(root), inRepository: true };
@@ -752,6 +755,21 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
     // Not a repository, or git is missing. Both mean there is no last commit to compare with.
   }
   return { root: resolve(startDir), inRepository: false };
+}
+
+// The repository git finds from a folder, as a real path, or null when it finds none.
+function gitDirOf(folder: string): string | null {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+      cwd: folder,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: gitProcessEnvironment(),
+    });
+    return realpathSync.native(out.replace(/\r?\n$/, ''));
+  } catch {
+    return null;
+  }
 }
 
 // Whether the folder is the root or inside it, by real paths. A path that cannot be resolved is
@@ -783,7 +801,7 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
   }
   try {
     // A repository with no commits has no HEAD, so it has no committed config either.
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore', env: gitProcessEnvironment() });
   } catch {
     return { status: 'missing' };
   }
