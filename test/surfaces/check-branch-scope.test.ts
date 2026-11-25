@@ -1239,8 +1239,33 @@ describe('a session cannot make a configured branch read as a setup branch', { t
     expect(stopped.stderr).not.toContain(SETUP_NOTE);
   });
 
-  it('origin/HEAD pointed at an origin branch from before the setup gives the setup notice on the verdict line', async () => {
+  // origin/main still has the config, so origin/HEAD may be stale. The stop does not read the
+  // branch as one that sets usabl up, and checks nothing.
+  it('origin/HEAD pointed at an origin branch from before the setup is a gap while origin/main has a config', async () => {
     const beforeSetup = await configuredBranchWithWaiver();
+    git('update-ref', 'refs/remotes/origin/old', beforeSetup);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/old');
+
+    const stopped = await stop();
+    const reason = blockReason(stopped);
+    expect(reason).toContain('so origin/HEAD may be stale');
+    expect(reason).toContain('git remote set-head origin --auto');
+    expect(reason).not.toContain(SETUP_NOTE);
+    expect(stopped.stderr).not.toContain(SETUP_VERDICT);
+    expect(stopped.scanned).toEqual([]);
+
+    const ran = await check('--branch-scope');
+    expect(ran.code).toBe(4);
+    expect(ran.scanned).toEqual([]);
+    expect(ran.stdout).toBe('');
+    expect(ran.stderr).toContain('so origin/HEAD may be stale');
+  });
+
+  // With no config on any branch of origin, the same move still reaches the setup path. The
+  // verdict line says the policy came from the branch.
+  it('origin/HEAD pointed at an origin branch from before the setup gives the setup notice when no origin branch has a config', async () => {
+    const beforeSetup = await configuredBranchWithWaiver();
+    git('update-ref', 'refs/remotes/origin/main', beforeSetup);
     git('update-ref', 'refs/remotes/origin/old', beforeSetup);
     git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/old');
 
