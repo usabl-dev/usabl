@@ -4643,13 +4643,21 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     same set of changed files gives the same gaps in any order. A changed file left untested when
     a budget runs out is a gap whose reason names the budget, never nothing to check. The guard's own matching carries no budget: a
     `guardedPaths` list inside the bounds took 9.2 seconds against one committed path of 3999
-    characters. Node's `fs.glob` can still take long too. usabl hands it each `guardedPaths` entry,
-    to list new files on the working tree (the guard) and to sample the files under it (`usabl
-    doctor`); `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is placed; the
-    `workspaces` patterns of a `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs
-    output. A pattern with many wildcards and a long file name there, or a long guarded list and
-    many deep committed paths, can take long enough that the host ends the hook before usabl
-    answers, and the stop then goes on with nothing checked (threat model, Threat 8).
+    characters. A long guarded list and many
+    deep committed paths can take long enough that the host ends the hook before usabl answers,
+    and the stop then goes on with nothing checked (threat model, Threat 8). Node's `fs.glob`,
+    which lists files on the working tree for the guard, test-file placement, and the
+    `workspaces` patterns, never gets a part that can backtrack: the file system adapter lists
+    each wildcard part as `*` and filters what Node lists with usabl's own matcher, so `src/` then
+    `*a` twelve times then `*b` against a file name of 30 letters takes about 50 milliseconds
+    instead of 11 seconds. The filter gives Node's answer for `*`, `**`, `?`, fixed text, and
+    `{a,b}` groups, ignores letter case on macOS and Windows as Node does, and lists more, never
+    less, where it cannot match Node exactly (a file reached through a link to a folder, and a file
+    named before a trailing `/**`). Other syntax, such as a character class or an extglob group,
+    runs in Node only inside a bound: at most 1024 characters, no extglob group, at most one run
+    of `*` in any part, and at most 256 brace expansions. Past it the pattern is not run. Config
+    load refuses that syntax in every policy glob list, and a `workspaces` pattern past the bound
+    makes the workspace root unreadable, so every changed file the workspace check tests is a gap.
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -5653,7 +5661,9 @@ workspace package folder it sits in. A change in a package the app does not depe
 change in a repository with no workspaces, reads as before.
 
 When the root `package.json` or `pnpm-workspace.yaml` exists and does not parse, or holds its
-workspace field in a shape no package manager reads, the workspace packages are unknown. Every
+workspace field in a shape no package manager reads, or lists a pattern past the file system
+adapter's glob bound (such as one with an extglob group, which Node can take minutes to match),
+the workspace packages are unknown. Every
 changed file that is not a test, not UI, and not Markdown is then a `not-covered` gap whose
 reason names the file usabl could not read. A workspace pattern with `..` in a brace group is
 refused, and a glob result that is absolute or leaves the repository is never read.

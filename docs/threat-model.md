@@ -957,16 +957,39 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   but a list inside the bounds (256 entries of `**/a/` parts) took 9.2 seconds against one
   committed path of 3999 characters and 0.3 seconds against one of 199. Such a list must be in
   committed policy, which a code owner approves, and the paths must be in a commit.
-- Known limit: Node's `fs.glob` still turns a pattern into a regular expression that can
-  backtrack. usabl hands it these patterns: each `guardedPaths` entry, to list new files on the
-  working tree (the guard) and to sample the files under it (`usabl doctor`); `uiFileGlobs` and
-  `discovery.wideBlastGlobs` when a changed test file is placed; the `workspaces` patterns of a
-  `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs output. The pattern `src/`
-  then `*a` twelve times then `*b` took Node 1.1 seconds against a file name of 26 letters and 9.2
-  seconds against one of 30. usabl's Stop hook deadline is a timer in the same process, so it
-  cannot end such a match, and the host can end the hook before usabl answers. A policy pattern
-  must be in committed policy, which a code owner approves; a `workspaces` pattern is in the
-  working tree, and the file name is the agent's choice. A later change replaces these calls.
+- Node's `fs.glob` turns each part of a pattern that holds a wildcard into a regular expression
+  that can backtrack: `src/` then `*a` twelve times then `*b` took Node 11 seconds against one
+  file name of 30 letters. usabl hands `fs.glob` each `guardedPaths` entry (the guard's
+  working-tree listing and `usabl doctor`), `uiFileGlobs` and `discovery.wideBlastGlobs` (test-file
+  placement, `usabl baseline`, and the docs output), and the `workspaces` patterns of a
+  `package.json`, which the agent can write with no code owner. The file system adapter
+  (`src/deps/fs.ts`) no longer hands Node a part that can backtrack. It lists wide: each part with
+  a wildcard becomes `*`, or `.*` when it starts with a dot, which Node tests without a regular
+  expression, and each fixed part stays as written, so the walk keeps Node's depth, its rule for
+  dot names, and its rule for links. Then it keeps each listed path the written pattern matches,
+  with a matcher whose time is at most the part's length times the name's length. The slow
+  pattern now takes about 50 milliseconds. The filter reads `*`, `**`, `?`, fixed text, and
+  `{a,b}` groups the way Node does. On macOS and Windows, where Node matches without regard to
+  letter case, the filter ignores case too and also lists fixed folders in other case. Where the
+  filter cannot give Node's exact answer it lists more, never less: a file the wide walk reaches
+  through a link to a folder where Node's walk does not follow the link, and a file that the part
+  before a trailing `/**` names. A comparison with Node on generated trees (dot names, nested
+  folders, long names, unicode, and links) found no file Node lists that the adapter does not.
+- Syntax the filter does not read (a character class such as `[a-z]`, an extglob group such as
+  `+(a|b)`, a brace range, and a nested or unbalanced brace) is handed to Node unchanged only inside
+  a bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and
+  braces usabl can count, at most 256 expansions. Past the bound the pattern is not run. The bound
+  is tight because Node backtracks on very little: five runs of `*` in one part took 18.5 seconds
+  against one name of 250 letters, and the one extglob group `+(a|aa)b` took 27 seconds against a
+  name of 40. The policy lists cannot hold such syntax: config load refuses it in `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, and `guardedPaths`, and the guard reads such an entry at a trusted
+  ref as the literal folder above it. A `workspaces` pattern past the bound makes the workspace
+  root unreadable, so every changed file usabl would test against the workspace packages is a gap
+  that names the pattern, never a file outside every package.
+- Known limit: usabl also builds patterns from folder names, such as the requirements folder and a
+  workspace package folder, and Node reads those names as patterns. A folder name that holds such
+  syntax past the bound is not listed there, and one inside the bound is read the way Node reads
+  it, as before.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
