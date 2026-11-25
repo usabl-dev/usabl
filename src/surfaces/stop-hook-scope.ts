@@ -66,26 +66,51 @@ export interface ScopeGitResult {
   stderr: string;
 }
 
-/** One git call. `input`, when given, is written to git's standard input. */
-export type ScopeGit = (args: readonly string[], input?: string) => Promise<ScopeGitResult>;
+/**
+ * How one git call runs. `input`, when given, is written to git's standard input. `env` is added
+ * to git's environment. `encoding` is how git's output is read: `latin1` keeps one character per
+ * byte, for output that holds raw bytes, such as a tree object.
+ */
+export interface ScopeGitOptions {
+  input?: string;
+  env?: Readonly<Record<string, string>>;
+  encoding?: 'utf8' | 'latin1';
+}
+
+/** One git call. */
+export type ScopeGit = (args: readonly string[], options?: ScopeGitOptions) => Promise<ScopeGitResult>;
 
 // usabl reads git's exit codes here, never its words, but the detail it prints is kept in English.
 const ENGLISH_MESSAGES = { LC_ALL: 'C' };
 
-/** git, run in `cwd` with an argument list, never a shell string. */
-export function scopeGit(cwd: string): ScopeGit {
-  return async (args, input) => {
+/**
+ * The most git may print on one of these calls, for stdout and for stderr each. A clone with tens
+ * of thousands of branches prints a few MiB to list them.
+ */
+export const SCOPE_GIT_MAX_BYTES = 64 * 1024 * 1024;
+
+// Node's code for a child process that printed more than maxBuffer. Node then ends git.
+const OUTPUT_TOO_LARGE = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+
+/**
+ * git, run in `cwd` with an argument list, never a shell string. `maxBytes` caps what git may
+ * print; past it the call fails with a detail that says so.
+ */
+export function scopeGit(cwd: string, limits: { maxBytes?: number } = {}): ScopeGit {
+  const maxBytes = limits.maxBytes ?? SCOPE_GIT_MAX_BYTES;
+  return async (args, options = {}) => {
     try {
       const pending = execFileAsync('git', [...args], {
         cwd,
-        encoding: 'utf8',
-        env: { ...process.env, ...ENGLISH_MESSAGES },
+        encoding: options.encoding ?? 'utf8',
+        maxBuffer: maxBytes,
+        env: { ...process.env, ...ENGLISH_MESSAGES, ...options.env },
       });
-      if (input !== undefined) {
+      if (options.input !== undefined) {
         // A git that stops before it reads all of its input reports that with its exit code. The
         // broken pipe on this side is not a second error.
         pending.child.stdin?.on('error', () => {});
-        pending.child.stdin?.end(input);
+        pending.child.stdin?.end(options.input);
       }
       const { stdout, stderr } = await pending;
       return { code: 0, stdout, stderr };
@@ -93,6 +118,13 @@ export function scopeGit(cwd: string): ScopeGit {
       const code: unknown = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : null;
       const stdout: unknown = typeof err === 'object' && err !== null ? Reflect.get(err, 'stdout') : '';
       const stderr: unknown = typeof err === 'object' && err !== null ? Reflect.get(err, 'stderr') : '';
+      if (code === OUTPUT_TOO_LARGE) {
+        return {
+          code: null,
+          stdout: '',
+          stderr: `git printed more than ${maxBytes} bytes for git ${args[0] ?? ''}, more than usabl reads, so usabl could not read its answer`,
+        };
+      }
       return {
         code: typeof code === 'number' ? code : null,
         stdout: typeof stdout === 'string' ? stdout : '',
@@ -237,8 +269,63 @@ async function holdsConfig(git: ScopeGit, commit: string): Promise<{ held: boole
   return { failed: { ...listed, stderr: `git listed an unexpected entry for ${CONFIG_FILE}` } };
 }
 
-// One line of git cat-file --batch-check for a tree that is there.
-const TREE_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}) tree \d+$/;
+// The header git cat-file --batch prints before a tree it has: the tree's id, "tree", its size.
+const TREE_HEADER = /^([0-9a-f]{40}|[0-9a-f]{64}) tree (\d+)$/;
+
+// Every git call in the lookup of the other branches runs with lazy fetch off. In a partial clone
+// git would otherwise fetch a missing object from origin over the network inside the stop. git
+// 2.45 and later honor it; an older git may still fetch, and a fetch that fails is a git failure.
+const NO_LAZY_FETCH = { GIT_NO_LAZY_FETCH: '1' } as const;
+
+/**
+ * Whether each root tree in the answer of `git cat-file --batch` holds an entry named
+ * usabl.config.json, in the order asked, or null when the answer is not what git prints for those
+ * trees. A tree git does not have, a header that is not a tree, a size longer than the answer, and
+ * an entry cut short are all null. The answer is read one character per byte (latin1), so sizes
+ * and the raw ids inside a tree line up with its characters. Anything at that name, a file, a
+ * link, a folder, or a submodule, counts as held, as in holdsConfig.
+ */
+function rootTreesHoldConfig(answer: string, count: number): boolean[] | 'missing' | null {
+  const held: boolean[] = [];
+  let at = 0;
+  for (let index = 0; index < count; index += 1) {
+    const end = answer.indexOf('\n', at);
+    if (end === -1) {
+      return null;
+    }
+    const header = answer.slice(at, end);
+    if (header.endsWith(' missing')) {
+      return 'missing';
+    }
+    const match = TREE_HEADER.exec(header);
+    if (match === null) {
+      return null;
+    }
+    const idBytes = (match[1] ?? '').length / 2;
+    const size = Number(match[2]);
+    const start = end + 1;
+    if (start + size + 1 > answer.length || answer[start + size] !== '\n') {
+      return null;
+    }
+    const tree = answer.slice(start, start + size);
+    let holds = false;
+    let entry = 0;
+    while (entry < tree.length) {
+      const space = tree.indexOf(' ', entry);
+      const nul = space === -1 ? -1 : tree.indexOf('\0', space);
+      if (nul === -1 || nul + 1 + idBytes > tree.length) {
+        return null;
+      }
+      if (tree.slice(space + 1, nul) === CONFIG_FILE) {
+        holds = true;
+      }
+      entry = nul + 1 + idBytes;
+    }
+    held.push(holds);
+    at = start + size + 1;
+  }
+  return at === answer.length ? held : null;
+}
 
 const LOCAL_BRANCHES = 'refs/heads/';
 
@@ -250,18 +337,21 @@ const LOCAL_BRANCHES = 'refs/heads/';
 const ALWAYS_COUNTED: ReadonlySet<string> = new Set(['main', 'master', 'trunk', 'develop']);
 
 // One line of the listing: object id, ref, "*" for the branch checked out here or a space, and the
-// upstream git records for a local branch, or nothing. git forbids a tab in a ref name.
+// upstream git records for a local branch, or nothing. git forbids a tab or a newline in a ref
+// name, but the upstream comes from branch.<name>.merge in the repository's config, which can hold
+// a newline and so add a line of its own. That is why a second "*" line is unexpected.
 const LISTING_LINE = /^((?:[0-9a-f]{40}|[0-9a-f]{64}))\t(refs\/[^\t]+)\t([* ])\t((?:refs\/[^\t]+)?)$/;
 
 /**
  * Whether the tip of any branch of origin other than the trusted one holds usabl.config.json at
  * the root, and the first such branch with a plain name, in name order.
  *
- * It reads local refs only, never the network. git lists the branches of origin and the local
- * branches once, and one batch lookup asks each tip for its tree and for the config, so a clone
- * with many branches costs two git calls. A tree that is missing, a line git was not expected to
- * print, and a call that fails are a git failure, never "no config". Anything at the config path
- * counts as held, as in holdsConfig. A branch name reaches output only when it is a plain name,
+ * It reads local objects only, never the network: both git calls run with lazy fetch off. git
+ * lists the branches of origin and the local branches once, and one batch read returns each tip's
+ * root tree, so a clone with many branches costs two git calls. Whether the config is there comes
+ * from the entry names in that tree, never from the config's own object, which a partial clone may
+ * not have. A tree that is missing, an answer git was not expected to print, and a call that fails
+ * are a git failure, never "no config". A branch name reaches output only when it is a plain name,
  * and no branch name is ever passed to git.
  *
  * This branch's own copy on origin is not evidence that usabl is set up elsewhere, so a branch
@@ -273,18 +363,17 @@ async function configOnOtherBranch(
   git: ScopeGit,
   trustedTip: string,
 ): Promise<{ held: false } | { held: true; name: string | null } | { failed: ScopeGitResult }> {
-  const listed = await git([
-    'for-each-ref',
-    '--format=%(objectname)%09%(refname)%09%(HEAD)%09%(upstream)',
-    ORIGIN_BRANCHES,
-    LOCAL_BRANCHES,
-  ]);
+  const listed = await git(
+    ['for-each-ref', '--format=%(objectname)%09%(refname)%09%(HEAD)%09%(upstream)', ORIGIN_BRANCHES, LOCAL_BRANCHES],
+    { env: NO_LAZY_FETCH },
+  );
   if (listed.code !== 0) {
     return { failed: listed };
   }
   const unexpected = (result: ScopeGitResult, what: string) => ({ failed: { ...result, stderr: `git printed an unexpected line for ${what}` } });
   const originRefs: { commit: string; ref: string }[] = [];
   const ownCopies = new Set<string>();
+  let current = 0;
   for (const line of listed.stdout.split('\n')) {
     if (line.length === 0) {
       continue;
@@ -296,6 +385,10 @@ async function configOnOtherBranch(
     const [, commit = '', ref = '', head = '', upstream = ''] = match;
     if (ref.startsWith(LOCAL_BRANCHES)) {
       if (head === '*') {
+        current += 1;
+        if (current > 1) {
+          return unexpected(listed, 'the branch checked out here');
+        }
         ownCopies.add(ORIGIN_BRANCHES + ref.slice(LOCAL_BRANCHES.length));
         if (upstream.startsWith(ORIGIN_BRANCHES)) {
           ownCopies.add(upstream);
@@ -323,24 +416,23 @@ async function configOnOtherBranch(
   if (commits.length === 0) {
     return { held: false };
   }
-  const input = commits.map((commit) => `${commit}^{tree}\n${commit}:${CONFIG_FILE}\n`).join('');
-  const batch = await git(['cat-file', '--batch-check'], input);
+  const input = commits.map((commit) => `${commit}^{tree}\n`).join('');
+  const batch = await git(['cat-file', '--batch'], { input, env: NO_LAZY_FETCH, encoding: 'latin1' });
   if (batch.code !== 0) {
     return { failed: batch };
   }
-  const answers = batch.stdout.split('\n');
-  if (answers.at(-1) === '') {
-    answers.pop();
+  const trees = rootTreesHoldConfig(batch.stdout, commits.length);
+  if (trees === 'missing') {
+    return {
+      failed: { ...batch, stderr: 'git does not have the tree of a branch of origin in this clone, and usabl does not fetch it' },
+    };
   }
-  if (answers.length !== commits.length * 2) {
-    return unexpected(batch, 'the tips of the branches of origin');
+  if (trees === null) {
+    return unexpected(batch, 'the trees of the branches of origin');
   }
   const heldRefs: string[] = [];
   for (const [index, commit] of commits.entries()) {
-    if (!TREE_LINE.test(answers[index * 2] ?? '')) {
-      return { failed: { ...batch, stderr: `git could not read the tree of ${commit}` } };
-    }
-    if (answers[index * 2 + 1] !== `${commit}:${CONFIG_FILE} missing`) {
+    if (trees[index] === true) {
       heldRefs.push(...(refsByCommit.get(commit) ?? []));
     }
   }
