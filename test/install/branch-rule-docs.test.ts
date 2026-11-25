@@ -51,7 +51,7 @@ const docsGate = (branch: string): Record<string, string> => ({ [USABL_DOCS_GATE
 describe('the branch rule check in a repository with only the docs gate', () => {
   it('checks trunk when the docs gate names trunk', async () => {
     const target = await gateBranchTarget(files(docsGate('trunk')));
-    expect(target).toEqual({ name: 'trunk', source: 'docs-gate' });
+    expect(target).toEqual({ name: 'trunk', source: 'docs-gate', line: 8 });
     const gh = ghProtecting('trunk', 'trunk');
     const result = await verifyBranchRule(gh.reader, target);
     expect(result.action).toBe('verified');
@@ -63,7 +63,7 @@ describe('the branch rule check in a repository with only the docs gate', () => 
 
   it('checks main, not assumed, when the docs gate names main', async () => {
     const target = await gateBranchTarget(files(docsGate('main')));
-    expect(target).toEqual({ name: 'main', source: 'docs-gate' });
+    expect(target).toEqual({ name: 'main', source: 'docs-gate', line: 8 });
     const result = await verifyBranchRule(ghProtecting('main', 'main').reader, target);
     expect(result.action).toBe('verified');
     expect(result.message).not.toContain('assumed');
@@ -96,7 +96,7 @@ describe('the branch rule check in a repository with only the docs gate', () => 
 describe('the branch rule check with both gates', () => {
   it('checks the branch the app gate names', async () => {
     const both = { [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('main'), SHA), ...docsGate('trunk') };
-    expect(await gateBranchTarget(files(both))).toEqual({ name: 'main', source: 'gate' });
+    expect(await gateBranchTarget(files(both))).toEqual({ name: 'main', source: 'gate', line: 8 });
   });
 });
 

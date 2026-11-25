@@ -13,7 +13,7 @@ import { collectDoctorReport, type SurfaceReport } from '../../src/doctor/index.
 import type { InstallFs } from '../../src/install/index.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
-const TRUNK = { name: 'trunk', source: 'gate' } as const;
+const TRUNK = { name: 'trunk', source: 'gate', line: 8 } as const;
 
 function recordingGh(reply: (endpoint: string) => GhResult | null): { reader: GhReader; calls: string[] } {
   const calls: string[] = [];
@@ -112,7 +112,7 @@ describe('the branch the check reads', () => {
     // The gate's branch is fully protected, but pull requests into the default branch run no gate,
     // so exit 0 would let a setup script pass while they merge unchecked.
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['~ALL'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.action).toBe('cannot-verify');
     expect(result.otherDefault).toBe('trunk');
@@ -125,7 +125,7 @@ describe('the branch the check reads', () => {
 
   it('names both problems when the gate branch is not protected and GitHub reports another default branch', async () => {
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/trunk'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.action).toBe('cannot-verify');
     expect(result.gateBranch?.action).toBe('not-applied');
@@ -142,7 +142,7 @@ describe('the branch the check reads', () => {
 
   it('says it could not confirm the gate branch either when its protection cannot be read', async () => {
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/ma*'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.action).toBe('cannot-verify');
     expect(result.gateBranch?.action).toBe('cannot-verify');
@@ -155,7 +155,7 @@ describe('the branch the check reads', () => {
 
   it('names both ways to fix it, for the gate file that names the branch', async () => {
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['~ALL'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'docs-gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'docs-gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.message).toContain(`put trunk in place of main on line 8 of ${USABL_DOCS_GATE_WORKFLOW_PATH}, and the same in the history workflow if you have it.`);
     expect(result.message).toContain(
@@ -165,7 +165,7 @@ describe('the branch the check reads', () => {
 
   it('is verified with exit 0, and says nothing about the default branch, when GitHub reports the gate branch', async () => {
     const gh = ghWithRuleset('main', { ref_name: { include: ['~ALL'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'main', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('verified');
     expect(result.otherDefault).toBeNull();
@@ -176,7 +176,7 @@ describe('the branch the check reads', () => {
   it('does not count ~DEFAULT_BRANCH for a gate on main when the default branch is trunk', async () => {
     const result = await verifyBranchRule(
       ghWithRuleset('trunk', { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }).reader,
-      { name: 'main', source: 'gate' },
+      { name: 'main', source: 'gate', line: 8 },
     );
     // The protection on main, read by itself, is not applied. The result is cannot-verify whatever
     // it reads, because pull requests into trunk, the default branch, are not gated.
@@ -220,6 +220,16 @@ describe('the branch the check reads', () => {
     }
   });
 
+  it('reads the line of the trigger branch from the file on disk, not from the draft', async () => {
+    const edited = `# Edited by the team.\n# Four lines\n# above the\n# trigger.\n${pinEngineRef(gateWorkflowFor('trunk'), SHA)}`;
+    expect(edited.split('\n')[11]).toBe('    branches: ["trunk"]');
+    const target = await gateBranchTarget(async (path) => (path === USABL_GATE_WORKFLOW_PATH ? edited : null));
+    expect(target).toEqual({ name: 'trunk', source: 'gate', line: 12 });
+    const result = await verifyBranchRule(ghWithRuleset('main', { ref_name: { include: ['~ALL'], exclude: [] } }).reader, target);
+    expect(result.message).toContain(`put main in place of trunk on line 12 of ${USABL_GATE_WORKFLOW_PATH},`);
+    expect(result.message).not.toContain('line 8');
+  });
+
   it('never reads a branch name that would leave the branches path', async () => {
     for (const name of ['..', '.', 'a/../b', 'a//b', '/a', 'a/']) {
       const raw = gateWorkflowFor('trunk').replace('    branches: ["trunk"]', `    branches: ["${name}"]`);
@@ -229,7 +239,7 @@ describe('the branch the check reads', () => {
 
   it('encodes a branch with a slash as one path segment', async () => {
     const gh = ghWithRuleset('release/2.x', { ref_name: { include: ['refs/heads/release/2.x'], exclude: [] } });
-    const result = await verifyBranchRule(gh.reader, { name: 'release/2.x', source: 'gate' });
+    const result = await verifyBranchRule(gh.reader, { name: 'release/2.x', source: 'gate', line: 8 });
     expect(result.action).toBe('verified');
     expect(gh.calls[0]).toBe('repos/{owner}/{repo}/branches/release%2F2.x/protection');
   });

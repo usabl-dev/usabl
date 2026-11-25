@@ -78,7 +78,7 @@ describe('doctor and the default branch GitHub reports', () => {
   });
 
   it('prints the same next step from install --branch-rule, which does not verify trunk', async () => {
-    const result = await verifyBranchRule(ghProtecting('trunk', 'main'), { name: 'trunk', source: 'gate' });
+    const result = await verifyBranchRule(ghProtecting('trunk', 'main'), { name: 'trunk', source: 'gate', line: 8 });
     expect(result.exitCode).toBe(2);
     expect(result.action).toBe('cannot-verify');
     expect(result.message).toContain(

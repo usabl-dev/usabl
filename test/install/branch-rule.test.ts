@@ -19,7 +19,7 @@ import {
 // A gate workflow on disk that names main. A test that reads the protection itself, with a fake
 // repository read that does not say which branch is the default, passes this target: with no target
 // usabl only assumed main, and an assumed main is never verified unless GitHub confirms it.
-const GATE_MAIN = { name: PROTECTED_BRANCH, source: 'gate' } as const;
+const GATE_MAIN = { name: PROTECTED_BRANCH, source: 'gate', line: 8 } as const;
 
 function recordingGh(reply: (endpoint: string) => GhResult | null): {
   reader: GhReader;
