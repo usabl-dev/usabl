@@ -109,6 +109,7 @@ export type LedgerGapCause =
   | 'hash-collision'
   | 'first-floor-for-screen'
   | 'not-seen'
+  | 'not-seen-since'
   | 'left-the-floor'
   | 'dates-out-of-order';
 
@@ -140,6 +141,9 @@ export type LedgerLessReason =
   | 'no-usable-history'
   // The history is on, but no full scan of main saw it during one of its spans.
   | 'not-seen'
+  // A span is counted as open past its last sighting: to the head commit, or to a gap in the floor
+  // history. No full scan of main saw it in that part of the span.
+  | 'not-seen-since'
   // A history record that touches it could not be placed in time.
   | 'history-unplaced'
   // A span ended only because it left the floor. It may have been fixed before.
@@ -205,6 +209,8 @@ interface OpenSpan {
   end: (LedgerSpanEnd & { position: number }) | null;
   // A full scan of main saw it while this span was open.
   seen?: boolean;
+  // The last full scan of main that saw it while this span was open.
+  lastSeenAt?: Placed | undefined;
   // Where it left the floor after the history had already fixed this span. Used only when that fix
   // is withdrawn, so the span then ends where the floor alone says.
   leftAfter?: { at: Placed; cause: FloorBreak | null } | undefined;
@@ -507,6 +513,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       } else if (following !== undefined) {
         span.end = following.end;
         span.seen = span.seen === true || following.seen === true;
+        span.lastSeenAt = following.lastSeenAt ?? span.lastSeenAt;
         span.leftAfter = following.leftAfter;
         row.spans.splice(index + 1, 1);
       }
@@ -518,11 +525,16 @@ export function buildLedger(input: LedgerInput): Ledger {
     const differs = [...seenOnTree].some((seen) => seen !== count);
     seenOnTree.add(count);
     row.countsByTree.set(record.sourceTree, seenOnTree);
-    if (count > 0) {
+    const markSeen = (): void => {
+      if (count === 0) return;
       row.lastSeen = point(at);
       const last = row.spans[row.spans.length - 1];
-      if (last !== undefined && last.end === null) last.seen = true;
-    }
+      if (last !== undefined && last.end === null) {
+        last.seen = true;
+        last.lastSeenAt = at;
+      }
+    };
+    markSeen();
     if (row.intermittent) return;
     const end = lastEnd(row);
     if (differs) {
@@ -532,6 +544,8 @@ export function buildLedger(input: LedgerInput): Ledger {
       row.intermittent = true;
       row.pendingZero = null;
       withdrawFixes(row);
+      // A withdrawn fix can leave the last span open again, and this scan saw it in that span.
+      markSeen();
       return;
     }
     if (isOpen(row)) {
@@ -547,7 +561,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       return;
     }
     if (end?.by === 'history' && count > 0) {
-      row.spans.push({ start: at, end: null, seen: true });
+      row.spans.push({ start: at, end: null, seen: true, lastSeenAt: at });
       row.pendingZero = null;
     }
   }
@@ -672,6 +686,27 @@ export function buildLedger(input: LedgerInput): Ledger {
               'so it may have been fixed sooner than the floor shows.',
           },
           { less: 'not-seen' },
+        );
+      }
+      // The same holds for the part of a span after its last sighting. A span that is open now is
+      // exact only when the scan of the head commit saw it. A span that ended at a gap in the floor
+      // history is counted to that gap, and no scan sees a row at the commit where it left the floor.
+      const tail = row.spans.some((span) => {
+        const seenAt = span.lastSeenAt;
+        if (span.seen !== true || seenAt === undefined) return false;
+        if (span.end === null) return seenAt.commit !== input.head;
+        return span.end.by === 'gap' && seenAt.position < span.end.position;
+      });
+      if (tail) {
+        addGap(
+          row,
+          {
+            cause: 'not-seen-since',
+            detail:
+              'A full scan of main saw this accessibility barrier, but no full scan saw it after that, up to the commit ' +
+              'where the ledger stops counting. It may have been fixed sooner than the count shows.',
+          },
+          { less: 'not-seen-since' },
         );
       }
     }

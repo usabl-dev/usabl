@@ -73,9 +73,10 @@ describe('usabl debt ledger', () => {
     expect(lines[header]).toMatch(/^Days open +State +First seen +Last change +Screen +Rule +Notes +Element$/u);
     const body = lines.slice(header + 1, header + 4);
     // Every row is in the first floor, so each may be older. The two fixed rows were never seen by a
-    // scan, so each may also have been fixed sooner: their days are not known either way.
+    // scan, so each may also have been fixed sooner: their days are not known either way. The open
+    // row was last seen at c5 and is counted to c41, so it may have been fixed sooner too.
     expect(body[0]).toMatch(
-      /^at least 41 +open +2026-01-01 +2026-01-01 +clusters +pf-focus-into-dialog +first baseline, last seen 2026-01-06 +clusters\|/u,
+      /^not known \(41 by the floor\) +open +2026-01-01 +2026-01-01 +clusters +pf-focus-into-dialog +first baseline, incomplete, last seen 2026-01-06 +clusters\|/u,
     );
     expect(body[1]).toMatch(
       /^not known \(20 by the floor\) +left the floor +2026-01-01 +2026-01-21 +clusters +button-name +first baseline, incomplete +\(counted, no element\)$/u,

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceFloor, FloorEntry } from '../../src/contracts/index.js';
 import { buildLedger, checkSpans, LedgerInvariantError, type FloorSnapshot, type LedgerHistory, type LedgerInput, type LedgerRecord } from '../../src/history/ledger.js';
+import { daysCell, formatLedger } from '../../src/history/ledger-report.js';
 import type { HistoryRecord } from '../../src/history/record.js';
 import { dialogAt, entryFor, floorOf, fullScreen, recordOf, rowButton } from './helpers.js';
 
@@ -440,6 +441,88 @@ describe('buildLedger', () => {
     const floor = floorOf([A, B]);
     const make = () => input([snap(0, floor), snap(7, floorOf([B]))], historyOn([scanAt(3, floor, [[B, 1]])]));
     expect(JSON.stringify(buildLedger(make()))).toBe(JSON.stringify(buildLedger(make())));
+  });
+});
+
+describe('buildLedger after the last sighting of an open row', () => {
+  it('says the days may be smaller when the scan at the head saw none, and leaves the row out of the median', () => {
+    // A and C are floored at c5. A scan at c6 sees both. The fix for A lands, and the scan at the
+    // head (c40) sees none at A. One clean scan is not a fix, so A stays open, but no scan saw it
+    // after c6.
+    const floor = floorOf([A, B, C]);
+    const ledger = buildLedger(
+      input(
+        [snap(0, floorOf([B])), snap(5, floor)],
+        historyOn([scanAt(6, floor, [[A, 1], [B, 1], [C, 1]]), scanAt(40, floor, [[A, 0], [B, 1], [C, 1]])]),
+        { head: commitAt(40), headDate: dayAt(40) },
+      ),
+    );
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({
+      state: 'open',
+      daysOpen: 35,
+      mayBeMore: false,
+      mayBeLess: true,
+      mayBeLessReasons: ['not-seen-since'],
+      lastSeen: { commit: commitAt(6), date: dayAt(6) },
+    });
+    expect(daysCell(a)).toBe('at most 35');
+    expect(a.incomplete.map((gap) => gap.cause)).toEqual(['not-seen-since']);
+    // C was seen at the head, so its count is exact. B was seen there too, and is in the first floor.
+    expect(daysCell(rowFor(ledger, C))).toBe('35 days');
+    expect(daysCell(rowFor(ledger, B))).toBe('at least 40');
+    expect(ledger.totals.open).toEqual({ rows: 3, exactRows: 1, medianDays: 35, longestDays: 35 });
+    expect(formatLedger(ledger)).toContain('Totals: 3 open, 1 exact, median 35 days, longest 35 days.');
+  });
+
+  it('never calls a first baseline row "at least" after a later scan saw none', () => {
+    const floor = floorOf([A]);
+    const ledger = buildLedger(input([snap(0, floor)], historyOn([scanAt(3, floor, [[A, 1]]), scanAt(39, floor, [[A, 0]])])));
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({
+      state: 'open',
+      daysOpen: 41,
+      mayBeMoreReasons: ['first-floor-for-screen'],
+      mayBeLessReasons: ['not-seen-since'],
+      lastSeen: { commit: commitAt(3), date: dayAt(3) },
+    });
+    expect(daysCell(a)).toBe('not known (41 by the floor)');
+  });
+
+  it('says the days may be smaller when scans stopped before the head', () => {
+    const floor = floorOf([A, B]);
+    const ledger = buildLedger(input([snap(0, floorOf([B])), snap(5, floor)], historyOn([scanAt(6, floor, [[A, 1], [B, 1]])])));
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({ state: 'open', daysOpen: 36, mayBeMore: false, mayBeLessReasons: ['not-seen-since'] });
+    expect(daysCell(a)).toBe('at most 36');
+    expect(a.incomplete.find((gap) => gap.cause === 'not-seen-since')?.detail).toMatch(/may have been fixed sooner/u);
+    expect(ledger.totals.open).toMatchObject({ rows: 2, exactRows: 0, medianDays: null });
+  });
+
+  it('keeps the count exact when the scan at the head saw it', () => {
+    const floor = floorOf([A, B]);
+    const ledger = buildLedger(
+      input([snap(0, floorOf([B])), snap(5, floor)], historyOn([scanAt(6, floor, [[A, 1], [B, 1]]), scanAt(41, floor, [[A, 1], [B, 1]])])),
+    );
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({ mayBeMore: false, mayBeLess: false, mayBeLessReasons: [], lastSeen: { commit: commitAt(41) } });
+    expect(daysCell(a)).toBe('36 days');
+    expect(ledger.totals.open).toMatchObject({ exactRows: 1, medianDays: 36 });
+  });
+
+  it('never calls a span that ended at a gap "at least" when no scan saw it at the end', () => {
+    // A is floored at c5 and seen at c6. The floor is rewritten at c20 without A, so its span ends
+    // at that gap. No scan saw it between c6 and c20, so it may have been fixed before the gap.
+    const ledger = buildLedger(
+      input(
+        [snap(0, floorOf([B], 2)), snap(5, floorOf([A, B], 2)), snap(20, floorOf([B], 3))],
+        historyOn([scanAt(6, floorOf([A, B], 2), [[A, 1], [B, 1]])]),
+      ),
+    );
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({ state: 'open', daysOpen: 15, mayBeMoreReasons: ['ended-at-gap'], mayBeLessReasons: ['not-seen-since'] });
+    expect(a.spans[0]?.end).toMatchObject({ commit: commitAt(20), by: 'gap' });
+    expect(daysCell(a)).toBe('not known (15 by the floor)');
   });
 });
 
