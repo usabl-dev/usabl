@@ -99,16 +99,51 @@ const contentAssertionSchema = z
   })
   .strict();
 
+// The most entries each list in a requirement file may hold. A real file holds a few of each. A
+// list past its limit is refused on its length alone, before any entry is read, so a huge file is
+// refused fast, with one message, and is never cut short or read in part.
+const REQUIREMENTS_LIMIT = 1000;
+const STEPS_LIMIT = 1000;
+const STEP_FIELDS_LIMIT = 100;
+// One requirement holds its obligations and each obligation's words, so a bad requirement can hold
+// up to obligations times words problems. The schema library collects the problems of one list
+// entry in a single call, and past about 123,000 of them that call fails (see parseBundle). These
+// two limits keep one requirement under about 13,000 problems.
+const OBLIGATIONS_LIMIT = 100;
+const TOKENS_LIMIT = 100;
+
+// A count as a person reads it, such as 1,000.
+function count(limit: number): string {
+  return limit.toLocaleString('en-US');
+}
+
+function atMost(list: string, limit: number, items: string): string {
+  return `${list} can list at most ${count(limit)} ${items}`;
+}
+
+// A flow step keeps the fields it does not name, for the step runner to read. Their number is
+// checked first, so a step with a huge number of fields is refused on that alone.
 const flowStepSchema = z
-  .object({
-    do: z.string().min(1, 'steps[].do is required'),
-  })
-  .catchall(z.unknown());
+  .custom<unknown>(
+    (input) =>
+      typeof input !== 'object' || input === null || Array.isArray(input) || Object.keys(input).length <= STEP_FIELDS_LIMIT,
+    { abort: true, error: `a flow step can have at most ${count(STEP_FIELDS_LIMIT)} fields` },
+  )
+  .pipe(
+    z
+      .object({
+        do: z.string().min(1, 'steps[].do is required'),
+      })
+      .catchall(z.unknown()),
+  );
 
 const flowAssertionSchema = z
   .object({
     type: z.literal('flow'),
-    steps: z.array(flowStepSchema).min(1, 'flow steps must contain at least one action'),
+    steps: z
+      .array(flowStepSchema)
+      .min(1, 'flow steps must contain at least one action')
+      .max(STEPS_LIMIT, atMost('flow steps', STEPS_LIMIT, 'steps')),
     expectedAnnouncement: z
       .string()
       .min(1, 'expectedAnnouncement must not be empty')
@@ -157,7 +192,8 @@ const voiceObligationSchema = z
     afterStep: numberField(),
     requiredTokens: z
       .array(z.string())
-      .min(1, 'requiredTokens must list at least one word a screen reader user must hear'),
+      .min(1, 'requiredTokens must list at least one word a screen reader user must hear')
+      .max(TOKENS_LIMIT, atMost('requiredTokens', TOKENS_LIMIT, 'words')),
     focusedRole: z
       .string()
       .trim()
@@ -172,10 +208,12 @@ const voiceAssertionSchema = z
     type: z.literal('voice'),
     steps: z
       .array(voiceStepsSchema)
-      .min(1, 'voice steps must list at least one step, such as a click on the control under test'),
+      .min(1, 'voice steps must list at least one step, such as a click on the control under test')
+      .max(STEPS_LIMIT, atMost('voice steps', STEPS_LIMIT, 'steps')),
     obligations: z
       .array(voiceObligationSchema)
-      .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear'),
+      .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear')
+      .max(OBLIGATIONS_LIMIT, atMost('voice obligations', OBLIGATIONS_LIMIT, 'obligations')),
     maxTabPath: numberField().optional(),
   })
   .strict();
@@ -299,7 +337,7 @@ const focusOrderAssertionSchema = z
     sequence: z
       .array(accessibleName('each sequence entry'))
       .min(2, 'sequence needs at least two names, because one name has no order')
-      .max(FOCUS_SEQUENCE_LIMIT, `sequence can list at most ${FOCUS_SEQUENCE_LIMIT} names`),
+      .max(FOCUS_SEQUENCE_LIMIT, atMost('sequence', FOCUS_SEQUENCE_LIMIT, 'names')),
   })
   .strict();
 
@@ -418,7 +456,10 @@ const requirementSchema = z
 const requirementBundleSchema = z
   .object({
     version: z.literal(1),
-    requirements: z.array(requirementSchema).min(1, 'requirements must contain at least one entry'),
+    requirements: z
+      .array(requirementSchema)
+      .min(1, 'requirements must contain at least one entry')
+      .max(REQUIREMENTS_LIMIT, `${atMost('requirements', REQUIREMENTS_LIMIT, 'requirements')}; put the rest in another file`),
   })
   .strict();
 
@@ -631,7 +672,9 @@ export function parseBundle(raw: unknown): ParseBundleResult {
   // the engine's limit and throws a RangeError in place of returning them. The file is refused
   // either way. This says why, and quotes nothing from the file, so the person is not told that
   // valid YAML is invalid. Any other error, a RangeError with another message included, is a fault
-  // that says nothing about the file, so it is thrown on as before.
+  // that says nothing about the file, so it is thrown on as before. The list limits above keep one
+  // requirement under about 13,000 problems, so no file within them reaches this today. The catch
+  // stays in case a later change or a much smaller stack lets one through.
   let parsed: z.ZodSafeParseResult<z.infer<typeof requirementBundleSchema>>;
   try {
     parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
