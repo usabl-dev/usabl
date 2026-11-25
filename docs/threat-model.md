@@ -429,17 +429,41 @@ passing bundle from another run.
   skip-worktree with the index. An agent can set either flag with `git update-index`, a developer
   may mark a local settings file this way, and sparse checkout sets skip-worktree. So an edit to
   such a file was in no changed list, and a stop whose only edit it was read "nothing to check".
-  The tree a receipt binds is built from a fresh index with no flags, so a stored receipt never
-  answered for it. The status listing now reads the flags (`git ls-files -v`) and adds each
-  flagged file whose working copy is not what the index holds: content that hashes to another
-  blob id through the filters `git add` uses, a different link text, a change of kind, a file
-  usabl cannot read, or a file that is gone. Each surface that lists changes reads this listing:
-  the Stop hook with and without a starting commit, `usabl check` in each mode, the overlay, and
-  `usabl brief`. The file is then planned and checked like any other edit, from the bytes on
-  disk. Limits: a skip-worktree file that is not there in a sparse checkout is not a change,
-  because sparse checkout removes the files outside its set on purpose; a change of the
-  executable bit alone is not compared. CI is not affected, because it lists commits, and the
-  pull request diff holds the file.
+  The status listing now reads the flags (`git ls-files -v`) and adds each flagged file whose
+  working copy is not what the index holds: content that hashes to another blob id through the
+  filters `git add` uses, a different link text, a change of kind, a file usabl cannot read, or a
+  file that is gone. File names are read as the bytes git stores, so a name that is not valid
+  UTF-8 is compared as that file. Each surface that lists changes reads this listing: the Stop
+  hook with and without a starting commit, `usabl check` in each mode (the CI gate's
+  `--trusted-ref` check included), the overlay, and `usabl brief`. The file is then planned and
+  checked like any other edit, from the bytes on disk.
+- A missing skip-worktree file is left out only when `core.sparseCheckout` is true and
+  `git sparse-checkout check-rules` says the file is outside the sparse set, because sparse
+  checkout removes those files on purpose. When git cannot answer (no pattern file, or a git
+  older than 2.41) or the file is inside the set, it is a deletion. So the setting alone, which an
+  agent can write with one `git config` line, hides nothing. Limit: an agent can write the
+  patterns too (`.git/info/sparse-checkout`), and then a file it leaves out of the set reads as
+  left out on purpose.
+- Limit, stated plainly: the compare goes through git's own filters, as `git add` does. A clean
+  filter, the `ident` attribute, or a `working-tree-encoding` attribute on a flagged file can make
+  edited bytes hash to the id the index holds, so the edit is still in no changed list. An agent
+  can set each of these without any tracked change: an attribute line in `.git/info/attributes`,
+  or a filter in `.git/config`. The same attributes also keep the tree id the receipt binds the
+  same, with or without a flag, so a stored receipt can answer a stop for bytes no check saw.
+  `writeTree` builds that tree with `git add -A`, which applies them, and patterns an agent writes
+  for sparse checkout keep a left-out file's committed bytes in the tree the same way. A
+  follow-up change closes this: the receipt tree and the changed list are to be built from the
+  bytes the checks see, with no attribute and no sparse pattern applied. Until then this case is
+  open.
+- CI lists changes the same way: the gate's `usabl check --trusted-ref` joins the merge-base diff
+  with this status listing. Its result changes only when the CI checkout itself holds a flagged
+  file whose working copy differs from the index. A fresh checkout has none. A sparse CI checkout
+  lists none of the files it left out, because git says they are outside its sparse set.
+- Limit: other local git settings still hide an edit from every changed list, flag or not:
+  `core.trustctime=false` with an edit of the same size and a restored modification time, and a
+  `core.fsmonitor` hook that answers "nothing changed". The tree id moves in both cases, so no
+  stored receipt answers, but the stop can read "nothing to check". This case is open. Listing
+  changes from a fresh index, as `writeTree` builds one, would close it.
 - Limits of the local files binding. It makes a stored receipt stop matching, and it does not
   widen what the stop checks: the stop checks the screens its changed list reaches, so an edit
   only to an ignored file on a branch with no other change is still nothing to check. A `.env`

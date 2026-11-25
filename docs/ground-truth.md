@@ -1761,16 +1761,33 @@ Files git hides with an index flag are listed too. git status never compares a t
 marked assume-unchanged or skip-worktree with the index, so an edit to one is not in its output.
 The status listing reads the flags with `git ls-files -v -s -z` (a lower case tag for
 assume-unchanged, `S` for skip-worktree) and adds each flagged file whose working copy is not what
-the index holds, by its path from the repository root. A regular file is compared by the blob id
-`git hash-object` gives it, through the same filters `git add` uses, so a line ending change that
-a filter removes is no edit. A symbolic link is compared by its link text. A file usabl cannot
-read, a folder, a pipe, a submodule, and a file that turned into a link or back are listed as
-changed, and a file that is gone is listed as deleted. A skip-worktree file that is not there in a
-sparse checkout (`core.sparseCheckout` is true) is not listed, because sparse checkout removes the
-files outside its set on purpose. A change of the executable bit alone is not compared. That
-listing covers every tracked file, so it is read as a stream and has no size limit. Every surface
-that lists changes uses this listing, so an edit hidden this way is planned and checked like any
-other.
+the index holds, by its path from the repository root. Each name is kept as the bytes git stores,
+so a name that is not valid UTF-8 is read, hashed, and checked against the sparse set as that
+file; only the name the listing returns is decoded. A regular file is compared by the blob id
+`git hash-object --stdin-paths` gives it, through the same filters `git add` uses, so a line
+ending change that a filter removes is no edit. One process hashes every file, and each name goes
+to it in git's C quoting, so a name with a newline arrives whole. A symbolic link is compared by
+its link text. A file usabl cannot read, a folder, a pipe, a submodule, and a file that turned
+into a link or back are listed as changed, and a file that is gone is listed as deleted. A
+skip-worktree file that is not there is left out only when `core.sparseCheckout` is true and
+`git sparse-checkout check-rules -z` says the file is outside the sparse set, because sparse
+checkout removes those files on purpose. When that command fails (no pattern file, or a git older
+than 2.41) or the file is inside the set, the file is listed as deleted. A change of the
+executable bit alone is not compared. That listing covers every tracked file, so it is read as a
+stream and has no size limit. Each entry gets one synchronous `lstat`, in chunks of 2000 between
+turns of the event loop, and a folder found missing answers for every file in it. In a sparse
+checkout of 50,000 files with 45,000 left out, the listing took about 0.7 seconds on a loaded
+8-core machine, where `git status` took about 0.1 seconds. Every surface that lists changes uses
+this listing, the CI gate's `--trusted-ref` check included, so an edit hidden this way is planned
+and checked like any other. A fresh CI checkout has no flagged edits, so its list does not change.
+
+Known limit: the compare goes through git's filters. A clean filter, the `ident` attribute, or a
+`working-tree-encoding` attribute on a flagged file, set from `.git/info/attributes` or
+`.git/config` with no tracked change, can make an edited file hash to the id the index holds, so
+the edit is not listed. The same attributes keep the tree id from `writeTree` the same, flagged or
+not, so a stored receipt can answer for bytes no check saw. A follow-up change closes this by
+building the receipt tree and the changed list from the bytes the checks see. The threat model
+names this case and the other local settings that hide an edit.
 
 A rename is listed by its new name only, on local runs and in CI. The old name is not listed. So
 a file moved out of the UI globs, or into a test folder, is seen only through other changed files:
