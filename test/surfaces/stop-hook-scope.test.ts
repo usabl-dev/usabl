@@ -26,6 +26,7 @@ import {
   findStartingCommit,
   scopeGit,
   type ScopeGit,
+  type ScopeGitOptions,
   type ScopeGitResult,
   type ScopeProblem,
 } from '../../src/surfaces/stop-hook-scope.js';
@@ -530,6 +531,473 @@ describe('no starting commit, no guess', { timeout: REAL_PROCESS_BUDGET_MS }, ()
   });
 });
 
+// A clone made while the default branch was master. The project then made main, set usabl up
+// there or not, and moved its default branch to main. A fetch brings main in but does not move
+// origin/HEAD, so it still names origin/master, which has no usabl.config.json.
+describe('a stale origin/HEAD after the default branch moves', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  const STALE_REASON = 'another branch of origin has one at its tip, so origin/HEAD may be stale';
+  const SET_HEAD_NEXT =
+    'Next: run git remote set-head origin --auto, which records the default branch of origin again, then fetch the trusted branch';
+
+  function gitIn(cwd: string, ...args: string[]): string {
+    return execFileSync('git', ['-c', 'user.name=usabl test', '-c', 'user.email=test@example.invalid', ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  }
+
+  // Leaves repo set to the clone, on a branch made from origin/main with one UI commit. The branch
+  // is named `feature` unless the test names it.
+  async function cloneWithStaleHead(options: { configOnMain: boolean; branch?: string }): Promise<void> {
+    const work = repo;
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'usabl-stale-head-')));
+    made.push(root);
+    git('branch', '-q', '-m', 'main', 'master');
+    git('rm', '-q', 'usabl.config.json');
+    git('commit', '-q', '-m', 'old master, before usabl');
+    gitIn(root, 'clone', '-q', '--bare', work, join(root, 'origin.git'));
+    const clone = join(root, 'clone');
+    gitIn(root, 'clone', '-q', join(root, 'origin.git'), clone);
+
+    git('switch', '-q', '-c', 'main');
+    await write('docs.md', 'main\n');
+    if (options.configOnMain) {
+      await write('usabl.config.json', CONFIG_TEXT);
+    }
+    git('add', '-A');
+    git('commit', '-q', '-m', 'main');
+    git('push', '-q', join(root, 'origin.git'), 'main');
+    gitIn(join(root, 'origin.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+
+    repo = clone;
+    git('fetch', '-q', 'origin');
+    // git's default: the new branch tracks origin/main, so its upstream is origin/main.
+    git('switch', '-q', '-c', options.branch ?? 'feature', 'origin/main');
+    if (!options.configOnMain) {
+      await write('usabl.config.json', CONFIG_TEXT);
+    }
+    await write('src/App.tsx', 'export const App = 2;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'change the app');
+    expect(git('symbolic-ref', 'refs/remotes/origin/HEAD').trim()).toBe('refs/remotes/origin/master');
+  }
+
+  it('does not read a configured repository as a setup branch, and names the other branch', async () => {
+    await cloneWithStaleHead({ configOnMain: true });
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+      kind: 'not-found',
+      branch: 'origin/master',
+      problem: 'trusted-branch-may-be-stale',
+      detail: 'origin/main',
+    });
+  });
+
+  it('blocks the stop as a gap that names git remote set-head origin --auto', async () => {
+    await cloneWithStaleHead({ configOnMain: true });
+
+    const h = hook();
+    expect(await runStopHookFromStdin('{}', h.ports)).toBe(0);
+    const text = blockReason(h.stdout());
+    expect(text.startsWith('NOT verified - not covered: usabl could not find where this branch left the trusted branch')).toBe(true);
+    expect(text).toContain(STALE_REASON);
+    expect(text).toContain(SET_HEAD_NEXT);
+    expect(text).not.toContain('VERIFIED');
+    expect(text).not.toContain('this branch sets usabl up');
+    expect(insideFrame(text, 'trusted branch: origin/master')).toBe(true);
+    expect(insideFrame(text, 'branch with usabl.config.json: origin/main')).toBe(true);
+    expect(h.scanned).toEqual([]);
+  });
+
+  it('checks the branch as usual once origin/HEAD is recorded again', async () => {
+    await cloneWithStaleHead({ configOnMain: true });
+    git('remote', 'set-head', 'origin', 'main');
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.scanned).toEqual(['home']);
+    expect(h.stderr()).not.toContain('this branch sets usabl up');
+    expect((await storedReceipt()).baseRevision).toBe(commitOf('origin/main'));
+  });
+
+  // No branch of origin has a config, so this branch is the one that sets usabl up. The other
+  // branch of origin with no config changes nothing.
+  it('keeps the setup path when no branch of origin has a config', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+      kind: 'found',
+      branch: 'origin/master',
+      policy: 'branch-sets-usabl-up',
+      configOnTrustedBranch: false,
+    });
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    expect(h.scanned).toEqual(['home']);
+    expect(h.stderr()).toContain('Note: this branch sets usabl up.');
+  });
+
+  // Once the setup branch is pushed, its own branch of origin holds the config. That copy is
+  // skipped, so the branch still reads as one that sets usabl up.
+  it('keeps the setup path for a setup branch pushed to origin', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    git('push', '-q', 'origin', 'feature');
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+      kind: 'found',
+      branch: 'origin/master',
+      policy: 'branch-sets-usabl-up',
+    });
+
+    const h = hook();
+    await runStopHookFromStdin('{}', h.ports);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    expect(h.scanned).toEqual(['home']);
+    expect(h.stderr()).toContain('Note: this branch sets usabl up.');
+  });
+
+  // The branch of origin that is this branch's own copy is not evidence that usabl is set up
+  // elsewhere: the copy with the same name, and the branch's configured upstream, are skipped.
+  // main, master, trunk, and develop always count, so the common stale origin/HEAD still blocks.
+  describe('the branch of origin that is this branch', () => {
+    async function expectSetupPath(): Promise<void> {
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+        kind: 'found',
+        branch: 'origin/master',
+        policy: 'branch-sets-usabl-up',
+      });
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      expect(h.scanned).toEqual(['home']);
+      expect(h.stderr()).toContain('Note: this branch sets usabl up.');
+    }
+
+    async function expectStaleGap(named: string): Promise<void> {
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+        kind: 'not-found',
+        branch: 'origin/master',
+        problem: 'trusted-branch-may-be-stale',
+        detail: named,
+      });
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(blockReason(h.stdout())).toContain(STALE_REASON);
+      expect(h.scanned).toEqual([]);
+    }
+
+    it('takes the setup path again for a pushed setup branch with the same name on origin', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'feature/setup' });
+      git('push', '-q', 'origin', 'feature/setup');
+      expect(commitOf('origin/feature/setup')).toBe(commitOf('HEAD'));
+      await expectSetupPath();
+    });
+
+    it('still blocks a local main when origin/HEAD names master and origin/main has a config', async () => {
+      await cloneWithStaleHead({ configOnMain: true, branch: 'main' });
+      expect(git('symbolic-ref', 'HEAD').trim()).toBe('refs/heads/main');
+      await expectStaleGap('origin/main');
+    });
+
+    it('skips the upstream of a branch whose upstream has another name', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'work' });
+      // Pushed under another name, with no upstream recorded yet: that branch of origin counts.
+      git('push', '-q', 'origin', 'work:setup-usabl');
+      await expectStaleGap('origin/setup-usabl');
+
+      git('branch', '-q', '--set-upstream-to=origin/setup-usabl');
+      await expectSetupPath();
+    });
+
+    it('blocks a pushed setup branch named develop, because develop always counts', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'develop' });
+      git('push', '-q', '-u', 'origin', 'develop');
+      await expectStaleGap('origin/develop');
+    });
+
+    it('skips nothing on a detached HEAD', async () => {
+      await cloneWithStaleHead({ configOnMain: false, branch: 'feature/setup' });
+      git('push', '-q', 'origin', 'feature/setup');
+      git('switch', '-q', '--detach');
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({
+        kind: 'not-found',
+        problem: 'trusted-branch-may-be-stale',
+        detail: 'origin/feature/setup',
+      });
+    });
+  });
+
+  // A partial clone leaves objects on origin until git needs them, and git then fetches them
+  // over the network. The lookup reads only root trees, with lazy fetch off, so it never fetches
+  // inside a stop, and an object it cannot read is a gap, never "no config".
+  describe('in a partial clone', () => {
+    // origin/HEAD names master (no config), and origin/main has the config. The clone was made
+    // before main existed, and the branch is made from master with a config of its own in other
+    // bytes, so the config blob at the tip of origin/main is not in the clone.
+    async function partialCloneWithStaleHead(filter: 'blob:none' | 'tree:0'): Promise<string> {
+      const work = repo;
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'usabl-partial-')));
+      made.push(root);
+      const origin = join(root, 'origin.git');
+      git('branch', '-q', '-m', 'main', 'master');
+      git('rm', '-q', 'usabl.config.json');
+      git('commit', '-q', '-m', 'old master, before usabl');
+      gitIn(root, 'clone', '-q', '--bare', work, origin);
+      gitIn(origin, 'config', 'uploadpack.allowFilter', 'true');
+      const clone = join(root, 'clone');
+      gitIn(root, 'clone', '-q', `--filter=${filter}`, `file://${origin}`, clone);
+
+      git('switch', '-q', '-c', 'main');
+      await write('usabl.config.json', CONFIG_TEXT);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'set usabl up on main');
+      git('push', '-q', origin, 'main');
+      gitIn(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+
+      repo = clone;
+      git('fetch', '-q', 'origin');
+      git('switch', '-q', '-c', 'feature');
+      await write('usabl.config.json', JSON.stringify(config) + '\n');
+      await write('src/App.tsx', 'export const App = 2;\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'change the app with a config of its own');
+      expect(git('symbolic-ref', 'refs/remotes/origin/HEAD').trim()).toBe('refs/remotes/origin/master');
+      return origin;
+    }
+
+    // Whether the clone holds an object, asked with lazy fetch off so the question fetches nothing.
+    function holdsObject(name: string): boolean {
+      try {
+        execFileSync('git', ['cat-file', '-e', name], { cwd: repo, stdio: 'ignore', env: { ...process.env, GIT_NO_LAZY_FETCH: '1' } });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    const STALE_MAIN = { kind: 'not-found', branch: 'origin/master', problem: 'trusted-branch-may-be-stale', detail: 'origin/main' };
+
+    it('reads the config at origin/main from its tree when lazy fetch is off for the whole process', async () => {
+      await partialCloneWithStaleHead('blob:none');
+      expect(holdsObject('origin/main:usabl.config.json')).toBe(false);
+      const saved = process.env.GIT_NO_LAZY_FETCH;
+      process.env.GIT_NO_LAZY_FETCH = '1';
+      try {
+        await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual(STALE_MAIN);
+      } finally {
+        if (saved === undefined) delete process.env.GIT_NO_LAZY_FETCH;
+        else process.env.GIT_NO_LAZY_FETCH = saved;
+      }
+    });
+
+    it('answers with no network call: origin cannot be reached, and the blob is still not in the clone after', async () => {
+      await partialCloneWithStaleHead('blob:none');
+      git('remote', 'set-url', 'origin', 'file:///nonexistent/usabl-origin.git');
+      expect(holdsObject('origin/main:usabl.config.json')).toBe(false);
+
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual(STALE_MAIN);
+      expect(holdsObject('origin/main:usabl.config.json')).toBe(false);
+
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      expect(blockReason(h.stdout())).toContain(STALE_REASON);
+      expect(h.scanned).toEqual([]);
+      expect(holdsObject('origin/main:usabl.config.json')).toBe(false);
+    });
+
+    // A treeless clone lacks the root tree of origin/main too. The lookup does not fetch it, so the
+    // stop is a gap, never the setup path.
+    it('reads a root tree that is not in a treeless clone as a gap that names the branch, never as no config', async () => {
+      await partialCloneWithStaleHead('tree:0');
+      expect(holdsObject('origin/main^{tree}')).toBe(false);
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+        kind: 'not-found',
+        branch: 'origin/master',
+        problem: 'tree-not-in-clone',
+        detail: 'origin/main',
+      });
+      expect(holdsObject('origin/main^{tree}')).toBe(false);
+
+      // The step the gap names loads the tree. The lookup then reads it, and the stale
+      // origin/HEAD gap follows.
+      git('ls-tree', 'origin/main');
+      expect(holdsObject('origin/main^{tree}')).toBe(true);
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual(STALE_MAIN);
+    });
+
+    // A treeless clone of a configured repository, behind origin: a fetch moved origin/main, and
+    // its tree stayed on origin. The branch was made from the older main, whose tree is local.
+    async function treelessCloneBehindOrigin(): Promise<void> {
+      const work = repo;
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'usabl-treeless-')));
+      made.push(root);
+      const origin = join(root, 'origin.git');
+      gitIn(root, 'clone', '-q', '--bare', work, origin);
+      gitIn(origin, 'config', 'uploadpack.allowFilter', 'true');
+      const clone = join(root, 'clone');
+      gitIn(root, 'clone', '-q', '--filter=tree:0', `file://${origin}`, clone);
+
+      await write('src/Other.tsx', 'export const Other = 2;\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'main moves on');
+      git('push', '-q', origin, 'main');
+
+      repo = clone;
+      git('fetch', '-q', 'origin');
+      git('switch', '-q', '-c', 'feature', 'main');
+      await write('src/App.tsx', 'export const App = 2;\n');
+      git('commit', '-q', '-am', 'change the app');
+      expect(git('symbolic-ref', 'refs/remotes/origin/HEAD').trim()).toBe('refs/remotes/origin/main');
+    }
+
+    // Runs `run` with git's trace of child processes written to a file, and returns the git
+    // commands it started as children, for example a lazy fetch.
+    async function childCommands(run: () => Promise<unknown>): Promise<string[]> {
+      const trace = join(repo, '..', `trace-${made.length}.json`);
+      const saved = process.env.GIT_TRACE2_EVENT;
+      process.env.GIT_TRACE2_EVENT = trace;
+      try {
+        await run();
+      } finally {
+        if (saved === undefined) delete process.env.GIT_TRACE2_EVENT;
+        else process.env.GIT_TRACE2_EVENT = saved;
+      }
+      let text = '';
+      try {
+        text = await readFile(trace, 'utf8');
+      } catch {
+        // No git process wrote a trace.
+      }
+      return text
+        .split('\n')
+        .filter((line) => line.includes('"event":"child_start"'))
+        .map((line) => (JSON.parse(line) as { argv?: string[] }).argv?.join(' ') ?? '');
+    }
+
+    // The trusted tip's tree is not local. The check of where policy is read does not fetch it:
+    // it is a gap that names the branch, and loading it clears the gap.
+    it('does not fetch the tree of the trusted branch, and names the step that loads it', async () => {
+      await treelessCloneBehindOrigin();
+      expect(holdsObject('origin/main^{tree}')).toBe(false);
+
+      let found: unknown;
+      const children = await childCommands(async () => {
+        found = await findStartingCommit(scopeGit(repo));
+      });
+      expect(children.filter((command) => command.includes('fetch'))).toEqual([]);
+      expect(found).toEqual({ kind: 'not-found', branch: 'origin/main', problem: 'tree-not-in-clone', detail: 'origin/main' });
+      expect(holdsObject('origin/main^{tree}')).toBe(false);
+
+      const h = hook();
+      await runStopHookFromStdin('{}', h.ports);
+      const text = blockReason(h.stdout());
+      expect(text).toContain('a partial clone that does not have the tree');
+      expect(text).toContain('Next: run git ls-tree');
+      expect(text).not.toContain('git fetch origin');
+      expect(insideFrame(text, 'tree not in this clone: origin/main')).toBe(true);
+      expect(h.scanned).toEqual([]);
+
+      git('ls-tree', 'origin/main');
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({ kind: 'found', policy: 'starting-commit' });
+    });
+
+    // A true setup repository in a treeless clone, with another branch of origin whose tree is
+    // not local. The gap names that branch; once its tree is loaded, the setup path follows.
+    it('names the other branch whose tree is not local, and takes the setup path once it is loaded', async () => {
+      const work = repo;
+      git('rm', '-q', 'usabl.config.json');
+      git('commit', '-q', '-m', 'main has no usabl config yet');
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'usabl-treeless-')));
+      made.push(root);
+      const origin = join(root, 'origin.git');
+      gitIn(root, 'clone', '-q', '--bare', work, origin);
+      gitIn(origin, 'config', 'uploadpack.allowFilter', 'true');
+      git('switch', '-q', '-c', 'docs');
+      await write('docs.md', 'docs\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'docs');
+      git('push', '-q', origin, 'docs');
+      const clone = join(root, 'clone');
+      gitIn(root, 'clone', '-q', '--filter=tree:0', `file://${origin}`, clone);
+      repo = clone;
+      git('switch', '-q', '-c', 'feature', 'main');
+      await write('usabl.config.json', CONFIG_TEXT);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'set usabl up');
+      expect(holdsObject('origin/docs^{tree}')).toBe(false);
+
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toEqual({
+        kind: 'not-found',
+        branch: 'origin/main',
+        problem: 'tree-not-in-clone',
+        detail: 'origin/docs',
+      });
+      git('ls-tree', 'origin/docs');
+      await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({ kind: 'found', policy: 'branch-sets-usabl-up' });
+    });
+  });
+
+  // A branch of origin that names a file's object, not a commit, has no tree to read. The gap says
+  // what it names, not that the clone lacks a tree.
+  it('says a branch of origin names a blob, not a commit', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    git('update-ref', 'refs/remotes/origin/odd', commitOf('HEAD:src/App.tsx'));
+    const found = await findStartingCommit(scopeGit(repo));
+    expect(found).toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+    const detail = found.kind === 'not-found' ? found.detail : null;
+    expect(detail).toContain('origin/odd names a blob, not a commit');
+    expect(detail).not.toContain('does not have the tree');
+  });
+
+  it('names git ls-tree, not a fetch, as the step for a tree that is not in the clone', () => {
+    const text = branchScopeGapText({ kind: 'gap', problem: 'tree-not-in-clone', branch: 'origin/main', detail: 'origin/main' });
+    expect(text).toContain('Next: run git ls-tree');
+    expect(text).toContain('then run usabl check --branch-scope again.');
+    expect(text).not.toContain('git fetch origin');
+    expect(insideFrame(text, 'tree not in this clone: origin/main')).toBe(true);
+  });
+
+  // Branches of origin at the tip of origin/master, made in one git call and packed.
+  function addOriginBranches(count: number): number {
+    const tip = commitOf('origin/master');
+    const refs = Array.from({ length: count }, (_, i) => `refs/remotes/origin/feature/branch-number-${String(i).padStart(5, '0')}`);
+    execFileSync('git', ['update-ref', '--stdin'], { cwd: repo, input: refs.map((ref) => `create ${ref} ${tip}\n`).join('') });
+    git('pack-refs', '--all');
+    // The bytes each branch adds to the listing: the id, the name, and the three separators and
+    // the end of line around the empty fields.
+    return refs.reduce((sum, ref) => sum + tip.length + ref.length + 5, 0);
+  }
+
+  // 15,000 branches of origin print more than 1 MiB. That used to cut git off, and the gap said
+  // "git did not run".
+  it('reads a listing of 15,000 branches of origin', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    expect(addOriginBranches(15_000)).toBeGreaterThan(1024 * 1024);
+
+    await expect(findStartingCommit(scopeGit(repo))).resolves.toMatchObject({ kind: 'found', policy: 'branch-sets-usabl-up' });
+  });
+
+  it('says the answer was too large when git prints more than usabl reads', async () => {
+    await cloneWithStaleHead({ configOnMain: false });
+    expect(addOriginBranches(50)).toBeGreaterThan(1000);
+
+    const found = await findStartingCommit(scopeGit(repo, { maxBytes: 1000 }));
+    expect(found).toMatchObject({ kind: 'not-found', problem: 'git-failed' });
+    const detail = found.kind === 'not-found' ? found.detail : null;
+    expect(detail).toContain('more than 1000 bytes');
+    expect(detail).not.toBe('git did not run');
+  });
+
+  it('names the other branch inside the frame in the check text too', () => {
+    const text = branchScopeGapText({ kind: 'gap', problem: 'trusted-branch-may-be-stale', branch: 'origin/master', detail: 'origin/main' });
+    expect(text).toContain(STALE_REASON);
+    expect(text).toContain(`${SET_HEAD_NEXT}`);
+    expect(text).toContain('then run usabl check --branch-scope again.');
+    expect(insideFrame(text, 'branch with usabl.config.json: origin/main')).toBe(true);
+    expect(text).not.toContain('error: origin/main');
+  });
+});
+
 describe('the scope in the cases that look like a missing starting commit', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   // A detached HEAD still has a merge base with the trusted branch, so the stop checks every
   // change since HEAD left it, as on a branch.
@@ -669,12 +1137,55 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
   // Where the config is decides where policy is read. Each commit's tree is checked first, then
   // listed for the config at the root: a name means held, no output means absent.
   type ConfigAnswer = 'held' | 'absent' | 'tree-missing' | ScopeGitResult;
-  function withConfigAt(answers: { start: ConfigAnswer; tip: ConfigAnswer }): ScopeGit {
+  // The other branches of origin, as for-each-ref lists them, and what a batch read of their root
+  // trees answers: 'held', 'absent', or 'tree-missing'. `entries` replaces the names in a root
+  // tree. `listing` and `batch` replace git's answer. `heads` are the local branches: the one
+  // checked out is marked current, and each may have an upstream ref.
+  interface OtherBranches {
+    refs?: { name: string; commit: string; answer: 'held' | 'absent' | 'tree-missing'; entries?: string[] }[];
+    heads?: { name: string; current?: boolean; upstream?: string }[];
+    listing?: ScopeGitResult;
+    batch?: ScopeGitResult;
+  }
+  // A root tree as git stores it: "<mode> <name>", a NUL byte, then the 20 bytes of the entry's id.
+  // The id bytes are made up, and one of them is a newline, as a real id can hold.
+  const ENTRY_ID = 'abcdefghij\nlmnopqrst';
+  const treeBytes = (entries: string[]) =>
+    entries.map((entry) => (entry.includes(' ') ? entry : `100644 ${entry}`) + `\0${ENTRY_ID}`).join('');
+  const treeAnswer = (entries: string[]) => {
+    const content = treeBytes(entries);
+    return `${'e'.repeat(40)} tree ${content.length}\n${content}\n`;
+  };
+  function withConfigAt(answers: { start: ConfigAnswer; tip: ConfigAnswer; others?: OtherBranches }): ScopeGit {
     const TIP = 'd'.repeat(40);
     const answerFor = (commit: string): ConfigAnswer => (commit === COMMIT ? answers.start : answers.tip);
-    return async (args) => {
+    const others = answers.others ?? {};
+    const refs = others.refs ?? [];
+    return async (args, options) => {
       if (args[0] === 'symbolic-ref') return ok('refs/remotes/origin/main');
       if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { code: 0, stdout: '', stderr: '' } : ok(COMMIT);
+      if (args[0] === 'for-each-ref') {
+        if (others.listing !== undefined) return others.listing;
+        const line = (commit: string, ref: string, head = ' ', upstream = '') => `${commit}\t${ref}\t${head}\t${upstream}\n`;
+        const listed = [
+          line(TIP, 'refs/remotes/origin/HEAD'),
+          line(TIP, 'refs/remotes/origin/main'),
+          ...refs.map((ref) => line(ref.commit, `refs/remotes/origin/${ref.name}`)),
+          ...(others.heads ?? []).map((head) => line(COMMIT, `refs/heads/${head.name}`, head.current === true ? '*' : ' ', head.upstream ?? '')),
+        ];
+        return { code: 0, stdout: listed.join(''), stderr: '' };
+      }
+      if (args[0] === 'cat-file' && args[1] === '--batch') {
+        if (others.batch !== undefined) return others.batch;
+        const lines = (options?.input ?? '').split('\n').filter((line) => line.length > 0);
+        const out = lines.map((line) => {
+          const ref = refs.find((candidate) => `${candidate.commit}^{tree}` === line);
+          const answer = ref?.answer ?? 'absent';
+          if (answer === 'tree-missing') return `${line} missing\n`;
+          return treeAnswer(ref?.entries ?? (answer === 'held' ? ['README.md', 'usabl.config.json'] : ['README.md', 'src']));
+        });
+        return { code: 0, stdout: out.join(''), stderr: '' };
+      }
       if (args[0] === 'cat-file') {
         const answer = answerFor((args.at(-1) ?? '').replace('^{tree}', ''));
         return answer === 'tree-missing' ? { code: 128, stdout: '', stderr: 'fatal: Not a valid object name' } : { code: 0, stdout: '', stderr: '' };
@@ -741,6 +1252,193 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
         kind: 'not-found',
         problem: 'git-failed',
       });
+    }
+  });
+
+  // origin/HEAD can name an old branch after the default branch moves. A config at the tip of any
+  // other branch of origin means usabl is set up in this repository, so this is not a setup branch.
+  const OTHER = 'a'.repeat(40);
+  const SECOND = 'b'.repeat(40);
+
+  it('reads a config at the tip of another branch of origin as a stale origin/HEAD, never as a setup branch', async () => {
+    const git = withConfigAt({ start: 'absent', tip: 'absent', others: { refs: [{ name: 'trunk', commit: OTHER, answer: 'held' }] } });
+    await expect(findStartingCommit(git)).resolves.toEqual({
+      kind: 'not-found',
+      branch: 'origin/main',
+      problem: 'trusted-branch-may-be-stale',
+      detail: 'origin/trunk',
+    });
+  });
+
+  it('keeps the setup path when the other branches of origin have no config', async () => {
+    const git = withConfigAt({ start: 'absent', tip: 'absent', others: { refs: [{ name: 'docs', commit: OTHER, answer: 'absent' }] } });
+    await expect(findStartingCommit(git)).resolves.toMatchObject({ kind: 'found', policy: 'branch-sets-usabl-up' });
+  });
+
+  it('asks git for the other branches only on the setup path, and in one batch', async () => {
+    const calls: string[][] = [];
+    const inner = withConfigAt({
+      start: 'absent',
+      tip: 'absent',
+      others: {
+        refs: [
+          { name: 'docs', commit: OTHER, answer: 'absent' },
+          { name: 'copy', commit: OTHER, answer: 'absent' },
+          { name: 'wip', commit: SECOND, answer: 'absent' },
+        ],
+      },
+    });
+    let input = '';
+    const lookupOptions: (ScopeGitOptions | undefined)[] = [];
+    await findStartingCommit(async (args, options) => {
+      calls.push([...args]);
+      if (args[0] === 'for-each-ref' || args[1] === '--batch') lookupOptions.push(options);
+      if (args[1] === '--batch') input = options?.input ?? '';
+      return inner(args, options);
+    });
+    expect(calls.filter((args) => args[0] === 'for-each-ref')).toHaveLength(1);
+    expect(calls.filter((args) => args[1] === '--batch')).toHaveLength(1);
+    // Each commit once, the trusted branch's tip not again, and only the root tree is read.
+    expect(input).toBe(`${OTHER}^{tree}\n${SECOND}^{tree}\n`);
+    // Both calls run with lazy fetch off, so a partial clone never fetches inside a stop.
+    expect(lookupOptions).toHaveLength(2);
+    for (const options of lookupOptions) {
+      expect(options?.env).toEqual({ GIT_NO_LAZY_FETCH: '1' });
+    }
+
+    for (const start of ['held', 'absent'] as const) {
+      const seen: string[][] = [];
+      const git = withConfigAt({ start, tip: start === 'held' ? 'absent' : 'held' });
+      await findStartingCommit(async (args, options) => {
+        seen.push([...args]);
+        return git(args, options);
+      });
+      expect(seen.some((args) => args[0] === 'for-each-ref')).toBe(false);
+    }
+  });
+
+  it('reads a listing or a batch lookup that fails as a git failure, never as no config', async () => {
+    const answers: OtherBranches[] = [
+      { listing: broken },
+      { refs: [{ name: 'trunk', commit: OTHER, answer: 'absent' }], batch: broken },
+      { refs: [{ name: 'trunk', commit: OTHER, answer: 'tree-missing' }] },
+      // An answer that is not a tree.
+      { refs: [{ name: 'trunk', commit: OTHER, answer: 'held' }], batch: ok(`${'f'.repeat(40)} blob 2`) },
+      // Fewer answers than questions.
+      {
+        refs: [
+          { name: 'trunk', commit: OTHER, answer: 'absent' },
+          { name: 'wip', commit: SECOND, answer: 'absent' },
+        ],
+        batch: { code: 0, stdout: treeAnswer(['README.md']), stderr: '' },
+      },
+      // A tree whose size is longer than what git printed.
+      { refs: [{ name: 'trunk', commit: OTHER, answer: 'absent' }], batch: ok(`${'e'.repeat(40)} tree 999\n100644 a\0`) },
+      // A tree entry cut short.
+      {
+        refs: [{ name: 'trunk', commit: OTHER, answer: 'absent' }],
+        batch: { code: 0, stdout: `${'e'.repeat(40)} tree 10\n100644 abc\n`, stderr: '' },
+      },
+      // A listing line that is not a commit id and a ref name.
+      { listing: ok('not-a-commit refs/remotes/origin/trunk') },
+      // Two branches checked out here: the upstream field comes from config, and a newline in it
+      // can add a forged line.
+      {
+        listing: ok(
+          `${OTHER}\trefs/heads/feature\t*\trefs/remotes/origin/x\n${OTHER}\trefs/heads/zz\t*\trefs/remotes/origin/release\n${OTHER}\trefs/remotes/origin/release\t \t`,
+        ),
+      },
+    ];
+    for (const others of answers) {
+      await expect(findStartingCommit(withConfigAt({ start: 'absent', tip: 'absent', others }))).resolves.toMatchObject({
+        kind: 'not-found',
+        problem: 'git-failed',
+      });
+    }
+  });
+
+  it('names only a plain branch name, and the first in order when several hold a config', async () => {
+    const several = withConfigAt({
+      start: 'absent',
+      tip: 'absent',
+      others: {
+        refs: [
+          { name: 'zeta', commit: OTHER, answer: 'held' },
+          { name: 'alpha', commit: SECOND, answer: 'held' },
+        ],
+      },
+    });
+    await expect(findStartingCommit(several)).resolves.toMatchObject({ problem: 'trusted-branch-may-be-stale', detail: 'origin/alpha' });
+
+    const strange = withConfigAt({
+      start: 'absent',
+      tip: 'absent',
+      others: { refs: [{ name: 'we"ird$(x)', commit: OTHER, answer: 'held' }] },
+    });
+    await expect(findStartingCommit(strange)).resolves.toEqual({
+      kind: 'not-found',
+      branch: 'origin/main',
+      problem: 'trusted-branch-may-be-stale',
+      detail: null,
+    });
+  });
+
+  // This branch's own copy on origin is skipped: the same name, and the configured upstream.
+  // main, master, trunk, and develop always count. With no current branch nothing is skipped.
+  const setupPath = { kind: 'found', policy: 'branch-sets-usabl-up' };
+  const staleGap = (name: string) => ({ kind: 'not-found', problem: 'trusted-branch-may-be-stale', detail: `origin/${name}` });
+  const pushed = (name: string, heads: NonNullable<OtherBranches['heads']>) =>
+    withConfigAt({ start: 'absent', tip: 'absent', others: { refs: [{ name, commit: OTHER, answer: 'held' }], heads } });
+
+  it('skips the branch of origin with the name of the current branch', async () => {
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup', current: true }]))).resolves.toMatchObject(setupPath);
+    // The same name on a branch that is not checked out is not skipped.
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup' }, { name: 'other', current: true }]))).resolves.toMatchObject(staleGap('setup'));
+  });
+
+  it('skips the upstream of the current branch, and only an upstream on origin', async () => {
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', current: true, upstream: 'refs/remotes/origin/setup-usabl' }])),
+    ).resolves.toMatchObject(setupPath);
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', current: true, upstream: 'refs/remotes/fork/setup-usabl' }])),
+    ).resolves.toMatchObject(staleGap('setup-usabl'));
+    await expect(
+      findStartingCommit(pushed('setup-usabl', [{ name: 'work', upstream: 'refs/remotes/origin/setup-usabl' }, { name: 'x', current: true }])),
+    ).resolves.toMatchObject(staleGap('setup-usabl'));
+  });
+
+  it('never skips main, master, trunk, or develop', async () => {
+    for (const name of ['main', 'master', 'trunk', 'develop']) {
+      const sameName = withConfigAt({
+        start: 'absent',
+        tip: 'absent',
+        // origin/main is the trusted branch in this fake, so a held main is listed as a second ref.
+        others: { refs: [{ name, commit: OTHER, answer: 'held' }], heads: [{ name, current: true, upstream: `refs/remotes/origin/${name}` }] },
+      });
+      await expect(findStartingCommit(sameName)).resolves.toMatchObject(staleGap(name));
+      const asUpstream = pushed(name, [{ name: 'work', current: true, upstream: `refs/remotes/origin/${name}` }]);
+      await expect(findStartingCommit(asUpstream)).resolves.toMatchObject(staleGap(name));
+    }
+  });
+
+  it('skips nothing on a detached HEAD', async () => {
+    await expect(findStartingCommit(pushed('setup', [{ name: 'setup' }]))).resolves.toMatchObject(staleGap('setup'));
+  });
+
+  it('reads the config from the root tree entry names, never from a name that only starts the same', async () => {
+    const answer = (entries: string[]) =>
+      findStartingCommit(withConfigAt({ start: 'absent', tip: 'absent', others: { refs: [{ name: 'trunk', commit: OTHER, answer: 'absent', entries }] } }));
+    await expect(answer(['usabl.config.json.bak', 'a-usabl.config.json'])).resolves.toMatchObject(setupPath);
+    // A folder or a link at the path counts as held, as in the lookup of the trusted branch.
+    await expect(answer(['40000 usabl.config.json'])).resolves.toMatchObject(staleGap('trunk'));
+    await expect(answer(['120000 usabl.config.json'])).resolves.toMatchObject(staleGap('trunk'));
+  });
+
+  it('reads a local branch line it cannot parse as a git failure', async () => {
+    for (const stdout of [`${OTHER}\trefs/heads/x\t?\t\n`, `${OTHER}\trefs/heads/x\t*\tnot-a-ref\n`, `${OTHER}\trefs/heads/x\t*\n`]) {
+      const git = withConfigAt({ start: 'absent', tip: 'absent', others: { listing: { code: 0, stdout, stderr: '' } } });
+      await expect(findStartingCommit(git)).resolves.toMatchObject({ kind: 'not-found', problem: 'git-failed' });
     }
   });
 });
