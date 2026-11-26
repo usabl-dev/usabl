@@ -409,6 +409,34 @@ describe('pf-toast-live-region: an empty toast group hidden by an open modal dia
     expect(drafts[0]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
   });
 
+  // The inline alert in the dialog has no live region, so it fails. Then the dialog removes it and
+  // a new toast takes its id in the hidden group. The inline alert's draft is about that alert, and
+  // the evidence floor or a waiver can hold it, so the group gets its own draft too.
+  it('reports a draft on the group when a new toast takes the id of a failed alert that was outside any toast group', async () => {
+    const modalWithSilentAlert = `<div class="pf-v6-c-backdrop"><div role="dialog" aria-modal="true" aria-label="Edit cluster"><button type="button">Close</button>${SAVE_ALERT}</div></div>`;
+    const drafts = await draftsWithChangeBeforeGroupQuery(`${APP_ROOT}${emptyGroup(true)}${modalWithSilentAlert}`, (data) => {
+      const inline = document.getElementById(data.alertId);
+      const group = document.querySelector(data.groupQuery);
+      if (inline === null || group === null) {
+        throw new Error('the inline alert or the toast group is missing');
+      }
+      inline.remove();
+      const toast = document.createElement('div');
+      toast.id = data.alertId;
+      toast.className = 'pf-v6-c-alert pf-m-success';
+      const title = document.createElement('h4');
+      title.className = 'pf-v6-c-alert__title';
+      title.textContent = data.alertTitle;
+      toast.appendChild(title);
+      const item = document.createElement('li');
+      item.appendChild(toast);
+      group.appendChild(item);
+    });
+    expect(drafts.map((draft) => draft.confidence)).toEqual(['fail', 'unverified']);
+    expect(drafts[0]?.elementPath).toContain('save-alert');
+    expect(drafts[1]).toMatchObject({ confidence: 'unverified', whatUserExperiences: GROUP_DRAFT_TEXT });
+  });
+
   it('reports one undecided draft on the group when it is hidden after its alert was read and passed', async () => {
     const shownHolding = `<div><ul role="list" aria-live="polite" class="pf-v6-c-alert-group pf-m-toast"><li>${ALERT}</li></ul></div>`;
     const drafts = await draftsWithChangeBeforeGroupQuery(`${APP_ROOT}${shownHolding}${OPEN_MODAL}`, (data) => {
