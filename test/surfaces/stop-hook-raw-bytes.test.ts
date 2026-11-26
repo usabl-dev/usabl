@@ -19,6 +19,7 @@ import type { Deps, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
+import { patchCommitGraphParent } from '../support/commit-graph.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const state = vi.hoisted(() => ({ scanned: [] as string[] }));
@@ -758,5 +759,116 @@ describe('a submodule folder emptied during a session', { timeout: REAL_PROCESS_
     // An empty submodule folder reads as never set up, so the changed list does not hold its files.
     expect(await changedPaths()).toEqual([]);
     await expectDrift(pins, '.git/modules');
+  });
+
+  it('blocks as drift when a submodule inside a submodule is dropped from it and its folder emptied', async () => {
+    const pins = memoryPinStore();
+    const deep = join(home, 'deep-source');
+    await mkdir(deep);
+    gitIn(deep, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = "<label>x</label>";\n', deep);
+    gitIn(deep, 'add', '-A');
+    gitIn(deep, 'commit', '-q', '-m', 'deep');
+    const mid = join(home, 'mid-source');
+    await mkdir(mid);
+    gitIn(mid, 'init', '-q', '-b', 'main');
+    await write('README.md', 'mid\n', mid);
+    gitIn(mid, 'add', '-A');
+    gitIn(mid, 'commit', '-q', '-m', 'mid');
+    gitIn(mid, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', deep, 'ui');
+    gitIn(mid, 'commit', '-q', '-m', 'add deep');
+    await setUp(async () => {
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', mid, 'lib');
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init', '--recursive');
+    });
+    await firstSessionStop(pins);
+    // In the middle submodule: a commit without the nested gitlink, and the nested folder emptied.
+    const inner = join(repo, 'lib');
+    gitIn(inner, 'rm', '-q', '--cached', 'ui');
+    gitIn(inner, 'commit', '-q', '-m', 'drop ui');
+    await rm(join(inner, 'ui'), { recursive: true, force: true });
+    await mkdir(join(inner, 'ui'));
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/modules');
+  });
+});
+
+describe('a case setting that changes what the sparse patterns answer', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('checks a screen file inside honest patterns that is deleted under core.ignorecase=true', async () => {
+    const pins = memoryPinStore();
+    await setUp(async () => {
+      await write('docs/a.md', 'a\n');
+      // Docs/Page.tsx is a screen file inside the honest patterns, so it is on disk.
+      await write('Docs/Page.tsx', 'export const Page = 1;\n');
+      const withDocs: UsablConfig = {
+        ...config,
+        uiFileGlobs: [...config.uiFileGlobs, 'Docs/**'],
+        surfaces: [...config.surfaces, { id: 'docs', url: 'http://127.0.0.1:5173/docs', files: ['Docs/Page.tsx'] }],
+      };
+      await write('usabl.config.json', JSON.stringify(withDocs, null, 2) + '\n');
+    });
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    git('config', 'core.ignorecase', 'true');
+    git('update-index', '--skip-worktree', 'Docs/Page.tsx');
+    await rm(join(repo, 'Docs/Page.tsx'));
+    const next = await stop(SESSION, pins);
+    expect(next.stderr).not.toContain(FAST_PATH);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toContain('docs');
+  });
+});
+
+describe('a commit-graph file that moves the merge base', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('checks a committed screen edit when the commit-graph makes HEAD a parent of a trusted commit', async () => {
+    await setUp();
+    git('switch', '-q', 'main');
+    await write('NOTES.md', 'n1\n');
+    git('add', 'NOTES.md');
+    git('commit', '-q', '-m', 'n1');
+    await write('NOTES.md', 'n2\n');
+    git('commit', '-q', '-am', 'n2');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    git('commit-graph', 'write', '--reachable', '--no-progress');
+    const graph = join(repo, '.git/objects/info/commit-graph');
+    await chmod(graph, 0o644);
+    const head = git('rev-parse', 'HEAD').trim();
+    patchCommitGraphParent(graph, git('rev-parse', 'origin/main~1').trim(), head);
+    expect(git('merge-base', 'origin/main', 'HEAD').trim()).toBe(head);
+    const next = await stop();
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toContain('home');
+  });
+});
+
+describe('honest checkout changes that block as drift', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('names the checkout state and says how to go on after a merge that adds a submodule', async () => {
+    const pins = memoryPinStore();
+    const lib = join(home, 'lib-source');
+    await mkdir(lib);
+    gitIn(lib, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = 1;\n', lib);
+    gitIn(lib, 'add', '-A');
+    gitIn(lib, 'commit', '-q', '-m', 'lib');
+    await setUp();
+    await firstSessionStop(pins);
+    git('switch', '-q', 'main');
+    // A teammate's commit that adds a submodule: the gitlink and .gitmodules, nothing cloned here.
+    await write('.gitmodules', `[submodule "vendor/lib"]\n\tpath = vendor/lib\n\turl = ${lib}\n`);
+    git('add', '.gitmodules');
+    git('update-index', '--add', '--cacheinfo', `160000,${gitIn(lib, 'rev-parse', 'HEAD').trim()},vendor/lib`);
+    git('commit', '-q', '-m', 'add a submodule');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    git('merge', '-q', '--no-edit', 'main');
+    await expectDrift(pins, '.git/modules');
+    const reason = blockOf((await stop(SESSION, pins)).stdout).reason ?? '';
+    expect(reason).toMatch(/sparse checkout or submodule state changed/u);
+    expect(reason).toMatch(/git submodule update --init/u);
+    expect(reason).toMatch(/pin fix: /u);
+    expect(reason).not.toMatch(/Do not edit those files/u);
   });
 });

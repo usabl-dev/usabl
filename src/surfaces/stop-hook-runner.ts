@@ -21,6 +21,7 @@ import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { gitProcessEnvironment } from '../deps/git-environment.js';
+import { EMPTY_SUBMODULES_NAME, SPARSE_STATE_NAME } from '../deps/worktree.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, pinsAreCurrent, type SessionPins } from '../trust/guard.js';
@@ -333,14 +334,39 @@ function pinsNotRecorded(refusal: { reason: string; fix: string }, driftChecked:
  * The drift lines. The changed paths are file names in the repository, which anyone who can add a
  * file under a guarded directory chooses, so they are carried values and go inside the frame.
  */
-function driftMessage(drift: string[], continuation: boolean): string {
+// The names the session pins give the local checkout state, which are not files.
+const CHECKOUT_STATE_NAMES: ReadonlySet<string> = new Set([SPARSE_STATE_NAME, EMPTY_SUBMODULES_NAME]);
+
+function driftMessage(drift: string[], continuation: boolean, pinPath: string | null = null): string {
+  const files = drift.filter((name) => !CHECKOUT_STATE_NAMES.has(name));
+  const state = drift.length > files.length;
+  if (!state) {
+    const head =
+      `NOT verified - guarded policy drift during this session: ${drift.length} guarded file(s) changed ` +
+      'since the session pins were recorded, named under "drifted files" in the untrusted text below.';
+    const next = continuation
+      ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to make a later stop pass.'
+      : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
+    return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
+  }
+  const changed = files.length > 0 ? `${files.length} guarded file(s) and the sparse checkout or submodule state changed` : 'the sparse checkout or submodule state changed';
   const head =
-    `NOT verified - guarded policy drift during this session: ${drift.length} guarded file(s) changed ` +
-    'since the session pins were recorded, named under "drifted files" in the untrusted text below.';
+    `NOT verified - guarded policy drift during this session: ${changed} since the session pins were recorded, ` +
+    'named under "drifted files" in the untrusted text below.';
+  const why =
+    'That state decides which deleted files usabl reads as left out on purpose, so any change to it is drift. ' +
+    'An honest git sparse-checkout command, git submodule update --init or git submodule deinit, or a merge, pull, ' +
+    'rebase, or branch switch that adds or removes a submodule changes it too. usabl keeps the pins, so every later ' +
+    'stop of this session blocks the same way.';
+  const steps =
+    'If the change was meant, review what changed since the session started, then delete the pin file named under ' +
+    '"pin fix" in the untrusted text below; the next stop records new pins. Otherwise put the state back.';
+  const policy = files.length > 0 ? ' The guarded policy files named there need review too.' : '';
   const next = continuation
-    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to make a later stop pass.'
-    : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
-  return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
+    ? `usabl let this stop through without blocking again (continuation already active). Next: tell the user. ${steps}${policy}`
+    : `Next: tell the user. ${steps}${policy}`;
+  const pieces = [`drifted files: ${drift.join(', ')}`, ...(pinPath === null ? [] : [`pin fix: ${deletePinFileFix(pinPath)}`])];
+  return framedMessage([head, why, next], pieces);
 }
 
 // Stored pins in a format an older usabl wrote. usabl cannot compare them, so it cannot tell
@@ -1517,11 +1543,11 @@ async function runStopChecks(
             if (input.stopHookActive) {
               // Allow one continuation while active to avoid recursive stop-hook loops.
               // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-              await emitProtocolAllow(ports, { message: driftMessage(drift, true) }, options);
+              await emitProtocolAllow(ports, { message: driftMessage(drift, true, ports.pins.locate(pinName)) }, options);
               return 0;
             }
             // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
-            await emitProtocolBlock(ports, driftMessage(drift, false), options);
+            await emitProtocolBlock(ports, driftMessage(drift, false, ports.pins.locate(pinName)), options);
             return 0;
           }
           pinsCompared = true;
