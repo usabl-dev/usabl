@@ -177,6 +177,32 @@ describe('the empty submodule folders', { timeout: REAL_PROCESS_BUDGET_MS }, () 
     expect(await state(clone)).toEqual(first);
   });
 
+  // The walk reads a submodule against the commit the outer repository records, not the
+  // submodule's own HEAD. So a nested gitlink that the submodule's HEAD and index drop is still
+  // one the walk reads, and its emptied folder must be named.
+  it('names an emptied submodule inside a submodule that its own HEAD and index no longer hold', async () => {
+    const deep = join(home, 'deep-source');
+    await newRepo(deep);
+    await write('ui/Lib.tsx', 'export const Lib = 1;\n', deep);
+    await commitAll('deep', deep);
+    const mid = join(home, 'mid-source');
+    await newRepo(mid);
+    await write('README.md', 'mid\n', mid);
+    await commitAll('mid', mid);
+    await gitIn(mid, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', deep, 'ui');
+    await gitIn(mid, 'commit', '-q', '-m', 'add deep');
+    await git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', mid, 'lib');
+    await git('-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init', '--recursive');
+    await git('commit', '-q', '-m', 'add the submodules');
+    expect(await state()).toEqual({});
+    const inner = join(repo, 'lib');
+    await gitIn(inner, 'rm', '-q', '--cached', 'ui');
+    await gitIn(inner, '-c', 'user.name=Test User', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'drop ui');
+    await rm(join(inner, 'ui'), { recursive: true, force: true });
+    await mkdir(join(inner, 'ui'));
+    expect(JSON.parse((await state())['.git/modules'] ?? '[]')).toEqual(['lib/ui']);
+  });
+
   it('reads the sparse checkout state inside a submodule under its path', async () => {
     await addSubmodule();
     const before = await state();

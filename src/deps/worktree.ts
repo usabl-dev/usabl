@@ -603,7 +603,9 @@ async function treeDifference(repo: Repository, before: string, after: string): 
 async function committedChanges(repo: Repository, ref: string): Promise<Buffer[]> {
   const tip = await checkedCommit(repo, ref);
   const head = await checkedCommit(repo, 'HEAD');
-  const found = await runGit(repo.top, ['merge-base', tip.id, head.id]);
+  // git reads parents from .git/objects/info/commit-graph when it is there, without checking the
+  // file, so a patched file made HEAD the merge base and every committed edit read unchanged.
+  const found = await runGit(repo.top, ['-c', 'core.commitGraph=false', 'merge-base', tip.id, head.id]);
   const base = found.stdout.toString('latin1').trim();
   if (found.code === 1) {
     throw new Error(
@@ -876,11 +878,19 @@ async function outsideSparseSet(repo: Repository, raws: readonly Buffer[]): Prom
     return outside;
   }
   const input = Buffer.concat(raws.flatMap((raw) => [raw, Buffer.from([0])]));
-  const result = await runGit(repo.top, ['sparse-checkout', 'check-rules', '-z'], { input });
-  if (result.code !== 0) {
-    return outside;
+  // core.ignorecase changes how check-rules matches a pattern: with it true, !/docs/ also matched
+  // Docs/, so a deleted file inside the honest patterns read as left out. Forcing false is not
+  // enough on a file system that does not tell case apart, where git honestly checks out with it
+  // true and a pattern that differs from a path only in case selects that path. So a file is
+  // outside only when both readings say so, and the agent's setting is never read.
+  const inside = new Set<string>();
+  for (const ignorecase of ['false', 'true']) {
+    const result = await runGit(repo.top, ['-c', `core.ignorecase=${ignorecase}`, 'sparse-checkout', 'check-rules', '-z'], { input });
+    if (result.code !== 0) {
+      return outside;
+    }
+    for (const raw of splitNul(result.stdout)) inside.add(raw.toString('hex'));
   }
-  const inside = new Set(splitNul(result.stdout).map((raw) => raw.toString('hex')));
   for (const raw of raws) {
     if (!inside.has(raw.toString('hex'))) {
       outside.add(raw.toString('hex'));
@@ -1164,31 +1174,41 @@ interface CheckoutState {
 
 /**
  * The sparse checkout state of a repository, and its submodule folders: an empty one is recorded,
- * and one that holds a repository is read the same way, as the walk reads it. A submodule is any
- * gitlink entry of HEAD or of the index.
+ * and one that holds a repository is read the same way. A submodule is any gitlink entry of the
+ * commit the walk reads the repository against, of HEAD, or of the index. The walk reads a
+ * submodule against the commit its outer repository records, not its own HEAD, so `base` is that
+ * commit, as nestedWalk passes it: HEAD for the top repository, null when the submodule lacks it.
  */
-async function gatherCheckoutState(repo: Repository, prefix: string, state: CheckoutState, depth: number): Promise<void> {
+async function gatherCheckoutState(repo: Repository, base: string | null, prefix: string, state: CheckoutState, depth: number): Promise<void> {
   const cone = (await runGit(repo.top, ['config', '--bool', '--get', 'core.sparseCheckoutCone'])).stdout.toString('utf8').trim();
   const patterns = patternFileState(repo.sparsePatterns);
   if (repo.sparse || cone.length > 0 || patterns[0] !== 'missing') {
     state.sparse.push([prefix, repo.sparse, cone, patterns]);
   }
-  const gitlinks = new Map<string, Buffer>();
-  try {
-    for (const entry of await readBaseTree(repo, 'HEAD')) {
-      if (entry.mode === SUBMODULE_MODE) gitlinks.set(entry.raw.toString('latin1'), entry.raw);
+  // Each gitlink by name, with the commit the walk would read it against: the id the base records.
+  const gitlinks = new Map<string, { raw: Buffer; recorded: string | null }>();
+  const fromCommit = async (commit: string, recorded: boolean): Promise<void> => {
+    try {
+      for (const entry of await readBaseTree(repo, commit)) {
+        if (entry.mode !== SUBMODULE_MODE) continue;
+        const key = entry.raw.toString('latin1');
+        if (recorded) gitlinks.set(key, { raw: entry.raw, recorded: entry.id });
+        else if (!gitlinks.has(key)) gitlinks.set(key, { raw: entry.raw, recorded: null });
+      }
+    } catch (err) {
+      // A repository with no commits yet has gitlinks in its index only.
+      if (!(err instanceof NoHeadError)) throw err;
     }
-  } catch (err) {
-    // A repository with no commits yet has gitlinks in its index only.
-    if (!(err instanceof NoHeadError)) throw err;
-  }
+  };
+  if (base !== null) await fromCommit(base, true);
+  if (base !== 'HEAD') await fromCommit('HEAD', false);
   for (const record of splitNul(await mustGit(repo.top, [...LISTING_SETTINGS, 'ls-files', '-s', '-z'], 'ls-files'))) {
     const tab = record.indexOf(TAB);
     if (tab < 0 || !record.subarray(0, tab).toString('latin1').startsWith(`${SUBMODULE_MODE} `)) continue;
     const raw = Buffer.from(record.subarray(tab + 1));
-    gitlinks.set(raw.toString('latin1'), raw);
+    if (!gitlinks.has(raw.toString('latin1'))) gitlinks.set(raw.toString('latin1'), { raw, recorded: null });
   }
-  for (const raw of [...gitlinks.values()].sort(Buffer.compare)) {
+  for (const { raw, recorded } of [...gitlinks.values()].sort((a, b) => Buffer.compare(a.raw, b.raw))) {
     const folder = Buffer.concat([repo.topBytes, raw]).toString('utf8');
     const name = `${prefix}${raw.toString('utf8')}`;
     if (kindOf(Buffer.from(folder)).kind !== 'folder') continue;
@@ -1201,7 +1221,9 @@ async function gatherCheckoutState(repo: Repository, prefix: string, state: Chec
     if (depth >= MAX_DEPTH) {
       throw new Error('Submodules are nested deeper than usabl reads, so usabl checked nothing.');
     }
-    await gatherCheckoutState(await openRepository(folder), `${name}/`, state, depth + 1);
+    const inner = await openRepository(folder);
+    const innerBase = recorded !== null && (await runGit(inner.top, ['cat-file', '-e', `${recorded}^{commit}`])).code === 0 ? recorded : null;
+    await gatherCheckoutState(inner, innerBase, `${name}/`, state, depth + 1);
   }
 }
 
@@ -1418,7 +1440,7 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
     },
     async checkoutState() {
       const state: CheckoutState = { sparse: [], emptySubmodules: [] };
-      await gatherCheckoutState(await openRepository(options.cwd), '', state, 0);
+      await gatherCheckoutState(await openRepository(options.cwd), 'HEAD', '', state, 0);
       const result: Record<string, string> = {};
       if (state.sparse.length > 0) result[SPARSE_STATE_NAME] = JSON.stringify(state.sparse);
       if (state.emptySubmodules.length > 0) result[EMPTY_SUBMODULES_NAME] = JSON.stringify(state.emptySubmodules);

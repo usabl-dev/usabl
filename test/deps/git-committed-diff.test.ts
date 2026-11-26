@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeGitReader } from '../../src/deps/git.js';
+import { patchCommitGraphParent } from '../support/commit-graph.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const execFileAsync = promisify(execFile);
@@ -175,6 +176,27 @@ describe('objects the agent overwrites on the trusted side', { timeout: REAL_PRO
     const forged = await makeTree(`100644 blob ${original}\tApp.tsx\n100644 blob ${other}\tOther.tsx\n`);
     await forgeObject(headSrc, 'tree', forged.raw);
     await expect(listed('trusted')).rejects.toThrow(/git fsck/u);
+  });
+});
+
+describe('a commit-graph file the agent writes', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('lists a committed edit when the commit-graph makes HEAD a parent of a trusted commit', async () => {
+    await git('switch', '-q', 'trusted');
+    await write('NOTES.md', 'n1\n');
+    await commitAll('n1');
+    await write('NOTES.md', 'n2\n');
+    await commitAll('n2');
+    await git('switch', '-q', 'feature');
+    await commitTheEdit();
+    await git('commit-graph', 'write', '--reachable', '--no-progress');
+    const graph = join(repo, '.git/objects/info/commit-graph');
+    await chmod(graph, 0o644);
+    const head = (await git('rev-parse', 'HEAD')).trim();
+    patchCommitGraphParent(graph, (await git('rev-parse', 'trusted~1')).trim(), head);
+    // git reads parents from the patched file, so HEAD is the merge base and git diff lists nothing.
+    expect((await git('merge-base', 'trusted', 'HEAD')).trim()).toBe(head);
+    expect(await gitDiffNames('trusted')).toEqual([]);
+    expect(await listed('trusted')).toEqual(['src/App.tsx', 'src/Other.tsx']);
   });
 });
 
