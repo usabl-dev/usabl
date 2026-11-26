@@ -453,29 +453,37 @@
   `workspaces` patterns of a `package.json`. Node tests a part with wildcards with a regular
   expression, and `src/` then `*a` twelve times then `*b` took 11 seconds against one file name of
   30 letters, so a stop could outlast the host's limit with nothing checked. The file system
-  adapter now lists each wildcard part as `*` and keeps the paths usabl's own matcher says the
-  written pattern matches. That pattern now takes about 50 milliseconds. The answer is Node's for
-  `*`, `**`, `?`, fixed text, and `{a,b}` groups, without regard to letter case on macOS and
-  Windows as Node does, and wider, never narrower, in two cases: a file reached through a link to
-  a folder where Node's walk does not follow the link, and a file named by the part before a
-  trailing `/**`. A comparison with Node on generated trees found no file Node lists that the
-  adapter does not. Other syntax, such as a character class or an extglob group, runs in Node
-  only inside a bound: at most 1024 characters, no extglob group, at most one run of `*` in any
-  part, and at most 256 brace expansions. A pattern that is empty or starts with `/`, itself or in
-  a brace expansion, is past the bound too: the `workspaces` entry `{,zz}/**` becomes
-  `/**/package.json`, which Node walked across the whole machine for more than 30 seconds. Past
-  the bound the pattern is not run. A workspace package folder and the requirements folder are now
-  listed with the folder as the walk's start, so a name such as `pkg[1]` or `reqs[1]` is read as
-  plain text. Before, Node read it as a pattern: `reqs[1]` loaded the requirement files of
-  `reqs1`, and a package folder named `pkg[1]` listed no sources, so an undeclared import in it
-  was missed. Gate effect: config load already refuses the other syntax in every policy glob list,
-  and now also refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry with a brace expansion
-  that is empty or starts with `/`. A `workspaces` pattern past the bound, or one that starts with
-  `/`, makes the workspace root unreadable, so every changed file the workspace check tests is a
-  `not-covered` gap that names the pattern. Known limit: the local guard still puts the
-  requirements folder into its working-tree patterns as text, so a requirements folder named with
-  glob syntax lists the wrong folder there, and a new untracked file in it is not seen until it is
-  committed. That fix is in the guard, a guarded path.
+  adapter now reads each pattern as Node does (backslashes as slashes, brace groups, and Node's
+  rewrites and merges of the parts). When no part holds more than one run of `*`, Node runs the
+  written pattern itself. Otherwise each such part is listed as `*` and usabl's own matcher keeps
+  the paths the pattern matches, and every other part stays as written, so Node's walk keeps its
+  shape. That pattern now takes about 50 milliseconds. On macOS and Windows fixed parts stay as
+  written too, and the filter folds letter case as Node does, so one guard expansion costs about
+  what it costs on Linux. Where the filter cannot give Node's exact answer it lists more: a file
+  reached through a link to a folder Node's walk does not follow, a file named by the part before
+  a trailing `/**`, a listing with a `..` Node keeps after `**`, and a file Node's walk cache
+  skips. A comparison with Node on generated trees found no file Node lists that the adapter does
+  not. Other syntax, such as a character class or an extglob group, runs in Node only inside a
+  bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and at
+  most 256 brace expansions. A pattern that names a path outside the repository is past the bound
+  too, itself or in a brace expansion: one that is empty or starts with `/` (the `workspaces`
+  entry `{,zz}/**` becomes `/**/package.json`, which Node walked across the whole machine for
+  more than 30 seconds), one that climbs above the repository with `..` (including `..\outside\*`
+  written with backslashes), and one that starts with a drive such as `C:`. Past the bound the
+  pattern is not run. A workspace package folder and the requirements folder are now listed with
+  the folder as the walk's start, so a name such as `pkg[1]` or `reqs[1]` is read as plain text.
+  Before, Node read it as a pattern: `reqs[1]` loaded the requirement files of `reqs1`, and a
+  package folder named `pkg[1]` listed no sources, so an undeclared import in it was missed. Gate
+  effect: config load already refuses the other syntax in every policy glob list, and now also
+  refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry that names a path outside the
+  repository. A `workspaces` pattern past the bound makes the workspace root unreadable, so every
+  changed file the workspace check tests is a `not-covered` gap that names the pattern. Known
+  limits: the local guard still puts the requirements folder into its working-tree patterns as
+  text, so a requirements folder named with a class, a brace group, or an extglob group names
+  another folder there, and a new untracked file in it is not seen until it is committed. When
+  `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper that cannot
+  list a folder that way, so a workspace package folder named with glob syntax has unknown
+  sources in that run, whose verdict is `approval_required`. Both fixes are in guarded paths.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
