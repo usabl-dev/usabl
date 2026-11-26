@@ -478,8 +478,11 @@
   package folder named `pkg[1]` listed no sources, so an undeclared import in it was missed. Gate
   effect: config load already refuses the other syntax in every policy glob list, and now also
   refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry that names a path outside the
-  repository or has a `..` after a wildcard part. A `workspaces` pattern past the bound makes the workspace root unreadable, so every
-  changed file the workspace check tests is a `not-covered` gap that names the pattern. Known
+  repository or has a `..` after a wildcard part. A `workspaces` pattern past the bound makes the
+  workspace root unreadable, so every changed file the workspace check tests is a `not-covered` gap
+  that names the pattern. So does a `workspaces` entry longer than 1,024 characters, or a list of
+  more than 1,000 entries: neither is read, so a very long list can no longer hold the stop hook
+  past its deadline. A folder name now loses its trailing slashes in linear time. Known
   limits: the local guard still puts the requirements folder into its working-tree patterns as
   text, so a requirements folder named with a class, a brace group, or an extglob group names
   another folder there, and a new untracked file in it is not seen until it is committed. When
