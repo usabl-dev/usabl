@@ -670,12 +670,24 @@
   around the alert. An alert in a nearer live region inside the app root behind a modal, with no
   toast group around it, is still judged by that live region. A toast group that holds no alert yet,
   which PatternFly renders as soon as a toast AlertGroup mounts, gets the same `unverified` draft
-  on the group when the modal hides it the same way. A group that holds an alert gets no draft of
-  its own, and a group that is shown, or hidden in another way, gets nothing. When a modal is open
+  on the group when the modal hides it the same way. A group that holds an alert the rule gave a
+  draft or a gap gets no draft of its own, and a group that is shown, or hidden in another way,
+  gets nothing. When a modal is open
   and the rule cannot tell which element is the body's child, an empty group gets the same
   `unverified` draft an alert gets in that state. Gate effect: a screen
   checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
   `not_covered`, unless the evidence floor or a waiver already holds that finding.
+- `pf-toast-live-region` no longer skips a toast group when the page changes while the rule runs.
+  The rule checks the page's alerts first and the toast groups later. A group that held an alert
+  was skipped, even when the rule had not reported that alert. That happened when an alert was
+  shown in between, for example by the dialog's own save action, and when the group's alert was
+  read and passed before the modal hid the group. It also happened when the alert in the group had
+  the selector of an alert that passed: the same element moved into the group, or a new toast
+  reused an inline alert's id. The screen got no draft and no gap. Now a group is left to the alert
+  check only when it holds an alert the rule gave a draft or a gap, matched by selector. Every
+  other group is checked as an empty group, so behind an open modal it gets the `unverified` draft.
+  Gate effect: such a screen, which read `verified`, now reads `not_covered`, unless the evidence
+  floor or a waiver already holds that finding.
 - A screen kept in a test folder is a gap for every way an unresolved import can name it. An
   import of `src/tests/Dashboard/index.tsx` written as `@/tests/Dashboard/index`,
   `@/tests/Dashboard/index.tsx`, or `@/tests/Dashboard/` did not match the file, so a change to that
