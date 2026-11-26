@@ -127,13 +127,14 @@ async function verifiedStop(): Promise<void> {
   expect(first.stderr).toContain(FAST_PATH);
 }
 
-async function stop(input = '{}'): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
+// A stop with no session id compares no pins. A test of session drift passes one store to every stop.
+async function stop(input = '{}', pins = memoryPinStore()): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
   const out: string[] = [];
   const decision: string[] = [];
   state.scanned = [];
   const ports = {
     ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
-    pins: memoryPinStore(),
+    pins,
     stdoutWrite: async (text: string) => {
       decision.push(text);
     },
@@ -645,5 +646,117 @@ describe('a committed edit hidden by a forged object on the trusted side', { tim
     expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
     expect(next.scanned).toEqual([]);
     expect(blockOf(next.stdout).decision).toBe('block');
+  });
+});
+
+const SESSION = '{"session_id":"s1"}';
+type PinStore = ReturnType<typeof memoryPinStore>;
+
+/** The first stop of a session answers from the receipt the check minted, and records the pins. */
+async function firstSessionStop(pins: PinStore): Promise<void> {
+  state.scanned = [];
+  expect(await main(['check', '--branch-scope'])).toBe(0);
+  const first = await stop(SESSION, pins);
+  expect(first.stderr).toContain(FAST_PATH);
+  expect(pins.files.size).toBe(1);
+}
+
+/** A later stop of the session blocks as session drift, names the state, and checks nothing. */
+async function expectDrift(pins: PinStore, name: string): Promise<void> {
+  const next = await stop(SESSION, pins);
+  expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+  expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+  expect(next.scanned).toEqual([]);
+  const block = blockOf(next.stdout);
+  expect(block.decision).toBe('block');
+  expect(block.reason).toMatch(/guarded policy drift during this session/u);
+  expect(block.reason).toContain(name);
+}
+
+async function changedPaths(): Promise<string[]> {
+  return (await makeGitReader({ cwd: repo }).statusZ()).map((entry) => entry.path);
+}
+
+// A folder the sparse patterns leave out of an honest checkout, set up before the session starts.
+async function withDocs(): Promise<void> {
+  await write('docs/Guide.md', 'guide\n');
+}
+
+describe('the sparse checkout state, pinned at the first stop of a session', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks as drift when the agent leaves a screen file out with its own patterns and deletes it', async () => {
+    const pins = memoryPinStore();
+    await setUp();
+    await firstSessionStop(pins);
+    git('config', 'core.sparseCheckout', 'true');
+    await write('.git/info/sparse-checkout', '/*\n!/src/App.tsx\n');
+    git('update-index', '--skip-worktree', 'src/App.tsx');
+    await rm(join(repo, 'src/App.tsx'));
+    // The walk reads the file as left out on purpose, so the changed list does not hold it.
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when sparse checkout is turned on during the session', async () => {
+    const pins = memoryPinStore();
+    await setUp();
+    await firstSessionStop(pins);
+    git('config', 'core.sparseCheckout', 'true');
+    await write('.git/info/sparse-checkout', '/*\n');
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when the pattern file is emptied', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    await writeFile(join(repo, '.git/info/sparse-checkout'), '');
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when a folder stands in place of the pattern file', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    await rm(join(repo, '.git/info/sparse-checkout'));
+    await mkdir(join(repo, '.git/info/sparse-checkout'));
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('never blocks an honest cone sparse checkout whose patterns do not change', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--cone', 'src');
+    await firstSessionStop(pins);
+    const again = await stop(SESSION, pins);
+    expect(again.stdout).toBe('');
+    expect(again.stderr).toContain(FAST_PATH);
+    await write('src/App.tsx', APP_EDITED);
+    const edited = await stop(SESSION, pins);
+    expect(blockOf(edited.stdout).reason ?? '').not.toMatch(/drift/u);
+    expect(edited.stderr).not.toContain(FAST_PATH);
+    expect(edited.scanned).toContain('home');
+  });
+});
+
+describe('a submodule folder emptied during a session', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks as drift when the agent empties an initialized submodule folder, its .git included', async () => {
+    const pins = memoryPinStore();
+    const lib = join(home, 'lib-source');
+    await mkdir(lib);
+    gitIn(lib, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = "<label>x</label>";\n', lib);
+    gitIn(lib, 'add', '-A');
+    gitIn(lib, 'commit', '-q', '-m', 'lib');
+    await setUp(async () => {
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'lib');
+    });
+    await firstSessionStop(pins);
+    await rm(join(repo, 'lib/ui'), { recursive: true });
+    await rm(join(repo, 'lib/.git'), { recursive: true, force: true });
+    // An empty submodule folder reads as never set up, so the changed list does not hold its files.
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/modules');
   });
 });
