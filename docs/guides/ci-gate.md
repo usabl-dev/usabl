@@ -118,8 +118,10 @@ it, so a pull request that edits `.github/workflows/` can make `usabl-required` 
 owner review on `.github/workflows/` is what stops it.
 
 `usabl install --branch-rule` and `usabl doctor` check the protection on the branch the gate
-workflow names in its trigger. A documentation repository with only the docs gate is checked
-on the branch the docs gate names, and the advice names `usabl install --docs-ci`.
+workflow names in its trigger. They read the trigger only inside the top-level `on:` block, so
+text shaped like a trigger elsewhere in the file, such as in a `run-name: |` block, is not read.
+A documentation repository with only the docs gate is checked on the branch the docs gate
+names, and the advice names `usabl install --docs-ci`.
 
 With no gate workflow, a trigger usabl cannot read, or a gate file it cannot read (a folder,
 or a file it has no permission to read), they check `main` and say in each line that they

@@ -5219,7 +5219,12 @@ merge without an owner's approval. `usabl install --ci` and `usabl install --bra
 `usabl install --branch-rule` verifies the required check, code-owner review, at least one
 required approving review (a count of 0 requires no review at all), and dismissal of stale
 approvals on push, each by classic protection or by an active ruleset, on the branch the gate
-workflow on disk names in its trigger. With no gate workflow, it reads the branch the docs gate
+workflow on disk names in its trigger. The trigger is read only inside the top-level `on:` block:
+the line `  pull_request:` with `    branches: ["<name>"]` straight below it. Text of that shape
+anywhere else, such as in a `run-name: |` block above `on:`, is not the trigger and is not read.
+A lone CR counts as a line break for the line the steps name, as an editor shows it. A branch name
+over 255 characters is a trigger it cannot read, so no long name is printed. With no gate
+workflow, it reads the branch the docs gate
 workflow names, since the docs gate requires the same check, and its advice names
 `install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
 or no permission), it checks `main` and says it assumed it in each line that names it. An
