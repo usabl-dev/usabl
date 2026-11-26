@@ -517,11 +517,22 @@ passing bundle from another run.
   names it and `git fsck`: the stop blocks, and `usabl check` fails. No diff setting applies any
   more, so `diff.ignoreSubmodules=all` in `.git/config` no longer hides a committed submodule
   move. A committed rename is listed by both names.
+- git reads commit parents from `.git/objects/info/commit-graph` when that file exists, and does
+  not check the file when it reads it. A patched file that gave a commit only the trusted side holds
+  HEAD as its parent made HEAD the merge base, with no object changed, so a committed screen edit
+  read as "nothing to check" at the stop and in `usabl check --branch-scope`. Now every
+  `git merge-base` usabl runs (the Stop hook's search for the starting commit, its ancestor check,
+  and the committed diff) runs with `core.commitGraph=false`, so git reads parents from the commit
+  objects. That costs about 10 microseconds per commit walked: a merge base 19,000 commits back took
+  200 ms instead of 18 ms.
 - Limit, stated plainly: two reads still take objects as stored.
-  - git finds the merge base from the commit parents as stored. A commit rewritten between the
-    trusted commit and HEAD can make git pick another merge base. The trusted commit, HEAD, and the
-    merge base git picks are each checked, so this gives the agent what moving the trusted branch
-    with `git update-ref` gives it, which the Stop hook limit above already states.
+  - git finds the merge base from the commit parents as the commit objects store them, and does
+    not check a commit's id when merge-base parses it. A commit only the trusted side holds,
+    rewritten in `.git/objects` with HEAD as its parent, makes HEAD the merge base, and a committed
+    screen edit reads as "nothing to check". The trusted commit, HEAD, and the merge base git picks
+    are each checked, so this gives the agent what moving the trusted branch with `git update-ref`
+    gives it, which the Stop hook limit above already states. Closing it would mean checking every
+    commit on the walked range.
   - The policy text the guard and the run read at a ref (`show`, and `listEntries` with text) is
     the blob as git stores it, and `git cat-file blob` does not check its id. A policy blob that
     both sides share, such as an unchanged `.usabl-waivers.json`, overwritten in `.git/objects`,
@@ -592,16 +603,40 @@ passing bundle from another run.
   the changed list. Now the Stop hook pins that state at the first stop of a session, with the
   guarded files: whether sparse checkout is on, cone mode, and what the pattern file is (missing,
   the sha256 of its bytes, a link by its text, or another kind such as a folder), for the
-  repository and each submodule the walk reads, and which submodule folders are empty. A change to
-  any of it at a later stop is session drift, as a changed guarded file is: the stop blocks and
-  names `.git/info/sparse-checkout` or `.git/modules`. Any change counts, so an honest
-  `git sparse-checkout set`, or `git submodule update --init` of a submodule that was not set up,
-  during a session also blocks as drift. Limits: the pins are recorded at the first stop, so a
-  change made before it is not seen (the tree still moves, so no stored receipt answers); a stop
-  with no usable session id compares no pins and says so; and the pin does not hold the
-  skip-worktree flags, so in an honest sparse checkout a file outside the patterns that is still
-  on disk, which git normally removes, can be flagged and deleted and reads as left out on
-  purpose.
+  repository and each submodule the walk reads, and which submodule folders are empty. A
+  submodule's own submodules are taken from the commit the outer repository records, as the walk
+  reads them, as well as from its HEAD and index, so a nested submodule dropped from the
+  submodule's own commit and emptied is still named. A change to any of it at a later stop is
+  session drift, as a changed guarded file is: the stop blocks and names
+  `.git/info/sparse-checkout` or `.git/modules`.
+- `core.ignorecase` changes what `git sparse-checkout check-rules` answers: with it true, a
+  pattern `!/docs/` also matched `Docs/Page.tsx`, so a screen file inside the honest patterns,
+  flagged skip-worktree and deleted, read as left out on purpose. Now a missing file is left out
+  only when check-rules calls it outside with `core.ignorecase` false and with it true, so the
+  agent's setting is never read. Forcing one value would not do: on a file system that does not
+  tell case apart, git checks out honestly with it true, and a pattern that differs from a path only
+  in case selects that path. The cost is a false change, never a false green: in such a checkout,
+  a file left out only under the case-blind reading is listed as deleted.
+- Honest commands change that state too, and any change counts: `git sparse-checkout set` or
+  `add`, `git submodule update --init` of a submodule that was not set up, `git submodule deinit`,
+  and a merge, pull, rebase, or branch switch that adds or removes a submodule. Each of these during
+  a session blocks the next stop as drift. Pins are kept on drift, so every later stop of that
+  session blocks the same way (once each, as for any drift) until the state is put back, the pin
+  file is deleted, or a new session starts. The drift message says that the sparse checkout or
+  submodule state changed, lists those commands, and tells the person to review what changed
+  since the session started, then delete the pin file it names under "pin fix" if the change was
+  meant; the next stop then records new pins. It no longer calls the state guarded files.
+- Limits of the pin, stated plainly:
+  - the pins are recorded at the first stop, so a change made before it is not seen (the tree
+    still moves, so no stored receipt answers);
+  - a stop with no usable session id compares no pins and says so;
+  - anyone who can delete the pin file, the agent included, starts a new baseline with no message.
+    After that, patterns the agent writes hide a deletion as before this change: the stop checks
+    only the other screens and can say VERIFIED. Pins are best-effort against an agent with a shell
+    (see Threat 1);
+  - the pin does not hold the skip-worktree flags, so in an honest sparse checkout a file outside
+    the patterns that is still on disk, which git normally removes, can be flagged and deleted and
+    reads as left out on purpose.
 - A submodule's files are walked by the same rule, against the commit the outer repository
   records, and are listed by their paths in the outer repository, so an edit inside one moves the
   tree and is planned. A submodule that was never set up is an empty folder, and the tree keeps the

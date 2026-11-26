@@ -1935,9 +1935,18 @@ Known limits:
   whose folder the agent empties, its `.git` included: it reads as never set up, so its files'
   deletion is not listed. The Stop hook pins that state for the session (see "Session pinning"),
   so a change to it after the first stop blocks as drift. What remains: a change made before the
-  first stop, a stop with no usable session id, and, in an honest sparse checkout, a file outside
-  the patterns that is still on disk and that the agent flags skip-worktree and deletes. The tree
-  moves in each of these, so no stored receipt answers.
+  first stop; a stop with no usable session id; a pin file deleted, by anyone who can write it, the
+  agent included, which starts a new baseline with no message, after which the agent's patterns
+  hide a deletion again; and, in an honest sparse checkout, a file outside the patterns that is
+  still on disk and that the agent flags skip-worktree and deletes. The tree moves in each of
+  these, so no stored receipt answers, but a stop can check only the other screens and say
+  VERIFIED.
+- `git sparse-checkout check-rules` decides which missing skip-worktree files are left out on
+  purpose. usabl runs it twice, with `core.ignorecase` false and true, and a file is left out only
+  when both say it is outside the patterns. With the agent's `core.ignorecase=true`, `!/docs/` also
+  matched `Docs/Page.tsx`, so a deleted screen file inside the honest patterns read as left out.
+  On a file system that does not tell case apart, a file left out only under the case-blind
+  reading is listed as deleted: a false change, never a false green.
 - A link to a folder outside the hashed files, such as `public/assets` pointing into an ignored
   `dist/`, blocks every stop and fails every check until what it points to is committed or the
   link is replaced with the files. A link to a single file outside them is always in the changed
@@ -1945,19 +1954,25 @@ Known limits:
 - A name git will not store makes every tree read differ, so every run ends with the not-covered
   gap for files that changed during the check, and that gap's text tells the person to wait
   rather than naming the file.
-- The walk and the committed diff check every commit and tree they read against its id. Other
-  reads take objects as stored: the commit parents git follows to find the merge base (the Stop
-  hook's search for the starting commit, and the committed diff's), and the policy text the guard
-  and the run read at a ref. A commit rewritten between the trusted commit and HEAD can move the
-  merge base, which moving the trusted branch with `git update-ref` also does. A policy blob both
-  sides share, overwritten in `.git/objects`, reads as the new text at the trusted ref while every
-  id still matches; this is open. In CI, git computes the id of every object it fetches, so
-  neither applies there.
+- The walk and the committed diff check every commit and tree they read against its id. Every
+  `git merge-base` usabl runs has `core.commitGraph=false`, because git reads parents from
+  `.git/objects/info/commit-graph` without checking that file: a patched file that gave a commit
+  only the trusted side holds HEAD as its parent made HEAD the merge base, and a committed screen
+  edit read as "nothing to check". That costs about 10 microseconds per commit walked (a merge
+  base 19,000 commits back took 200 ms instead of 18 ms). Other reads take objects as stored: the
+  commit parents in the commit objects git follows to find the merge base (the Stop hook's search
+  for the starting commit, and the committed diff's), and the policy text the guard and the run
+  read at a ref. A commit only the trusted side holds, rewritten with HEAD as its parent, makes
+  HEAD the merge base, which moving the trusted branch with `git update-ref` also does. A policy
+  blob both sides share, overwritten in `.git/objects`, reads as the new text at the trusted ref
+  while every id still matches; this is open. In CI, git computes the id of every object it
+  fetches, so neither applies there.
 - `.git/info/exclude` and a local `core.excludesFile` still hide a new file, as the threat model
   says for ignored files.
 
 **The committed diff.** usabl reads the commit the trusted ref names (peeling tags one checked
-object at a time), HEAD, and the merge base `git merge-base` gives for those two commit ids. Each
+object at a time), HEAD, and the merge base `git -c core.commitGraph=false merge-base` gives for
+those two commit ids. Each
 is read with `git cat-file --batch` and checked against its id in Node, so the ref reaches git
 only on standard input, never as an argument. Then it compares the merge base tree with the HEAD
 tree, one level of folders per `git cat-file --batch`, checking each tree it reads. Two entries
@@ -4099,19 +4114,31 @@ reads a missing file under it as left out on purpose:
   `core.sparseCheckout` is true, `core.sparseCheckoutCone` as git reads it from every scope, and
   what the pattern file is: missing, a regular file by the sha256 of its bytes (empty included), a
   link by its text, or another kind such as a folder.
-- `.git/modules`: the submodule folders (gitlinks of HEAD or of the index) that are empty, which
-  the walk reads as never set up.
+- `.git/modules`: the submodule folders that are empty, which the walk reads as never set up. A
+  submodule is a gitlink of the commit the walk reads the repository against, of its HEAD, or of
+  its index. For the top repository that commit is HEAD. For a submodule it is the commit the
+  outer repository records, when the submodule has it, because that is the commit the walk reads
+  the submodule against, so a nested submodule that the submodule's own HEAD and index drop is
+  still named.
 
 git never stores a path with a `.git` part, so neither name is a committed file. A guarded path
 with one of those names pins both texts. A name in its default state (no sparse checkout and no
 pattern file, or no empty submodule folder) has no pin, so a repository that uses neither pins
-what it pinned before. Any change to either is drift: the stop blocks with the drift message and
-names the state under "drifted files". So an honest `git sparse-checkout set`, or
-`git submodule update --init` of a submodule that was not set up, during a session blocks as
-drift too. A pin file from before this change lacks those names, so in a repository that uses
-either, the first stop after the upgrade reads as drift for the rest of that session. Reading the
-state costs a few short git processes per stop (about 90 to 150 ms in a small repository under
-load).
+what it pinned before. Any change to either is drift. Honest commands change the state too:
+`git sparse-checkout set` or `add`, `git submodule update --init` of a submodule that was not set
+up, `git submodule deinit`, and a merge, pull, rebase, or branch switch that adds or removes a
+submodule. Pins are kept on drift, so after any of these every later stop of that session blocks
+(once each, with the continuation allowed as for any drift) until the state is put back, the pin
+file is deleted, or a new session starts. When the drift holds a state name, the block reason
+says `the sparse checkout or submodule state changed` instead of counting it as a guarded file,
+says which honest commands also change it and that every later stop of the session blocks, and
+tells the person to review what changed since the session started, then delete the pin file
+named under "pin fix" if the change was meant, or put the state back. Deleting the pin file
+starts a new baseline with no message (see "What this does not cover" below), and the next stop
+records new pins. A pin file from before this change lacks those names, so in a repository that
+uses either, the first stop after the upgrade reads as drift for the rest of that session.
+Reading the state costs a few short git processes per stop (about 90 to 150 ms in a small
+repository under load).
 
 A pin file from an earlier release holds bare hashes with no version. Those say nothing this
 usabl can compare, so usabl cannot tell whether policy was weakened and committed earlier in the

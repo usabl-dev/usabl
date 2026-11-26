@@ -16,7 +16,8 @@
  * whose target the walk does not hash) is a tree id that never repeats.
  *
  * The committed changes from the merge base of a trusted ref to HEAD are read the same way: the
- * commits and every tree compared are checked against their ids.
+ * commits and every tree compared are checked against their ids. git finds the merge base with the
+ * commit-graph file off, from the parents the commit objects store.
  *
  * This unit reports repository facts only and never decides coverage or verdicts.
  */
