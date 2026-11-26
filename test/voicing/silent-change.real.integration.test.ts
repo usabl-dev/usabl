@@ -353,6 +353,25 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(shown).not.toContain('417');
       expect(shown).not.toContain('example.com');
     });
+
+    // The rule compares the names the browser gives, so a control that holds a progress bar, or an
+    // option whose text changes, is judged on its full name. Only the evidence leaves a value out.
+    it('still reports a click that removes the progress bar inside the button and adds a row', async () => {
+      const drafts = await flow('progress-button', click('#go'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toContain('two');
+    });
+
+    it('still reports a button drawn again without its progress bar, with focus on the new one, as a gap', async () => {
+      expect(outcome(await flow('progress-redraw', click('#go')))).toEqual(['replaced focus']);
+    });
+
+    it('still reports option text changed in place in a list box, and shows none of it', async () => {
+      const drafts = await flow('listbox-text', click('#go'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.changed).toMatchObject({ option: 2 });
+      expect(JSON.stringify(drafts)).not.toContain('example.com');
+    });
   });
 
   describe('determinism', () => {

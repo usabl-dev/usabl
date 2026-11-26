@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { BrowserDriver, Draft, Page, Requirement, TargetRole } from '../../src/contracts/index.js';
+import type { BrowserDriver, Draft, Page, Requirement, RoleTarget, TargetRole } from '../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { findByRole, resolveTarget, ROLE_CANDIDATES } from '../../src/intake/resolve-target.js';
 import { designCheckProvider } from '../../src/intake/structure-providers.js';
@@ -28,28 +28,63 @@ const SHADOW_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   </script>
 </body></html>`;
 
-// One plain Refresh button and a second one the document search cannot read as a plain candidate:
-// inside a closed shadow root, with a role attribute of two tokens, or with a role set through
-// ElementInternals.
-const SECOND_MATCH_PAGES: Readonly<Record<string, string>> = {
-  '/closed-shadow.html': `<x-closed></x-closed><script>
+// Markup inside a closed shadow root, which the document search cannot read.
+function closedShadow(inner: string): string {
+  return `<x-closed></x-closed><script>
     customElements.define('x-closed', class extends HTMLElement {
-      constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = '<button type="button">Refresh</button>'; }
+      constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = ${JSON.stringify(inner)}; }
     });
-  </script>`,
-  '/two-tokens.html': `<div role="button menuitem" tabindex="0">Refresh</div>`,
-  '/internals.html': `<x-internals tabindex="0"></x-internals><script>
+  </script>`;
+}
+
+const REFRESH: RoleTarget = { role: 'button', name: 'Refresh' };
+const CLUSTERS: RoleTarget = { role: 'heading', name: 'Clusters' };
+
+// One plain element and a second one with the same role and name that the document search cannot
+// read as a plain candidate: inside a closed shadow root, with a role attribute of two tokens, or
+// with a role set through ElementInternals. In the closed shadow root, the second element may also
+// take its name from contents that hold an empty progress bar, a spinner, or an empty field, which
+// add nothing to its name.
+const SECOND_MATCH_PAGES: Readonly<Record<string, { body: string; target: RoleTarget }>> = {
+  '/closed-shadow.html': { body: `<button type="button">Refresh</button>${closedShadow('<button type="button">Refresh</button>')}`, target: REFRESH },
+  '/two-tokens.html': { body: `<button type="button">Refresh</button><div role="button menuitem" tabindex="0">Refresh</div>`, target: REFRESH },
+  '/internals.html': {
+    body: `<button type="button">Refresh</button><x-internals tabindex="0"></x-internals><script>
     customElements.define('x-internals', class extends HTMLElement {
       constructor() { super(); const internals = this.attachInternals(); internals.role = 'button'; internals.ariaLabel = 'Refresh'; }
     });
   </script>`,
+    target: REFRESH,
+  },
+  '/closed-shadow-progress.html': {
+    body: `<button type="button">Refresh</button>${closedShadow('<button type="button">Refresh<progress></progress></button>')}`,
+    target: REFRESH,
+  },
+  '/closed-shadow-spinner.html': { body: `<h2>Clusters</h2>${closedShadow('<h3>Clusters<span role="progressbar"></span></h3>')}`, target: CLUSTERS },
+  '/closed-shadow-field.html': {
+    body: `<button type="button">Refresh</button>${closedShadow('<div role="button" tabindex="0">Refresh<span contenteditable="true" aria-label="n"></span></div>')}`,
+    target: REFRESH,
+  },
 };
 
-function secondMatchPage(path: string): string | null {
-  const extra = SECOND_MATCH_PAGES[path];
-  return extra === undefined
+// Pages where the element the design names holds an empty progress bar or a spinner, which adds
+// nothing to its name.
+const HONEST_PAGES: Readonly<Record<string, string>> = {
+  '/honest-button.html': '<button type="button">Upload<progress></progress></button>',
+  '/honest-heading.html': '<h2>Clusters<span role="progressbar"></span></h2>',
+  '/honest-label.html': '<label>Owner <select><option>alice@example.com</option></select></label><button type="button">Save</button>',
+  '/shadow-heading.html': closedShadow('<h2>Clusters<span role="progressbar"></span></h2>'),
+};
+
+function testPage(path: string): string | null {
+  const body = SECOND_MATCH_PAGES[path]?.body ?? HONEST_PAGES[path];
+  return body === undefined
     ? null
-    : `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Two</title></head><body><main><button type="button">Refresh</button>${extra}</main></body></html>`;
+    : `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Two</title></head><body><main>${body}</main></body></html>`;
+}
+
+function requirementFor(assertion: Requirement['assertion']): Requirement {
+  return { id: 'users-design', kind: assertion.type, surface: 'users', description: 'An element the design names', assertion, approved: true } as Requirement;
 }
 
 // A link that wraps onto two lines, a 44 pixel button inside a 12 pixel box that hides its
@@ -176,7 +211,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         '/focus-blur.html': focusPage(true),
         '/focus.html': focusPage(false),
       };
-      res.end(secondMatchPage(path) ?? pages[path] ?? roles);
+      res.end(testPage(path) ?? pages[path] ?? roles);
     });
     await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
     const address = server.address();
@@ -404,14 +439,53 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
     });
   });
 
-  for (const path of Object.keys(SECOND_MATCH_PAGES)) {
+  async function designDrafts(page: Page, path: string, assertion: Requirement['assertion']): Promise<Array<[string, string]>> {
+    const provider = designCheckProvider(requirementFor(assertion));
+    if (provider === null) {
+      throw new Error('no design check provider');
+    }
+    const output = await provider.run({ page, screen: { id: 'users', url: `${baseUrl}${path}` }, config: testConfig() });
+    return draftsOf(output).map((draft) => [draft.confidence, draft.whatUserExperiences]);
+  }
+
+  for (const [path, { target }] of Object.entries(SECOND_MATCH_PAGES)) {
     it(`never reads one match when a second element has the name (${path})`, async () => {
       await withPage(path, async (page) => {
-        const found = await resolveTarget(page, { role: 'button', name: 'Refresh' });
+        const found = await resolveTarget(page, target);
         expect(['many', 'cannot-tell', 'out-of-reach']).toContain(found.kind);
+        // The check asks for review whichever element the design means: it never passes or fails
+        // on the one element the document search read.
+        const assertions: Array<Requirement['assertion']> =
+          target.role === 'heading'
+            ? [
+                { type: 'heading', name: target.name, level: 2 },
+                { type: 'heading', name: target.name, level: 3 },
+              ]
+            : [{ type: 'name', target }];
+        for (const assertion of assertions) {
+          expect((await designDrafts(page, path, assertion)).map(([confidence]) => confidence)).toEqual(['unverified']);
+        }
       });
     });
   }
+
+  it('reads an element named from contents that hold an empty progress bar or a spinner by its name', async () => {
+    await withPage('/honest-button.html', async (page) => {
+      expect(await designDrafts(page, '/honest-button.html', { type: 'name', target: { role: 'button', name: 'Upload' } })).toEqual([]);
+    });
+    await withPage('/honest-heading.html', async (page) => {
+      expect(await designDrafts(page, '/honest-heading.html', { type: 'heading', name: 'Clusters', level: 2 })).toEqual([]);
+    });
+    await withPage('/honest-label.html', async (page) => {
+      expect(await designDrafts(page, '/honest-label.html', { type: 'name', target: { role: 'button', name: 'Save' } })).toEqual([]);
+    });
+    // The only Clusters heading is in a closed shadow root. The tree sees it and the document
+    // search does not, so the check asks for review. It never says the heading is missing.
+    await withPage('/shadow-heading.html', async (page) => {
+      const drafts = await designDrafts(page, '/shadow-heading.html', { type: 'heading', name: 'Clusters', level: 2 });
+      expect(drafts.map(([confidence]) => confidence)).toEqual(['unverified']);
+    });
+  });
 
   async function focusOrderDrafts(page: Page): Promise<Draft[]> {
     const provider = designCheckProvider(FOCUS_ORDER);

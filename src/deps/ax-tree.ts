@@ -64,10 +64,10 @@ function isTrue(value: unknown): boolean {
   return value === true || value === 1 || value === 'true';
 }
 
-// Whether a name may hold the value of a field the node holds. The browser lists where a name
-// comes from, and the first source with a value that is not superseded is the one it used. A name
-// built from the node's contents includes the field's value. A name that does not say where it
-// comes from may too. An author-given name, such as aria-label, does not.
+// Whether a name may hold the value of a field or a control the node holds. The browser lists
+// where a name comes from, and the first source with a value that is not superseded is the one it
+// used. A name built from the node's contents includes that value. A name that does not say where
+// it comes from may too. An author-given name, such as aria-label, does not.
 function nameMayHoldValue(rawName: unknown): boolean {
   const sources = getProp(rawName, 'sources');
   if (!Array.isArray(sources)) {
@@ -77,6 +77,12 @@ function nameMayHoldValue(rawName: unknown): boolean {
   return used === undefined || getProp(used, 'type') === 'contents';
 }
 
+export interface AxTreeOptions {
+  // Keep every node and every name as the browser gives them, with no field rule and no value mark.
+  // For the design checks, which only count names and never show them.
+  browserNames?: boolean;
+}
+
 /**
  * The tree a getFullAXTree result describes. A node with no DOM node, such as an inline text box,
  * has no identity across two reads, so it is left out, and its children climb to the nearest
@@ -84,13 +90,21 @@ function nameMayHoldValue(rawName: unknown): boolean {
  * text box is its value, and a value is never read. The field itself is kept, with its name and
  * states. A node that holds a field, such as a row or a button with a text box inside, has no name
  * when the browser built its name from its contents or does not say where the name comes from,
- * because that name can hold the field's value. A control with a value that is not editable, such
- * as a slider, a spin button, a progress bar, a select, or a list box, counts as a field here. The
- * control keeps an author-given name, and the nodes inside it are kept, but an option inside it
- * has no name, and neither has any node there whose name may come from its contents. An ignored
- * node is kept without a name, so the parent chain stays whole.
+ * because that name can hold the field's value. An ignored node is kept without a name, so the
+ * parent chain stays whole.
+ *
+ * A control with a value that is not editable, such as a slider, a spin button, a progress bar, a
+ * select, or a list box, keeps every name the browser gives, because the silent change rule compares
+ * them. A name that may show its value is marked instead, and evidence never shows a marked name:
+ * a name built from contents that hold such a control, the control's own name when it is built from
+ * its contents, the name of a node inside it built from contents, and the name of an option inside
+ * it, whatever its source.
+ *
+ * With `browserNames`, every node with a DOM node is kept, the content of a field included, and
+ * every name is the browser's own, so a second element with a design's name is always counted.
  */
-export function axTreeFromCdp(result: unknown): { documentNodeId: number | null; nodes: AxTreeNode[] } {
+export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { documentNodeId: number | null; nodes: AxTreeNode[] } {
+  const browserNames = options.browserNames === true;
   const rawNodes = getProp(result, 'nodes');
   if (!Array.isArray(rawNodes)) {
     return { documentNodeId: null, nodes: [] };
@@ -106,22 +120,26 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     const parentAxId = readString(getProp(raw, 'parentId'));
     return parentAxId === null ? undefined : byAxId.get(parentAxId);
   };
-
-  // Every node that holds an editable field or a value control and is not editable itself. A field
-  // is the parent of its own inner editor, and the field keeps its own name.
-  const holdsField = new Set<unknown>();
-  for (const raw of rawNodes) {
-    if (!hasProperty(raw, 'editable') && !isValueControl(raw)) {
-      continue;
-    }
-    const seen = new Set<unknown>();
-    for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
-      seen.add(ancestor);
-      if (!hasProperty(ancestor, 'editable')) {
-        holdsField.add(ancestor);
+  // Every ancestor of a node that matches, that is not editable itself. A field is the parent of its
+  // own inner editor, and the field keeps its own name.
+  const holding = (matches: (raw: unknown) => boolean): Set<unknown> => {
+    const holders = new Set<unknown>();
+    for (const raw of rawNodes) {
+      if (!matches(raw)) {
+        continue;
+      }
+      const seen = new Set<unknown>();
+      for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
+        seen.add(ancestor);
+        if (!hasProperty(ancestor, 'editable')) {
+          holders.add(ancestor);
+        }
       }
     }
-  }
+    return holders;
+  };
+  const holdsField = browserNames ? new Set<unknown>() : holding((raw) => hasProperty(raw, 'editable'));
+  const holdsValueControl = browserNames ? new Set<unknown>() : holding(isValueControl);
 
   let documentNodeId: number | null = null;
   const nodes: AxTreeNode[] = [];
@@ -138,7 +156,7 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     const seen = new Set<unknown>();
     for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
       seen.add(ancestor);
-      if (hasProperty(ancestor, 'editable')) {
+      if (!browserNames && hasProperty(ancestor, 'editable')) {
         insideField = true;
         break;
       }
@@ -155,10 +173,12 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     const role = roleOf(raw);
     const ignored = getProp(raw, 'ignored') === true;
     const rawName = getProp(raw, 'name');
-    // The name may hold a value: the node holds a field or a value control, is one, or is inside
-    // one. An option inside a value control is a choice, so its name is left out whatever its source.
-    const mayHoldValue = holdsField.has(raw) || isValueControl(raw) || insideValueControl;
-    const nameLeftOut = ignored || (mayHoldValue && nameMayHoldValue(rawName)) || (insideValueControl && role === 'option');
+    const name = ignored || (holdsField.has(raw) && nameMayHoldValue(rawName)) ? null : readString(getProp(rawName, 'value'));
+    const fromContents = nameMayHoldValue(rawName);
+    const mayShowValue =
+      !browserNames &&
+      name !== null &&
+      (((holdsValueControl.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) || (insideValueControl && role === 'option'));
     if (role === 'RootWebArea' && documentNodeId === null) {
       documentNodeId = nodeId;
     }
@@ -196,11 +216,12 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
       nodeId,
       parentId,
       role,
-      name: nameLeftOut ? null : readString(getProp(rawName, 'value')),
+      name,
       ignored,
       states: ignored ? {} : states,
       busy: !ignored && busy,
       controls: ignored ? [] : controls,
+      ...(mayShowValue ? { nameMayShowValue: true as const } : {}),
     });
   }
   return { documentNodeId, nodes };
@@ -292,8 +313,10 @@ export const DESIGN_AX_TREE_NODE_LIMIT = 20000;
 /**
  * One read of the whole tree for the design checks. A design check decides a gate input, so no
  * clock may decide it: there is no timer and no time budget, only a node count. It reads no sort
- * state, which no design check uses, so it makes exactly one browser call. The nodes it keeps are
- * the ones the silent change rule keeps, from the same conversion.
+ * state, which no design check uses, so it makes exactly one browser call. It keeps every node and
+ * every name as the browser gives them: the design checks count elements by role and name, and a
+ * name left out would let a second element with the design's name drop out of the count. No name
+ * from this read reaches a draft.
  */
 export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead> {
   const result = await send('Accessibility.getFullAXTree');
@@ -306,5 +329,5 @@ export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead>
   if (rawNodes.length > DESIGN_AX_TREE_NODE_LIMIT) {
     return { kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT };
   }
-  return { kind: 'tree', nodes: axTreeFromCdp(result).nodes };
+  return { kind: 'tree', nodes: axTreeFromCdp(result, { browserNames: true }).nodes };
 }

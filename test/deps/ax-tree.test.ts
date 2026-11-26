@@ -204,13 +204,22 @@ describe('axTreeFromCdp', () => {
     const read = axTreeFromCdp(VALUES);
     const nameOf = (nodeId: number): string | null | undefined => read.nodes.find((entry) => entry.nodeId === nodeId)?.name;
 
-    it('keeps the value out of every name: the cells that hold the control, its options, and the text inside it', () => {
-      for (const nodeId of [50, 51, 60, 63, 70, 72, 73, 81, 82, 90, 92]) expect(nameOf(nodeId)).toBeNull();
-      expect(JSON.stringify(read)).not.toContain('example.com');
-      expect(JSON.stringify(read)).not.toContain('417');
+    const shownOf = (nodeId: number): boolean | undefined => read.nodes.find((entry) => entry.nodeId === nodeId)?.nameMayShowValue;
+    const MAY_SHOW = [50, 51, 60, 63, 70, 72, 73, 81, 82, 90, 92];
+
+    it('keeps the browser name for the comparison, and marks each name that may show the value', () => {
+      const raw = new Map(VALUES.nodes.map((entry) => [Number((entry as { nodeId: string }).nodeId), entry]));
+      for (const nodeId of MAY_SHOW) {
+        expect({ nodeId, name: nameOf(nodeId), shown: shownOf(nodeId) }).toEqual({
+          nodeId,
+          name: (raw.get(nodeId) as { name: { value: string } }).name.value,
+          shown: true,
+        });
+      }
     });
 
     it('keeps each control, its own name, and the nodes under it with their states', () => {
+      for (const nodeId of [52, 61, 71, 74, 80, 91, 93, 99]) expect({ nodeId, shown: shownOf(nodeId) }).toEqual({ nodeId, shown: undefined });
       expect(nameOf(52)).toBe('Age');
       expect(nameOf(61)).toBe('Owner');
       expect(nameOf(71)).toBe('Owners');
@@ -332,14 +341,41 @@ describe('readDesignAxTree', () => {
     vi.restoreAllMocks();
   });
 
-  it('makes one tree call and no header reads, and keeps the nodes the silent change rule keeps', async () => {
+  it('makes one tree call and no header reads, and keeps the nodes and names the browser gives', async () => {
     const calls: string[] = [];
     const read = await readDesignAxTree(async (method) => {
       calls.push(method);
       return RAW;
     });
     expect(calls).toEqual(['Accessibility.getFullAXTree']);
-    expect(read).toEqual({ kind: 'tree', nodes: axTreeFromCdp(RAW).nodes });
+    expect(read).toEqual({ kind: 'tree', nodes: axTreeFromCdp(RAW, { browserNames: true }).nodes });
+    // The design checks only count these nodes and never show their names, so the nodes inside a
+    // field are kept, where the silent change read leaves them out.
+    if (read.kind !== 'tree') throw new Error('not a tree');
+    expect(read.nodes.map((node) => node.nodeId)).toEqual([1, 2, 3, 4, 6, 7, 8, 9]);
+    expect(read.nodes.find((node) => node.nodeId === 8)).toMatchObject({ parentId: 7, name: 'alice@example.com' });
+  });
+
+  it('keeps a name the silent change read marks or leaves out, so a second element with the name is counted', async () => {
+    // A button named from its contents, which hold an empty field or an empty progress bar. The
+    // browser name is the design's name.
+    const SECOND = {
+      nodes: [
+        { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: '' }, childIds: ['2', '4'] },
+        { nodeId: '2', backendDOMNodeId: 2, ignored: false, role: { value: 'button' }, name: { value: 'Refresh', sources: [{ type: 'contents', value: { value: 'Refresh' } }] }, parentId: '1', childIds: ['3'] },
+        { nodeId: '3', backendDOMNodeId: 3, ignored: false, role: { value: 'textbox' }, name: { value: 'n' }, parentId: '2', childIds: [], properties: [prop('editable', 'richtext', 'token')] },
+        { nodeId: '4', backendDOMNodeId: 4, ignored: false, role: { value: 'button' }, name: { value: 'Refresh', sources: [{ type: 'contents', value: { value: 'Refresh' } }] }, parentId: '1', childIds: ['5'] },
+        { nodeId: '5', backendDOMNodeId: 5, ignored: false, role: { value: 'progressbar' }, name: { value: '' }, parentId: '4', childIds: [] },
+      ],
+    };
+    const design = await readDesignAxTree(async () => SECOND);
+    if (design.kind !== 'tree') throw new Error('not a tree');
+    expect(design.nodes.filter((node) => node.name === 'Refresh').map((node) => node.nodeId)).toEqual([2, 4]);
+    expect(design.nodes.some((node) => node.nameMayShowValue !== undefined)).toBe(false);
+    const full = await readFullAxTree(async () => SECOND);
+    if (full.kind !== 'tree') throw new Error('not a tree');
+    expect(full.nodes.find((node) => node.nodeId === 2)?.name).toBeNull();
+    expect(full.nodes.find((node) => node.nodeId === 4)).toMatchObject({ name: 'Refresh', nameMayShowValue: true });
   });
 
   it('gives the same result on a slow machine and a fast one, because no clock takes part', async () => {
