@@ -159,10 +159,12 @@ describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }
     await runGit(repoPath, ['commit', '-m', 'awkward names']);
   }
 
-  it('lists every changed name from the merge base as git stores it', async () => {
+  // The merge-base diff compares the two trees name by name, so a committed rename is the new name
+  // and the old one, as an uncommitted one is.
+  it('lists every changed name from the merge base as git stores it, with both names of a rename', async () => {
     await commitAwkwardNames();
     const changed = await makeGitReader({ cwd: repoPath }).diffNameOnly(base);
-    expect([...changed].sort()).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
+    expect([...changed].sort()).toEqual([NEWLINE, RENAMED_FROM, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
   });
 
   // The list compares the bytes on disk with HEAD, so a rename is the new name and the old one,
@@ -963,7 +965,7 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     expect(end).toBeLessThan(args.indexOf(refArg));
   }
 
-  it('puts --end-of-options before the ref in show, the commit check, the folder read, the diff, and each tree listing', async () => {
+  it('puts --end-of-options before the ref in show, the commit check, the folder read, and each tree listing, and gives the diff no ref as an argument', async () => {
     const git = makeGitReader({ cwd: repoPath });
     await git.show('main', 'screen.tsx');
     await git.show(ABSENT_COMMIT, 'missing.tsx').catch(() => undefined);
@@ -983,7 +985,12 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     expect(typeCheck?.indexOf('--end-of-options') ?? -1, `--end-of-options in git ${(typeCheck ?? []).join(' ')}`).toBeGreaterThan(-1);
     expect(typeCheck?.indexOf('--end-of-options')).toBeLessThan(typeCheck?.indexOf('main:src/gate') ?? -1);
     expectEndBefore(all, 'main:src/gate', 'show');
-    expectEndBefore(all, 'main...HEAD', 'diff');
+    // The diff reads the ref on git cat-file --batch's standard input, where git never reads an
+    // option, and gives git merge-base only the two commit ids that read gave.
+    expect(all.find((args) => args[0] === 'diff')).toBeUndefined();
+    const mergeBase = all.find((args) => args[0] === 'merge-base');
+    expect(mergeBase, 'a git merge-base call').toBeDefined();
+    expect(mergeBase?.slice(1).every((arg) => /^[0-9a-f]{40}$/u.test(arg))).toBe(true);
     const listings = all.filter((args) => args[0] === 'ls-tree');
     expect(listings).toHaveLength(4);
     for (const args of listings) {
