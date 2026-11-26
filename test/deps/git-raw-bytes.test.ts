@@ -155,11 +155,15 @@ describe('edits that local git settings hide are still read', { timeout: REAL_PR
 
   it('reads a same-size edit with its modification time restored when core.trustctime is false', async () => {
     await git('config', 'core.trustctime', 'false');
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    // The file gets a whole second a minute in the past, and git status records it, so the index is
+    // newer than the file. Restoring a time read back with stat() is not exact: its Date is rounded
+    // to the millisecond, so a time in the last half millisecond of a second moves to the next
+    // second, and git then sees the edit. A whole second restores exactly.
+    const past = Math.floor(Date.now() / 1000) - 60;
+    await utimes(join(repo, 'src/App.tsx'), past, past);
     await git('status', '--porcelain');
-    const { mtime } = await stat(join(repo, 'src/App.tsx'));
     await write('src/App.tsx', APP_EDITED);
-    await utimes(join(repo, 'src/App.tsx'), mtime, mtime);
+    await utimes(join(repo, 'src/App.tsx'), past, past);
     expect(await git('status', '--porcelain')).toBe('');
     expect(await paths()).toEqual(['src/App.tsx']);
   });
