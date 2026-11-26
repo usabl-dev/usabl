@@ -459,26 +459,45 @@
   `diff.ignoreSubmodules=all` in `.git/config` no longer hides a committed submodule move. Gate
   effect: those stops block, and `usabl check` fails, instead of reading VERIFIED. Listing change:
   a committed rename lists both names, as an uncommitted one already did. Cost: on a repository of
-  20,000 commits and 10,000 files under load, 340 to 460 ms against 70 to 100 ms for `git diff`,
-  with the same 149 files listed. Known limits: git still finds the merge base from commit parents
-  as stored, which can move it as moving the trusted branch with `git update-ref` can; and the
-  policy text read at a ref is the blob as stored, so a policy blob both sides share, overwritten
-  in `.git/objects`, reads as the new text. CI fetches and checks every object, so neither applies
-  there.
+  20,000 commits and 10,000 files, 340 to 460 ms under a load average near 10 and 250 to 284 ms
+  near 5, against 70 to 100 ms for `git diff`, with the same 149 files listed. Every
+  `git merge-base` usabl runs, in the committed diff and in the Stop hook's search for the
+  starting commit, now runs with `core.commitGraph=false`. git read parents from
+  `.git/objects/info/commit-graph` without checking that file, so a patched file that made HEAD a
+  parent of a commit only the trusted side holds made HEAD the merge base, and a committed screen
+  edit read as "nothing to check" at the stop and in `usabl check --branch-scope`. That costs about
+  10 microseconds per commit walked: a merge base 19,000 commits back took 200 ms instead of
+  18 ms. Known limits: git still finds the merge base from the parents the commit objects store,
+  so a commit only the trusted side holds, rewritten in `.git/objects` with HEAD as its parent,
+  moves it as moving the trusted branch with `git update-ref` can; and the policy text read at a
+  ref is the blob as stored, so a policy blob both sides share, overwritten in `.git/objects`,
+  reads as the new text. CI fetches and checks every object, so neither applies there.
 - The Stop hook now pins the local checkout state with the guarded files at the first stop of a
   session: whether sparse checkout and cone mode are on and what the pattern file holds, for the
-  repository and each submodule, and which submodule folders are empty. The changed list reads a
+  repository and each submodule the walk reads, and which submodule folders are empty. A
+  submodule's own submodules are taken from the commit the outer repository records, as the walk
+  reads them, so one dropped from the submodule's own commit and emptied is still named. The
+  changed list reads a
   missing file under that state as left out on purpose, so an agent that turned sparse checkout
   on, wrote its own patterns, or emptied a submodule folder, and deleted a screen file, got a stop
   that read "nothing to check", or VERIFIED after checking only the other screens. Now a change to
   that state blocks the next stop as session drift and names `.git/info/sparse-checkout` or
   `.git/modules`; an emptied pattern file or a folder in its place counts. Gate effect: those
-  stops block. Any change counts, so an honest `git sparse-checkout set` or
-  `git submodule update --init` during a session also blocks as drift, and a repository that uses
-  either reads as drift for the rest of a session that was running when usabl was upgraded. The
-  default state adds no pin. Known limits: a change made before the first stop, a stop with no
-  session id, and a file outside honest sparse patterns that is still on disk, which the agent
-  flags skip-worktree and deletes. Each stop reads the state with a few git processes, about 90 to
+  stops block. Any change counts, so an honest `git sparse-checkout set` or `add`,
+  `git submodule update --init` or `deinit`, or a merge, pull, rebase, or switch that adds or
+  removes a submodule during a session also blocks as drift. The pins are kept, so every later
+  stop of that session blocks until the state is put back, the pin file is deleted, or a new
+  session starts. That drift message says the sparse checkout or submodule state changed, not
+  guarded files, lists those commands, and names the pin file to delete once the change is
+  reviewed. A repository that uses either reads as drift for the rest of a session that was
+  running when usabl was upgraded. The default state adds no pin. Separately, a missing file is
+  now left out only when `git sparse-checkout check-rules` says so with `core.ignorecase` both
+  false and true: with the agent's `core.ignorecase=true`, `!/docs/` also matched `Docs/`, so a
+  deleted screen file inside the honest patterns read as left out on purpose. Known limits: a
+  change made before the first stop; a stop with no session id; deleting the pin file, which
+  anyone who can write it can do, the agent included, and which starts a new baseline with no
+  message; and a file outside honest sparse patterns that is still on disk, which the agent flags
+  skip-worktree and deletes. Each stop reads the state with a few git processes, about 90 to
   150 ms in a small repository under load.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
