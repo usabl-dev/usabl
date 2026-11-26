@@ -1989,7 +1989,7 @@ error that says so and names `git fetch --unshallow` for a shallow clone. The li
 same size limit as before. Cost, on a repository of 20,000 commits and 10,000 files whose
 feature branch has 50 commits and one merge of the trusted branch, under a load average near 10:
 the committed diff took 340 to 460 ms against 70 to 100 ms for `git diff`, and listed the same
-149 files. Most of it is the dozen short git processes; the trees read are only the folders that
+149 files. Near a load average of 5 it took 250 to 284 ms. Most of it is the dozen short git processes; the trees read are only the folders that
 differ.
 
 A rename is listed by both names, committed or not: the committed diff compares each name of the
