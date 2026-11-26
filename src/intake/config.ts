@@ -114,8 +114,9 @@ function climbsOut(expansion: string): boolean {
 
 // A pattern that climbs above the repository root with `..`, such as `../shared/**`, or whose
 // first part is a drive such as `C:`, names files outside the repository, and Node's glob would
-// walk outside it, up to the whole drive. The file system adapter never runs such a pattern.
-// Refuse it.
+// walk outside it, up to the whole drive. A `..` after a wildcard part is refused too. The file
+// system adapter never runs the first two on Windows or the last anywhere, and a policy file is
+// read on every platform. Refuse them.
 function checkInsideRepository(glob: string, label: string): void {
   const expansions = glob.includes('{') ? (expandBraces(glob) ?? [glob]) : [glob];
   for (const expansion of expansions) {
@@ -123,7 +124,21 @@ function checkInsideRepository(glob: string, label: string): void {
     if (climbsOut(expansion) || (first.endsWith(':') && !/[*?]/u.test(first))) {
       throw configError`${label} pattern "${glob}" names a path outside the repository: it climbs above the repository root with .., or starts with a drive such as C:. Write it as a path inside the repository.`;
     }
+    if (dotsAfterWildcard(expansion)) {
+      throw configError`${label} pattern "${glob}" has a .. after a wildcard part. Node's glob walks such a part in a way usabl cannot match, so the file system adapter does not run it. Write the path without .., or name the folders it means.`;
+    }
   }
+}
+
+// A `..` after a part with `*` or `?`, as the guard reads it. Node's glob walks `**/..` in a way
+// that depends on the pattern's other brace expansions, so the adapter does not run such a pattern.
+function dotsAfterWildcard(expansion: string): boolean {
+  let afterWildcard = false;
+  for (const part of expansion.split('/')) {
+    if (part === '..' && afterWildcard) return true;
+    if (/[*?]/u.test(part)) afterWildcard = true;
+  }
+  return false;
 }
 
 // A brace group can leave an expansion empty or starting with /, as `{,src}/**` gives `/**`. Node's

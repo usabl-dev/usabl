@@ -34,6 +34,16 @@ describe('a policy glob with a brace expansion from the machine root', () => {
     });
   }
 
+  // Node's walk of a `..` after a wildcard depends on which expansions it walks together.
+  for (const glob of ['src/{a,**/..}/*.tsx', 'src/**/../x/*.tsx', 'src/*/../x.tsx']) {
+    it(`refuses ${glob}, which has a .. after a wildcard part`, () => {
+      expect(() => parseUsablConfig(configWith({ uiFileGlobs: [glob] }))).toThrow(/uiFileGlobs pattern .* \.\. after a wildcard/u);
+      expect(() => parseUsablConfig(configWith({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [glob] } }))).toThrow(
+        /discovery\.wideBlastGlobs pattern .* \.\. after a wildcard/u,
+      );
+    });
+  }
+
   it('accepts a .. that Node folds away inside the repository', () => {
     expect(parseUsablConfig(configWith({ uiFileGlobs: ['src/../lib/**'] })).uiFileGlobs).toEqual(['src/../lib/**']);
   });
