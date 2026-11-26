@@ -988,9 +988,11 @@ describe('makeGitReader ends git options before every ref', { timeout: 30_000 },
     // The diff reads the ref on git cat-file --batch's standard input, where git never reads an
     // option, and gives git merge-base only the two commit ids that read gave.
     expect(all.find((args) => args[0] === 'diff')).toBeUndefined();
-    const mergeBase = all.find((args) => args[0] === 'merge-base');
+    const mergeBase = all.find((args) => args.includes('merge-base'));
     expect(mergeBase, 'a git merge-base call').toBeDefined();
-    expect(mergeBase?.slice(1).every((arg) => /^[0-9a-f]{40}$/u.test(arg))).toBe(true);
+    const ids = mergeBase?.slice(mergeBase.indexOf('merge-base') + 1) ?? [];
+    expect(ids).toHaveLength(2);
+    expect(ids.every((arg) => /^[0-9a-f]{40}$/u.test(arg))).toBe(true);
     const listings = all.filter((args) => args[0] === 'ls-tree');
     expect(listings).toHaveLength(4);
     for (const args of listings) {
