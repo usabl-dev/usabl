@@ -1590,7 +1590,8 @@ of those names reaches a draft, so a second element with the design's name is al
 even when its name comes from contents that hold a field or a value control. A name built through
 `aria-labelledby`, or a label element, from such a control, from a node inside one, or from a node
 that holds one takes the control's value too (a select gives its chosen option, a slider its
-value), so the read marks it the same way and `addedNames` leaves it out. A name built through
+value), so the read marks it the same way and `addedNames` leaves it out, and so does a name
+built from contents that hold an element with such a name. A name built through
 `aria-labelledby` from a field can still hold that field's value, and the rule does not take a
 name apart. A description, from `aria-describedby`, is never read, so it never reaches evidence. Background announcements are found only from
 the drain taken before the first step: a ticker that first writes inside a step's window, or

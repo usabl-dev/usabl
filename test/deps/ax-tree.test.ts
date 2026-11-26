@@ -241,16 +241,21 @@ describe('axTreeFromCdp', () => {
           node(114, 1, 'button', labelledBy('alice@example.com', 60)),
           // A name from a node that holds no value control is not marked.
           node(115, 1, 'button', labelledBy('Owner', 110)),
+          // A row named from its contents, which hold a button labelled by the select above.
+          node(116, 1, 'row', contents('Owner alice@example.com')),
+          node(117, 116, 'button', labelledBy('Owner alice@example.com', 110, 61)),
         ],
       };
       const labelledRead = axTreeFromCdp(LABELLED);
       const marked = (nodeId: number) => labelledRead.nodes.find((entry) => entry.nodeId === nodeId)?.nameMayShowValue;
-      expect([111, 112, 113, 114, 115].map((nodeId) => [nodeId, marked(nodeId)])).toEqual([
+      expect([111, 112, 113, 114, 115, 116, 117].map((nodeId) => [nodeId, marked(nodeId)])).toEqual([
         [111, true],
         [112, true],
         [113, true],
         [114, true],
         [115, undefined],
+        [116, true],
+        [117, true],
       ]);
       expect(labelledRead.nodes.find((entry) => entry.nodeId === 111)?.name).toBe('Owner alice@example.com');
     });

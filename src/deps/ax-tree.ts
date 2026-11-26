@@ -126,8 +126,9 @@ export interface AxTreeOptions {
  * them. A name that may show its value is marked instead, and evidence never shows a marked name:
  * a name built from contents that hold such a control, the control's own name when it is built from
  * its contents, the name of a node inside it built from contents, the name of an option inside
- * it, whatever its source, and a name built through aria-labelledby or a label element from such
- * a control, from a node inside one, or from a node that holds one.
+ * it, whatever its source, a name built through aria-labelledby or a label element from such a
+ * control, from a node inside one, or from a node that holds one, and a name built from contents
+ * that hold a node with such a name.
  *
  * With `browserNames`, every node with a DOM node is kept, the content of a field included, and
  * every name is the browser's own, so a second element with a design's name is always counted.
@@ -194,6 +195,8 @@ export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { d
       const related = byDomId.get(id);
       return related !== undefined && (isValueControl(related) || holdsValueControl.has(related) || hasValueControlAncestor(related));
     });
+  // A name built from contents that hold such a name takes the value with it.
+  const holdsNameFromValue = browserNames ? new Set<unknown>() : holding((raw) => builtFromValue(getProp(raw, 'name')));
 
   let documentNodeId: number | null = null;
   const nodes: AxTreeNode[] = [];
@@ -232,7 +235,7 @@ export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { d
     const mayShowValue =
       !browserNames &&
       name !== null &&
-      (((holdsValueControl.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) ||
+      (((holdsValueControl.has(raw) || holdsNameFromValue.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) ||
         (insideValueControl && role === 'option') ||
         builtFromValue(rawName));
     if (role === 'RootWebArea' && documentNodeId === null) {
