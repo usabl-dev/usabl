@@ -163,25 +163,15 @@ const PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]>> = {
 };
 
 // Where a finding from another rule counts as a catch by that rule. An entry reported on the screen
-// accepts its expected rules anywhere, but another rule only on the changed element or inside it.
-// A finding of another rule elsewhere on the screen can come from the two loads differing.
+// accepts its expected rules anywhere, but another rule only on the changed element itself. A
+// finding of another rule elsewhere on the screen can come from the two loads differing. So can one
+// inside the changed element: a live region or a dialog can be a large container, such as a results
+// list, and one more row in the second load is not the change. A removed element leaves nothing
+// behind, so the element that held it stands in as the changed element.
 const OTHER_RULE_PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]>> = {
   ...PLACES_FOR,
-  screen: ['target', 'inside'],
+  screen: ['target'],
 };
-
-/**
- * Where a finding from another rule counts for this entry. A removed element leaves nothing behind,
- * so the element that held it stands in as the target, and the rest of that element is not the
- * change. For a level one heading that sits straight in main, that rest is the whole page. So for
- * an entry reported on the screen, another rule counts only on the stand-in itself.
- */
-function otherRulePlaces(entry: CatalogEntry): readonly ElementPlace[] {
-  if (entry.reportedOn === 'screen' && entry.mutation.edit.kind === 'remove-element') {
-    return ['target'];
-  }
-  return OTHER_RULE_PLACES_FOR[entry.reportedOn];
-}
 
 function expectedText(entry: CatalogEntry): string {
   return entry.expectedRules.length === 0 ? 'no shipped rule claims this defect' : `expected ${entry.expectedRules.join(' or ')}`;
@@ -349,7 +339,7 @@ async function decide(
     if (expected.length > 0) {
       return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
     }
-    const byOther = at(otherRulePlaces(entry)).filter((finding) => !isExpected(finding));
+    const byOther = at(OTHER_RULE_PLACES_FOR[entry.reportedOn]).filter((finding) => !isExpected(finding));
     if (byOther.length > 0) {
       const rules = sortedUnique(byOther.map((finding) => finding.rule));
       return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);

@@ -7192,18 +7192,20 @@ The outcome, in this order:
   `unverified`. Or no definite new finding is where it can count below: the two loads differ, so
   they prove nothing about the defect. For most entries that means every definite new finding is
   away from the change. For an entry reported on the screen, it means every one is from another
-  rule and away from the changed element (for a removed element, anywhere but the element that
-  held it).
+  rule and not on the changed element itself (for a removed element, not on the element that held
+  it).
 - `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
   it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
   anywhere on the screen.
 - `caught by another rule`: a new gating finding with confidence `fail` from another rule, where
-  the entry says it reports. For an entry reported on the screen, that is on the changed element
-  or inside it, never elsewhere on the screen. When the edit removed an element
-  (`heading-one-removed`, `page-title-removed`), it is only on the element that held the removed
-  one, never inside it: the rest of that element, such as all of `main` for a heading that sits
-  straight in it, is not the change. Counted apart from caught.
+  the entry says it reports. For an entry reported on the screen, that is only on the changed
+  element itself, never inside it and never elsewhere on the screen. A live region or a dialog
+  (`flow-live-region-broken`, `voice-live-region-broken`, `dialog-focus-not-moved-in`) can be a
+  large container, such as a results list with `aria-live`, and one more row in the second load is
+  not the change. When the edit removed an element (`heading-one-removed`, `page-title-removed`),
+  the element that held the removed one counts as the changed element: the rest of it, such as all
+  of `main` for a heading that sits straight in it, is not the change. Counted apart from caught.
 - `preview only`: nothing new gates, and a preview finding is new.
 - `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
   the reason says so.

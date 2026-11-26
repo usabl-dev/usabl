@@ -65,10 +65,11 @@ could not run, and 2 when a flag or the config is wrong.
 - **caught by another rule**: a new, definite failure from another rule, where the defect is
   expected to be reported: on the changed element, inside it, or on its shadow host, by defect. It
   is counted apart from caught. For the defects that can be caught anywhere on the screen, the
-  failure from another rule must still be on the changed element or inside it. When the change
-  removed an element (the level one heading, the page title), it must be on the element that held
-  the removed one, not inside it, because for a heading straight in `main` that would be the whole
-  page. A failure from another rule anywhere else on the screen makes the row unreadable.
+  failure from another rule must be on the changed element itself, not inside it. A live region or
+  a dialog can be a large container, such as a results list, and one more row in the second load
+  is not the change. When the change removed an element (the level one heading, the page title),
+  the element that held the removed one counts as the changed element. A failure from another rule
+  anywhere else on the screen makes the row unreadable.
 - **missed**: nothing new would block. The summary names the defect and what was expected. When the
   defect is a key that does nothing, and the checks never pressed that key on the element, the
   reason says so.
