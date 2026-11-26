@@ -282,6 +282,19 @@ describe('doctor checks the branch the gate names', () => {
     expect(gh.calls).toContain('repos/{owner}/{repo}/branches/trunk/protection');
   });
 
+  it('reads the trigger under on:, not text shaped like one in a run-name block above it', async () => {
+    // The real trigger names main. The run-name text names trunk, which is the protected default.
+    const raw = `run-name: |\n  pull_request:\n    branches: ["trunk"]\n${pinEngineRef(gateWorkflowFor('main'), SHA)}`;
+    const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/trunk'], exclude: [] } });
+    const target = await gateBranchTarget(async (path) => (path === USABL_GATE_WORKFLOW_PATH ? raw : null));
+    expect(target).toEqual({ name: 'main', source: 'gate', line: 11 });
+    const result = await verifyBranchRule(gh.reader, target);
+    expect(result.action).not.toBe('verified');
+    expect(result.exitCode).not.toBe(0);
+    const report = await branchRule({ [USABL_GATE_WORKFLOW_PATH]: raw }, gh.reader);
+    expect(report.state).toBe('missing');
+  });
+
   it('is missing, and names trunk, when only main is protected', async () => {
     const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/main'], exclude: [] } });
     const report = await branchRule({ [USABL_GATE_WORKFLOW_PATH]: pinEngineRef(gateWorkflowFor('trunk'), SHA) }, gh.reader);
