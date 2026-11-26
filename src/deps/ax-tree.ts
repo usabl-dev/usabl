@@ -21,6 +21,10 @@ const JUDGED_STATES: ReadonlySet<string> = new Set(['checked', 'expanded', 'pres
 // The roles that carry a sort state.
 const HEADER_ROLES: ReadonlySet<string> = new Set(['columnheader', 'rowheader']);
 const SORT_TOKENS: ReadonlySet<string> = new Set(['ascending', 'descending', 'other', 'none']);
+// The roles of controls that hold a value without being editable: a range, or a choice among
+// options. The browser puts that value into a name built from contents, and an option's name is
+// the text a person may have chosen.
+const VALUE_ROLES: ReadonlySet<string> = new Set(['combobox', 'listbox', 'slider', 'spinbutton', 'progressbar', 'meter', 'scrollbar']);
 
 function getProp(value: unknown, key: string): unknown {
   if (value === null || typeof value !== 'object') {
@@ -46,22 +50,65 @@ function hasProperty(raw: unknown, name: string): boolean {
   return properties(raw).some((property) => getProp(property, 'name') === name);
 }
 
+function roleOf(raw: unknown): string | null {
+  return readString(getProp(getProp(raw, 'role'), 'value'));
+}
+
+function isValueControl(raw: unknown): boolean {
+  const role = roleOf(raw);
+  return role !== null && VALUE_ROLES.has(role);
+}
+
 // A busy value is true, or 1 as Chromium reports it for aria-busy="true".
 function isTrue(value: unknown): boolean {
   return value === true || value === 1 || value === 'true';
 }
 
-// Whether a name may hold the value of a field the node holds. The browser lists where a name
-// comes from, and the first source with a value that is not superseded is the one it used. A name
-// built from the node's contents includes the field's value. A name that does not say where it
-// comes from may too. An author-given name, such as aria-label, does not.
+// Whether a name may hold the value of a field or a control the node holds. The browser lists
+// where a name comes from, and the first source with a value that is not superseded is the one it
+// used. A name built from the node's contents includes that value. A name that does not say where
+// it comes from may too. An author-given name, such as aria-label, does not.
 function nameMayHoldValue(rawName: unknown): boolean {
   const sources = getProp(rawName, 'sources');
   if (!Array.isArray(sources)) {
     return true;
   }
-  const used = sources.find((source) => getProp(source, 'value') !== undefined && getProp(source, 'superseded') !== true);
+  const used = usedSource(sources);
   return used === undefined || getProp(used, 'type') === 'contents';
+}
+
+function usedSource(sources: unknown[]): unknown {
+  return sources.find((source) => getProp(source, 'value') !== undefined && getProp(source, 'superseded') !== true);
+}
+
+// The DOM nodes a name built from other elements, through aria-labelledby or a label element,
+// was built from. Empty for any other name.
+function relatedNodeIds(rawName: unknown): number[] {
+  const sources = getProp(rawName, 'sources');
+  const used = Array.isArray(sources) ? usedSource(sources) : undefined;
+  if (used === undefined || getProp(used, 'type') !== 'relatedElement') {
+    return [];
+  }
+  const ids: number[] = [];
+  for (const holder of [getProp(used, 'attributeValue'), getProp(used, 'nativeSourceValue')]) {
+    const related = getProp(holder, 'relatedNodes');
+    if (!Array.isArray(related)) {
+      continue;
+    }
+    for (const entry of related) {
+      const id = readNumber(getProp(entry, 'backendDOMNodeId'));
+      if (id !== null) {
+        ids.push(id);
+      }
+    }
+  }
+  return ids;
+}
+
+export interface AxTreeOptions {
+  // Keep every node and every name as the browser gives them, with no field rule and no value mark.
+  // For the design checks, which only count names and never show them.
+  browserNames?: boolean;
 }
 
 /**
@@ -73,8 +120,21 @@ function nameMayHoldValue(rawName: unknown): boolean {
  * when the browser built its name from its contents or does not say where the name comes from,
  * because that name can hold the field's value. An ignored node is kept without a name, so the
  * parent chain stays whole.
+ *
+ * A control with a value that is not editable, such as a slider, a spin button, a progress bar, a
+ * select, or a list box, keeps every name the browser gives, because the silent change rule compares
+ * them. A name that may show its value is marked instead, and evidence never shows a marked name:
+ * a name built from contents that hold such a control, the control's own name when it is built from
+ * its contents, the name of a node inside it built from contents, the name of an option inside
+ * it, whatever its source, a name built through aria-labelledby or a label element from such a
+ * control, from a node inside one, or from a node that holds one, and a name built from contents
+ * that hold a node with such a name.
+ *
+ * With `browserNames`, every node with a DOM node is kept, the content of a field included, and
+ * every name is the browser's own, so a second element with a design's name is always counted.
  */
-export function axTreeFromCdp(result: unknown): { documentNodeId: number | null; nodes: AxTreeNode[] } {
+export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { documentNodeId: number | null; nodes: AxTreeNode[] } {
+  const browserNames = options.browserNames === true;
   const rawNodes = getProp(result, 'nodes');
   if (!Array.isArray(rawNodes)) {
     return { documentNodeId: null, nodes: [] };
@@ -90,22 +150,53 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     const parentAxId = readString(getProp(raw, 'parentId'));
     return parentAxId === null ? undefined : byAxId.get(parentAxId);
   };
-
-  // Every node that holds an editable field and is not editable itself. A field is the parent of
-  // its own inner editor, and the field keeps its own name.
-  const holdsField = new Set<unknown>();
-  for (const raw of rawNodes) {
-    if (!hasProperty(raw, 'editable')) {
-      continue;
+  // Every ancestor of a node that matches, that is not editable itself. A field is the parent of its
+  // own inner editor, and the field keeps its own name.
+  const holding = (matches: (raw: unknown) => boolean): Set<unknown> => {
+    const holders = new Set<unknown>();
+    for (const raw of rawNodes) {
+      if (!matches(raw)) {
+        continue;
+      }
+      const seen = new Set<unknown>();
+      for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
+        seen.add(ancestor);
+        if (!hasProperty(ancestor, 'editable')) {
+          holders.add(ancestor);
+        }
+      }
     }
+    return holders;
+  };
+  const holdsField = browserNames ? new Set<unknown>() : holding((raw) => hasProperty(raw, 'editable'));
+  const holdsValueControl = browserNames ? new Set<unknown>() : holding(isValueControl);
+  const byDomId = new Map<number, unknown>();
+  for (const raw of rawNodes) {
+    const domId = readNumber(getProp(raw, 'backendDOMNodeId'));
+    if (domId !== null && !byDomId.has(domId)) {
+      byDomId.set(domId, raw);
+    }
+  }
+  const hasValueControlAncestor = (raw: unknown): boolean => {
     const seen = new Set<unknown>();
     for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
       seen.add(ancestor);
-      if (!hasProperty(ancestor, 'editable')) {
-        holdsField.add(ancestor);
+      if (isValueControl(ancestor)) {
+        return true;
       }
     }
-  }
+    return false;
+  };
+  // A name built from other elements takes their values too: a select gives its chosen option, a
+  // slider its value. So it may show a value when one of them is a value control, is inside one, or
+  // holds one.
+  const builtFromValue = (rawName: unknown): boolean =>
+    relatedNodeIds(rawName).some((id) => {
+      const related = byDomId.get(id);
+      return related !== undefined && (isValueControl(related) || holdsValueControl.has(related) || hasValueControlAncestor(related));
+    });
+  // A name built from contents that hold such a name takes the value with it.
+  const holdsNameFromValue = browserNames ? new Set<unknown>() : holding((raw) => builtFromValue(getProp(raw, 'name')));
 
   let documentNodeId: number | null = null;
   const nodes: AxTreeNode[] = [];
@@ -118,12 +209,16 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     // inside a field, and its text is the field's value.
     let parentId: number | null = null;
     let insideField = false;
+    let insideValueControl = false;
     const seen = new Set<unknown>();
     for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
       seen.add(ancestor);
-      if (hasProperty(ancestor, 'editable')) {
+      if (!browserNames && hasProperty(ancestor, 'editable')) {
         insideField = true;
         break;
+      }
+      if (isValueControl(ancestor)) {
+        insideValueControl = true;
       }
       if (parentId === null) {
         parentId = readNumber(getProp(ancestor, 'backendDOMNodeId'));
@@ -132,8 +227,17 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     if (insideField) {
       continue;
     }
-    const role = readString(getProp(getProp(raw, 'role'), 'value'));
+    const role = roleOf(raw);
     const ignored = getProp(raw, 'ignored') === true;
+    const rawName = getProp(raw, 'name');
+    const name = ignored || (holdsField.has(raw) && nameMayHoldValue(rawName)) ? null : readString(getProp(rawName, 'value'));
+    const fromContents = nameMayHoldValue(rawName);
+    const mayShowValue =
+      !browserNames &&
+      name !== null &&
+      (((holdsValueControl.has(raw) || holdsNameFromValue.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) ||
+        (insideValueControl && role === 'option') ||
+        builtFromValue(rawName));
     if (role === 'RootWebArea' && documentNodeId === null) {
       documentNodeId = nodeId;
     }
@@ -171,11 +275,12 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
       nodeId,
       parentId,
       role,
-      name: ignored || (holdsField.has(raw) && nameMayHoldValue(getProp(raw, 'name'))) ? null : readString(getProp(getProp(raw, 'name'), 'value')),
+      name,
       ignored,
       states: ignored ? {} : states,
       busy: !ignored && busy,
       controls: ignored ? [] : controls,
+      ...(mayShowValue ? { nameMayShowValue: true as const } : {}),
     });
   }
   return { documentNodeId, nodes };
@@ -267,8 +372,10 @@ export const DESIGN_AX_TREE_NODE_LIMIT = 20000;
 /**
  * One read of the whole tree for the design checks. A design check decides a gate input, so no
  * clock may decide it: there is no timer and no time budget, only a node count. It reads no sort
- * state, which no design check uses, so it makes exactly one browser call. The nodes it keeps are
- * the ones the silent change rule keeps, from the same conversion.
+ * state, which no design check uses, so it makes exactly one browser call. It keeps every node and
+ * every name as the browser gives them: the design checks count elements by role and name, and a
+ * name left out would let a second element with the design's name drop out of the count. No name
+ * from this read reaches a draft.
  */
 export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead> {
   const result = await send('Accessibility.getFullAXTree');
@@ -281,5 +388,5 @@ export async function readDesignAxTree(send: CdpSend): Promise<DesignAxTreeRead>
   if (rawNodes.length > DESIGN_AX_TREE_NODE_LIMIT) {
     return { kind: 'over-limit', limit: DESIGN_AX_TREE_NODE_LIMIT };
   }
-  return { kind: 'tree', nodes: axTreeFromCdp(result).nodes };
+  return { kind: 'tree', nodes: axTreeFromCdp(result, { browserNames: true }).nodes };
 }

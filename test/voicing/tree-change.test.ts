@@ -38,6 +38,20 @@ describe('compareAxTrees', () => {
     expect(compareAxTrees(base(), after, 3)).toEqual({ ...NONE, added: { StaticText: 1 }, addedNames: ['Saved'] });
   });
 
+  it('counts a node whose name may show a value, and never names it', () => {
+    // A row named from a cell that holds a slider at 417, the slider named Age, and an option.
+    const after = [
+      ...base(),
+      node(6, 2, 'row', '417', { nameMayShowValue: true }),
+      node(7, 6, 'slider', 'Age'),
+      node(8, 2, 'option', 'alice@example.com', { nameMayShowValue: true }),
+    ];
+    expect(compareAxTrees(base(), after, 3)).toEqual({ ...NONE, added: { option: 1, row: 1, slider: 1 }, addedNames: ['Age'] });
+    // The comparison still reads the name: a change of it is a change.
+    const renamed = after.map((entry) => (entry.nodeId === 8 ? { ...entry, name: 'bob@example.com' } : entry));
+    expect(compareAxTrees(after, renamed, 3)).toEqual({ ...NONE, changed: { option: 1 } });
+  });
+
   it('counts a node removed by role and never names it', () => {
     const before = [...base(), node(10, 2, 'row', 'alice@example.com'), node(11, 10, 'cell', 'alice@example.com')];
     const change = compareAxTrees(before, base(), 3);

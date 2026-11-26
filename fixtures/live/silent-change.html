@@ -41,6 +41,20 @@
       //                  the browser's own query matches only the document button.
       //   field-row      Add row adds a row whose only cell holds a field with an email address as
       //                  its value. Nothing announces it.
+      //   slider-row, select-row, listbox-row, spin-row, combobox-row, progress-row
+      //                  Add row adds a row whose only cell holds a control with a value: a range
+      //                  input at 417, a select showing an email address, a multiple select with an
+      //                  email address chosen, a spin button at 417, a combobox that shows an email
+      //                  address as text, or a progress bar at 417. Nothing announces it.
+      //   labelledby-select-row, labelledby-slider-row
+      //                  Add row adds a row with an Edit button whose aria-labelledby points at a
+      //                  select showing an email address, or at a range input at 417.
+      //   progress-button  Refresh holds an empty progress bar. The click removes the bar and adds a
+      //                  list item. Nothing announces it.
+      //   progress-redraw  Refresh holds an empty progress bar. The click draws the button again with
+      //                  the same name and no bar, focuses the new one, and adds a list item.
+      //   listbox-text   Next page rewrites, in place, the text of the two options in a results list
+      //                  box. The text is an email address. Nothing announces it.
       //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
       //                  the dialog in a later step.
       //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
@@ -193,6 +207,43 @@
         draw('<button type="button" id="add">Add row</button><table><thead><tr><th>Email</th></tr></thead><tbody id="rows"></tbody></table>');
         on('add', () => {
           document.getElementById('rows').insertAdjacentHTML('beforeend', '<tr><td><input aria-label="Email" value="alice@example.com" /></td></tr>');
+        });
+      } else if (which.endsWith('-row') && which !== 'field-row') {
+        const controls = {
+          'slider-row': '<input type="range" aria-label="Age" min="0" max="999" value="417" />',
+          'select-row': '<select aria-label="Owner"><option>alice@example.com</option><option>bob@example.com</option></select>',
+          'listbox-row': '<select aria-label="Owners" multiple><option selected>alice@example.com</option><option>bob@example.com</option></select>',
+          'spin-row': '<div role="spinbutton" tabindex="0" aria-label="Count" aria-valuemin="0" aria-valuemax="999" aria-valuenow="417"></div>',
+          'combobox-row': '<div role="combobox" tabindex="0" aria-label="Team" aria-expanded="false">alice@example.com</div>',
+          'progress-row': '<progress aria-label="Upload" max="999" value="417"></progress>',
+          'labelledby-select-row':
+            '<span id="l1">Owner</span><select id="s1"><option>alice@example.com</option></select><button type="button" aria-labelledby="l1 s1">Edit</button>',
+          'labelledby-slider-row':
+            '<input type="range" id="r1" aria-label="Age" min="0" max="999" value="417" /><button type="button" aria-labelledby="r1">Edit</button>',
+        };
+        draw('<button type="button" id="add">Add row</button><table><thead><tr><th>Value</th></tr></thead><tbody id="rows"></tbody></table>');
+        on('add', () => {
+          document.getElementById('rows').insertAdjacentHTML('beforeend', `<tr><td>${controls[which] ?? ''}</td></tr>`);
+        });
+      } else if (which === 'progress-button' || which === 'progress-redraw') {
+        draw('<div id="bar"><button type="button" id="go">Refresh<progress></progress></button></div><ul id="list"><li>one</li></ul>');
+        on('go', () => {
+          if (which === 'progress-button') {
+            document.querySelector('#go progress').remove();
+          } else {
+            document.getElementById('bar').innerHTML = '<button type="button" id="go2">Refresh</button>';
+            document.getElementById('go2').focus();
+          }
+          document.getElementById('list').insertAdjacentHTML('beforeend', '<li>two</li>');
+        });
+      } else if (which === 'listbox-text') {
+        draw(
+          '<div role="listbox" aria-label="Results"><div role="option" id="o1">alice@example.com</div><div role="option" id="o2">bob@example.com</div></div>' +
+            '<button type="button" id="go">Next page</button>',
+        );
+        on('go', () => {
+          document.getElementById('o1').firstChild.data = 'carol@example.com';
+          document.getElementById('o2').firstChild.data = 'dave@example.com';
         });
       } else if (which === 'dialog-heard') {
         draw(

@@ -8,7 +8,8 @@ import type { AxTreeNode } from '../contracts/index.js';
 
 /**
  * Counts by role, and the names of added nodes. A count map's keys are sorted, so two equal
- * changes are equal values. addedNames holds each non-empty name once, sorted.
+ * changes are equal values. addedNames holds each non-empty name once, sorted, and never a name
+ * the tree read marks as one that may show a control's value.
  */
 export interface TreeChange {
   added: Record<string, number>;
@@ -135,7 +136,8 @@ export function compareAxTrees(beforeNodes: readonly AxTreeNode[], afterNodes: r
     if (old === undefined) {
       if (ownInAfter(now.nodeId)) continue;
       bump(added, now.role);
-      const name = now.name?.trim() ?? '';
+      // A name that may show a control's value counts as a change but is never shown.
+      const name = now.nameMayShowValue === true ? '' : (now.name?.trim() ?? '');
       if (name.length > 0) addedNames.add(name);
       continue;
     }

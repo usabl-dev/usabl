@@ -155,6 +155,126 @@ describe('axTreeFromCdp', () => {
     });
   });
 
+  describe('a control whose value is user data', () => {
+    // Shaped as Chromium gives them. A cell built from its contents takes the value of a slider,
+    // a spin button, a progress bar, or the option a select shows. An option's name is its text.
+    const contents = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label' }, { type: 'contents', value: { value } }] });
+    const labelled = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label', value: { value } }, { type: 'contents', superseded: true, value: { value: 'x' } }] });
+    const node = (nodeId: number, parentId: number, role: string, name: unknown, properties: unknown[] = []): unknown => ({
+      nodeId: String(nodeId),
+      backendDOMNodeId: nodeId,
+      ignored: false,
+      role: { value: role },
+      name,
+      parentId: String(parentId),
+      childIds: [],
+      properties,
+    });
+    const VALUES = {
+      nodes: [
+        { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Rows' }, childIds: [] },
+        // A slider.
+        node(50, 1, 'row', contents('417')),
+        node(51, 50, 'cell', contents('417')),
+        node(52, 51, 'slider', labelled('Age'), [prop('valuetext', '417', 'string')]),
+        // A select: the combobox, its popup, and its options.
+        node(60, 1, 'cell', contents('alice@example.com')),
+        node(61, 60, 'combobox', labelled('Owner'), [prop('expanded', false)]),
+        node(62, 61, 'MenuListPopup', { value: '' }),
+        node(63, 62, 'option', contents('alice@example.com'), [prop('selected', true)]),
+        // A list box, an option with an author-given name, and a checkbox inside it.
+        node(70, 1, 'cell', contents('bob@example.com')),
+        node(71, 70, 'listbox', labelled('Owners')),
+        node(72, 71, 'option', labelled('carol@example.com'), [prop('selected', true)]),
+        node(73, 72, 'StaticText', contents('carol@example.com')),
+        node(74, 71, 'checkbox', labelled('Pick all')),
+        // A combobox that shows its value as text, and a combobox named from its contents.
+        node(80, 1, 'combobox', labelled('Team'), [prop('expanded', false)]),
+        node(81, 80, 'StaticText', contents('dave@example.com')),
+        node(82, 1, 'combobox', contents('erin@example.com')),
+        // A spin button and a progress bar that are not editable.
+        node(90, 1, 'cell', contents('417')),
+        node(91, 90, 'spinbutton', labelled('Count')),
+        node(92, 1, 'cell', contents('417')),
+        node(93, 92, 'progressbar', labelled('Upload')),
+        // A button away from any control keeps a name from its contents.
+        node(99, 1, 'button', contents('Save')),
+      ],
+    };
+    const read = axTreeFromCdp(VALUES);
+    const nameOf = (nodeId: number): string | null | undefined => read.nodes.find((entry) => entry.nodeId === nodeId)?.name;
+
+    const shownOf = (nodeId: number): boolean | undefined => read.nodes.find((entry) => entry.nodeId === nodeId)?.nameMayShowValue;
+    const MAY_SHOW = [50, 51, 60, 63, 70, 72, 73, 81, 82, 90, 92];
+
+    it('keeps the browser name for the comparison, and marks each name that may show the value', () => {
+      const raw = new Map(VALUES.nodes.map((entry) => [Number((entry as { nodeId: string }).nodeId), entry]));
+      for (const nodeId of MAY_SHOW) {
+        expect({ nodeId, name: nameOf(nodeId), shown: shownOf(nodeId) }).toEqual({
+          nodeId,
+          name: (raw.get(nodeId) as { name: { value: string } }).name.value,
+          shown: true,
+        });
+      }
+    });
+
+    it('marks a name built through aria-labelledby from a value control, an option inside one, or a node that holds one', () => {
+      const labelledBy = (value: string, ...ids: number[]): unknown => ({
+        value,
+        sources: [
+          {
+            type: 'relatedElement',
+            attribute: 'aria-labelledby',
+            value: { value },
+            attributeValue: { type: 'idrefList', relatedNodes: ids.map((id) => ({ backendDOMNodeId: id })) },
+          },
+          { type: 'contents', superseded: true, value: { value: 'Edit' } },
+        ],
+      });
+      const LABELLED = {
+        nodes: [
+          ...VALUES.nodes,
+          node(110, 1, 'StaticText', labelled('Owner')),
+          node(111, 1, 'button', labelledBy('Owner alice@example.com', 110, 61)),
+          node(112, 1, 'button', labelledBy('417', 52)),
+          node(113, 1, 'button', labelledBy('carol@example.com', 72)),
+          node(114, 1, 'button', labelledBy('alice@example.com', 60)),
+          // A name from a node that holds no value control is not marked.
+          node(115, 1, 'button', labelledBy('Owner', 110)),
+          // A row named from its contents, which hold a button labelled by the select above.
+          node(116, 1, 'row', contents('Owner alice@example.com')),
+          node(117, 116, 'button', labelledBy('Owner alice@example.com', 110, 61)),
+        ],
+      };
+      const labelledRead = axTreeFromCdp(LABELLED);
+      const marked = (nodeId: number) => labelledRead.nodes.find((entry) => entry.nodeId === nodeId)?.nameMayShowValue;
+      expect([111, 112, 113, 114, 115, 116, 117].map((nodeId) => [nodeId, marked(nodeId)])).toEqual([
+        [111, true],
+        [112, true],
+        [113, true],
+        [114, true],
+        [115, undefined],
+        [116, true],
+        [117, true],
+      ]);
+      expect(labelledRead.nodes.find((entry) => entry.nodeId === 111)?.name).toBe('Owner alice@example.com');
+    });
+
+    it('keeps each control, its own name, and the nodes under it with their states', () => {
+      for (const nodeId of [52, 61, 71, 74, 80, 91, 93, 99]) expect({ nodeId, shown: shownOf(nodeId) }).toEqual({ nodeId, shown: undefined });
+      expect(nameOf(52)).toBe('Age');
+      expect(nameOf(61)).toBe('Owner');
+      expect(nameOf(71)).toBe('Owners');
+      expect(nameOf(74)).toBe('Pick all');
+      expect(nameOf(80)).toBe('Team');
+      expect(nameOf(91)).toBe('Count');
+      expect(nameOf(93)).toBe('Upload');
+      expect(nameOf(99)).toBe('Save');
+      expect(read.nodes.find((entry) => entry.nodeId === 63)).toMatchObject({ role: 'option', parentId: 62, states: { selected: 'true' } });
+      expect(read.nodes.find((entry) => entry.nodeId === 72)).toMatchObject({ role: 'option', parentId: 71, states: { selected: 'true' } });
+    });
+  });
+
   it('reads nothing from a response that is not a tree', () => {
     expect(axTreeFromCdp(null)).toEqual({ documentNodeId: null, nodes: [] });
     expect(axTreeFromCdp({ nodes: 'x' })).toEqual({ documentNodeId: null, nodes: [] });
@@ -263,14 +383,41 @@ describe('readDesignAxTree', () => {
     vi.restoreAllMocks();
   });
 
-  it('makes one tree call and no header reads, and keeps the nodes the silent change rule keeps', async () => {
+  it('makes one tree call and no header reads, and keeps the nodes and names the browser gives', async () => {
     const calls: string[] = [];
     const read = await readDesignAxTree(async (method) => {
       calls.push(method);
       return RAW;
     });
     expect(calls).toEqual(['Accessibility.getFullAXTree']);
-    expect(read).toEqual({ kind: 'tree', nodes: axTreeFromCdp(RAW).nodes });
+    expect(read).toEqual({ kind: 'tree', nodes: axTreeFromCdp(RAW, { browserNames: true }).nodes });
+    // The design checks only count these nodes and never show their names, so the nodes inside a
+    // field are kept, where the silent change read leaves them out.
+    if (read.kind !== 'tree') throw new Error('not a tree');
+    expect(read.nodes.map((node) => node.nodeId)).toEqual([1, 2, 3, 4, 6, 7, 8, 9]);
+    expect(read.nodes.find((node) => node.nodeId === 8)).toMatchObject({ parentId: 7, name: 'alice@example.com' });
+  });
+
+  it('keeps a name the silent change read marks or leaves out, so a second element with the name is counted', async () => {
+    // A button named from its contents, which hold an empty field or an empty progress bar. The
+    // browser name is the design's name.
+    const SECOND = {
+      nodes: [
+        { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: '' }, childIds: ['2', '4'] },
+        { nodeId: '2', backendDOMNodeId: 2, ignored: false, role: { value: 'button' }, name: { value: 'Refresh', sources: [{ type: 'contents', value: { value: 'Refresh' } }] }, parentId: '1', childIds: ['3'] },
+        { nodeId: '3', backendDOMNodeId: 3, ignored: false, role: { value: 'textbox' }, name: { value: 'n' }, parentId: '2', childIds: [], properties: [prop('editable', 'richtext', 'token')] },
+        { nodeId: '4', backendDOMNodeId: 4, ignored: false, role: { value: 'button' }, name: { value: 'Refresh', sources: [{ type: 'contents', value: { value: 'Refresh' } }] }, parentId: '1', childIds: ['5'] },
+        { nodeId: '5', backendDOMNodeId: 5, ignored: false, role: { value: 'progressbar' }, name: { value: '' }, parentId: '4', childIds: [] },
+      ],
+    };
+    const design = await readDesignAxTree(async () => SECOND);
+    if (design.kind !== 'tree') throw new Error('not a tree');
+    expect(design.nodes.filter((node) => node.name === 'Refresh').map((node) => node.nodeId)).toEqual([2, 4]);
+    expect(design.nodes.some((node) => node.nameMayShowValue !== undefined)).toBe(false);
+    const full = await readFullAxTree(async () => SECOND);
+    if (full.kind !== 'tree') throw new Error('not a tree');
+    expect(full.nodes.find((node) => node.nodeId === 2)?.name).toBeNull();
+    expect(full.nodes.find((node) => node.nodeId === 4)).toMatchObject({ name: 'Refresh', nameMayShowValue: true });
   });
 
   it('gives the same result on a slow machine and a fast one, because no clock takes part', async () => {
