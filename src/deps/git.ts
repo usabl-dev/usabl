@@ -580,5 +580,9 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     async headRef() {
       return (await runGit(cwd, ['rev-parse', 'HEAD'])).trim();
     },
+    async checkoutState() {
+      // Read from the same repository and pattern file the working tree walk uses: see worktree.ts.
+      return worktree.checkoutState();
+    },
   };
 }

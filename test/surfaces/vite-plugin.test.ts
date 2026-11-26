@@ -1665,6 +1665,7 @@ function makeDeps(): Deps {
       listEntries: async () => new Map(),
       statusZ: async () => [],
       diffNameOnly: async () => [],
+      checkoutState: async () => ({}),
       lsTree: async () => ({}),
       lsFiles: async () => [],
       lsFilesUnder: async () => [],

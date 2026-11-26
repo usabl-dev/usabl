@@ -1138,6 +1138,74 @@ function folderIsEmpty(folder: string): boolean {
   }
 }
 
+// What the sparse pattern file is, as the walk reads it: missing, a regular file by the sha256 of
+// its bytes (an empty file included), a link by its text, or another kind. The walk takes an answer
+// from the patterns only when the file is regular and holds a pattern line.
+function patternFileState(path: string): string[] {
+  const found = kindOf(Buffer.from(path));
+  try {
+    if (found.kind === 'file') return ['file', createHash('sha256').update(readFileSync(path)).digest('hex')];
+    if (found.kind === 'link') return ['link', readLinkBytes(Buffer.from(path)).toString('hex')];
+  } catch {
+    return ['unreadable'];
+  }
+  return [found.kind];
+}
+
+/** The checkout state of one repository and the submodules below it, gathered for checkoutState. */
+interface CheckoutState {
+  sparse: Array<[string, boolean, string, string[]]>;
+  emptySubmodules: string[];
+}
+
+/**
+ * The sparse checkout state of a repository, and its submodule folders: an empty one is recorded,
+ * and one that holds a repository is read the same way, as the walk reads it. A submodule is any
+ * gitlink entry of HEAD or of the index.
+ */
+async function gatherCheckoutState(repo: Repository, prefix: string, state: CheckoutState, depth: number): Promise<void> {
+  const cone = (await runGit(repo.top, ['config', '--bool', '--get', 'core.sparseCheckoutCone'])).stdout.toString('utf8').trim();
+  const patterns = patternFileState(repo.sparsePatterns);
+  if (repo.sparse || cone.length > 0 || patterns[0] !== 'missing') {
+    state.sparse.push([prefix, repo.sparse, cone, patterns]);
+  }
+  const gitlinks = new Map<string, Buffer>();
+  try {
+    for (const entry of await readBaseTree(repo, 'HEAD')) {
+      if (entry.mode === SUBMODULE_MODE) gitlinks.set(entry.raw.toString('latin1'), entry.raw);
+    }
+  } catch (err) {
+    // A repository with no commits yet has gitlinks in its index only.
+    if (!(err instanceof NoHeadError)) throw err;
+  }
+  for (const record of splitNul(await mustGit(repo.top, [...LISTING_SETTINGS, 'ls-files', '-s', '-z'], 'ls-files'))) {
+    const tab = record.indexOf(TAB);
+    if (tab < 0 || !record.subarray(0, tab).toString('latin1').startsWith(`${SUBMODULE_MODE} `)) continue;
+    const raw = Buffer.from(record.subarray(tab + 1));
+    gitlinks.set(raw.toString('latin1'), raw);
+  }
+  for (const raw of [...gitlinks.values()].sort(Buffer.compare)) {
+    const folder = Buffer.concat([repo.topBytes, raw]).toString('utf8');
+    const name = `${prefix}${raw.toString('utf8')}`;
+    if (kindOf(Buffer.from(folder)).kind !== 'folder') continue;
+    const shown = await runGit(folder, ['rev-parse', '--show-toplevel']);
+    const holdsRepository = shown.code === 0 && realOrNull(shown.stdout.toString('utf8').replace(/\n$/u, '')) === realOrNull(folder);
+    if (!holdsRepository) {
+      if (folderIsEmpty(folder)) state.emptySubmodules.push(name);
+      continue;
+    }
+    if (depth >= MAX_DEPTH) {
+      throw new Error('Submodules are nested deeper than usabl reads, so usabl checked nothing.');
+    }
+    await gatherCheckoutState(await openRepository(folder), `${name}/`, state, depth + 1);
+  }
+}
+
+/** The name checkoutState gives the sparse checkout state: git's own pattern file. */
+export const SPARSE_STATE_NAME = '.git/info/sparse-checkout';
+/** The name checkoutState gives the empty submodule folders. */
+export const EMPTY_SUBMODULES_NAME = '.git/modules';
+
 /** A reader of the working tree with a hash cache of its own, for the life of the git reader. */
 export interface WorktreeReader {
   /** The tree id of the bytes on disk, hashed fresh on every call. */
@@ -1146,6 +1214,8 @@ export interface WorktreeReader {
   changes(): Promise<WorktreeChange[]>;
   /** The files that differ between the merge base of the ref and HEAD, and HEAD, sorted. */
   committed(ref: string): Promise<string[]>;
+  /** The sparse checkout state and the empty submodule folders, as GitReader.checkoutState. */
+  checkoutState(): Promise<Record<string, string>>;
 }
 
 // A tree id that never matches any earlier read, for a tree usabl cannot build from the bytes the
@@ -1341,6 +1411,14 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
       }
       const unique = [...new Set(names.map((name) => name.toString('utf8')))];
       return unique.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    },
+    async checkoutState() {
+      const state: CheckoutState = { sparse: [], emptySubmodules: [] };
+      await gatherCheckoutState(await openRepository(options.cwd), '', state, 0);
+      const result: Record<string, string> = {};
+      if (state.sparse.length > 0) result[SPARSE_STATE_NAME] = JSON.stringify(state.sparse);
+      if (state.emptySubmodules.length > 0) result[EMPTY_SUBMODULES_NAME] = JSON.stringify(state.emptySubmodules);
+      return result;
     },
   };
 }

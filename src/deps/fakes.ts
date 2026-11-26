@@ -24,6 +24,7 @@ export interface FakeDepsSpec {
   scannerVersions: ScannerVersions;
   changed: Array<{ code: string; path: string }>;
   diffNames?: string[];
+  checkoutState?: Record<string, string>; // git.checkoutState; none means the default state
   files: Record<string, string>; // working-tree contents by path
   headContents: Record<string, string>; // HEAD contents by path (for git.show)
   refContents?: Record<string, Record<string, string>>; // other refs by path
@@ -205,6 +206,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       },
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],
+      checkoutState: async () => ({ ...spec.checkoutState }),
       lsTree: async (_ref, paths) => {
         const blobs: Array<[string, string]> = [];
         for (const path of paths) {
