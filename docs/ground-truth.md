@@ -6207,7 +6207,12 @@ the browser gives it, with none of the silent change rule's field rule: a node i
 editable field is kept, and a node that holds a field keeps a name built from its contents. The
 design checks only count these names and test whether one is empty, and none of them reaches a
 draft, whose element is read with the document search. A name left out would let a second
-element with the design's name drop out of the count, so the check would read one match. It
+element with the design's name drop out of the count, so the check would read one match. An
+element inside an editable region counts as the browser exposes it: Chromium gives a heading
+inside a `contenteditable` region, or inside a `role="textbox"` region, its role, name, and level,
+so a design check can pass on it. Some screen readers treat an editable region as one field in
+browse mode, the `role="textbox"` case most of all, and may not stop at that heading. No design
+check proves screen reader navigation for any element, and this one does not either. It
 reads no sort state, which no design check uses. It is read once per page state: every design
 check on a screen shares one read. The focus order check, which presses Tab, and the target size
 check, which scrolls, each drop it when they end, so the next check reads the page again. The silent change rule keeps its own read, with its
