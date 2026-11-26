@@ -53,8 +53,16 @@ describe('the bound on syntax the filter does not read', () => {
       expect(fsGlobBoundProblem(pattern, 'darwin'), pattern).toBeNull();
     }
     expect(fsGlobBoundProblem('src/../x/*')).toBeNull();
-    expect(fsGlobBoundProblem('src/**/../x')).toBeNull();
     expect(fsGlobBoundProblem('src/a:b/*')).toBeNull();
+  });
+
+  // Node's walk of a `..` after a wildcard depends on which expansions it walks together, so no
+  // listing the adapter makes can be sure to hold every file Node lists.
+  it('names a pattern with a .. after a wildcard part, in any brace expansion', () => {
+    for (const pattern of ['{*a*,**/a,*}/{b,*a*/**,**/..}/*', 'src/{a,**/..}/*.tsx', 'src/**/../x', 'a/*/../f', 'a\\*\\..\\f', '{b,.a}/{*,**/..,*a*/b}/**']) {
+      expect(fsGlobBoundProblem(pattern), pattern).toMatch(/\.\. after a wildcard/u);
+    }
+    expect(fsGlobBoundProblem('a/../b/*')).toBeNull();
   });
 
   it('names braces it cannot count', () => {
@@ -128,6 +136,16 @@ describe('the listing', () => {
     // ß has no one-letter upper case, and σ and ς meet only in upper case, as in Node's test.
     expect(test?.('x/ßςxa')).toBe(true);
     expect(test?.('x/İσaa')).toBe(true);
+  });
+
+  // Node already matched a part listed as written. On a platform that ignores case, its fast test
+  // for a part of `?` then text compares the end of the name in lower case, which none of the
+  // filter's foldings reproduces, so the filter keeps Node's answer for that part.
+  it('keeps Node answer for a part listed as written on a platform that ignores case', () => {
+    const reading = nodeGlobReading('*a*b/??ß', { nocase: true });
+    const test = reading.kind === 'filtered' ? reading.listings[0]?.matches : undefined;
+    expect(test?.('zazb/aİẞ')).toBe(true);
+    expect(test?.('zzzz/aİẞ')).toBe(false);
   });
 
   it('hands other syntax to Node unchanged', () => {

@@ -35,8 +35,9 @@ import { wildcardNameMatcher } from '../primitives/match-glob.js';
  * `expansions` of them). A part that is `**` alone is not a run of `*`: Node walks it without a
  * regular expression. A pattern that names a path outside the folder it is listed from is past
  * the bound too, whatever its syntax: one that is empty or starts with `/`, which Node walks from
- * the root of the machine; one that climbs above the folder with `..`; and one whose first part is
- * a drive such as `C:`, which Node on Windows walks from the root of that drive. Each brace
+ * the root of the machine; one that climbs above the folder with `..`; and, on Windows, one whose
+ * first part is a drive such as `C:`, which Node walks from the root of that drive. So is a pattern
+ * with a `..` after a wildcard part, which Node walks in a way the adapter cannot match. Each brace
  * expansion is checked too.
  */
 export const FS_GLOB_BOUND = { length: 1024, starRunsPerPart: 1, expansions: 256 } as const;
@@ -67,6 +68,9 @@ export type FsGlobReading =
 export interface FsGlobReadOptions {
   // True on a platform where Node matches without regard to letter case (macOS and Windows).
   nocase: boolean;
+  // True on Windows, where Node walks a first name that ends with `:` from the root of a drive.
+  // Elsewhere such a name is a plain folder name.
+  windows?: boolean;
 }
 
 /** Whether Node's fs.glob matches without regard to letter case on this platform. */
@@ -120,12 +124,13 @@ function expandBracesAsNode(pattern: string): string[] | null | 'too-many' {
   return forms;
 }
 
-// Why a pattern names a path outside the folder it is listed from, or null when it does not.
-// Each reason is past the bound, whatever the syntax, since Node would walk outside the folder.
+// Why a pattern names a path outside the folder it is listed from, or a `..` the adapter cannot
+// list the way Node does, or null for neither. Each reason is past the bound, whatever the syntax.
 const OUTSIDE_REASONS = {
   root: 'it or one of its brace expansions is empty or starts with /, so it names no path in the repository and Node would walk it from the root of the machine',
   climb: 'it or one of its brace expansions climbs above the folder it is listed from with .., so it names a path outside the repository',
   drive: 'it or one of its brace expansions starts with a drive name such as C:, which Node on Windows walks from the root of that drive',
+  dots: 'it or one of its brace expansions has a .. after a wildcard part, which Node walks in a way that depends on the other expansions, so usabl could list fewer files than Node',
 } as const;
 
 // Any character Node may read as syntax in a part. A part without one is fixed text to Node.
@@ -254,7 +259,7 @@ function secondPhaseSets(sets: string[][]): string[][] {
 // can have at each part: `**` may be none, `.` stays, and `..` goes up one. Below zero, the path
 // is above the folder. On Windows a first fixed part that ends with `:` is a drive, and Node walks
 // it from the root of that drive.
-function outsideReason(set: readonly string[]): keyof typeof OUTSIDE_REASONS | null {
+function outsideReason(set: readonly string[], windows: boolean): keyof typeof OUTSIDE_REASONS | null {
   if (set.length === 0 || set[0] === '') return 'root';
   let depth = 0;
   for (const part of set) {
@@ -263,19 +268,34 @@ function outsideReason(set: readonly string[]): keyof typeof OUTSIDE_REASONS | n
     if (depth < 0) return 'climb';
   }
   const first = set.find((part) => part !== '.');
-  if (first !== undefined && first.endsWith(':') && !PART_SYNTAX.test(first)) return 'drive';
+  if (windows && first !== undefined && first.endsWith(':') && !PART_SYNTAX.test(first)) return 'drive';
   return null;
 }
 
-function outsideProblem(written: string, forms: readonly string[] | null | 'too-many'): string | null {
+// Whether a `..` part comes after a part with glob syntax, read as written, before Node's
+// rewrites. Node's walk of `**/..` writes to state it shares with the pattern's other expansions,
+// so which files it finds depends on what it walks together: a run found `x` for
+// `{*a*,**/a,*}/{b,*a*/**,**/..}/*` that no listing of single sets found. The guard reads such an
+// entry the same way.
+function dotsAfterWildcard(form: string): boolean {
+  let afterWildcard = false;
+  for (const part of form.split('/')) {
+    if (part === '..' && afterWildcard) return true;
+    if (part === '**' || PART_SYNTAX.test(part)) afterWildcard = true;
+  }
+  return false;
+}
+
+function outsideProblem(written: string, forms: readonly string[] | null | 'too-many', windows: boolean): string | null {
   const expanded = Array.isArray(forms) ? forms : [written];
   if (written === '' || written.startsWith('/') || expanded.some((form) => form === '' || form.startsWith('/'))) {
     return OUTSIDE_REASONS.root;
   }
   for (const set of firstPhaseSets(expanded)) {
-    const reason = outsideReason(set);
+    const reason = outsideReason(set, windows);
     if (reason !== null) return OUTSIDE_REASONS[reason];
   }
+  if (expanded.some(dotsAfterWildcard)) return OUTSIDE_REASONS.dots;
   return null;
 }
 
@@ -331,9 +351,14 @@ const FOLDINGS: ReadonlyArray<(text: string) => string> = [regexFold, (text) => 
 // a name that does (Node's dot rule). Without regard to case, a name matches when it matches after
 // any of three foldings: the one Node's regular expression uses, lower case, or upper case. That
 // is never narrower than Node's test.
-function namePart(part: string, nocase: boolean): NamePart {
+function namePart(part: string, nocase: boolean, listedAsWritten: boolean): NamePart {
   if (part === '**') return { kind: 'any-parts' };
   const dotGuard = !part.startsWith('.');
+  // Without regard to case, Node already tested a wildcard part it was given as written, with
+  // rules none of the foldings fully match: its fast test for `?` then text, such as `??ß`,
+  // compares the end of the name in lower case, so `aİẞ` passes. Its answer is kept, with only
+  // its dot rule.
+  if (nocase && listedAsWritten && hasWildcard(part)) return { kind: 'name', test: (name) => !(dotGuard && name.startsWith('.')) };
   if (!hasWildcard(part)) {
     if (!nocase) return { kind: 'name', test: (name) => name === part };
     const folded = FOLDINGS.map((fold) => fold(part));
@@ -477,15 +502,15 @@ function shareCalls(sets: readonly SetListing[]): SetListing[][] {
  * How the adapter reads one pattern. Node first reads every `\` as `/`, so this does too.
  *
  * A pattern that names a path outside the folder (from the root, above it with `..`, or at a
- * drive) is past the bound and not run. Otherwise the filter reads a pattern made of fixed text,
+ * drive on Windows), or that has a `..` after a wildcard part, is past the bound and not run. Otherwise the filter reads a pattern made of fixed text,
  * `*`, `**`, `?`, and brace groups Node expands the same way (see expandBracesAsNode). The adapter
  * makes the sets Node walks, with Node's two rewrites. When no part of any set has more than one
  * run of `*`, Node cannot backtrack, and it runs the written pattern itself. Otherwise each such
  * part is listed as `*`, every other part stays as written, so Node's walk keeps its shape, and a
  * listed path is kept when the set matches it. Without regard to case (macOS and Windows), the
- * test ignores case too, and fixed parts stay as written: a volume that ignores case finds `SRC`
- * through `src`. A set that still holds a `.` or `..` part Node walks, such as a `..` after `**`,
- * is not read by the filter, so that listing is kept whole.
+ * test ignores case too, fixed parts stay as written (a volume that ignores case finds `SRC`
+ * through `src`), and a wildcard part listed as written keeps the answer Node gave it. A set that
+ * ends with a `.` part is not read by the filter, so that listing is kept whole.
  *
  * Any other pattern is run by Node unchanged when it is inside FS_GLOB_BOUND, and not at all past
  * it. A pattern longer than Node's own limit is handed to Node, which refuses it.
@@ -494,7 +519,7 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
   if (pattern.length > NODE_MAX_PATTERN_LENGTH) return { kind: 'unchanged' };
   const written = pattern.replace(/\\/gu, '/');
   const forms = expandBracesAsNode(written);
-  const outside = outsideProblem(written, forms);
+  const outside = outsideProblem(written, forms, options.windows ?? false);
   if (outside !== null) return { kind: 'past-bound', reason: outside };
   if (!Array.isArray(forms) || CLASS_CHARACTER.test(written) || EXTGLOB_OPEN.test(written)) {
     const problem = boundProblem(written, forms);
@@ -511,16 +536,16 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
     if (rest.length === 0 || (rest.length === 1 && rest[0] === '')) continue;
     const listed = rest.map((part) => (needsWidening(part) ? widen(part) : part));
     const base = set.slice(0, lead).join('/');
-    // A `.` or `..` left after a wildcard, as in `src/**/../x`, or a `.` at the end, is walked by
-    // Node in ways the filter does not read. The wide listing is kept whole: every file it lists
-    // is one Node could list, which is never narrower than Node's answer.
+    // A `.` at the end is walked by Node in a way the filter does not read. The wide listing is
+    // kept whole. A `..` never gets here: one after a wildcard is past the bound, and Node folds
+    // away every other one inside the folder.
     if (rest.some((part) => part === '.' || part === '..')) {
       listings.push({ base, listed, test: null });
       continue;
     }
     // A trailing empty part names the folder or link the parts before it match.
     const matched = rest[rest.length - 1] === '' ? rest.slice(0, -1) : rest;
-    const compiled = matched.map((part) => namePart(part, options.nocase));
+    const compiled = matched.map((part) => namePart(part, options.nocase, !needsWidening(part)));
     const test = (path: string): boolean => partsMatch(compiled, path.split('/'));
     const unchanged = listed.every((part, index) => part === rest[index]);
     listings.push({ base, listed, test: unchanged ? null : test });
@@ -544,11 +569,11 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
  * pattern it did not run as one that matched nothing, such as the workspace packages, asks first.
  * A pattern longer than Node's own limit is named too, because Node refuses it.
  */
-export function fsGlobBoundProblem(pattern: string): string | null {
+export function fsGlobBoundProblem(pattern: string, platform: NodeJS.Platform = process.platform): string | null {
   if (pattern.length > NODE_MAX_PATTERN_LENGTH) {
     return `it is longer than ${String(NODE_MAX_PATTERN_LENGTH)} characters, which Node refuses`;
   }
-  const reading = nodeGlobReading(pattern, { nocase: false });
+  const reading = nodeGlobReading(pattern, { nocase: false, windows: platform === 'win32' });
   return reading.kind === 'past-bound' ? reading.reason : null;
 }
 

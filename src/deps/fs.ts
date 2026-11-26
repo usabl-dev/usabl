@@ -232,7 +232,7 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
       // and not at all past it.
       const seen = new Set<string>();
       for (const pattern of patterns) {
-        const reading = nodeGlobReading(pattern, { nocase });
+        const reading = nodeGlobReading(pattern, { nocase, windows: platform === 'win32' });
         if (reading.kind === 'past-bound') {
           continue;
         }

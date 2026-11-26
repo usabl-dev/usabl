@@ -173,13 +173,13 @@ function makePattern(next: () => number, tree: Tree): string {
  * - file-before-trailing-globstar: a pattern that ends with a slash and `**` names a file the
  *   part before them matches. Node lists that file only in some walks (when that part is fixed
  *   text it reaches with no `**` before it), and the adapter always lists it.
- * - dot-part-after-wildcard: a `..` that Node keeps after `**`, or a `.` at the end. The filter
- *   does not read how Node walks those, so the wide listing is kept whole.
+ * - dot-part-at-end: a `.` at the end. The filter does not read how Node walks it, so the wide
+ *   listing is kept whole. A `..` after a wildcard part is past the bound.
  * - skipped-by-node-cache: Node lists the path for one brace expansion walked alone, but not for
  *   the written pattern. Node keeps one cache for all the expansions of a pattern and skips an
  *   expansion that reaches a folder with a rest of the pattern already seen there.
  */
-const WIDER_CASES = ['through-link', 'file-before-trailing-globstar', 'dot-part-after-wildcard', 'skipped-by-node-cache'] as const;
+const WIDER_CASES = ['through-link', 'file-before-trailing-globstar', 'dot-part-at-end', 'skipped-by-node-cache'] as const;
 
 // The expansions of single-level brace groups, as Node makes them. A group right after `$`, or one
 // with no comma, is text.
@@ -197,7 +197,7 @@ async function widerCase(root: string, tree: Tree, pattern: string, path: string
     const above = names.slice(0, index + 1).join('/');
     if (tree.links.some((link) => link.path === above)) return 'through-link';
   }
-  if (/\*\*\/\.\.(?:\/|$)|\/\.$/u.test(pattern.replace(/\\/gu, '/'))) return 'dot-part-after-wildcard';
+  if (/\/\.$/u.test(pattern.replace(/\\/gu, '/'))) return 'dot-part-at-end';
   // Node reads a run of `/**` at the end as one.
   if (pattern.endsWith('/**') && (await nodeAnswer(root, pattern.replace(/(?:\/\*\*)+$/u, ''))).includes(path)) {
     return 'file-before-trailing-globstar';
@@ -217,7 +217,12 @@ function otherSyntax(pattern: string): boolean {
   for (const form of braceForms(pattern.replace(/\\/gu, '/'))) {
     if (form === '' || form.startsWith('/') || /^(?:\.\/)*[^/*?]*:(?:\/|$)/u.test(form)) return true;
     let depth = 0;
+    let afterWildcard = false;
     for (const part of form.split('/')) {
+      // A `..` after a wildcard part, which Node walks in a way that depends on the other
+      // expansions.
+      if (part === '..' && afterWildcard) return true;
+      if (/[*?]/u.test(part)) afterWildcard = true;
       if (part === '..') depth -= 1;
       else if (part !== '.' && part !== '**' && part !== '') depth += 1;
       if (depth < 0) return true;
@@ -259,6 +264,7 @@ const SAMPLE_PATTERNS = [
   'a,b', 'a/b/**', 'A/q', 'a/Q', '*/q', 'link/x', '*/x', 'l*/x', '**/x', '**', 'link/**', 'link', '*', './**/x',
   'link/*', '*/*', 'link/', '*/sub/y', '**/.h', '**/.*', '**/.*/**', '*/**', '**/*', '[a]b', '[!a]*', 'b[12]/z',
   'x/{a/**,**/a}/y', 'src/{pages/**,**/pages}/*.tsx', 'packages/{a/**,**/a}/package.json',
+  '{*a*,**/a,*}/{b,*a*/**,**/..}/*',
 ];
 
 describe('a fixed sample against Node fs.glob', () => {
@@ -276,6 +282,11 @@ describe('a fixed sample against Node fs.glob', () => {
   it('gives Node answer for every sample pattern, wider only through a link', async () => {
     const adapter = makeFsGlob({ cwd: root, platform: 'linux' });
     for (const pattern of SAMPLE_PATTERNS) {
+      // A pattern past the bound is not run; every caller reads it as a gap or refuses it.
+      if (fsGlobBoundProblem(pattern) !== null) {
+        expect(otherSyntax(pattern), pattern).toBe(true);
+        continue;
+      }
       const expected = await nodeAnswer(root, pattern);
       const actual = await adapter.glob([pattern]);
       const extra = actual.filter((path) => !expected.includes(path));

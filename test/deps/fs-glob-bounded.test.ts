@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { glob as nodeGlob } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { makeFsGlob } from '../../src/deps/fs.js';
+import { fsGlobBoundProblem } from '../../src/deps/fs-glob-reading.js';
 
 // The slow shape: `src/`, then `*a` twelve times, then `*b`. Node took seconds on one name of 30
 // letters. A run on a loaded machine stays far below this limit.
@@ -134,5 +135,19 @@ describe('a pattern whose walk would start outside the folder', { timeout: 30_00
     expect(await makeFsGlob({ cwd: join(root, 'in'), platform: 'win32' }).glob(['C:/**', 'C:\\**'])).toEqual([]);
     expect(ms).toBeLessThan(QUICK_MS);
     expect(await fs.glob(['a.ts', 'x/../a.ts'])).toEqual(['a.ts']);
+  });
+});
+
+// A `..` after a wildcard: Node lists `x` (as `bab/../x`) for the whole pattern, but no listing the
+// adapter could make holds it, so the pattern is past the bound and every caller reads it so.
+describe('a .. after a wildcard part', () => {
+  it('is past the bound and not run', async () => {
+    await mkdir(join(root, 'bab/x/aa'), { recursive: true });
+    await write('x');
+    const pattern = '{*a*,**/a,*}/{b,*a*/**,**/..}/*';
+    const found: string[] = [];
+    for await (const entry of nodeGlob(pattern, { cwd: root })) found.push(entry);
+    expect(found).toContain('x');
+    expect(fsGlobBoundProblem(pattern)).toMatch(/\.\. after a wildcard/u);
   });
 });
