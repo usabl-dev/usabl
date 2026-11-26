@@ -27,6 +27,17 @@ describe('a policy glob with a brace expansion from the machine root', () => {
     });
   }
 
+  // Node's walk would start above the repository or at the root of a drive.
+  for (const glob of ['../shared/**', '{..,src}/**', 'src/**/../../x/*.tsx', 'C:/**', 'c:']) {
+    it(`refuses ${glob}, whose walk starts outside the repository`, () => {
+      expect(() => parseUsablConfig(configWith({ uiFileGlobs: [glob] }))).toThrow(/uiFileGlobs pattern .* outside the repository/u);
+    });
+  }
+
+  it('accepts a .. that Node folds away inside the repository', () => {
+    expect(parseUsablConfig(configWith({ uiFileGlobs: ['src/../lib/**'] })).uiFileGlobs).toEqual(['src/../lib/**']);
+  });
+
   it('accepts a brace group whose every expansion starts inside the repository', () => {
     const globs = ['src/{,lib/}**/*.tsx', '{src,lib}/**', 'src/{a,b}/x{,}'];
     expect(parseUsablConfig(configWith({ uiFileGlobs: globs })).uiFileGlobs).toEqual(globs);

@@ -95,8 +95,35 @@ function expectBoundedGlobArray(value: unknown, label: string): string[] {
   checkGlobListBounds(globs, label);
   for (const glob of globs) {
     checkNoExpansionFromRoot(glob, label);
+    checkInsideRepository(glob, label);
   }
   return globs;
+}
+
+// The fewest names a path the parts can match has at each part: `**` may be none, `.` stays, and
+// `..` goes up one. Below zero, the path is above the repository root.
+function climbsOut(expansion: string): boolean {
+  let depth = 0;
+  for (const part of expansion.split('/')) {
+    if (part === '..') depth -= 1;
+    else if (part !== '.' && part !== '**' && part !== '') depth += 1;
+    if (depth < 0) return true;
+  }
+  return false;
+}
+
+// A pattern that climbs above the repository root with `..`, such as `../shared/**`, or whose
+// first part is a drive such as `C:`, names files outside the repository, and Node's glob would
+// walk outside it, up to the whole drive. The file system adapter never runs such a pattern.
+// Refuse it.
+function checkInsideRepository(glob: string, label: string): void {
+  const expansions = glob.includes('{') ? (expandBraces(glob) ?? [glob]) : [glob];
+  for (const expansion of expansions) {
+    const first = expansion.split('/').find((part) => part !== '.') ?? '';
+    if (climbsOut(expansion) || (first.endsWith(':') && !/[*?]/u.test(first))) {
+      throw configError`${label} pattern "${glob}" names a path outside the repository: it climbs above the repository root with .., or starts with a drive such as C:. Write it as a path inside the repository.`;
+    }
+  }
 }
 
 // A brace group can leave an expansion empty or starting with /, as `{,src}/**` gives `/**`. Node's
