@@ -48,10 +48,13 @@ describe('a pattern with many wildcards', { timeout: 120_000 }, () => {
 });
 
 describe('letter case', () => {
-  it('matches a wildcard part in other letter case only on a platform that ignores case', async () => {
-    await write('src/APP.TSX');
-    expect(await makeFsGlob({ cwd: root, platform: 'darwin' }).glob(['src/*.tsx'])).toEqual(['src/APP.TSX']);
-    expect(await makeFsGlob({ cwd: root, platform: 'linux' }).glob(['src/*.tsx'])).toEqual([]);
+  // A part with one run of `*` goes to Node as written, and Node on macOS or Windows folds case
+  // itself. A part with more than one run is listed as `*` and filtered, so the filter folds it.
+  it('matches a filtered part in other letter case only on a platform that ignores case', async () => {
+    await write('src/XAPP.TSX');
+    expect(await makeFsGlob({ cwd: root, platform: 'darwin' }).glob(['src/*app*.tsx'])).toEqual(['src/XAPP.TSX']);
+    expect(await makeFsGlob({ cwd: root, platform: 'win32' }).glob(['src/*app*.tsx'])).toEqual(['src/XAPP.TSX']);
+    expect(await makeFsGlob({ cwd: root, platform: 'linux' }).glob(['src/*app*.tsx'])).toEqual([]);
   });
 });
 
