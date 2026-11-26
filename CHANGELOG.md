@@ -458,25 +458,27 @@
   written pattern itself. Otherwise each such part is listed as `*` and usabl's own matcher keeps
   the paths the pattern matches, and every other part stays as written, so Node's walk keeps its
   shape. That pattern now takes about 50 milliseconds. On macOS and Windows fixed parts stay as
-  written too, and the filter folds letter case as Node does, so one guard expansion costs about
-  what it costs on Linux. Where the filter cannot give Node's exact answer it lists more: a file
-  reached through a link to a folder Node's walk does not follow, a file named by the part before
-  a trailing `/**`, a listing with a `..` Node keeps after `**`, and a file Node's walk cache
-  skips. A comparison with Node on generated trees found no file Node lists that the adapter does
+  written too, a wildcard part Node was given as written keeps Node's answer, and a part listed
+  as `*` is folded for letter case as Node does, so one guard expansion costs about what it costs
+  on Linux. Where the filter cannot give Node's exact answer it lists more: a file reached through
+  a link to a folder Node's walk does not follow, a file named by the part before a trailing
+  `/**`, a listing that ends with `.`, and a file Node's walk cache skips. A comparison with Node on generated trees found no file Node lists that the adapter does
   not. Other syntax, such as a character class or an extglob group, runs in Node only inside a
   bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and at
   most 256 brace expansions. A pattern that names a path outside the repository is past the bound
   too, itself or in a brace expansion: one that is empty or starts with `/` (the `workspaces`
   entry `{,zz}/**` becomes `/**/package.json`, which Node walked across the whole machine for
   more than 30 seconds), one that climbs above the repository with `..` (including `..\outside\*`
-  written with backslashes), and one that starts with a drive such as `C:`. Past the bound the
-  pattern is not run. A workspace package folder and the requirements folder are now listed with
+  written with backslashes), and, on Windows, one that starts with a drive such as `C:`. So is a
+  pattern with a `..` after a wildcard part, such as `src/{a,**/..}/*.tsx`: Node's walk of it
+  depends on which expansions it walks together, so usabl could list fewer files than Node. Past
+  the bound the pattern is not run. A workspace package folder and the requirements folder are now listed with
   the folder as the walk's start, so a name such as `pkg[1]` or `reqs[1]` is read as plain text.
   Before, Node read it as a pattern: `reqs[1]` loaded the requirement files of `reqs1`, and a
   package folder named `pkg[1]` listed no sources, so an undeclared import in it was missed. Gate
   effect: config load already refuses the other syntax in every policy glob list, and now also
   refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry that names a path outside the
-  repository. A `workspaces` pattern past the bound makes the workspace root unreadable, so every
+  repository or has a `..` after a wildcard part. A `workspaces` pattern past the bound makes the workspace root unreadable, so every
   changed file the workspace check tests is a `not-covered` gap that names the pattern. Known
   limits: the local guard still puts the requirements folder into its working-tree patterns as
   text, so a requirements folder named with a class, a brace group, or an extglob group names
