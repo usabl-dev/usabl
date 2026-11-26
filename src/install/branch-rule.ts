@@ -20,8 +20,7 @@
  * an Enterprise feature, takes the workflow out of the pull request's hands.
  */
 import { REQUIRED_GATE_JOB, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW_PATH } from './ci.js';
-import { isSafeBranchName, workflowTriggerBranch } from './repo-git.js';
-import { branchLinesText, DOCS_GATE_BRANCHED, GATE_BRANCHED, type BranchedWorkflow } from './workflow-branch.js';
+import { isSafeBranchName, workflowTrigger } from './repo-git.js';
 
 // The gate triggers on pull requests into the branch its workflow file names, so that is the
 // branch to protect. main is the branch usabl checks when no gate workflow names one, and it
@@ -35,11 +34,14 @@ export const REQUIRED_CHECK = REQUIRED_GATE_JOB;
 /**
  * The branch the check reads. source is gate when the gate workflow on disk names it, docs-gate when
  * there is no gate workflow and the docs gate workflow names it, and assumed when usabl checks main
- * because it could not read one. An assumed target carries the reason, whether a gate file is there
- * at all, and the step that would let usabl read the branch.
+ * because it could not read one. A target a gate names carries the line of that file that names the
+ * branch, counted from 1. When the app gate names it, docsGateBranch is the branch a docs gate names
+ * too, when there is one usabl can read. An assumed target carries the reason, whether a gate file is
+ * there at all, and the step that would let usabl read the branch.
  */
 export type BranchTarget =
-  | { name: string; source: 'gate' | 'docs-gate' }
+  | { name: string; source: 'gate'; line: number; docsGateBranch?: string }
+  | { name: string; source: 'docs-gate'; line: number }
   | { name: string; source: 'assumed'; reason: string; gatePresent: boolean; step: string };
 
 // The step when there is no gate workflow: install writes one for the default branch git names.
@@ -56,17 +58,19 @@ interface GateFile {
   source: 'gate' | 'docs-gate';
   path: string;
   command: string;
-  workflow: BranchedWorkflow;
   // The other usabl workflows that name the branch, for the step that says to change it.
   others: string;
 }
 const GATE_FILES: readonly GateFile[] = [
-  { source: 'gate', path: USABL_GATE_WORKFLOW_PATH, command: 'usabl install --ci', workflow: GATE_BRANCHED, others: 'the docs gate and history workflows if you have them' },
-  { source: 'docs-gate', path: USABL_DOCS_GATE_WORKFLOW_PATH, command: 'usabl install --docs-ci', workflow: DOCS_GATE_BRANCHED, others: 'the history workflow if you have it' },
+  { source: 'gate', path: USABL_GATE_WORKFLOW_PATH, command: 'usabl install --ci', others: 'the docs gate and history workflows if you have them' },
+  { source: 'docs-gate', path: USABL_DOCS_GATE_WORKFLOW_PATH, command: 'usabl install --docs-ci', others: 'the history workflow if you have it' },
 ];
 function gateFile(source: 'gate' | 'docs-gate'): GateFile {
   return GATE_FILES.find((file) => file.source === source) ?? GATE_FILES[0]!;
 }
+
+// A target a gate file names.
+type NamedTarget = Extract<BranchTarget, { source: 'gate' | 'docs-gate' }>;
 
 const ASSUMED_MAIN: BranchTarget = {
   name: PROTECTED_BRANCH,
@@ -116,8 +120,8 @@ export async function gateBranchTarget(readFile: (path: string) => Promise<strin
       };
     }
     if (raw === null) continue;
-    const name = workflowTriggerBranch(raw, 'pull_request');
-    if (name === null || !isPathSafeBranch(name)) {
+    const trigger = workflowTrigger(raw, 'pull_request');
+    if (trigger === null || !isPathSafeBranch(trigger.name)) {
       return {
         name: PROTECTED_BRANCH,
         source: 'assumed',
@@ -126,9 +130,26 @@ export async function gateBranchTarget(readFile: (path: string) => Promise<strin
         step: triggerFormStep(file.command),
       };
     }
-    return { name, source: file.source };
+    if (file.source === 'docs-gate') return { name: trigger.name, source: 'docs-gate', line: trigger.line };
+    const docsGateBranch = await readDocsGateBranch(readFile);
+    return { name: trigger.name, source: 'gate', line: trigger.line, ...(docsGateBranch === null ? {} : { docsGateBranch }) };
   }
   return { name: PROTECTED_BRANCH, source: 'assumed', reason: `${USABL_GATE_WORKFLOW_PATH} is missing`, gatePresent: false, step: INSTALL_CI_STEP };
+}
+
+// The branch the docs gate names, beside an app gate, or null when there is no docs gate, usabl
+// cannot read it, or its trigger is in another form. It only changes how a result words which pull
+// requests are not gated, never whether a result is verified.
+async function readDocsGateBranch(readFile: (path: string) => Promise<string | null>): Promise<string | null> {
+  let raw: string | null;
+  try {
+    raw = await readFile(USABL_DOCS_GATE_WORKFLOW_PATH);
+  } catch (error) {
+    if (unreadableReason(error) === null) throw error;
+    return null;
+  }
+  const trigger = workflowTrigger(raw, 'pull_request');
+  return trigger !== null && isPathSafeBranch(trigger.name) ? trigger.name : null;
 }
 
 // The read-only gh call. {owner}/{repo} are resolved by gh from the current repo context,
@@ -165,9 +186,15 @@ export interface BranchRuleResult {
   // says it, this is the next step alone. null when the gate names the branch and GitHub agrees or
   // cannot say. doctor shows it.
   branchNote: string | null;
-  // GitHub's default branch when it is another branch than the one checked, else null. A verified
-  // check then still leaves pull requests into the default branch without a gate.
+  // GitHub's default branch when it is another branch than the one checked, else null. Pull requests
+  // into the default branch then run no gate, so the result is cannot-verify whatever the protection
+  // on the branch checked reads.
   otherDefault: string | null;
+  // When the gate names its branch and GitHub's default branch is another one, or cannot be read
+  // (otherDefault is then null): what the protection on the gate's branch reads by itself, and the
+  // finding in words. doctor shows it, so the two commands report the same facts. null otherwise,
+  // and for a branch usabl only assumed.
+  gateBranch: { action: BranchRuleResult['action']; finding: string } | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -690,9 +717,8 @@ function requirementState(classic: ClassicState, ruleset: RulesetOutcome): Requi
   return ruleset === 'ambiguous' ? 'ambiguous' : 'absent';
 }
 
-// The lines that say which branch was checked and why, when that is not plain: main was assumed, or
-// GitHub's default branch is another branch than the one the gate runs on. An assumed target never
-// gets here with another default branch: that case is its own result.
+// The lines that say which branch was checked and why, when main was assumed. Another default branch
+// on GitHub is its own result, for an assumed target and for one a gate names, so it never gets here.
 function branchFacts(target: BranchTarget, defaultBranch: string | null): string[] {
   if (target.source === 'assumed') {
     const why = `usabl assumed ${target.name} because it could not read the branch your gate runs on: ${target.reason}.`;
@@ -707,14 +733,86 @@ function branchFacts(target: BranchTarget, defaultBranch: string | null): string
       : '';
     return [`${why} GitHub reports ${target.name} as the default branch.${present}`, target.step];
   }
-  if (defaultBranch !== null && defaultBranch !== target.name) {
-    const file = gateFile(target.source);
-    return [
-      `GitHub reports ${defaultBranch} as the default branch, but the gate runs on pull requests into ${target.name}, so it covers only pull requests into ${target.name}.`,
-      `To gate pull requests into ${defaultBranch}, put ${defaultBranch} in place of ${target.name} on ${branchLinesText(file.workflow, target.name)} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on ${defaultBranch}.`,
-    ];
-  }
   return [];
+}
+
+// What to do when the gate names one branch and GitHub's default branch is another: move the gate to
+// the default branch, or gate both. Both names passed the safe name checks before they got here: the
+// gate's from its trigger, the default branch from GitHub's answer.
+function otherDefaultSteps(target: NamedTarget, defaultBranch: string): string[] {
+  const file = gateFile(target.source);
+  return [
+    `To gate pull requests into ${defaultBranch}, put ${defaultBranch} in place of ${target.name} on line ${target.line} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on ${defaultBranch}.`,
+    `To keep pull requests into ${target.name} gated too, add ${defaultBranch} to the pull_request trigger of ${file.path} instead, and protect both branches. usabl reads only a trigger that names one branch, so then check the protection on each branch by hand.`,
+  ];
+}
+
+// The result when the gate names its branch and GitHub's default branch is another one. Pull requests
+// into the default branch run no gate, so this is never verified, whatever the protection on the
+// gate's branch reads. The first line says that, and what the protection on the gate's branch reads.
+// rest is the setting to apply, or how to check by hand, when the gate's branch is not verified.
+function otherDefaultResult(
+  target: NamedTarget,
+  defaultBranch: string,
+  gateBranch: { action: BranchRuleResult['action']; finding: string },
+  rest: string[],
+): BranchRuleResult {
+  // When the docs gate runs on the default branch, it does gate pull requests into it, so only the
+  // app's pull requests into it are not gated.
+  const docsOnDefault = target.source === 'gate' && target.docsGateBranch === defaultBranch;
+  const notGated = docsOnDefault
+    ? `the app's pull requests into ${defaultBranch} are not gated: the docs gate runs on them, but the app gate runs only on pull requests into ${target.name}`
+    : `pull requests into ${defaultBranch} are not gated`;
+  const ungated = `GitHub reports ${defaultBranch} as the default branch, and ${notGated}.`;
+  const headline =
+    gateBranch.action === 'verified'
+      ? `cannot verify: the branch rule on ${target.name} is set, but ${ungated}`
+      : gateBranch.action === 'not-applied'
+        ? `cannot verify: ${ungated} The branch rule on ${target.name} is not set either.`
+        : `cannot verify: ${ungated} usabl could not confirm the branch rule on ${target.name} either.`;
+  const finding = gateBranch.action === 'cannot-verify' ? `usabl cannot verify the protection on ${target.name}: ${gateBranch.finding}.` : `${gateBranch.finding}.`;
+  const steps = otherDefaultSteps(target, defaultBranch);
+  return {
+    exitCode: 2,
+    action: 'cannot-verify',
+    message: [headline, finding, ...steps, ...rest].join('\n'),
+    branchNote: [
+      docsOnDefault ? ungated : `GitHub reports ${defaultBranch} as the default branch, but the gate runs on pull requests into ${target.name}, so ${notGated}.`,
+      ...steps,
+    ].join(' '),
+    otherDefault: defaultBranch,
+    gateBranch,
+  };
+}
+
+// The result when the gate names its branch and GitHub's answer gives no default branch usabl can
+// use: the read failed, or it named no plain branch. usabl then cannot confirm that pull requests
+// into the default branch are gated, so this is never verified, whatever the protection on the
+// gate's branch reads. rest is as for otherDefaultResult.
+function unknownDefaultResult(target: NamedTarget, gateBranch: { action: BranchRuleResult['action']; finding: string }, rest: string[]): BranchRuleResult {
+  const file = gateFile(target.source);
+  const unknown = "usabl could not read GitHub's default branch, so it cannot confirm that pull requests into the default branch are gated.";
+  const headline =
+    gateBranch.action === 'verified'
+      ? `cannot verify: the branch rule on ${target.name} is set, but ${unknown}`
+      : gateBranch.action === 'not-applied'
+        ? `cannot verify: ${unknown} The branch rule on ${target.name} is not set either.`
+        : `cannot verify: ${unknown} usabl could not confirm the branch rule on ${target.name} either.`;
+  const finding = gateBranch.action === 'cannot-verify' ? `usabl cannot verify the protection on ${target.name}: ${gateBranch.finding}.` : `${gateBranch.finding}.`;
+  const why =
+    'usabl reads the default branch with "gh api repos/{owner}/{repo}". The read failed, or its answer named no branch usabl takes (only letters, digits, and . _ - / are taken).';
+  const steps = [
+    `The gate runs on pull requests into ${target.name}. If GitHub's default branch is ${target.name}, run "usabl install --branch-rule" again once usabl can read it.`,
+    `If it is another branch, put that branch in place of ${target.name} on line ${target.line} of ${file.path}, and the same in ${file.others}. Then run "usabl install --branch-rule" to check the protection on that branch.`,
+  ];
+  return {
+    exitCode: 2,
+    action: 'cannot-verify',
+    message: [headline, finding, why, ...steps, ...rest].join('\n'),
+    branchNote: [unknown, why, ...steps].join(' '),
+    otherDefault: null,
+    gateBranch,
+  };
 }
 
 // Whether the branch checked is known to be the one that matters: a gate names it, or there is no
@@ -753,17 +851,29 @@ export async function verifyBranchRule(gh: GhReader, target: BranchTarget = ASSU
       `cannot verify: GitHub reports ${otherDefault} as the default branch, but usabl assumed ${name} because it could not read the branch your gate runs on: ${target.reason}. usabl did not check the protection on ${otherDefault}, so this result is not verified.`,
       target.step,
     ];
-    return { exitCode: 2, action: 'cannot-verify', message: lines.join('\n'), branchNote: target.step, otherDefault };
+    return { exitCode: 2, action: 'cannot-verify', message: lines.join('\n'), branchNote: target.step, otherDefault, gateBranch: null };
   }
   const branch: CheckedBranch = { name, isDefault: defaultBranch === null ? null : defaultBranch === name };
   const facts = branchFacts(target, defaultBranch);
-  const outcome = (exitCode: 0 | 2, action: BranchRuleResult['action'], first: string, rest: string[]): BranchRuleResult => ({
-    exitCode,
-    action,
-    message: [first, ...facts, ...rest].join('\n'),
-    branchNote: facts.length > 0 ? facts.join(' ') : null,
-    otherDefault,
-  });
+  // finding is what the protection on this branch reads, in words, without the action prefix. When
+  // the gate names this branch and GitHub's default branch is another one, or cannot be read, the
+  // result is that case, whatever the protection reads.
+  const outcome = (exitCode: 0 | 2, action: BranchRuleResult['action'], finding: string, first: string, rest: string[]): BranchRuleResult => {
+    if (target.source !== 'assumed' && otherDefault !== null) {
+      return otherDefaultResult(target, otherDefault, { action, finding }, rest);
+    }
+    if (target.source !== 'assumed' && defaultBranch === null) {
+      return unknownDefaultResult(target, { action, finding }, rest);
+    }
+    return {
+      exitCode,
+      action,
+      message: [first, ...facts, ...rest].join('\n'),
+      branchNote: facts.length > 0 ? facts.join(' ') : null,
+      otherDefault,
+      gateBranch: null,
+    };
+  };
   const parts: Array<{ label: string; classic: ClassicState; ruleset: RulesetRequirement }> = [
     { label: checkLabel, classic: classicState(classic, isRequiredCheckPresent), ruleset: rulesetNamesRequiredCheck },
     { label: reviewLabel, classic: classicState(classic, isCodeOwnerReviewRequired), ruleset: rulesetRequiresCodeOwnerReview },
@@ -786,9 +896,9 @@ export async function verifyBranchRule(gh: GhReader, target: BranchTarget = ASSU
     const where = [...new Set(confirmed)].join(' and ');
     const requires = `${label} requires ${checkLabel}, ${reviewLabel}, ${approvalLabel}, and ${staleLabel} (${where})`;
     if (!isBranchConfirmed(target, defaultBranch)) {
-      return outcome(2, 'cannot-verify', `cannot verify: ${requires}, but usabl could not confirm that ${name} is the branch your gate runs on.`, []);
+      return outcome(2, 'cannot-verify', requires, `cannot verify: ${requires}, but usabl could not confirm that ${name} is the branch your gate runs on.`, []);
     }
-    return outcome(0, 'verified', `verified: ${requires}.`, []);
+    return outcome(0, 'verified', requires, `verified: ${requires}.`, []);
   }
 
   // A part that is confidently absent is reported as not applied, because the operator has a step
@@ -796,11 +906,12 @@ export async function verifyBranchRule(gh: GhReader, target: BranchTarget = ASSU
   // whose branch targeting usabl cannot evaluate, is refused rather than called missing.
   const missing = states.flatMap((entry) => (entry.state === 'absent' ? [entry.label] : []));
   if (missing.length > 0) {
-    return outcome(2, 'not-applied', `not applied: ${label} does not require ${missing.join(' or ')}, by classic branch protection or by an active ruleset.`, [setting]);
+    const absent = `${label} does not require ${missing.join(' or ')}, by classic branch protection or by an active ruleset`;
+    return outcome(2, 'not-applied', absent, `not applied: ${absent}.`, [setting]);
   }
   const reason =
     states.some((entry) => entry.state === 'ambiguous')
       ? `a ruleset sets part of the protection but usabl cannot confirm it targets ${label}`
       : `could not read classic protection and rulesets for ${label}`;
-  return outcome(2, 'cannot-verify', `cannot verify: ${reason}.`, [setting, verifyByHand(name, assumed)]);
+  return outcome(2, 'cannot-verify', reason, `cannot verify: ${reason}.`, [setting, verifyByHand(name, assumed)]);
 }
