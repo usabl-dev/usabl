@@ -473,7 +473,7 @@
   built through `aria-labelledby` or a label element from such a control, from a node inside one,
   or from a node that holds one (a select gives its chosen option, a slider its value), and a name
   built from contents that hold an element with such a name. The control's author-given name
-  stays. A description from `aria-describedby` is never read. A name built through
+  stays, except a name from a label element that wraps the control, which is marked too. A description from `aria-describedby` is never read. A name built through
   `aria-labelledby` from a text field can still hold that field's value, as before. The rule still
   compares every name the browser gives, so its findings and gaps are the same as before. Gate
   effect: none; the rule is preview.

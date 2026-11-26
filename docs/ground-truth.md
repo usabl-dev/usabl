@@ -1584,7 +1584,8 @@ that may show the control's value, and evidence never shows a marked name: a nam
 contents that hold such a control, the control's own name when it is built from its contents, a
 name built from contents inside it, and the name of an option inside it, whatever its source.
 So a slider or a select in an added row shows only the control's author-given name in
-`addedNames`. The design checks read their own copy of the tree, with every node and every name
+`addedNames`, except when that name comes from a label element that wraps the control: the
+label holds the control, so its name is marked too and the control shows no name. The design checks read their own copy of the tree, with every node and every name
 as the browser gives them and no field rule: they only count elements by role and name, and none
 of those names reaches a draft, so a second element with the design's name is always counted,
 even when its name comes from contents that hold a field or a value control. A name built through
