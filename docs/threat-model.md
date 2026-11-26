@@ -1092,20 +1092,23 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   matcher whose time is at most the part's length times the name's length. The slow pattern now
   takes about 50 milliseconds. Expansions that cannot clash in Node's walk cache share one walk.
   On macOS and Windows, where Node matches without regard to letter case, fixed parts also stay as
-  written, since a volume that ignores case finds `SRC` through `src`, and the filter folds case
-  the way Node's regular expressions do (and also by lower and by upper case). Before, a second
+  written, since a volume that ignores case finds `SRC` through `src`. A wildcard part Node was
+  given as written keeps the answer Node gave it, since Node's own tests there (such as its fast
+  test for `??ß`, which compares the end of the name in lower case) are ones no folding fully
+  matches. A part listed as `*` is folded the way Node's regular expressions do, and also by
+  lower and by upper case. Before, a second
   listing there turned every fixed part into `*`, so an entry such as `usabl.config.json/**`
   walked the whole repository: one guard expansion of a tree of 100,006 files took 96 seconds and
   3.5 GB of memory on an injected `darwin`, and now takes about 110 milliseconds and 65 MB, as on
   Linux. Where the filter cannot give Node's exact answer it lists more: a file the wide walk
   reaches through a link to a folder where Node's walk does not follow the link, a file that the
-  part before a trailing `/**` names, every file a listing with a `..` or `.` that Node keeps after
-  `**` finds (that listing is kept whole), and a file Node skips because its walk cache already saw
-  the rest of another expansion at the same folder. A comparison with Node on generated trees (dot
-  names, nested folders, long names, unicode, links, and brace groups that span `/`) found no file
-  Node lists that the adapter does not, in 26,400 patterns, 9,531 of them through the filter. The
-  case rules were checked on Linux with the platform injected, not on a real volume that ignores
-  case.
+  part before a trailing `/**` names, every file a listing that ends with a `.` part finds (that
+  listing is kept whole), and a file Node skips because its walk cache already saw the rest of
+  another expansion at the same folder. A comparison with Node on generated trees (dot names,
+  nested folders, long names, unicode, links, and brace groups that span `/`) found no file Node
+  lists that the adapter does not, in 26,400 patterns, 9,386 of them through the filter. That is
+  what was measured, not a proof. The case rules were checked on Linux with the platform injected,
+  not on a real volume that ignores case.
 - Syntax the filter does not read (a character class such as `[a-z]`, an extglob group such as
   `+(a|b)`, a brace range, and a nested or unbalanced brace) is handed to Node unchanged only inside
   a bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and
@@ -1121,12 +1124,22 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   syntax, itself or in one of its brace expansions: one that is empty or starts with `/`, which
   Node walks from the root of the machine (the `workspaces` entry `{,zz}/**` becomes
   `/**/package.json`, which Node had not finished after 30 seconds); one that climbs above the
-  folder with `..`, such as `..\outside\*` or a run of `..\` that reaches `/`; and one whose
-  first part is a drive such as `C:`, which Node on Windows walks from the root of that drive.
-  Node reads `\` as `/`, so the checks read it that way first. Config load refuses a `uiFileGlobs`
-  or `discovery.wideBlastGlobs` entry of any of these kinds, as it already refused a root brace
-  expansion in `guardedPaths`. A `workspaces` entry of any of these kinds makes the workspace root
-  unreadable, so it is a gap, never a walk.
+  folder with `..`, such as `..\outside\*` or a run of `..\` that reaches `/`; and, on Windows,
+  one whose first part is a drive such as `C:`, which Node walks from the root of that drive. On
+  Linux and macOS a first name that ends with `:` is a plain folder name and is listed as one, so
+  a guarded folder `x:` or a requirements folder `reqs:` keeps its working-tree listing. Node
+  reads `\` as `/`, so the checks read it that way first. Config load refuses a `uiFileGlobs` or
+  `discovery.wideBlastGlobs` entry of any of these kinds, on every platform, as it already refused
+  a root brace expansion in `guardedPaths`. A `workspaces` entry of any of these kinds makes the
+  workspace root unreadable, so it is a gap, never a walk.
+- A pattern with a `..` after a wildcard part, itself or in a brace expansion, is past the bound
+  too. Node's walk of `**/..` writes to state it shares with the pattern's other expansions, so
+  which files it finds depends on what it walks together, and no listing the adapter makes is sure
+  to hold them all: for a folder `bab/x/aa` and a file `x`, Node lists `x` for
+  `{*a*,**/a,*}/{b,*a*/**,**/..}/*`, and none of the four listings the adapter made for it did.
+  The guard already reads such an entry as past its own rules. Config load refuses it in
+  `uiFileGlobs` and `discovery.wideBlastGlobs`, such as `src/{a,**/..}/*.tsx`, and a `workspaces`
+  entry like it makes the workspace root unreadable, so it is a gap.
 - The bound does not cap the walk a brace group costs. A `workspaces` pattern such as
   `**/{a0,...,a63}/package.json` is inside it, and Node took about 17 seconds to walk its 64
   expansions once on this repository's 18,506 files, as it did before this change. The adapter

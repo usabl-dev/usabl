@@ -4800,16 +4800,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     is listed as `*`, every other part stays as written, and usabl's own matcher filters what Node
     lists, so `src/` then `*a` twelve times then `*b` against a file name of 30 letters takes about
     50 milliseconds instead of 11 seconds. Expansions that cannot clash in Node's walk cache share
-    one walk. On macOS and Windows fixed parts stay as written, as on Linux, and the filter folds
-    letter case the way Node's regular expressions do, so one guard expansion costs about what it
-    costs on Linux. Where the filter cannot match Node exactly it lists more (a file reached
-    through a link to a folder, a file named before a trailing `/**`, a listing with a `..` Node
-    keeps after `**`, and a file Node's walk cache skips). Other syntax, such as a character class
-    or an extglob group, runs in Node only inside a bound: at most 1024 characters, no extglob
-    group, at most one run of `*` in any part, and at most 256 brace expansions. A pattern that
-    names a path outside the folder is past the bound too, itself or in a brace expansion: one
-    that is empty or starts with `/`, such as `{,zz}/**`; one that climbs above the folder with
-    `..`, such as `..\outside\*`; and one that starts with a drive such as `C:`. Past the bound
+    one walk. On macOS and Windows fixed parts stay as written, as on Linux, a wildcard part Node
+    was given as written keeps Node's answer, and a part listed as `*` is folded the way Node's
+    regular expressions fold letter case, so one guard expansion costs about what it costs on
+    Linux. Where the filter cannot match Node exactly it lists more (a file reached through a link
+    to a folder, a file named before a trailing `/**`, a listing that ends with `.`, and a file
+    Node's walk cache skips). Other syntax, such as a character class or an extglob group, runs in
+    Node only inside a bound: at most 1024 characters, no extglob group, at most one run of `*` in
+    any part, and at most 256 brace expansions. A pattern that names a path outside the folder is
+    past the bound too, itself or in a brace expansion: one that is empty or starts with `/`, such
+    as `{,zz}/**`; one that climbs above the folder with `..`, such as `..\outside\*`; and, on
+    Windows, one that starts with a drive such as `C:` (elsewhere `x:` is a plain folder name). So
+    is a pattern with a `..` after a wildcard part, such as `src/{a,**/..}/*.tsx`, since Node's walk
+    of it depends on which expansions it walks together. Past the bound
     the pattern is not run. Config load refuses that syntax and those patterns in every policy
     glob list, and a `workspaces` pattern past the bound makes the workspace root unreadable, so
     every changed file the workspace check tests is a gap. A folder whose name usabl does not
