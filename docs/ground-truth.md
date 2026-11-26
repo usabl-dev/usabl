@@ -638,7 +638,8 @@ export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
-  diffNameOnly(ref: string): Promise<string[]>; // merge-base..HEAD changed files
+  diffNameOnly(ref: string): Promise<string[]>; // merge-base..HEAD changed files, from checked trees
+  checkoutState(): Promise<Record<string, string>>; // sparse state and empty submodule folders, for the pins
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
   lsFilesUnder(ref: string, prefixes: string[]): Promise<string[]>; // one -z listing; '' is the whole tree
@@ -1746,9 +1747,10 @@ rules that ran, because Deque records applicability for its own rules. Those cou
 
 **Which files changed.** A local run takes the paths whose bytes on disk are not the content HEAD
 holds, and the new files git does not ignore (the working tree walk below). A run with
-`--trusted-ref` joins them with the merge-base diff, `git diff --name-only -z <ref>...HEAD`. Every
-git listing usabl reads (`ls-files`, diff, `ls-tree`, and `ls-tree -r --name-only`) runs with `-z`
-and is split on NUL.
+`--trusted-ref` joins them with the merge-base diff: the files that differ between the merge base
+of the ref and HEAD, and HEAD, what `git diff --name-only <ref>...HEAD` lists. usabl builds it
+itself (the committed diff below). Every git listing usabl reads (`ls-files`, `ls-tree`, and
+`ls-tree -r --name-only`) runs with `-z` and is split on NUL.
 Without `-z`, git quotes a name that holds a byte above 0x7f, a newline, a tab, or a double quote,
 so `src/pages/Über.tsx` arrived as `"src/pages/\303\234ber.tsx"`, matched no UI glob, and a CI
 run read as nothing to check. Names are never trimmed, so a name that starts or ends with a space
@@ -1908,10 +1910,13 @@ Known limits:
   changed on every stop while its bytes on disk are not the blob's. That is a false change, never
   a false green.
 - An agent can write the sparse patterns too. A file it leaves out of the set and deletes reads as
-  left out on purpose, so the deletion is not in the changed list. The tree moves, so no stored
-  receipt answers, but a stop whose only change it is reads "nothing to check". The same holds for
-  a submodule whose folder the agent empties, its `.git` included: it reads as never set up, so
-  its files' deletion is not listed, and the tree keeps the recorded commit.
+  left out on purpose, so the deletion is not in the changed list. The same holds for a submodule
+  whose folder the agent empties, its `.git` included: it reads as never set up, so its files'
+  deletion is not listed. The Stop hook pins that state for the session (see "Session pinning"),
+  so a change to it after the first stop blocks as drift. What remains: a change made before the
+  first stop, a stop with no usable session id, and, in an honest sparse checkout, a file outside
+  the patterns that is still on disk and that the agent flags skip-worktree and deletes. The tree
+  moves in each of these, so no stored receipt answers.
 - A link to a folder outside the hashed files, such as `public/assets` pointing into an ignored
   `dist/`, blocks every stop and fails every check until what it points to is committed or the
   link is replaced with the files. A link to a single file outside them is always in the changed
@@ -1919,23 +1924,44 @@ Known limits:
 - A name git will not store makes every tree read differ, so every run ends with the not-covered
   gap for files that changed during the check, and that gap's text tells the person to wait
   rather than naming the file.
-- Only HEAD's commit and trees are checked against their ids. Other reads take objects as stored:
-  the merge-base diff, the Stop hook's search for the starting commit, and the guard's policy
-  reads at the trusted ref. Until the merge-base diff is built from checked trees, an agent that
-  overwrites a tree object only the trusted side holds, so that it lists the blob of a committed
-  edit, hides that edit from the changed list, and a full run says VERIFIED. In CI, git computes
-  the id of every object it fetches, so this does not apply there.
+- The walk and the committed diff check every commit and tree they read against its id. Other
+  reads take objects as stored: the commit parents git follows to find the merge base (the Stop
+  hook's search for the starting commit, and the committed diff's), and the policy text the guard
+  and the run read at a ref. A commit rewritten between the trusted commit and HEAD can move the
+  merge base, which moving the trusted branch with `git update-ref` also does. A policy blob both
+  sides share, overwritten in `.git/objects`, reads as the new text at the trusted ref while every
+  id still matches; this is open. In CI, git computes the id of every object it fetches, so
+  neither applies there.
 - `.git/info/exclude` and a local `core.excludesFile` still hide a new file, as the threat model
   says for ignored files.
 
-A rename that is committed is listed by its new name only, on local runs and in CI, because the
-merge-base diff lists it that way. A rename that is not committed is listed by both names, because
-the working tree walk compares each name with HEAD. For a committed rename, a file moved out of
-the UI globs, or into a test folder, is seen only through other changed files:
-the files that import it, and the router file or `usabl.routes.json` when a route names it. An
-import left pointing at the old path is an import usabl cannot resolve, so a file moved into a
-test folder under the same name is a gap (see "Test files" below). A move that changes nothing
-else, such as moving a route's entry file while the route still names the old path, is not seen.
+**The committed diff.** usabl reads the commit the trusted ref names (peeling tags one checked
+object at a time), HEAD, and the merge base `git merge-base` gives for those two commit ids. Each
+is read with `git cat-file --batch` and checked against its id in Node, so the ref reaches git
+only on standard input, never as an argument. Then it compares the merge base tree with the HEAD
+tree, one level of folders per `git cat-file --batch`, checking each tree it reads. Two entries
+with the same tree id hold the same files, so a folder is read only where the ids differ. A file
+is listed when its mode or its id differs, or when one side lacks it; every file of a folder only
+one side has is listed; and a name a tree holds twice is listed with everything under it. An
+object whose bytes do not hash to its id stops the read with an error that names it and
+`git fsck`. `git diff` read trees as stored, so a tree only the trusted side holds, rewritten to
+list a committed edit, hid the edit, and a stop said VERIFIED after checking only the other
+screens. No diff setting applies, so `diff.ignoreSubmodules=all` in `.git/config` no longer hides
+a committed submodule move. A ref with no commit gives the same "git cannot read"
+error as the policy reads, with the fetch advice; HEAD and a ref with no commit in common give an
+error that says so and names `git fetch --unshallow` for a shallow clone. The listing has the
+same size limit as before. Cost, on a repository of 20,000 commits and 10,000 files whose
+feature branch has 50 commits and one merge of the trusted branch, under a load average near 10:
+the committed diff took 340 to 460 ms against 70 to 100 ms for `git diff`, and listed the same
+149 files. Most of it is the dozen short git processes; the trees read are only the folders that
+differ.
+
+A rename is listed by both names, committed or not: the committed diff compares each name of the
+merge base tree with HEAD, and the working tree walk compares each name with HEAD. So a file moved
+out of the UI globs, or into a test folder, is listed by its old name too. Before, a committed
+rename was listed by its new name only, and such a move was seen only through other changed
+files. An import left pointing at the old path is an import usabl cannot resolve, so a file moved
+into a test folder under the same name is a gap (see "Test files" below).
 
 Given a set of changed files, discover which surfaces they affect:
 
@@ -4035,6 +4061,27 @@ the id, and for a link also the path it resolves to and the mode and id there. S
 different entries pin the same, and a missing guarded file pins differently from an empty one.
 A link that does not resolve pins the same on every stop; the local guard reports it as changed
 on each stop instead.
+
+The pins also hold the local checkout state, from `git.checkoutState()`, because the changed list
+reads a missing file under it as left out on purpose:
+
+- `.git/info/sparse-checkout`: for the repository and each submodule the walk reads, whether
+  `core.sparseCheckout` is true, `core.sparseCheckoutCone` as git reads it from every scope, and
+  what the pattern file is: missing, a regular file by the sha256 of its bytes (empty included), a
+  link by its text, or another kind such as a folder.
+- `.git/modules`: the submodule folders (gitlinks of HEAD or of the index) that are empty, which
+  the walk reads as never set up.
+
+git never stores a path with a `.git` part, so neither name is a committed file. A guarded path
+with one of those names pins both texts. A name in its default state (no sparse checkout and no
+pattern file, or no empty submodule folder) has no pin, so a repository that uses neither pins
+what it pinned before. Any change to either is drift: the stop blocks with the drift message and
+names the state under "drifted files". So an honest `git sparse-checkout set`, or
+`git submodule update --init` of a submodule that was not set up, during a session blocks as
+drift too. A pin file from before this change lacks those names, so in a repository that uses
+either, the first stop after the upgrade reads as drift for the rest of that session. Reading the
+state costs a few short git processes per stop (about 90 to 150 ms in a small repository under
+load).
 
 A pin file from an earlier release holds bare hashes with no version. Those say nothing this
 usabl can compare, so usabl cannot tell whether policy was weakened and committed earlier in the

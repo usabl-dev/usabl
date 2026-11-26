@@ -96,7 +96,13 @@ re-baseline to green.
 - The session pins hash a fixed label and what HEAD stores at each guarded path, as JSON of short
   strings: nothing, or the mode and the id, and for a link also the path it resolves to and the
   mode and id there. Two different entries never give the same input. Each pin is stored as `v4:`
-  and the hash. A missing ledger and an empty one pin differently.
+  and the hash. A missing ledger and an empty one pin differently. The pins also hold the local
+  checkout state under the names `.git/info/sparse-checkout` and `.git/modules`, which git never
+  stores as paths; a guarded path with one of those names pins both texts, so neither hides the
+  other. The default state (no sparse checkout, no pattern file, no empty submodule folder) adds no
+  pin. A pin file written before this change lacks those names, so in a repository with sparse
+  checkout or an empty submodule folder, the first stop after the upgrade reads as drift for the
+  rest of that session.
 - A pin file written by an earlier release holds bare hashes with no version. Those say nothing
   this usabl can compare, so usabl cannot tell whether policy was weakened and committed earlier
   in the session. A full check would then run under that weaker policy and could pass, and
@@ -499,13 +505,30 @@ passing bundle from another run.
   `git rev-parse --verify -q HEAD` resolves but git cannot read is a damaged object: the guard's
   error names `git fsck`, and the stop blocks. Only a HEAD that does not resolve reads as no
   commits yet.
-- Limit, stated plainly, until the merge-base diff is built from checked trees: other reads take
-  objects as stored, among them the merge-base diff and the guard's policy reads at the trusted
-  ref. An agent that overwrites a tree object only the trusted side holds, so that it lists the
-  blob of a committed edit, hides that edit from `git diff <trusted>...HEAD`. The edit is not in
-  the changed list, the stop checks only the other screens, and a full run says VERIFIED. No
-  receipt is involved. In CI this does not apply: the runner fetches the objects, and git computes
-  each fetched object's id from its bytes.
+- The committed part of the changed list is built from checked trees too. usabl reads the trusted
+  commit, HEAD, their merge base, and every tree whose id differs between the merge base and HEAD
+  in Node, and checks each one against its id. Two folders with the same tree id are one object on
+  both sides, so only the folders whose ids differ are read. `git diff <trusted>...HEAD` read those
+  trees as stored: an agent that overwrote a tree object only the trusted side holds, so that it
+  listed the blob of a committed edit, hid that edit from the changed list. The stop checked only
+  the other screens and a full run said VERIFIED, with no receipt involved. A merge base commit
+  rewritten to name a tree that holds the edit did the same for `usabl check --trusted-ref` when
+  the trusted branch had moved on. Now each of those objects stops the read with an error that
+  names it and `git fsck`: the stop blocks, and `usabl check` fails. No diff setting applies any
+  more, so `diff.ignoreSubmodules=all` in `.git/config` no longer hides a committed submodule
+  move. A committed rename is listed by both names.
+- Limit, stated plainly: two reads still take objects as stored.
+  - git finds the merge base from the commit parents as stored. A commit rewritten between the
+    trusted commit and HEAD can make git pick another merge base. The trusted commit, HEAD, and the
+    merge base git picks are each checked, so this gives the agent what moving the trusted branch
+    with `git update-ref` gives it, which the Stop hook limit above already states.
+  - The policy text the guard and the run read at a ref (`show`, and `listEntries` with text) is
+    the blob as git stores it, and `git cat-file blob` does not check its id. A policy blob that
+    both sides share, such as an unchanged `.usabl-waivers.json`, overwritten in `.git/objects`,
+    reads as the new text at the trusted ref while every id the guard compares still matches, and
+    the walk reads the file on disk as unchanged. This is open.
+  - In CI neither applies: the runner fetches the objects, and git computes each fetched object's
+    id from its bytes.
 - A name git will not store is never silently left out of the tree. `git update-index
   --index-info` skips a name such as a folder named `GIT~1` or `.GIT` (rejected on every platform),
   prints a line, and exits 0, and it drops a record that clashes with another one. A new screen file
@@ -560,14 +583,25 @@ passing bundle from another run.
   says the file is outside the sparse set, because sparse checkout removes those files on
   purpose. When git cannot answer (no pattern file, an empty one, a folder in its place, or a git
   older than 2.41) or the file is inside the set, it is a deletion. A present file is compared
-  wherever the patterns put it. Limit: an agent can write the patterns too, and then a file it
-  leaves out of the set and deletes reads as left out on purpose. The tree moves, because the
-  file is gone from disk, so no stored receipt answers. But the deletion is not in the changed
-  list, so a stop whose only change it is reads "nothing to check". A deletion is quiet only for a
-  file nothing imports, such as one loaded through `import.meta.glob` or a CSS file. The same holds
-  for a submodule whose folder the agent empties, its `.git` included: it reads as a submodule that
-  was never set up, so the deletion of its files is not in the changed list, and the tree keeps the
-  recorded commit, which differs from the tree of a receipt minted while its files were there.
+  wherever the patterns put it. An agent can write the patterns too: it turned sparse checkout
+  on, or wrote other patterns, then deleted a screen file the patterns left out, and the file read
+  as left out on purpose. The deletion was not in the changed list, so a stop whose only change it
+  was read "nothing to check", and with other changes the stop checked only their screens and
+  said VERIFIED. The same held for a submodule whose folder the agent empties, its `.git`
+  included: it reads as a submodule that was never set up, so the deletion of its files is not in
+  the changed list. Now the Stop hook pins that state at the first stop of a session, with the
+  guarded files: whether sparse checkout is on, cone mode, and what the pattern file is (missing,
+  the sha256 of its bytes, a link by its text, or another kind such as a folder), for the
+  repository and each submodule the walk reads, and which submodule folders are empty. A change to
+  any of it at a later stop is session drift, as a changed guarded file is: the stop blocks and
+  names `.git/info/sparse-checkout` or `.git/modules`. Any change counts, so an honest
+  `git sparse-checkout set`, or `git submodule update --init` of a submodule that was not set up,
+  during a session also blocks as drift. Limits: the pins are recorded at the first stop, so a
+  change made before it is not seen (the tree still moves, so no stored receipt answers); a stop
+  with no usable session id compares no pins and says so; and the pin does not hold the
+  skip-worktree flags, so in an honest sparse checkout a file outside the patterns that is still
+  on disk, which git normally removes, can be flagged and deleted and reads as left out on
+  purpose.
 - A submodule's files are walked by the same rule, against the commit the outer repository
   records, and are listed by their paths in the outer repository, so an edit inside one moves the
   tree and is planned. A submodule that was never set up is an empty folder, and the tree keeps the
