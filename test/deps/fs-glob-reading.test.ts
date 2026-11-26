@@ -73,9 +73,16 @@ describe('the listing', () => {
     expect(listed('x{,a}')).toEqual(['x', 'xa']);
   });
 
-  it('also widens fixed parts with a letter on a platform that ignores case', () => {
-    expect(listed('src/**', true)).toEqual(['src/**', '*/**']);
-    expect(listed('.github/x1/9', true)).toEqual(['.github/x1/9', '.*/*/9']);
+  // On macOS and Windows the volume answers a fixed name without regard to case, so Node's walk
+  // finds `SRC` through `src`. The listing keeps every fixed part as written, and the filter
+  // compares without case.
+  it('keeps fixed parts on a platform that ignores case and matches them without case', () => {
+    expect(listed('src/**', true)).toEqual(['src/**']);
+    expect(listed('.github/x1/9', true)).toEqual(['.github/x1/9']);
+    const folded = nodeGlobReading('src/**', { nocase: true });
+    const test = folded.kind === 'filtered' ? folded.listings[0]?.matches : undefined;
+    expect(test?.('SRC/App.tsx')).toBe(true);
+    expect(test?.('src2/App.tsx')).toBe(false);
   });
 
   it('keeps a wide listing whole where a dot part follows a wildcard', () => {

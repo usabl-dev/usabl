@@ -48,14 +48,6 @@ describe('a pattern with many wildcards', { timeout: 120_000 }, () => {
 });
 
 describe('letter case', () => {
-  it('matches a folder in other letter case on a platform that ignores case, and not on Linux', async () => {
-    await write('SRC/App.tsx');
-    await write('src2/App.tsx');
-    expect(await makeFsGlob({ cwd: root, platform: 'darwin' }).glob(['src/**'])).toEqual(['SRC/App.tsx']);
-    expect(await makeFsGlob({ cwd: root, platform: 'win32' }).glob(['src/**'])).toEqual(['SRC/App.tsx']);
-    expect(await makeFsGlob({ cwd: root, platform: 'linux' }).glob(['src/**'])).toEqual([]);
-  });
-
   it('matches a wildcard part in other letter case only on a platform that ignores case', async () => {
     await write('src/APP.TSX');
     expect(await makeFsGlob({ cwd: root, platform: 'darwin' }).glob(['src/*.tsx'])).toEqual(['src/APP.TSX']);
