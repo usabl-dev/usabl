@@ -65,16 +65,17 @@ const PRUNED = floorOf([B, N, R_NEW], 3);
 // The hand count the ledger must match. "more": the true number may be larger. "less": it may be
 // smaller. The label is what the table prints.
 //
-//   identity  days            state           more                         less               label
-//   A         27 - 0 = 27     left the floor  first floor, left the floor  left the floor     not known (27 by the floor)
-//   B         (10 - 0) +      reopened        first floor                  span 1 not seen    not known (25 by the floor)
-//             (30 - 15) = 25
-//   N         30 - 6 = 24     open            no                           no, seen 8 to 15   24 days
-//   R_OLD     20 - 0 = 20     open until gap  first floor, ended at gap    never seen         not known (20 by the floor)
-//   R_NEW     30 - 20 = 10    open            entered at the migration     never seen         not known (10 by the floor)
+//   identity  days            state           more                         less                       label
+//   A         27 - 0 = 27     left the floor  first floor, left the floor  left the floor             not known (27 by the floor)
+//   B         (10 - 0) +      reopened        first floor                  span 1 not seen,           not known (25 by the floor)
+//             (30 - 15) = 25                                               span 2 not seen after 15
+//   N         30 - 6 = 24     open            no                           not seen after 15          at most 24
+//   R_OLD     20 - 0 = 20     open until gap  first floor, ended at gap    never seen                 not known (20 by the floor)
+//   R_NEW     30 - 20 = 10    open            entered at the migration     never seen                 not known (10 by the floor)
 //
 // A only left the floor, so it is not called fixed. B's first span was closed by two clean scans,
-// but no scan saw B in it before then. N is the one exact row, so the open median is N's 24 days.
+// but no scan saw B in it before then. N was seen on days 8 and 15, but no scan ran after day 15,
+// so it may have been fixed before the tip on day 30. No row is exact, so there is no open median.
 
 describe('the ledger sources in a real repository', () => {
   let root = '';
@@ -140,14 +141,14 @@ describe('the ledger sources in a real repository', () => {
     expect(ledger.rows.map((row) => [row.rule, row.elementKey, row.state, row.daysOpen, row.mayBeMore, row.mayBeLess])).toEqual([
       [A.rule, A.elementKey, 'left-the-floor', 27, true, true],
       [B.rule, B.elementKey, 'reopened', 25, true, true],
-      [N.rule, N.elementKey, 'open', 24, false, false],
+      [N.rule, N.elementKey, 'open', 24, false, true],
       [R_OLD.rule, R_OLD.elementKey, 'open', 20, true, true],
       [R_NEW.rule, R_NEW.elementKey, 'open', 10, true, true],
     ]);
     expect(ledger.rows.map((row) => daysCell(row))).toEqual([
       'not known (27 by the floor)',
       'not known (25 by the floor)',
-      '24 days',
+      'at most 24',
       'not known (20 by the floor)',
       'not known (10 by the floor)',
     ]);
@@ -158,12 +159,15 @@ describe('the ledger sources in a real repository', () => {
       [dayAt(15), null, null],
     ]);
     expect(ledger.rows.filter((row) => row.firstSeenAtFirstBaseline).map((row) => row.rule)).toEqual([A.rule, B.rule, R_OLD.rule]);
+    expect(ledger.rows[1]?.mayBeLessReasons).toEqual(['not-seen', 'not-seen-since']);
+    expect(ledger.rows[2]).toMatchObject({ mayBeMoreReasons: [], mayBeLessReasons: ['not-seen-since'] });
+    expect(ledger.rows[2]?.incomplete.map((gap) => gap.cause)).toEqual(['not-seen-since']);
     expect(ledger.rows[3]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
     expect(ledger.rows[4]?.incomplete.map((gap) => gap.cause)).toEqual(['floor-rewritten', 'not-seen']);
     expect(ledger.history).toMatchObject({ kind: 'on', records: 3, skipped: 0 });
-    // Only N is exact, so it is the only number in a median.
+    // No row is exact, so no number goes into a median.
     expect(ledger.totals).toEqual({
-      open: { rows: 3, exactRows: 1, medianDays: 24, longestDays: 24 },
+      open: { rows: 3, exactRows: 0, medianDays: null, longestDays: null },
       fixed: { rows: 0, exactRows: 0, medianDays: null, longestDays: null },
       'left-the-floor': { rows: 1, exactRows: 0, medianDays: null, longestDays: null },
       reopened: { rows: 1, exactRows: 0, medianDays: null, longestDays: null },

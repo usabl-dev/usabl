@@ -335,6 +335,57 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(shown).not.toContain('alice');
       expect(shown).not.toContain('example.com');
     });
+
+    // The browser builds the cell's name from its contents, and those contents include the value of
+    // the control in it. Only the control's own name may reach the evidence.
+    it.each([
+      ['slider-row', 'Age'],
+      ['select-row', 'Owner'],
+      ['listbox-row', 'Owners'],
+      ['spin-row', 'Count'],
+      ['combobox-row', 'Team'],
+      ['progress-row', 'Upload'],
+    ])('never shows the value of the control in an added row: %s', async (which, name) => {
+      const drafts = await flow(which, click('#add'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toEqual([name]);
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('417');
+      expect(shown).not.toContain('example.com');
+    });
+
+    // The browser builds a name from aria-labelledby with the value of the select or slider it
+    // points at. Only the label text and the button's own text may reach the evidence.
+    it.each([
+      ['labelledby-select-row', ['Edit', 'Owner']],
+      ['labelledby-slider-row', ['Age', 'Edit']],
+    ])('never shows the value a name takes through aria-labelledby: %s', async (which, names) => {
+      const drafts = await flow(which, click('#add'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toEqual(names);
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('417');
+      expect(shown).not.toContain('example.com');
+    });
+
+    // The rule compares the names the browser gives, so a control that holds a progress bar, or an
+    // option whose text changes, is judged on its full name. Only the evidence leaves a value out.
+    it('still reports a click that removes the progress bar inside the button and adds a row', async () => {
+      const drafts = await flow('progress-button', click('#go'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toContain('two');
+    });
+
+    it('still reports a button drawn again without its progress bar, with focus on the new one, as a gap', async () => {
+      expect(outcome(await flow('progress-redraw', click('#go')))).toEqual(['replaced focus']);
+    });
+
+    it('still reports option text changed in place in a list box, and shows none of it', async () => {
+      const drafts = await flow('listbox-text', click('#go'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.changed).toMatchObject({ option: 2 });
+      expect(JSON.stringify(drafts)).not.toContain('example.com');
+    });
   });
 
   describe('determinism', () => {
