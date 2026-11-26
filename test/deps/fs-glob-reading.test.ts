@@ -42,6 +42,15 @@ describe('the bound on syntax the filter does not read', () => {
     expect(fsGlobBoundProblem('{,a}b/**')).toBeNull();
   });
 
+  it('names a pattern whose walk starts above its folder or at a drive', () => {
+    for (const pattern of ['../x/*', '..\\outside\\*', './../x', '{..,a}/*', 'src/**/../../x', 'C:/**', 'C:\\**', 'c:', 'd:/x/[a]']) {
+      expect(fsGlobBoundProblem(pattern), pattern).not.toBeNull();
+    }
+    expect(fsGlobBoundProblem('src/../x/*')).toBeNull();
+    expect(fsGlobBoundProblem('src/**/../x')).toBeNull();
+    expect(fsGlobBoundProblem('src/a:b/*')).toBeNull();
+  });
+
   it('names braces it cannot count', () => {
     expect(fsGlobBoundProblem('src/{a,{b,c}}/x')).toContain('brace');
     expect(fsGlobBoundProblem('src/{1..3}/x')).toContain('brace');
@@ -55,39 +64,64 @@ describe('the bound on syntax the filter does not read', () => {
 describe('the listing', () => {
   const listed = (pattern: string, nocase = false): string[] => {
     const reading = nodeGlobReading(pattern, { nocase });
-    return reading.kind === 'filtered' ? reading.listings.map((listing) => listing.pattern) : [reading.kind];
+    return reading.kind === 'filtered' ? reading.listings.map((listing) => listing.patterns.join(' + ')) : [reading.kind];
   };
 
-  it('widens every part with a wildcard and keeps every fixed part', () => {
+  it('widens every part with more than one run of * and keeps every other part', () => {
     expect(listed(`src/${'*a'.repeat(12)}*b`)).toEqual(['src/*']);
-    expect(listed('src/**/.a*/x?.tsx')).toEqual(['src/**/.*/*']);
-    expect(listed('./src//a/./b/../*.ts')).toEqual(['./src/a/*']);
-    expect(listed('a\\*.ts')).toEqual(['a/*']);
+    expect(listed('src/**/.a*a*/x?.tsx')).toEqual(['src/**/.*/x?.tsx']);
+    expect(listed('./src//a/./b/../*a*.ts')).toEqual(['./src/a/*']);
+    expect(listed('a\\*a*.ts')).toEqual(['a/*']);
   });
 
-  it('expands braces the way Node does and lists each wide pattern once', () => {
-    expect(listed('src/{a,b}/*.{ts,tsx}')).toEqual(['src/a/*', 'src/b/*']);
-    expect(listed('{x}/k')).toEqual(['{x}/k']);
-    expect(listed('${a,b}')).toEqual(['${a,b}']);
+  it('expands braces the way Node does and joins sets that can share one call', () => {
+    expect(listed('src/{a,b}/*a*.{ts,tsx}')).toEqual(['src/a/* + src/b/*']);
+    expect(listed('x{,a}/*a*b')).toEqual(['x/* + xa/*']);
+    expect(listed('{x}/k*a*b')).toEqual(['{x}/*']);
+    expect(listed('${a,b}/*a*b')).toEqual(['${a,b}/*']);
     expect(listed('{,a}/x')).toEqual(['past-bound']);
-    expect(listed('x{,a}')).toEqual(['x', 'xa']);
+  });
+
+  // Node skips a pattern that reaches a folder with a rest it has seen there, so two sets whose
+  // listed rests are the same but whose written rests differ are listed in separate calls.
+  it('lists sets in separate calls when Node could skip one of them', () => {
+    expect(listed('{a/*p*q,*/*r*s}')).toEqual(['a/*', '*/*']);
+    expect(listed('{a/*p*q,c/*r*s}')).toEqual(['a/* + c/*']);
+  });
+
+  it('hands Node the written pattern when no part can backtrack', () => {
+    for (const pattern of ['src/**', 'src/{a,b}/*.{ts,tsx}', '{x}/k', '${a,b}', 'x{,a}', 'src*/**/*.tsx', 'x/{a/**,**/a}/y']) {
+      expect(listed(pattern), pattern).toEqual(['unchanged']);
+      expect(listed(pattern, true), pattern).toEqual(['unchanged']);
+    }
   });
 
   // On macOS and Windows the volume answers a fixed name without regard to case, so Node's walk
   // finds `SRC` through `src`. The listing keeps every fixed part as written, and the filter
   // compares without case.
   it('keeps fixed parts on a platform that ignores case and matches them without case', () => {
-    expect(listed('src/**', true)).toEqual(['src/**']);
-    expect(listed('.github/x1/9', true)).toEqual(['.github/x1/9']);
-    const folded = nodeGlobReading('src/**', { nocase: true });
+    expect(listed('src/*a*b', true)).toEqual(['src/*']);
+    expect(listed('.github/x1/*a*b', true)).toEqual(['.github/x1/*']);
+    const folded = nodeGlobReading('src/*a*b', { nocase: true });
     const test = folded.kind === 'filtered' ? folded.listings[0]?.matches : undefined;
-    expect(test?.('SRC/App.tsx')).toBe(true);
-    expect(test?.('src2/App.tsx')).toBe(false);
+    expect(test?.('SRC/zAzB')).toBe(true);
+    expect(test?.('src2/zazb')).toBe(false);
   });
 
-  it('keeps a wide listing whole where a dot part follows a wildcard', () => {
-    const reading = nodeGlobReading(`src/**/../${'*a'.repeat(3)}`, { nocase: false });
-    expect(reading.kind === 'filtered' ? reading.listings : []).toEqual([{ pattern: 'src/**/../*', base: '', matches: null }]);
+  it('keeps a part with at most one run of *, which Node cannot backtrack on', () => {
+    expect(listed('apps-*/a?b*/*a*b')).toEqual(['apps-*/a?b*/*']);
+  });
+
+  it('merges brace expansions the way Node does', () => {
+    expect(listed('x/{a/**,**/a}/*b*c')).toEqual(['x/**/a/**/*']);
+  });
+
+  it('lists names Node folds together on a platform that ignores case', () => {
+    const reading = nodeGlobReading('x/?σ*a*', { nocase: true });
+    const test = reading.kind === 'filtered' ? reading.listings[0]?.matches : undefined;
+    // ß has no one-letter upper case, and σ and ς meet only in upper case, as in Node's test.
+    expect(test?.('x/ßςxa')).toBe(true);
+    expect(test?.('x/İσaa')).toBe(true);
   });
 
   it('hands other syntax to Node unchanged', () => {

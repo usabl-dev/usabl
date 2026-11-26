@@ -33,21 +33,23 @@ import { wildcardNameMatcher } from '../primitives/match-glob.js';
  * when it is at most `length` characters long, holds no extglob group, has at most
  * `starRunsPerPart` runs of `*` in any part, and has braces the filter can expand (at most
  * `expansions` of them). A part that is `**` alone is not a run of `*`: Node walks it without a
- * regular expression. Any pattern that is empty or starts with `/`, itself or in one of its brace
- * expansions, is past the bound too, whatever its syntax: Node would walk it from the root of the
- * machine.
+ * regular expression. A pattern that names a path outside the folder it is listed from is past
+ * the bound too, whatever its syntax: one that is empty or starts with `/`, which Node walks from
+ * the root of the machine; one that climbs above the folder with `..`; and one whose first part is
+ * a drive such as `C:`, which Node on Windows walks from the root of that drive. Each brace
+ * expansion is checked too.
  */
 export const FS_GLOB_BOUND = { length: 1024, starRunsPerPart: 1, expansions: 256 } as const;
 
 // Node's own limit: a longer pattern throws before anything is listed.
 const NODE_MAX_PATTERN_LENGTH = 64 * 1024;
 
-/** One listing: a pattern handed to Node, and the test each path it lists must pass. */
+/** One listing: the patterns handed to Node in one call, and the test each path must pass. */
 export interface FsGlobListing {
-  // The pattern handed to Node's fs.glob.
-  pattern: string;
-  // The folder the pattern starts from, relative to the adapter's folder: '' for that folder, or
-  // a path such as '..' when the pattern starts there.
+  // The patterns handed to Node's fs.glob in one call.
+  patterns: string[];
+  // The folder the patterns start from, relative to the adapter's folder: '' for that folder, or
+  // '.' for a pattern that starts with './'.
   base: string;
   // Whether a path, relative to base and with '/' between its parts, is one the written pattern
   // matches. Null when Node lists exactly what the written pattern names, so no path is tested.
@@ -55,7 +57,7 @@ export interface FsGlobListing {
 }
 
 export type FsGlobReading =
-  // Listed wide and filtered, one listing for each distinct wide pattern.
+  // Listed wide and filtered: one listing for each group of sets that can share one call.
   | { kind: 'filtered'; listings: FsGlobListing[] }
   // Syntax the filter does not read, inside the bound: Node runs the written pattern.
   | { kind: 'unchanged' }
@@ -118,70 +120,170 @@ function expandBracesAsNode(pattern: string): string[] | null | 'too-many' {
   return forms;
 }
 
-// A pattern, or one of its brace expansions, that is empty or starts with `/` names no path under
-// the folder it is listed from: Node walks it from the root of the machine, as `{,zz}/**` becomes
-// `/**`, which can take minutes.
-const FROM_ROOT_REASON =
-  'it or one of its brace expansions is empty or starts with /, so it names no path in the repository and Node would walk it from the root of the machine';
+// Why a pattern names a path outside the folder it is listed from, or null when it does not.
+// Each reason is past the bound, whatever the syntax, since Node would walk outside the folder.
+const OUTSIDE_REASONS = {
+  root: 'it or one of its brace expansions is empty or starts with /, so it names no path in the repository and Node would walk it from the root of the machine',
+  climb: 'it or one of its brace expansions climbs above the folder it is listed from with .., so it names a path outside the repository',
+  drive: 'it or one of its brace expansions starts with a drive name such as C:, which Node on Windows walks from the root of that drive',
+} as const;
 
-function fromRoot(written: string, forms: readonly string[] | null | 'too-many'): boolean {
-  if (written === '' || written.startsWith('/')) return true;
-  return Array.isArray(forms) && forms.some((form) => form === '' || form.startsWith('/'));
-}
+// Any character Node may read as syntax in a part. A part without one is fixed text to Node.
+const PART_SYNTAX = /[*?[\]()]/u;
 
 /**
- * The parts of one expansion after the rewrites Node makes before it walks: repeated slashes are
- * one, a `.` or empty part inside the pattern is dropped, a part followed by `..` is dropped with
- * it (unless it is `.`, `..`, `**`, or empty), and a run of `**` parts is one. A leading `.`, a
- * leading `..`, a leading empty part (an absolute pattern), and a trailing empty part (a pattern
- * that ends with `/`) are kept, as Node keeps them.
+ * Node's first rewrite of the parts of each expansion, as minimatch makes it at optimization
+ * level 2 (firstPhasePreProcess): a run of `**` is one, a `**` followed by `..` and two more
+ * names is split into two sets, a `.` or empty part inside the pattern is dropped, and a part
+ * followed by `..` is dropped with it (unless it is `.`, `..`, `**`, or empty). Repeated slashes
+ * are one. The sets are changed in place and new ones are added at the end, as Node does.
  */
-function nodeParts(form: string): string[] {
-  const parts = form.split(/\/+/u);
+function firstPhaseSets(forms: readonly string[]): string[][] {
+  const sets = forms.map((form) => form.split(/\/+/u));
   let changed = true;
   while (changed) {
     changed = false;
-    for (let i = 0; i + 1 < parts.length; ) {
-      if (parts[i] === '**' && parts[i + 1] === '**') {
-        parts.splice(i + 1, 1);
+    for (const parts of sets) {
+      let gs = -1;
+      while ((gs = parts.indexOf('**', gs + 1)) !== -1) {
+        let end = gs;
+        while (parts[end + 1] === '**') end += 1;
+        if (end > gs) parts.splice(gs + 1, end - gs);
+        const next = parts[gs + 1];
+        const p = parts[gs + 2];
+        const p2 = parts[gs + 3];
+        if (next !== '..') continue;
+        if (p === undefined || p === '' || p === '.' || p === '..' || p2 === undefined || p2 === '' || p2 === '.' || p2 === '..') {
+          continue;
+        }
         changed = true;
-      } else {
-        i += 1;
+        parts.splice(gs, 1);
+        const other = parts.slice(0);
+        other[gs] = '**';
+        sets.push(other);
+        gs -= 1;
       }
-    }
-    for (let i = 1; i < parts.length - 1; i += 1) {
-      const part = parts[i];
-      if (i === 1 && part === '' && parts[0] === '') continue;
-      if (part === '.' || part === '') {
-        parts.splice(i, 1);
-        i -= 1;
-        changed = true;
+      for (let i = 1; i < parts.length - 1; i += 1) {
+        const part = parts[i];
+        if (i === 1 && part === '' && parts[0] === '') continue;
+        if (part === '.' || part === '') {
+          changed = true;
+          parts.splice(i, 1);
+          i -= 1;
+        }
       }
-    }
-    if (parts[0] === '.' && parts.length === 2 && (parts[1] === '.' || parts[1] === '')) {
-      parts.pop();
-      changed = true;
-    }
-    let dots = 0;
-    while ((dots = parts.indexOf('..', dots + 1)) !== -1) {
-      const before = parts[dots - 1];
-      if (before !== undefined && before !== '' && before !== '.' && before !== '..' && before !== '**') {
-        const keepDot = dots === 1 && parts[dots + 1] === '**';
-        parts.splice(dots - 1, 2, ...(keepDot ? ['.'] : []));
-        if (parts.length === 0) parts.push('');
-        dots -= 2;
+      if (parts[0] === '.' && parts.length === 2 && (parts[1] === '.' || parts[1] === '')) {
         changed = true;
+        parts.pop();
+      }
+      let dots = 0;
+      while ((dots = parts.indexOf('..', dots + 1)) !== -1) {
+        const before = parts[dots - 1];
+        if (before !== undefined && before !== '' && before !== '.' && before !== '..' && before !== '**') {
+          changed = true;
+          const keepDot = dots === 1 && parts[dots + 1] === '**';
+          parts.splice(dots - 1, 2, ...(keepDot ? ['.'] : []));
+          if (parts.length === 0) parts.push('');
+          dots -= 2;
+        }
       }
     }
   }
-  return parts;
+  return sets;
 }
 
-// The leading parts that name the folder a pattern starts from: a run of `.` and `..`. A pattern
-// that starts from the root of the machine never gets here (see fromRoot).
+/**
+ * Two sets as one wider set, or null, as minimatch merges them (partsMatch with empty `**`
+ * matches on). Node then walks only the merged set: `x/a/** /y` and `x/** /a/y` (written here
+ * with spaces) become `x/** /a/** /y`, which also matches `x/p/a/q/y`.
+ */
+function mergedSet(a: readonly string[], b: readonly string[]): string[] | null {
+  let ai = 0;
+  let bi = 0;
+  const result: string[] = [];
+  let which = '';
+  while (ai < a.length && bi < b.length) {
+    const left = a[ai] ?? '';
+    const right = b[bi] ?? '';
+    if (left === right) {
+      result.push(left);
+      ai += 1;
+      bi += 1;
+    } else if (left === '**' && right === a[ai + 1]) {
+      result.push(left);
+      ai += 1;
+    } else if (right === '**' && left === b[bi + 1]) {
+      result.push(right);
+      bi += 1;
+    } else if (left === '*' && right !== '' && !right.startsWith('.') && right !== '**') {
+      if (which === 'b') return null;
+      which = 'a';
+      result.push(left);
+      ai += 1;
+      bi += 1;
+    } else if (right === '*' && left !== '' && !left.startsWith('.') && left !== '**') {
+      if (which === 'a') return null;
+      which = 'b';
+      result.push(right);
+      ai += 1;
+      bi += 1;
+    } else {
+      return null;
+    }
+  }
+  return a.length === b.length ? result : null;
+}
+
+// Node's second rewrite (secondPhasePreProcess): each set is merged into the first later set it
+// merges with, and the sets Node walks are what is left.
+function secondPhaseSets(sets: string[][]): string[][] {
+  for (let i = 0; i < sets.length - 1; i += 1) {
+    for (let j = i + 1; j < sets.length; j += 1) {
+      const merged = mergedSet(sets[i] ?? [], sets[j] ?? []);
+      if (merged !== null) {
+        sets[i] = [];
+        sets[j] = merged;
+        break;
+      }
+    }
+  }
+  return sets.filter((set) => set.length > 0);
+}
+
+// Why one set names a path outside the folder, or null. The depth counts the fewest names a path
+// can have at each part: `**` may be none, `.` stays, and `..` goes up one. Below zero, the path
+// is above the folder. On Windows a first fixed part that ends with `:` is a drive, and Node walks
+// it from the root of that drive.
+function outsideReason(set: readonly string[]): keyof typeof OUTSIDE_REASONS | null {
+  if (set.length === 0 || set[0] === '') return 'root';
+  let depth = 0;
+  for (const part of set) {
+    if (part === '..') depth -= 1;
+    else if (part !== '.' && part !== '**' && part !== '') depth += 1;
+    if (depth < 0) return 'climb';
+  }
+  const first = set.find((part) => part !== '.');
+  if (first !== undefined && first.endsWith(':') && !PART_SYNTAX.test(first)) return 'drive';
+  return null;
+}
+
+function outsideProblem(written: string, forms: readonly string[] | null | 'too-many'): string | null {
+  const expanded = Array.isArray(forms) ? forms : [written];
+  if (written === '' || written.startsWith('/') || expanded.some((form) => form === '' || form.startsWith('/'))) {
+    return OUTSIDE_REASONS.root;
+  }
+  for (const set of firstPhaseSets(expanded)) {
+    const reason = outsideReason(set);
+    if (reason !== null) return OUTSIDE_REASONS[reason];
+  }
+  return null;
+}
+
+// The leading parts that name the folder a set starts from: a run of `.`. A set that starts above
+// the folder or at the root never gets here (see outsideProblem).
 function leadingCount(parts: readonly string[]): number {
   let count = 0;
-  while (count < parts.length - 1 && (parts[count] === '.' || parts[count] === '..')) count += 1;
+  while (count < parts.length - 1 && parts[count] === '.') count += 1;
   return count;
 }
 
@@ -189,10 +291,14 @@ function hasWildcard(part: string): boolean {
   return part.includes('*') || part.includes('?');
 }
 
-// A fixed part with a letter that has another case, which a platform that ignores case may hold
-// in that other case. `.` and `..` are never widened.
-function isFixedWithCase(part: string): boolean {
-  return part !== '**' && !hasWildcard(part) && part.toLowerCase() !== part.toUpperCase();
+function starRuns(part: string): number {
+  return part.match(/\*+/gu)?.length ?? 0;
+}
+
+// A part Node could backtrack on: more than one run of `*`. A part with one run, such as `src*`
+// or `a?b*`, is kept as written, so Node keeps the pruning its fixed text gives.
+function needsWidening(part: string): boolean {
+  return part !== '**' && starRuns(part) > FS_GLOB_BOUND.starRunsPerPart;
 }
 
 // A part as `*`, or `.*` for one that starts with a dot. Node lists every name such a part could
@@ -203,31 +309,44 @@ function widen(part: string): string {
 
 type NamePart = { kind: 'any-parts' } | { kind: 'name'; test: (name: string) => boolean };
 
-function foldings(text: string): [string, string] {
-  return [text.toLowerCase(), text.toUpperCase()];
+/**
+ * Text as a regular expression with the `i` flag and no `u` flag compares it, one UTF-16 code
+ * unit at a time: a unit becomes its upper case when that is one unit, except that a unit past
+ * ASCII never becomes an ASCII one. So `ß` stays `ß`, and `σ` and `ς` both become `Σ`.
+ */
+function regexFold(text: string): string {
+  let folded = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charAt(i);
+    const upper = unit.toUpperCase();
+    folded += upper.length === 1 && !(unit.charCodeAt(0) >= 128 && upper.charCodeAt(0) < 128) ? upper : unit;
+  }
+  return folded;
 }
+
+const FOLDINGS: ReadonlyArray<(text: string) => string> = [regexFold, (text) => text.toLowerCase(), (text) => text.toUpperCase()];
 
 // One part as Node's walk tests a name: fixed text must be equal, and a part with `*` or `?` uses
 // the matcher that never backtracks. A wildcard part that does not start with a dot never matches
-// a name that does (Node's dot rule). Without regard to case, a name matches when it matches in
-// lower case or in upper case, which is never narrower than Node's test.
+// a name that does (Node's dot rule). Without regard to case, a name matches when it matches after
+// any of three foldings: the one Node's regular expression uses, lower case, or upper case. That
+// is never narrower than Node's test.
 function namePart(part: string, nocase: boolean): NamePart {
   if (part === '**') return { kind: 'any-parts' };
   const dotGuard = !part.startsWith('.');
   if (!hasWildcard(part)) {
     if (!nocase) return { kind: 'name', test: (name) => name === part };
-    const [lower, upper] = foldings(part);
-    return { kind: 'name', test: (name) => name === part || name.toLowerCase() === lower || name.toUpperCase() === upper };
+    const folded = FOLDINGS.map((fold) => fold(part));
+    return { kind: 'name', test: (name) => name === part || FOLDINGS.some((fold, index) => fold(name) === folded[index]) };
   }
   if (!nocase) {
     const matches = wildcardNameMatcher(part, { question: true });
     return { kind: 'name', test: (name) => !(dotGuard && name.startsWith('.')) && matches(name) };
   }
-  const [lower, upper] = foldings(part).map((text) => wildcardNameMatcher(text, { question: true }));
+  const matchers = FOLDINGS.map((fold) => wildcardNameMatcher(fold(part), { question: true }));
   return {
     kind: 'name',
-    test: (name) =>
-      !(dotGuard && name.startsWith('.')) && ((lower?.(name.toLowerCase()) ?? false) || (upper?.(name.toUpperCase()) ?? false)),
+    test: (name) => !(dotGuard && name.startsWith('.')) && FOLDINGS.some((fold, index) => matchers[index]?.(fold(name)) ?? false),
   };
 }
 
@@ -271,11 +390,6 @@ function partsMatch(parts: readonly NamePart[], names: readonly string[]): boole
   return reach[count] === 1;
 }
 
-interface FormReading {
-  base: string[];
-  rest: string[];
-}
-
 // Why a pattern Node runs unchanged is past the bound, or null when it is inside it.
 function boundProblem(pattern: string, forms: readonly string[] | null | 'too-many'): string | null {
   if (pattern.length > FS_GLOB_BOUND.length) {
@@ -292,9 +406,7 @@ function boundProblem(pattern: string, forms: readonly string[] | null | 'too-ma
   }
   for (const form of forms) {
     for (const part of form.split('/')) {
-      if (part === '**') continue;
-      const runs = part.match(/\*+/gu)?.length ?? 0;
-      if (runs > FS_GLOB_BOUND.starRunsPerPart) {
+      if (part !== '**' && starRuns(part) > FS_GLOB_BOUND.starRunsPerPart) {
         return `a part holds more than ${String(FS_GLOB_BOUND.starRunsPerPart)} run of * with other syntax Node must match itself`;
       }
     }
@@ -302,15 +414,78 @@ function boundProblem(pattern: string, forms: readonly string[] | null | 'too-ma
   return null;
 }
 
+// One set Node walks, as the adapter lists it.
+interface SetListing {
+  base: string;
+  // The set's parts after the base, as listed.
+  listed: string[];
+  // The test for a path the listing finds, or null when every path it finds is kept.
+  test: ((path: string) => boolean) | null;
+}
+
+// Whether two listed beginnings can reach the same folder. Node names a folder by the text of the
+// parts that led to it, and a fixed part adds its own text. So two beginnings never meet when, read
+// from the start or from the end up to a `**`, one part is fixed text in both and the texts
+// differ, or when neither holds `**` and their lengths differ.
+function canMeet(a: readonly string[], b: readonly string[]): boolean {
+  const differ = (left: string | undefined, right: string | undefined): boolean =>
+    left !== undefined && right !== undefined && !PART_SYNTAX.test(left) && !PART_SYNTAX.test(right) && left !== right;
+  for (let i = 0; i < Math.min(a.length, b.length) && a[i] !== '**' && b[i] !== '**'; i += 1) {
+    if (differ(a[i], b[i])) return false;
+  }
+  for (let i = 1; i <= Math.min(a.length, b.length) && a[a.length - i] !== '**' && b[b.length - i] !== '**'; i += 1) {
+    if (differ(a[a.length - i], b[b.length - i])) return false;
+  }
+  return a.includes('**') || b.includes('**') || a.length === b.length;
+}
+
+/**
+ * Node keeps one cache for all the patterns of one call, keyed by a folder and the rest of a
+ * pattern from some part on. When a second pattern reaches a folder with a rest already seen
+ * there, Node skips it, and a run found that this can lose a file one of the patterns lists on its
+ * own. So two listed patterns share one call only when they are the same text, or when no rest
+ * of one is a rest of the other at a folder both can reach. Sets that share a call share a test:
+ * a path is kept when any of their sets matches it.
+ */
+function shareCalls(sets: readonly SetListing[]): SetListing[][] {
+  interface Rest {
+    whole: string;
+    before: string[];
+  }
+  const groups: Array<{ members: SetListing[]; rests: Map<string, Rest[]> }> = [];
+  for (const set of sets) {
+    const whole = set.listed.join('/');
+    const rests: Array<[string, Rest]> = [];
+    for (let at = 0; at < set.listed.length; at += 1) {
+      rests.push([set.listed.slice(at).join('/'), { whole, before: set.listed.slice(0, at) }]);
+    }
+    const clashes = (seen: Map<string, Rest[]>): boolean =>
+      rests.some(([listed, rest]) => (seen.get(listed) ?? []).some((other) => other.whole !== rest.whole && canMeet(other.before, rest.before)));
+    const group = groups.find(
+      (candidate) =>
+        candidate.members[0]?.base === set.base && (candidate.members[0].test === null) === (set.test === null) && !clashes(candidate.rests),
+    );
+    const target = group ?? { members: [], rests: new Map<string, Rest[]>() };
+    if (group === undefined) groups.push(target);
+    target.members.push(set);
+    for (const [listed, rest] of rests) target.rests.set(listed, [...(target.rests.get(listed) ?? []), rest]);
+  }
+  return groups.map((group) => group.members);
+}
+
 /**
  * How the adapter reads one pattern. Node first reads every `\` as `/`, so this does too.
  *
- * The filter reads a pattern made of fixed text, `*`, `**`, `?`, and brace groups Node expands the
- * same way (see expandBracesAsNode). Each expansion is split into parts the way Node splits it,
- * and one wide listing is made for each distinct wide pattern. On a platform that ignores case, a
- * second listing also widens every fixed part that holds a letter, so a folder named in other
- * letter case is listed, and every test ignores case. A `.` or `..` part Node still walks after
- * its rewrites, such as a `..` after `**`, is not read by the filter, so that listing is kept whole.
+ * A pattern that names a path outside the folder (from the root, above it with `..`, or at a
+ * drive) is past the bound and not run. Otherwise the filter reads a pattern made of fixed text,
+ * `*`, `**`, `?`, and brace groups Node expands the same way (see expandBracesAsNode). The adapter
+ * makes the sets Node walks, with Node's two rewrites. When no part of any set has more than one
+ * run of `*`, Node cannot backtrack, and it runs the written pattern itself. Otherwise each such
+ * part is listed as `*`, every other part stays as written, so Node's walk keeps its shape, and a
+ * listed path is kept when the set matches it. Without regard to case (macOS and Windows), the
+ * test ignores case too, and fixed parts stay as written: a volume that ignores case finds `SRC`
+ * through `src`. A set that still holds a `.` or `..` part Node walks, such as a `..` after `**`,
+ * is not read by the filter, so that listing is kept whole.
  *
  * Any other pattern is run by Node unchanged when it is inside FS_GLOB_BOUND, and not at all past
  * it. A pattern longer than Node's own limit is handed to Node, which refuses it.
@@ -319,57 +494,48 @@ export function nodeGlobReading(pattern: string, options: FsGlobReadOptions): Fs
   if (pattern.length > NODE_MAX_PATTERN_LENGTH) return { kind: 'unchanged' };
   const written = pattern.replace(/\\/gu, '/');
   const forms = expandBracesAsNode(written);
-  if (fromRoot(written, forms)) return { kind: 'past-bound', reason: FROM_ROOT_REASON };
+  const outside = outsideProblem(written, forms);
+  if (outside !== null) return { kind: 'past-bound', reason: outside };
   if (!Array.isArray(forms) || CLASS_CHARACTER.test(written) || EXTGLOB_OPEN.test(written)) {
     const problem = boundProblem(written, forms);
     return problem === null ? { kind: 'unchanged' } : { kind: 'past-bound', reason: problem };
   }
-  const readings: FormReading[] = forms.map((form) => {
-    const parts = nodeParts(form);
-    const lead = leadingCount(parts);
-    return { base: parts.slice(0, lead), rest: parts.slice(lead) };
-  });
+  const sets = secondPhaseSets(firstPhaseSets(forms));
+  if (!sets.some((set) => set.some(needsWidening))) return { kind: 'unchanged' };
 
-  const listings = new Map<string, { base: string; tests: Array<((path: string) => boolean) | null> }>();
-  const add = (base: string[], listed: string[], test: ((path: string) => boolean) | null): void => {
-    const key = [...base, ...listed].join('/');
-    const entry = listings.get(key) ?? { base: base.join('/'), tests: [] };
-    entry.tests.push(test);
-    listings.set(key, entry);
-  };
-  for (const { base, rest } of readings) {
-    // A pattern that names only a folder, such as `.` or `..`, lists no file.
+  const listings: SetListing[] = [];
+  for (const set of sets) {
+    const lead = leadingCount(set);
+    const rest = set.slice(lead);
+    // A set that names only a folder, such as `.`, lists no file.
     if (rest.length === 0 || (rest.length === 1 && rest[0] === '')) continue;
+    const listed = rest.map((part) => (needsWidening(part) ? widen(part) : part));
+    const base = set.slice(0, lead).join('/');
     // A `.` or `..` left after a wildcard, as in `src/**/../x`, or a `.` at the end, is walked by
     // Node in ways the filter does not read. The wide listing is kept whole: every file it lists
     // is one Node could list, which is never narrower than Node's answer.
     if (rest.some((part) => part === '.' || part === '..')) {
-      add(base, rest.map((part) => (part === '**' || !hasWildcard(part) ? part : widen(part))), null);
-      if (options.nocase) add(base, rest.map((part) => (isFixedWithCase(part) || hasWildcard(part) ? widen(part) : part)), null);
+      listings.push({ base, listed, test: null });
       continue;
     }
     // A trailing empty part names the folder or link the parts before it match.
     const matched = rest[rest.length - 1] === '' ? rest.slice(0, -1) : rest;
     const compiled = matched.map((part) => namePart(part, options.nocase));
     const test = (path: string): boolean => partsMatch(compiled, path.split('/'));
-    const wide = rest.map((part) => (part === '**' || !hasWildcard(part) ? part : widen(part)));
-    const unchanged = wide.every((part, index) => part === rest[index]);
-    add(base, wide, unchanged && !options.nocase ? null : test);
-    if (options.nocase && rest.some(isFixedWithCase)) {
-      add(
-        base,
-        rest.map((part) => (isFixedWithCase(part) || (part !== '**' && hasWildcard(part)) ? widen(part) : part)),
-        test,
-      );
-    }
+    const unchanged = listed.every((part, index) => part === rest[index]);
+    listings.push({ base, listed, test: unchanged ? null : test });
   }
   return {
     kind: 'filtered',
-    listings: [...listings].map(([key, { base, tests }]) => ({
-      pattern: key,
-      base,
-      matches: tests.includes(null) ? null : (path) => tests.some((test) => test?.(path) ?? false),
-    })),
+    listings: shareCalls(listings).map((members) => {
+      const tests = members.map((member) => member.test);
+      const base = members[0]?.base ?? '';
+      return {
+        patterns: [...new Set(members.map((member) => (base === '' ? '' : `${base}/`) + member.listed.join('/')))],
+        base,
+        matches: tests.includes(null) ? null : (path: string) => tests.some((test) => test?.(path) ?? false),
+      };
+    }),
   };
 }
 

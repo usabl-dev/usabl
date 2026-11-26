@@ -8,6 +8,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { glob as nodeGlob } from 'node:fs/promises';
+import { relative, resolve } from 'node:path';
 import { makeFsGlob } from '../../src/deps/fs.js';
 
 // The slow shape: `src/`, then `*a` twelve times, then `*b`. Node took seconds on one name of 30
@@ -93,5 +95,43 @@ describe('listing under a folder', () => {
     const fs = makeFsGlob({ cwd: root });
     expect(await fs.globUnder?.(odd, ['**/*.ts'])).toEqual([`${odd}/src/index.ts`]);
     expect(await fs.globUnder?.('missing', ['**/*.ts'])).toEqual([]);
+  });
+});
+
+// Node merges two brace expansions whose `**` sits in different places into one wider set, so
+// `x/{a/**,**/a}/y` also matches `x/p/a/q/y`. The adapter must list at least what Node lists.
+describe('brace expansions Node merges', () => {
+  async function nodeFiles(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    for await (const entry of nodeGlob(pattern, { cwd: root, withFileTypes: true })) {
+      if (!entry.isDirectory()) found.push(relative(root, resolve(entry.parentPath, entry.name)));
+    }
+    return found.sort();
+  }
+
+  for (const [pattern, file] of [
+    ['x/{a/**,**/a}/y', 'x/p/a/q/y'],
+    ['src/{pages/**,**/pages}/*.tsx', 'src/x/pages/y/A.tsx'],
+    ['packages/{a/**,**/a}/package.json', 'packages/x/a/y/package.json'],
+  ] as const) {
+    it(`lists ${file} for ${pattern}, as Node does`, async () => {
+      await write(file);
+      await write('x/a/y');
+      expect(await nodeFiles(pattern)).toContain(file);
+      const listed = await makeFsGlob({ cwd: root }).glob([pattern]);
+      expect(listed).toContain(file);
+      expect(listed).toEqual(expect.arrayContaining(await nodeFiles(pattern)));
+    });
+  }
+});
+
+describe('a pattern whose walk would start outside the folder', { timeout: 30_000 }, () => {
+  it('is not walked', async () => {
+    await write('in/a.ts');
+    const fs = makeFsGlob({ cwd: join(root, 'in') });
+    const { value, ms } = await timed(() => fs.glob(['..\\in\\*', `${'..\\'.repeat(12)}**`, '../in/*', 'C:/**', 'C:\\**']));
+    expect(value).toEqual([]);
+    expect(ms).toBeLessThan(QUICK_MS);
+    expect(await fs.glob(['a.ts', 'x/../a.ts'])).toEqual(['a.ts']);
   });
 });

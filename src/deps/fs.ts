@@ -237,10 +237,10 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
           continue;
         }
         const listings =
-          reading.kind === 'unchanged' ? [{ pattern, base: '', matches: null }] : reading.listings;
+          reading.kind === 'unchanged' ? [{ patterns: [pattern], base: '', matches: null }] : reading.listings;
         for (const listing of listings) {
           const base = resolve(cwd, listing.base);
-          for await (const entry of glob(listing.pattern, { cwd, withFileTypes: true })) {
+          for await (const entry of glob(listing.patterns, { cwd, withFileTypes: true })) {
             if (entry.isDirectory()) {
               continue;
             }

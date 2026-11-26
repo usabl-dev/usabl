@@ -14,7 +14,7 @@ import { glob } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fsGlobBoundProblem } from '../../src/deps/fs-glob-reading.js';
+import { fsGlobBoundProblem, nodeGlobReading } from '../../src/deps/fs-glob-reading.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 
 // What the adapter returned before: Node's answer, files only, relative to the folder.
@@ -105,6 +105,10 @@ const PARTS = [
   '.a', '.*', '.a*', 'a', 'b', 'ab', 'src', 'A', '?', 'a?', '?b', '??', '?*', '*?', '*a*b*', 'é', '😀',
   '{x}', 'a{b}', '${a,b}', '#c', '!n', 'x y', 'a,b', '.git', 'package.json', '*.test.*', '{,a}',
   `${'*a'.repeat(3)}`, '.env*', '[a]*', '[!a]', 'a\nb', 'a\n*',
+  // Brace groups that span a slash, which Node may merge into a wider set.
+  '{a/**,**/a}', '{**/b,b/**}', '{src/,}a', '{a,b/c}', '{a/*,*/b}', '{**/a/**,a}',
+  // Parts with two runs of `*`, which the adapter lists wide and filters.
+  '*a*', '*b*', '*.*', '.*a*', 'a*b*', '*s*c', '*?*', '{*a*,b}', '{a/*b*,*/*a*}', '*{a,b}*',
 ];
 
 // A pattern made from a file the tree holds, with some of its names written as wildcards, so many
@@ -115,12 +119,14 @@ function patternFrom(next: () => number, file: string): string {
   const written: string[] = [];
   for (const name of names) {
     const roll = next();
-    if (roll < 0.4) written.push(name);
-    else if (roll < 0.5) written.push(name.startsWith('.') ? '.*' : '*');
-    else if (roll < 0.6) written.push(`${name.slice(0, 1)}*`);
-    else if (roll < 0.7) written.push(`*${name.slice(-1)}`);
-    else if (roll < 0.75) written.push(`${name.slice(0, 1)}?${name.length > 2 ? '*' : ''}`);
-    else if (roll < 0.8) written.push(`{${name},zz}`);
+    if (roll < 0.35) written.push(name);
+    else if (roll < 0.42) written.push(name.startsWith('.') ? '.*' : '*');
+    else if (roll < 0.49) written.push(`${name.slice(0, 1)}*`);
+    else if (roll < 0.56) written.push(`*${name.slice(-1)}`);
+    else if (roll < 0.6) written.push(`${name.slice(0, 1)}?${name.length > 2 ? '*' : ''}`);
+    else if (roll < 0.65) written.push(`{${name},zz}`);
+    // Two runs of `*`, which the adapter lists wide and filters.
+    else if (roll < 0.8) written.push(`${name.startsWith('.') ? '.' : ''}*${name.slice(Math.floor(name.length / 2), Math.floor(name.length / 2) + 1)}*`);
     else if (roll < 0.9) {
       if (written[written.length - 1] !== '**') written.push('**');
     } else written.push(pick(PARTS));
@@ -169,8 +175,21 @@ function makePattern(next: () => number, tree: Tree): string {
  *   text it reaches with no `**` before it), and the adapter always lists it.
  * - dot-part-after-wildcard: a `..` that Node keeps after `**`, or a `.` at the end. The filter
  *   does not read how Node walks those, so the wide listing is kept whole.
+ * - skipped-by-node-cache: Node lists the path for one brace expansion walked alone, but not for
+ *   the written pattern. Node keeps one cache for all the expansions of a pattern and skips an
+ *   expansion that reaches a folder with a rest of the pattern already seen there.
  */
-const WIDER_CASES = ['through-link', 'file-before-trailing-globstar', 'dot-part-after-wildcard'] as const;
+const WIDER_CASES = ['through-link', 'file-before-trailing-globstar', 'dot-part-after-wildcard', 'skipped-by-node-cache'] as const;
+
+// The expansions of single-level brace groups, as Node makes them. A group right after `$`, or one
+// with no comma, is text.
+function braceForms(pattern: string): string[] {
+  const group = /\{([^{}]*)\}/u.exec(pattern);
+  if (group === null || !(group[1] ?? '').includes(',') || pattern.charAt(group.index - 1) === '$') return [pattern];
+  const before = pattern.slice(0, group.index);
+  const after = pattern.slice(group.index + group[0].length);
+  return (group[1] ?? '').split(',').flatMap((alternative) => braceForms(before + alternative + after));
+}
 
 async function widerCase(root: string, tree: Tree, pattern: string, path: string): Promise<(typeof WIDER_CASES)[number] | null> {
   const names = parts(path);
@@ -183,6 +202,10 @@ async function widerCase(root: string, tree: Tree, pattern: string, path: string
   if (pattern.endsWith('/**') && (await nodeAnswer(root, pattern.replace(/(?:\/\*\*)+$/u, ''))).includes(path)) {
     return 'file-before-trailing-globstar';
   }
+  const forms = braceForms(pattern);
+  if (forms.length > 1) {
+    for (const form of forms) if ((await nodeAnswer(root, form)).includes(path)) return 'skipped-by-node-cache';
+  }
   return null;
 }
 
@@ -190,6 +213,16 @@ async function widerCase(root: string, tree: Tree, pattern: string, path: string
 // that are not single closed groups.
 function otherSyntax(pattern: string): boolean {
   if (/[[\]]|[?*+@!]\(/u.test(pattern)) return true;
+  // A start at the root or at a drive, or a `..` that climbs above the tree.
+  for (const form of braceForms(pattern.replace(/\\/gu, '/'))) {
+    if (form === '' || form.startsWith('/') || /^(?:\.\/)*[^/*?]*:(?:\/|$)/u.test(form)) return true;
+    let depth = 0;
+    for (const part of form.split('/')) {
+      if (part === '..') depth -= 1;
+      else if (part !== '.' && part !== '**' && part !== '') depth += 1;
+      if (depth < 0) return true;
+    }
+  }
   let open = false;
   for (const char of pattern) {
     if (char === '{') {
@@ -211,7 +244,8 @@ const PATTERNS_PER_TREE = 60;
 const SAMPLE_TREE: Tree = {
   files: [
     'a/b/f', 'a/f', 'a/.d', 'a/b/.e', '.h/c/g', '.h/g', 'x{y}/k', '${a,b}', 'a,b', '#c', '!n', 'ab', 'ac',
-    'aé', 'a😀', 'b1/z', 'b2/z', 'A/q', 'real/x', 'real/sub/y', 'real/.h',
+    'aé', 'a😀', 'b1/z', 'b2/z', 'A/q', 'real/x', 'real/sub/y', 'real/.h', 'x/p/a/q/y', 'x/a/y',
+    'src/x/pages/y/A.tsx', 'packages/x/a/y/package.json',
   ],
   links: [
     { path: 'link', target: 'real' },
@@ -224,6 +258,7 @@ const SAMPLE_PATTERNS = [
   '${a,b}', '{,a}', 'a//f', 'a/./f', './a/f', 'a/b/../f', 'a/*/../f', '*/../a/f', 'a/', 'a/**/', '#c', '!n',
   'a,b', 'a/b/**', 'A/q', 'a/Q', '*/q', 'link/x', '*/x', 'l*/x', '**/x', '**', 'link/**', 'link', '*', './**/x',
   'link/*', '*/*', 'link/', '*/sub/y', '**/.h', '**/.*', '**/.*/**', '*/**', '**/*', '[a]b', '[!a]*', 'b[12]/z',
+  'x/{a/**,**/a}/y', 'src/{pages/**,**/pages}/*.tsx', 'packages/{a/**,**/a}/package.json',
 ];
 
 describe('a fixed sample against Node fs.glob', () => {
@@ -269,6 +304,8 @@ describe('the adapter against Node fs.glob', { timeout: 600_000 }, () => {
     let compared = 0;
     let matched = 0;
     let ignoringCaseWider = 0;
+    // Patterns the adapter lists wide and filters, rather than handing to Node as written.
+    let filtered = 0;
     // Patterns past the bound, which the adapter does not run.
     const skipped: string[] = [];
     const widerExamples: string[] = [];
@@ -285,6 +322,7 @@ describe('the adapter against Node fs.glob', { timeout: 600_000 }, () => {
         const actual = await adapter.glob([pattern]);
         compared += 1;
         if (expected.length > 0) matched += 1;
+        if (nodeGlobReading(pattern, { nocase: false }).kind === 'filtered') filtered += 1;
         // A platform that ignores case lists at least what Linux lists.
         const folded = new Set(await ignoringCase.glob([pattern]));
         for (const path of actual) if (!folded.has(path)) missing.push(`ignoring case: ${pattern} -> ${path}`);
@@ -307,12 +345,14 @@ describe('the adapter against Node fs.glob', { timeout: 600_000 }, () => {
       }
     }
     if (process.env['FS_GLOB_COMPARE_REPORT'] === '1') {
-      console.log(JSON.stringify({ compared, matched, ignoringCaseWider, skipped: skipped.length, skippedWithFiles, wider, widerExamples, skippedExamples: skipped.slice(0, 10), missing: missing.slice(0, 40), unexplained: unexplained.slice(0, 40) }, null, 2));
+      console.log(JSON.stringify({ compared, matched, filtered, ignoringCaseWider, skipped: skipped.length, skippedWithFiles, wider, widerExamples, skippedExamples: skipped.slice(0, 10), missing: missing.slice(0, 40), unexplained: unexplained.slice(0, 40) }, null, 2));
     }
     expect(missing).toEqual([]);
     expect(unexplained).toEqual([]);
     // Enough patterns match some file for the comparison to mean something.
     expect(matched).toBeGreaterThan(compared / 4);
+    // Enough patterns go through the filter for the comparison to test it.
+    expect(filtered).toBeGreaterThan(compared / 4);
     // Only patterns with syntax the filter does not read are past the bound.
     for (const pattern of skipped) expect(otherSyntax(pattern), pattern).toBe(true);
   });
