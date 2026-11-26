@@ -447,6 +447,39 @@
 
 ### Fixed
 
+- The merge-base diff, the committed part of the changed list for `usabl check --trusted-ref`,
+  `usabl check --branch-scope`, and the Stop hook, is now built from commits and trees checked
+  against their ids. `git diff <ref>...HEAD` read trees as stored, so an agent that overwrote a
+  tree object only the trusted side holds, rewritten to list a committed edit, hid that edit: the
+  stop checked only the other screens and said VERIFIED. A merge base commit rewritten to name a
+  tree that holds the edit did the same for `usabl check --trusted-ref` once the trusted branch had
+  moved on. Now usabl reads the trusted commit, HEAD, the merge base, and each tree whose id
+  differs between the two sides in Node, and an object whose bytes do not hash to its id stops the
+  read with an error that names it and `git fsck`. No diff setting applies any more, so
+  `diff.ignoreSubmodules=all` in `.git/config` no longer hides a committed submodule move. Gate
+  effect: those stops block, and `usabl check` fails, instead of reading VERIFIED. Listing change:
+  a committed rename lists both names, as an uncommitted one already did. Cost: on a repository of
+  20,000 commits and 10,000 files under load, 340 to 460 ms against 70 to 100 ms for `git diff`,
+  with the same 149 files listed. Known limits: git still finds the merge base from commit parents
+  as stored, which can move it as moving the trusted branch with `git update-ref` can; and the
+  policy text read at a ref is the blob as stored, so a policy blob both sides share, overwritten
+  in `.git/objects`, reads as the new text. CI fetches and checks every object, so neither applies
+  there.
+- The Stop hook now pins the local checkout state with the guarded files at the first stop of a
+  session: whether sparse checkout and cone mode are on and what the pattern file holds, for the
+  repository and each submodule, and which submodule folders are empty. The changed list reads a
+  missing file under that state as left out on purpose, so an agent that turned sparse checkout
+  on, wrote its own patterns, or emptied a submodule folder, and deleted a screen file, got a stop
+  that read "nothing to check", or VERIFIED after checking only the other screens. Now a change to
+  that state blocks the next stop as session drift and names `.git/info/sparse-checkout` or
+  `.git/modules`; an emptied pattern file or a folder in its place counts. Gate effect: those
+  stops block. Any change counts, so an honest `git sparse-checkout set` or
+  `git submodule update --init` during a session also blocks as drift, and a repository that uses
+  either reads as drift for the rest of a session that was running when usabl was upgraded. The
+  default state adds no pin. Known limits: a change made before the first stop, a stop with no
+  session id, and a file outside honest sparse patterns that is still on disk, which the agent
+  flags skip-worktree and deletes. Each stop reads the state with a few git processes, about 90 to
+  150 ms in a small repository under load.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
@@ -595,13 +628,8 @@
   than with a cache for every read, a few seconds under load, and about the same in a sparse
   checkout with 45,000 files left out. Known limits: a file under a filter driver that is not LFS,
   an LFS pointer with extension lines, or a `working-tree-encoding` file reads as changed on every
-  stop while its bytes differ from the blob. A deletion under sparse patterns the agent wrote, and
-  the deletion of a submodule's files by emptying its folder, are not listed, though the tree
-  moves. A link to a folder outside the hashed files blocks every stop until it is fixed. Reads
-  other than HEAD's trees, such as the merge-base diff and the guard's policy reads, take objects
-  as stored: until the merge-base diff reads checked trees, an agent that overwrites a tree object
-  only the trusted side holds can hide a committed edit from the changed list, and a full run can
-  say VERIFIED.
+  stop while its bytes differ from the blob. A link to a folder outside the hashed files blocks
+  every stop until it is fixed.
 - usabl's glob matcher no longer backtracks. It matches `uiFileGlobs`,
   `discovery.wideBlastGlobs`, `guardedPaths` as the guard reads them from git listings,
   `sharedGlobs`, `import.meta.glob` patterns, and `CODEOWNERS` patterns in time that is at most the
