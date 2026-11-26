@@ -68,6 +68,30 @@ describe('the size of the workspaces list', { timeout: 30_000 }, () => {
     expect(coverage.unresolvedFiles).toEqual(['packages/ui/src/Button.tsx']);
   });
 
+  const braces = '/{a,b}'.repeat(8);
+
+  it('makes a list whose brace groups expand to more than 4,096 patterns in all a gap', async () => {
+    const many = Array.from({ length: 20 }, (_, i) => `p${i}${braces}`);
+    const coverage = await coverageFor(['packages/admin', ...many], 'packages/ui/src/Button.tsx');
+    expect(coverage.unresolvedFiles).toEqual(['packages/ui/src/Button.tsx']);
+    expect(coverage.gaps[0]?.reason ?? '').toContain('4,096 patterns');
+  });
+
+  it('counts an entry whose braces the count cannot read as the most one entry may expand to', async () => {
+    const many = Array.from({ length: 17 }, (_, i) => `p${i}}${braces}`);
+    const coverage = await coverageFor(['packages/admin', ...many], 'packages/ui/src/Button.tsx');
+    expect(coverage.unresolvedFiles).toEqual(['packages/ui/src/Button.tsx']);
+    expect(coverage.gaps[0]?.reason ?? '').toContain('could not read the workspace packages');
+  });
+
+  it('reads a list of entries with many brace expansions and many parts quickly', async () => {
+    const many = Array.from({ length: 70 }, (_, i) => `${'x/'.repeat(400)}y${i}${braces}`);
+    const start = performance.now();
+    const coverage = await coverageFor(['packages/admin', ...many], 'packages/ui/src/Button.tsx');
+    expect(performance.now() - start).toBeLessThan(5_000);
+    expect(coverage.unresolvedFiles).toEqual(['packages/ui/src/Button.tsx']);
+  });
+
   it('still lists the package an entry with trailing slashes names', async () => {
     const coverage = await coverageFor(['packages/admin', './packages/ui///'], 'packages/ui/src/Button.tsx');
     expect(coverage.gaps[0]?.reason ?? '').toContain('@mono/ui in packages/ui');

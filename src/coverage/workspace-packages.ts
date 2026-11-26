@@ -19,6 +19,7 @@ import { posix as path } from 'node:path';
 import yaml from 'js-yaml';
 import type { CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
 import { FS_GLOB_BOUND, fsGlobBoundProblem, globUnderFolder, trimTrailingSlashes } from '../deps/fs-glob-reading.js';
+import { countBraceExpansions } from '../primitives/match-glob.js';
 import { loadAliasConfig } from './alias-config.js';
 import { mentionsPackage } from './import-graph.js';
 
@@ -142,6 +143,29 @@ function manifestGlob(raw: string): string | null {
 // long entry, or very many, could hold the event loop past the stop hook's deadline.
 const MAX_WORKSPACE_ENTRIES = 1000;
 
+// Reading an entry the way Node does compares each pair of its brace expansions part by part, so
+// one entry with 256 expansions and many parts takes about half a second, and many such entries
+// could hold the event loop past the stop hook's deadline. The whole list is bounded first: at
+// most MAX_WORKSPACE_EXPANSIONS expansions, and MAX_WORKSPACE_CHARACTERS characters of expansions,
+// in all. Each expansion counts as long as its entry. An entry whose braces this count cannot read
+// counts as the most expansions one entry may have.
+const MAX_WORKSPACE_EXPANSIONS = 4096;
+const MAX_WORKSPACE_CHARACTERS = 262_144;
+
+function listExpansionProblem(listed: readonly string[]): string | null {
+  let expansions = 0;
+  let characters = 0;
+  for (const raw of listed) {
+    const count = countBraceExpansions(raw.replace(/\\/gu, '/')) ?? FS_GLOB_BOUND.expansions;
+    expansions += count;
+    characters += count * raw.length;
+  }
+  if (expansions > MAX_WORKSPACE_EXPANSIONS || characters > MAX_WORKSPACE_CHARACTERS) {
+    return 'lists workspace patterns whose brace groups expand to more than 4,096 patterns, or 262,144 characters, in all';
+  }
+  return null;
+}
+
 function checkGlobBound(file: string, listed: readonly string[]): void {
   if (listed.length > MAX_WORKSPACE_ENTRIES) {
     throw new UnreadableWorkspaceRoot(file, `lists ${listed.length} workspace patterns, more than the 1,000 entries usabl reads`);
@@ -153,6 +177,10 @@ function checkGlobBound(file: string, listed: readonly string[]): void {
         `lists the workspace pattern "${raw.slice(0, 200)}", which usabl does not run because it is longer than 1,024 characters`,
       );
     }
+  }
+  const total = listExpansionProblem(listed);
+  if (total !== null) throw new UnreadableWorkspaceRoot(file, total);
+  for (const raw of listed) {
     const glob = manifestGlob(raw);
     const problem = glob === null ? null : fsGlobBoundProblem(glob);
     if (problem !== null) {
