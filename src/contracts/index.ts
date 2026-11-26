@@ -756,6 +756,9 @@ export interface AxTreeNode {
   busy: boolean;
   // The nodes its aria-controls names that the browser exposes, by backend node id.
   controls: number[];
+  // The name may show the value of a slider, a select, or another control with a value, or it is
+  // the text of an option inside one. A comparison reads it. Evidence never shows it.
+  nameMayShowValue?: true;
 }
 // What one read of the whole accessibility tree returned. A read that needs more than the budget
 // in time or in nodes is not a tree: a check that compares trees cannot use it, and says so.

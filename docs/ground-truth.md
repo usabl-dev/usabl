@@ -260,50 +260,49 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
 
 ### Module map
 
-This is the actual source layout as built for v0.2.2. Dedup is not a separate module;
-it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
-an MCP wrapper stays an optional transport.
+This is the source layout on main, one line per folder: what it holds, not every file in it.
+Dedup is not a separate module; it runs inside the gate (see section 9). There is no built MCP
+surface (section 11.5); an MCP wrapper stays an optional transport.
 
 ```
 src/
-  contracts/        index.ts
-  primitives/       canonical.ts identity.ts iso8601.ts match-glob.ts neutralize.ts slug.ts sortKey.ts
-  deps/             build.ts real.ts ax-tree.ts fakes.ts fs.ts git.ts
-  providers/
-    axe/            index.ts notes.ts
-    rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
-    rhds/           index.ts sources.ts draft.ts rhds-<one-file-per-rule>.ts
-    design-system-pack.ts   (design-system markers and the inapplicable record; section 7.2)
-    docs-rulepack/  index.ts heading-order.ts
-    keyboard-walk/  index.ts steps.ts
-    check-runner.ts index.ts
-  evidence/         receipt.ts floor.ts
-  coverage/         import-graph.ts planner.ts route-manifest.ts docs-manifest.ts docs-planner.ts asciidoc-include-graph.ts
-  gate/             index.ts
-  trust/            guard.ts
-  intake/           schema.ts normalize.ts load.ts config.ts load-config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
-  docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
-  output/           conformance.ts summary.ts
-  doctor/           index.ts
-  brief/            index.ts   (usabl brief: the task-start brief; measurement only, section 11.5)
-  drift/            routes.ts
-  floor/            prune.ts
-  init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
-  baseline/         index.ts
-  session/          index.ts   (usabl session: sign in once, save the storage state)
-  install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
-  history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
-                    ledger.ts ledger-git.ts ledger-report.ts   (usabl debt ledger; measurement only, section 9)
-  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts silent-change.ts tree-change.ts   (runs voice requirements and the silent change rule; section 7.5)
-  measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
-    sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
-  surfaces/
-    cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
-    stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
-    overlay-host.ts vite-plugin.ts webpack-plugin.ts webpack-loader.ts overlay-client.ts
-    playwright-helper.ts
-    self-check.ts docs.ts docs-html.ts
-  run.ts cli.ts cli-bin.ts index.ts
+  run.ts              the sequencer: guard, coverage, scan, gate, then the receipt when the gate verifies
+  index.ts            the library entry: the contracts, run, and gate
+  cli.ts cli-bin.ts   the CLI entry and the installed binary
+  integration-smoke.ts  a manual real-browser smoke run of the provider stack; prints scan evidence only
+  contracts/          the shared types: Draft, Finding, Result, config, and the injected deps
+  primitives/         small pure helpers: hashing, identity, globs, CODEOWNERS matching, accessible names, neutralize
+  deps/               adapters for git, the file system, the browser (real.ts, ax-tree.ts, axe-world.ts), the session, the sandbox, and scanner versions, plus fakes for tests
+  providers/          the evidence collectors and the check runner; they emit drafts only
+    axe/              axe-core (section 7.1)
+    rulepack/         the PatternFly rulepack, one pf-*.ts file per rule (section 7.2)
+    rhds/             the Red Hat Design System rulepack, one rhds-*.ts file per rule (section 7.2.1)
+    keyboard-walk/    the keyboard walk (section 7.3)
+    docs-rulepack/    checks for rendered documentation (section 7.6)
+    engines/          the optional Deque and Evinced engines, preview (section 7.7)
+  coverage/           maps changed files to screens: import graph, aliases, routes, docs manifests, and completeness (section 8)
+  gate/               the gate, the only verdict authority, and the checks on its own input (section 9)
+  trust/              the guard that detects policy drift from the trusted ref (section 10)
+  evidence/           the evidence floor, the waivers, and the verified receipt with what it binds
+  intake/             config, route, and requirement loading and validation, and the design check providers (section 13)
+  voicing/            the voice lane and the silent change rule (section 7.5)
+  history/            the debt history, usabl debt, and usabl debt ledger (measurement only, section 9)
+  judge/              the trusted judge: build extract, the static build server, the isolated browser's request filter, and its disclosure (section 11.4)
+  import/             usabl import figma: Figma files to draft requirements, written as YAML (section 13)
+  surfaces/           CLI commands, stop hook, overlay, pull request comment, CI enforce, Playwright helper, self-check, docs output, and scrub.ts (section 11)
+  output/             text projections of a Result: verdict line, summary, disclosure, debt words, bounds
+  docs/               the reports artifacts and rendered-finding to AsciiDoc source mapping (section 14)
+  app/                finding to app source mapping, presentation only
+  doctor/             usabl doctor, a read-only health check (section 11.9)
+  brief/              usabl brief, the task-start brief; measurement only (section 11.5)
+  init/               usabl init and usabl init --docs: draft policy from the working tree
+  install/            usabl install: the workflows, hooks, skills, and overlay setup for each integration
+  baseline/           usabl baseline: the first evidence floor draft
+  floor/              usabl floor prune, and the floor entries a run cannot call fixed
+  drift/              usabl drift routes and usabl drift design
+  session/            usabl session: sign in once and save the storage state
+  measure/            measurement only, never in the run or gate path: fleet insights and identity stability (section 25)
+    sensitivity/      usabl verify sensitivity (section 25)
 fixtures/
 test/
 usabl.config.json
@@ -313,6 +312,8 @@ usabl.docs.json
 .usabl-waivers.json
 .github/workflows/usabl.yml        (engine dogfood CI: gitleaks, pre-commit, semgrep, npm run check)
 .github/workflows/usabl-gate.yml   (engine PR gate; see section 11.4)
+.github/workflows/codeql.yml       (CodeQL code scanning; not a required check)
+.github/workflows/pages.yml        (publishes the approved public docs pages, run by hand)
 ```
 
 ### Check-agnostic data flow
@@ -1397,9 +1398,11 @@ What it reads, per action step:
    state change, and the nodes its `aria-controls` names, are the control's own change too. A tab
    that was removed was not deselected, and the panel it controlled is not exempt. So a disclosure that shows its
    panel, a tab that shows its panel, and a sort header that re-orders its rows are the control
-   speaking for itself, and the voicing tier already checks that speech. Values never count and
-   are never read: a field's value, and the text inside an editable field, are left out of the
-   read.
+   speaking for itself, and the voicing tier already checks that speech. A field's value never
+   counts and is never read: the value, and the text inside an editable field, are left out of
+   the read. The value of a slider, a spin button, a progress bar, a meter, a select, or a list
+   box, and the text of its options, can count, because the browser puts it into names the rule
+   compares, but it never enters evidence (see Known limits below).
 2. Was anything heard. The step's own drain, with the same hidden and modal rules as every
    announcement check (section 11.6), so a region in a dialog the step closed, or outside an
    open modal, is not heard. Each record carries the live region that wrote it and whether the
@@ -1576,8 +1579,26 @@ contents, and those contents include the field's value. When the browser says su
 comes from its contents, or does not say where it comes from, the read leaves that name out: it is
 never shown in evidence, a change of it never counts as a page change, and focus that moves to
 that node does not count as a move to a named control. An author-given name, such as
-`aria-label`, is kept. A name built through `aria-labelledby` from a field can still hold that
-field's value, and the rule does not take a name apart. Background announcements are found only from
+`aria-label`, is kept. A control that holds a value without being editable (role `slider`,
+`spinbutton`, `progressbar`, `meter`, `scrollbar`, `combobox`, or `listbox`) is not a field
+here. The rule compares every name the browser gives around it, so a step that only moves a
+slider in a row, or rewrites the text of an option, is a page change, and a button that holds an
+empty progress bar keeps its name for the focus and re-render checks. The read marks each name
+that may show the control's value, and evidence never shows a marked name: a name built from
+contents that hold such a control, the control's own name when it is built from its contents, a
+name built from contents inside it, and the name of an option inside it, whatever its source.
+So a slider or a select in an added row shows only the control's author-given name in
+`addedNames`, except when that name comes from a label element that wraps the control: the
+label holds the control, so its name is marked too and the control shows no name. The design checks read their own copy of the tree, with every node and every name
+as the browser gives them and no field rule: they only count elements by role and name, and none
+of those names reaches a draft, so a second element with the design's name is always counted,
+even when its name comes from contents that hold a field or a value control. A name built through
+`aria-labelledby`, or a label element, from such a control, from a node inside one, or from a node
+that holds one takes the control's value too (a select gives its chosen option, a slider its
+value), so the read marks it the same way and `addedNames` leaves it out, and so does a name
+built from contents that hold an element with such a name. A name built through
+`aria-labelledby` from a field can still hold that field's value, and the rule does not take a
+name apart. A description, from `aria-describedby`, is never read, so it never reaches evidence. Background announcements are found only from
 the drain taken before the first step: a ticker that first writes inside a step's window, or
 between two steps, reads as speech that step caused. A live region that is drawn again, as a new
 element, counts as a new region, so a ticker that draws its region again is not known as
@@ -3699,14 +3720,23 @@ open, the two bounds below with their reasons, and the last full scan of main th
   a gap in the floor history, it left the floor, or commit dates go backwards along it.
 - `mayBeLess`: the true number could be smaller. There is no usable history for it (no history, an
   unreadable one, or a history hash it shares with another identity), the history is on but no
-  full scan of main saw it during one of its spans, a record that touches it could not be placed
-  in time, it left the floor, or commit dates go backwards along it.
+  full scan of main saw it during one of its spans, a span is counted past its last sighting (see
+  below), a record that touches it could not be placed in time, it left the floor, or commit dates
+  go backwards along it.
 
 The table prints "N days" when neither holds, "at least N" for `mayBeMore` only, "at most N" for
 `mayBeLess` only, and "not known (N by the floor)" for both. N is always the sum of the spans. The
 floor is accepted debt, not proof that an accessibility barrier is still on the page, so a span no
 scan saw is never called a lower bound. A row still open also shows the date of the last scan that
-saw it, when one did.
+saw it, when one did. The part of a span after its last sighting is such a stretch too
+(`not-seen-since`). It applies to three kinds of span that a scan saw. A span open now counts to
+the head commit, and it is exact only when the scan of the head commit saw it. A later scan that
+sees none is not a fix on its own (a fix needs two in a row), but the row is no longer exact. A
+span that ended at a gap in the floor history counts to that gap, and no scan sees a row at the
+commit where it left the floor, so such a span is never exact. A span the history fixed counts to
+the second clean scan, and the fix may have landed at any commit after the last sighting, so a
+fixed row is never exact either: it prints "at most N", or "not known" when it may also be older,
+and the fixed totals have no median. A span that left the floor already carries both bounds.
 
 **First seen is the earliest evidence.** It is never presented as the day an accessibility
 barrier was introduced. One in the first floor ever committed shows that commit's date, and the row
@@ -6186,7 +6216,17 @@ In the Stop hook, usabl's own deadline ends it before the agent's hook timeout, 
 blocks once as out of time (section 11.2, Stop time). It never reads as a pass.
 Measured in Chromium,
 the largest fixture page returns 172 nodes, and the `usabl-app` screens measured for the silent
-change rule return 179 to 300. The read keeps the same nodes as the silent change rule's read but
+change rule return 179 to 300. The read keeps every node that has a DOM node and every name as
+the browser gives it, with none of the silent change rule's field rule: a node inside an
+editable field is kept, and a node that holds a field keeps a name built from its contents. The
+design checks only count these names and test whether one is empty, and none of them reaches a
+draft, whose element is read with the document search. A name left out would let a second
+element with the design's name drop out of the count, so the check would read one match. An
+element inside an editable region counts as the browser exposes it: Chromium gives a heading
+inside a `contenteditable` region, or inside a `role="textbox"` region, its role, name, and level,
+so a design check can pass on it. Some screen readers treat an editable region as one field in
+browse mode, the `role="textbox"` case most of all, and may not stop at that heading. No design
+check proves screen reader navigation for any element, and this one does not either. It
 reads no sort state, which no design check uses. It is read once per page state: every design
 check on a screen shares one read. The focus order check, which presses Tab, and the target size
 check, which scrolls, each drop it when they end, so the next check reads the page again. The silent change rule keeps its own read, with its
