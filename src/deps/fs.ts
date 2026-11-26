@@ -8,7 +8,7 @@ import { constants } from 'node:fs';
 import { glob, lstat, open, readFile, readlink } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
-import { nodeGlobIgnoresCase, nodeGlobReading } from './fs-glob-reading.js';
+import { nodeGlobIgnoresCase, nodeGlobReading, trimTrailingSlashes } from './fs-glob-reading.js';
 
 function asBytes(buffer: Buffer): Uint8Array {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -216,7 +216,7 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
     async globUnder(folder, patterns) {
       // The folder is the walk's starting folder, so Node never parses its name. A folder that is
       // missing lists nothing.
-      const under = folder.replace(/\/+$/u, '');
+      const under = trimTrailingSlashes(folder);
       const found = await makeFsGlob({ cwd: resolve(cwd, under), platform }).glob(patterns);
       return under === '' ? found : found.map((path) => `${under}/${path.split(sep).join('/')}`).sort();
     },

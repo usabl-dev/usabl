@@ -577,6 +577,15 @@ export function fsGlobBoundProblem(pattern: string, platform: NodeJS.Platform = 
   return reading.kind === 'past-bound' ? reading.reason : null;
 }
 
+// A name without its trailing `/` characters. A loop, not a regular expression: a pattern such as
+// one or more `/` anchored at the end retries from every position of a long run of `/` that is
+// not at the end, so its time grows with the square of the name's length.
+export function trimTrailingSlashes(name: string): string {
+  let end = name.length;
+  while (end > 0 && name.charCodeAt(end - 1) === 47) end -= 1;
+  return name.slice(0, end);
+}
+
 // A character Node's glob reads as syntax in a name, or `\`, which it reads as `/`.
 const NODE_GLOB_SYNTAX = /[*?[\]{}()\\]/u;
 
@@ -588,7 +597,7 @@ const NODE_GLOB_SYNTAX = /[*?[\]{}()\\]/u;
  * answer is the same. Otherwise the caller must read the folder as one it could not list.
  */
 export async function globUnderFolder(fs: FsGlob, folder: string, patterns: readonly string[]): Promise<string[] | null> {
-  const under = folder.replace(/\/+$/u, '');
+  const under = trimTrailingSlashes(folder);
   if (fs.globUnder !== undefined) return fs.globUnder(under, [...patterns]);
   if (under === '') return fs.glob([...patterns]);
   if (NODE_GLOB_SYNTAX.test(under)) return null;

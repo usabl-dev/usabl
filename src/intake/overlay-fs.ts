@@ -4,7 +4,7 @@
  * It must never decide verdicts or hide policy divergence.
  */
 import type { FsGlob, GitReader, UsablConfig } from '../contracts/index.js';
-import { globUnderFolder } from '../deps/fs-glob-reading.js';
+import { globUnderFolder, trimTrailingSlashes } from '../deps/fs-glob-reading.js';
 import { matchGlob } from '../primitives/match-glob.js';
 import { textWithin } from './file-size.js';
 
@@ -68,7 +68,7 @@ export function overlayRequirementsFs(
     // Anywhere else the working tree is listed, with the requirements folder's files taken from the
     // trusted ref, as glob does.
     async globUnder(folder, patterns) {
-      const under = folder.replace(/\/+$/u, '');
+      const under = trimTrailingSlashes(folder);
       const fromRef = async (): Promise<string[]> => {
         const prefix = under === '' ? '' : `${under}/`;
         return (await trustedFiles()).filter(
