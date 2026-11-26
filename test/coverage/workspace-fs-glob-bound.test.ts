@@ -65,7 +65,7 @@ describe('a workspaces pattern past the glob bound', { timeout: 30_000 }, () => 
   });
 
   // `{,zz}/**` expands to `/**`, which Node walks from the root of the machine.
-  for (const pattern of ['{,zz}/**', '{/,a}/**', '/packages/*', '..\\outside\\*', `${'..\\'.repeat(10)}**`, 'C:/**', 'C:\\**', '{..,packages/*}']) {
+  for (const pattern of ['{,zz}/**', '{/,a}/**', '/packages/*', '..\\outside\\*', `${'..\\'.repeat(10)}**`, '{..,packages/*}']) {
     it(`makes ${pattern}, which names a path outside the repository, a gap and never walks it`, async () => {
       const start = performance.now();
       const coverage = await coverageFor(['packages/admin', pattern], 'packages/ui/src/Button.tsx');

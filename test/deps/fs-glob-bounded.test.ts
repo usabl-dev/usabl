@@ -129,8 +129,9 @@ describe('a pattern whose walk would start outside the folder', { timeout: 30_00
   it('is not walked', async () => {
     await write('in/a.ts');
     const fs = makeFsGlob({ cwd: join(root, 'in') });
-    const { value, ms } = await timed(() => fs.glob(['..\\in\\*', `${'..\\'.repeat(12)}**`, '../in/*', 'C:/**', 'C:\\**']));
+    const { value, ms } = await timed(() => fs.glob(['..\\in\\*', `${'..\\'.repeat(12)}**`, '../in/*']));
     expect(value).toEqual([]);
+    expect(await makeFsGlob({ cwd: join(root, 'in'), platform: 'win32' }).glob(['C:/**', 'C:\\**'])).toEqual([]);
     expect(ms).toBeLessThan(QUICK_MS);
     expect(await fs.glob(['a.ts', 'x/../a.ts'])).toEqual(['a.ts']);
   });

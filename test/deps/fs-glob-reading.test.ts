@@ -43,8 +43,14 @@ describe('the bound on syntax the filter does not read', () => {
   });
 
   it('names a pattern whose walk starts above its folder or at a drive', () => {
-    for (const pattern of ['../x/*', '..\\outside\\*', './../x', '{..,a}/*', 'src/**/../../x', 'C:/**', 'C:\\**', 'c:', 'd:/x/[a]']) {
+    for (const pattern of ['../x/*', '..\\outside\\*', './../x', '{..,a}/*', 'src/**/../../x']) {
       expect(fsGlobBoundProblem(pattern), pattern).not.toBeNull();
+    }
+    // Only Windows reads a first name that ends with `:` as a drive.
+    for (const pattern of ['C:/**', 'C:\\**', 'c:', 'd:/x/[a]', '{C:,a}/x']) {
+      expect(fsGlobBoundProblem(pattern, 'win32'), pattern).not.toBeNull();
+      expect(fsGlobBoundProblem(pattern, 'linux'), pattern).toBeNull();
+      expect(fsGlobBoundProblem(pattern, 'darwin'), pattern).toBeNull();
     }
     expect(fsGlobBoundProblem('src/../x/*')).toBeNull();
     expect(fsGlobBoundProblem('src/**/../x')).toBeNull();
