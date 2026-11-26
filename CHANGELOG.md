@@ -480,9 +480,10 @@
   refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry that names a path outside the
   repository or has a `..` after a wildcard part. A `workspaces` pattern past the bound makes the
   workspace root unreadable, so every changed file the workspace check tests is a `not-covered` gap
-  that names the pattern. So does a `workspaces` entry longer than 1,024 characters, or a list of
-  more than 1,000 entries: neither is read, so a very long list can no longer hold the stop hook
-  past its deadline. A folder name now loses its trailing slashes in linear time. Known
+  that names the pattern. So does a `workspaces` entry longer than 1,024 characters, a list of
+  more than 1,000 entries, or a list whose brace groups expand to more than 4,096 patterns or
+  262,144 characters in all: none of it is read. The largest list inside these bounds took about
+  2 seconds to read. A folder name now loses its trailing slashes in linear time. Known
   limits: the local guard still puts the requirements folder into its working-tree patterns as
   text, so a requirements folder named with a class, a brace group, or an extglob group names
   another folder there, and a new untracked file in it is not seen until it is committed. When
