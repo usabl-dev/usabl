@@ -763,7 +763,7 @@ check --json` lists each one as its own finding.
 The provider id is `pf-rulepack` (layer `pf`). It emits eight named rules: six static
 checks (one file per rule) and two interaction probes (`pf-focus-into-dialog` and
 `pf-modal-focus-return`, both in `probes.ts`). They return drafts. `pf-toast-live-region`
-also returns a gap for each alert it could not check:
+also returns a gap for each alert or toast group it could not check:
 
 1. `pf-toast-live-region`: toasts, alert groups, inline validation, and async table
    loading must sit in a role=status/alert/aria-live region that exists before the
@@ -822,8 +822,17 @@ also returns a gap for each alert it could not check:
    rule also finds each toast group on the page, read by the same two classes. A group
    that holds no alert, and whose only hidden element is the body's child while an open
    modal sits outside it (the same modal test the alert check uses), gets one
-   `unverified` draft on the group, with the same text. A group that holds an alert gets
-   no draft of its own, because the alert check judges that alert. A group that is not
+   `unverified` draft on the group, with the same reason and fix. A group gets no draft of
+   its own only when it holds an alert that the alert check gave a draft or a gap, because
+   that draft or gap already reports the screen. The alerts are matched by selector. Every
+   other group is checked as an empty group is. That includes a group that holds an alert
+   the check never listed, for example a toast the dialog's own save action shows while
+   the check runs. It also includes a group whose alert the check read and passed: the
+   group was hidden only after that read, or the alert's selector belongs to an alert that
+   passed, as when the same element moved into the group or a new toast reuses the id of
+   an inline alert. A selector can still match a reported alert outside the group, for
+   example when a new toast takes that alert's id. That group is skipped, and the screen
+   still carries the other alert's draft or gap. A group that is not
    hidden, or that is hidden in another way, gets nothing. When a modal is open but the
    rule cannot tell which entry of the group's chain is the body's child, the group gets
    the same `unverified` draft an alert gets in that state, whose reason names the open
