@@ -455,6 +455,16 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
         return `${SUBMODULE_READ_PREFIX}${failed.commit}\n`;
       }
     },
+    async commitOf(ref) {
+      assertReadableRef(ref);
+      try {
+        const output = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+        const id = output.trim();
+        return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(id) ? id : null;
+      } catch {
+        return null;
+      }
+    },
     async blobSize(ref, path) {
       assertReadableRef(ref);
       try {
