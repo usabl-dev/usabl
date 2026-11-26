@@ -74,6 +74,8 @@ const HONEST_PAGES: Readonly<Record<string, string>> = {
   '/honest-heading.html': '<h2>Clusters<span role="progressbar"></span></h2>',
   '/honest-label.html': '<label>Owner <select><option>alice@example.com</option></select></label><button type="button">Save</button>',
   '/shadow-heading.html': closedShadow('<h2>Clusters<span role="progressbar"></span></h2>'),
+  // A heading inside an editable region, which the document search reads.
+  '/editable-heading.html': '<div contenteditable="true"><h2>Notes</h2><p>Text</p></div>',
 };
 
 function testPage(path: string): string | null {
@@ -484,6 +486,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
     await withPage('/shadow-heading.html', async (page) => {
       const drafts = await designDrafts(page, '/shadow-heading.html', { type: 'heading', name: 'Clusters', level: 2 });
       expect(drafts.map(([confidence]) => confidence)).toEqual(['unverified']);
+    });
+  });
+
+  it('counts a heading inside an editable region in the tree as well as in the document', async () => {
+    await withPage('/editable-heading.html', async (page) => {
+      expect((await resolveTarget(page, { role: 'heading', name: 'Notes' })).kind).toBe('one');
+      expect(await designDrafts(page, '/editable-heading.html', { type: 'heading', name: 'Notes', level: 2 })).toEqual([]);
     });
   });
 
