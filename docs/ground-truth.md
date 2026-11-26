@@ -5997,7 +5997,10 @@ largest in this repository's tests and docs is a few KiB, with at most 5 require
 The byte limit is checked before the file is parsed, and it counts the bytes of the file as stored.
 The loader reads a file on disk only when its size is within the limit, so the loader never reads a
 huge file whole. A file at the trusted ref is sized by git from the stored object first, and read
-only when it is within the limit. A file with bytes that are not valid UTF-8, such as Latin-1
+only when it is within the limit. The trusted ref is turned into its commit id once, and every
+listing, size, and text of the requirement files is read at that id, so a branch that moves during
+the run cannot pair one file's size with another file's text. A ref that names no commit is read by
+its name, as before. A file with bytes that are not valid UTF-8, such as Latin-1
 letters, is counted by those bytes too, as it is stored. The message is `a requirement file can be
 at most 128 KiB; split it into smaller files`. A caller that hands the normalizer text it holds in
 memory, such as `usabl import figma` with the file it drafts, gets the same limit counted as the
@@ -6029,11 +6032,11 @@ the reason `this file has too many problems to check, so it is refused; shorten 
 list` in place of the first 100 problems.
 
 A refusal lists the first 100 problems, in the order the schema reports them, then says how many
-more the file has,
-such as `; and 900 more problems`. An unknown-key message names the first five unknown keys,
-then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd', 'e', and 3
-more`. Each key name is file text, so its secrets are taken out first, and it is then cut to 60
-characters, with `...` after a cut name. A voice step's unknown fields are listed the same way.
+more the file has, such as `; and 900 more problems`. An unknown-key message names the first five
+unknown keys, then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd',
+'e', and 3 more`. Each key name is file text, so its secrets are taken out first, and it is then
+cut to 60 characters, with `...` after a cut name. A voice step's unknown fields are listed the
+same way.
 
 ### Mapping to checks
 
