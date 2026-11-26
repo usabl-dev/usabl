@@ -165,14 +165,16 @@ describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }
     expect([...changed].sort()).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
   });
 
-  it('lists every changed name in the working tree as git stores it, with the new name of a rename', async () => {
+  // The list compares the bytes on disk with HEAD, so a rename is the new name and the old one,
+  // whether or not it is staged.
+  it('lists every changed name in the working tree as git stores it, with both names of a rename', async () => {
     for (const name of [UMLAUT, TRAILING_SPACE, NEWLINE]) {
       await writeFile(join(repoPath, name), 'export const Page = 1;\n', 'utf8');
     }
     await runGit(repoPath, ['mv', RENAMED_FROM, RENAMED_TO]);
     await runGit(repoPath, ['add', '-A']);
     const paths = (await makeGitReader({ cwd: repoPath }).statusZ()).map((entry) => entry.path);
-    expect([...paths].sort()).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
+    expect([...paths].sort()).toEqual([NEWLINE, RENAMED_FROM, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
   });
 
   it('lists committed names under a prefix as git stores them', async () => {
@@ -232,7 +234,7 @@ describe('makeGitReader with new untracked files', { timeout: 30_000 }, () => {
   // words, so the run reports an error a person can act on, never a short list read as complete.
   it('fails with a plain reason when a listing is longer than usabl reads', async () => {
     const git = makeGitReader({ cwd: repoPath, maxBuffer: 16 });
-    await expect(git.statusZ()).rejects.toThrow(/git status printed more than usabl reads.*could not list/s);
+    await expect(git.statusZ()).rejects.toThrow(/git ls-files printed more than usabl reads.*could not list/s);
     const seed = await runGit(repoPath, ['rev-parse', 'HEAD']);
     await runGit(repoPath, ['add', '-A']);
     await runGit(repoPath, ['commit', '-m', 'new files']);

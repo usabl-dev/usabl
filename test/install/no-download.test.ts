@@ -378,6 +378,7 @@ describe('usabl doctor reports an old npx usabl file as a security drift', () =>
   async function report(files: Record<string, string>) {
     const reports = await collectDoctorReport({
       fs: readOnly(files),
+      readWorkflow: (path) => readOnly(files).readFile(path),
       gh: { getJson: async () => null },
       configPath: 'usabl.config.json',
       env: {},

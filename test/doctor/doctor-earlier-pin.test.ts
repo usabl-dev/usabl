@@ -12,6 +12,7 @@ const fixture = (name: string): string => readFileSync(new URL(`../../fixtures/i
 
 async function report(files: Record<string, string>, id: string): Promise<SurfaceReport> {
   const all = await collectDoctorReport({
+    readWorkflow: async (path) => files[path] ?? null,
     fs: {
       readFile: async (path) => files[path] ?? null,
       glob: async () => [],

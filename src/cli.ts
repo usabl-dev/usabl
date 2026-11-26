@@ -18,6 +18,7 @@ import { run } from './run.js';
 import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob, makeWorkflowReader } from './deps/fs.js';
+import { gitProcessEnvironment } from './deps/git-environment.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
@@ -255,7 +256,7 @@ const execFileAsync = promisify(execFile);
 async function repositoryRoot(): Promise<string> {
   const cwd = await realpath(process.cwd());
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', env: gitProcessEnvironment() });
     const top = stdout.trim();
     return top.length === 0 ? cwd : await realpath(top);
   } catch {
@@ -852,6 +853,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // The environment is read here, at the edge, so no collector reaches for a global.
     const deps: DoctorDeps = {
       fs: doctorFs,
+      // The branch rule reads the gate the way install --branch-rule does, so a folder or a file
+      // usabl cannot read at the gate path says so in both commands instead of reading as missing.
+      readWorkflow: makeWorkflowReader(),
       gh: makeGhReader(),
       configPath: opts.configPath,
       env: process.env,

@@ -97,7 +97,9 @@ function ghReplying(reply: (endpoint: string) => GhResult | null): GhReader {
   return { getJson: async (endpoint) => reply(endpoint) };
 }
 
-const GH_VERIFIED = ghReplying(() => ({
+// The repository read answers main as the default branch, the branch the gate names, so the branch
+// rule can be verified. Every other read answers full classic protection.
+const GH_VERIFIED = ghReplying((endpoint) => endpoint === 'repos/{owner}/{repo}' ? { code: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' } : ({
   code: 0,
   stdout: JSON.stringify({
     required_status_checks: { strict: true, checks: [{ context: REQUIRED_CHECK, app_id: -1 }] },
@@ -114,6 +116,7 @@ const GH_NOT_PROTECTED = ghReplying((endpoint) =>
 
 // No classic protection, but an active ruleset requires the check. Doctor must read wired.
 const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
+  if (endpoint === 'repos/{owner}/{repo}') return { code: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' };
   if (endpoint.endsWith('/rulesets/7')) {
     return {
       code: 0,
@@ -222,6 +225,7 @@ function doctorDeps(
     probePlaywrightChromium: async () => 'wired',
     probeChromiumSandbox: async () => 'available',
     env: NO_SESSION,
+    readWorkflow: (path) => base.fs.readFile(path),
     ...base,
   };
 }
