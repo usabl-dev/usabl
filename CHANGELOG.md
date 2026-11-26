@@ -463,24 +463,32 @@
   "at most N", or "not known (N by the floor)" when it may also be older, and it is left out of
   the median and the longest. So a fixed row is never exact, and the fixed totals have no median.
   Measurement only: no verdict reads the ledger.
-- The silent change evidence never shows the value of a slider, a spin button, a progress bar, a
-  meter, a select, or a list box. A row built from its contents took that value as its name, so
-  an added row with a range input at 417 showed `["417","Age"]`, and an option's name is a choice
-  a person made. The tree read now marks each name that may show such a value: a name built from
-  contents that hold one of these controls, the control's own name when built from its contents, a
-  name built from contents inside it, and an option's name inside it. `addedNames` leaves a marked
-  name out, and the control's author-given name stays. The rule still compares every name the
-  browser gives, so its findings and gaps are the same as before. Gate effect: none; the rule is
-  preview.
+- The silent change evidence leaves out the value of a slider, a spin button, a progress bar, a
+  meter, a scroll bar, a select, or a list box. A row built from its contents took that value as
+  its name, so an added row with a range input at 417 showed `["417","Age"]`, and an option's name
+  is a choice a person made. The tree read now marks each name that may show such a value, and
+  `addedNames` leaves every marked name out. Marked are a name built from contents that hold one
+  of these controls, the control's own name when it is built from its contents, a name built from
+  contents inside it, and the name of an option inside one, whatever its source. So is a name
+  built through `aria-labelledby` or a label element from such a control, from a node inside one,
+  or from a node that holds one (a select gives its chosen option, a slider its value), and a name
+  built from contents that hold an element with such a name. The control's author-given name
+  stays. A description from `aria-describedby` is never read. A name built through
+  `aria-labelledby` from a text field can still hold that field's value, as before. The rule still
+  compares every name the browser gives, so its findings and gaps are the same as before. Gate
+  effect: none; the rule is preview.
 - The design checks count a second element with the design's name even when its name comes from
   contents that hold an empty field. The design read left out such a name, as the silent change
   read does, so a second same-named button in a closed shadow root that held an empty
   `contenteditable` span dropped out of the tree count, and the check read one match and could
   pass. The design read now keeps every node and every name as the browser gives them; none of
-  those names reaches a draft. It also keeps the nodes inside an editable field, so a heading
-  inside a `contenteditable` region is counted in the tree too. Gate effect: the closed shadow
-  root page above now asks for review, where it could pass; an element inside an editable field
-  that the document search found is now confirmed by the tree count, where it asked for review.
+  those names reaches a draft. It also keeps the nodes inside an editable field. Gate effect: the
+  closed shadow root page above now asks for review, where it could pass. Two kinds of element
+  that the document search found, and that asked for review because the tree did not confirm
+  them, now pass or fail on their own check: a heading inside an editable region (a
+  `contenteditable` or `role="textbox"` region), and a button named from contents that hold an
+  empty editable field. Chromium exposes both with their role and name. Some screen readers treat
+  an editable region as one field in browse mode and may not stop at a heading inside it.
 - The ground truth module map lists today's source folders, `src/judge/`, `src/app/`, and
   `src/import/` among them, one line each.
 - Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
