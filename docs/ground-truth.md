@@ -3710,10 +3710,14 @@ The table prints "N days" when neither holds, "at least N" for `mayBeMore` only,
 floor is accepted debt, not proof that an accessibility barrier is still on the page, so a span no
 scan saw is never called a lower bound. A row still open also shows the date of the last scan that
 saw it, when one did. The part of a span after its last sighting is such a stretch too
-(`not-seen-since`): a span open now counts to the head commit, and a span that ended at a gap in
-the floor history counts to that gap, so either may have been fixed sooner. A span open now is
-exact only when the scan of the head commit saw it. A later scan that sees none is not a fix on its
-own (a fix needs two in a row), but the row is no longer exact.
+(`not-seen-since`). It applies to three kinds of span that a scan saw. A span open now counts to
+the head commit, and it is exact only when the scan of the head commit saw it. A later scan that
+sees none is not a fix on its own (a fix needs two in a row), but the row is no longer exact. A
+span that ended at a gap in the floor history counts to that gap, and no scan sees a row at the
+commit where it left the floor, so such a span is never exact. A span the history fixed counts to
+the second clean scan, and the fix may have landed at any commit after the last sighting, so a
+fixed row is never exact either: it prints "at most N", or "not known" when it may also be older,
+and the fixed totals have no median. A span that left the floor already carries both bounds.
 
 **First seen is the earliest evidence.** It is never presented as the day an accessibility
 barrier was introduced. One in the first floor ever committed shows that commit's date, and the row

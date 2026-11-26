@@ -139,7 +139,14 @@ describe('buildLedger', () => {
       const ledger = buildLedger(
         input([snap(0, floor), snap(9, floorOf([]))], historyOn([scanAt(2, floor, [[A, 1]]), scanAt(3, floor, [[A, 0]]), scanAt(5, floor, [[A, 0]])])),
       );
-      expect(rowFor(ledger, A)).toMatchObject({ state: 'fixed', daysOpen: 5, mayBeLess: false });
+      // Leaving the floor after the fix adds no bound. It may be older, because it is in the first
+      // floor, and the fix may have come sooner than c5, after the last sighting at c2.
+      expect(rowFor(ledger, A)).toMatchObject({
+        state: 'fixed',
+        daysOpen: 5,
+        mayBeMoreReasons: ['first-floor-for-screen'],
+        mayBeLessReasons: ['not-seen-since'],
+      });
     });
   });
 
@@ -537,6 +544,23 @@ describe('buildLedger after the last sighting of an open row', () => {
       lastSeen: { commit: commitAt(7) },
     });
     expect(daysCell(a)).toBe('5 days');
+  });
+
+  it('says a fix the history confirmed may have come sooner, after the last sighting, and leaves it out of the median', () => {
+    // A is floored at c5 and seen at c6. The next scans, at c38 and c39, see none, so the history
+    // fixes it at c39. No scan saw it between c6 and c38, so the fix may be as early as c7.
+    const floor = floorOf([A, B]);
+    const ledger = buildLedger(
+      input(
+        [snap(0, floorOf([B])), snap(5, floor)],
+        historyOn([scanAt(6, floor, [[A, 1], [B, 1]]), scanAt(38, floor, [[A, 0], [B, 1]]), scanAt(39, floor, [[A, 0], [B, 1]])]),
+      ),
+    );
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({ state: 'fixed', daysOpen: 34, mayBeMore: false, mayBeLessReasons: ['not-seen-since'] });
+    expect(a.spans[0]?.end).toMatchObject({ commit: commitAt(39), by: 'history' });
+    expect(daysCell(a)).toBe('at most 34');
+    expect(ledger.totals.fixed).toEqual({ rows: 1, exactRows: 0, medianDays: null, longestDays: null });
   });
 
   it('never calls a span that ended at a gap "at least" when no scan saw it at the end', () => {

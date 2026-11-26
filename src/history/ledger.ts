@@ -141,8 +141,8 @@ export type LedgerLessReason =
   | 'no-usable-history'
   // The history is on, but no full scan of main saw it during one of its spans.
   | 'not-seen'
-  // A span is counted as open past its last sighting: to the head commit, or to a gap in the floor
-  // history. No full scan of main saw it in that part of the span.
+  // A span is counted past its last sighting: to the head commit, to a gap in the floor history, or
+  // to the second clean scan that confirmed a fix. No full scan of main saw it in that part.
   | 'not-seen-since'
   // A history record that touches it could not be placed in time.
   | 'history-unplaced'
@@ -691,11 +691,13 @@ export function buildLedger(input: LedgerInput): Ledger {
       // The same holds for the part of a span after its last sighting. A span that is open now is
       // exact only when the scan of the head commit saw it. A span that ended at a gap in the floor
       // history is counted to that gap, and no scan sees a row at the commit where it left the floor.
+      // A span the history fixed is counted to the second clean scan, and the fix may have landed
+      // anywhere after the last sighting.
       const tail = row.spans.some((span) => {
         const seenAt = span.lastSeenAt;
         if (span.seen !== true || seenAt === undefined) return false;
         if (span.end === null) return seenAt.commit !== input.head;
-        return span.end.by === 'gap' && seenAt.position < span.end.position;
+        return (span.end.by === 'gap' || span.end.by === 'history') && seenAt.position < span.end.position;
       });
       if (tail) {
         addGap(
@@ -703,8 +705,9 @@ export function buildLedger(input: LedgerInput): Ledger {
           {
             cause: 'not-seen-since',
             detail:
-              'A full scan of main saw this accessibility barrier, but no full scan saw it after that, up to the commit ' +
-              'where the ledger stops counting. It may have been fixed sooner than the count shows.',
+              'A full scan of main last saw this accessibility barrier before the end of a span the ledger counts: the ' +
+              'head commit, a gap in the floor history, or the second clean scan that confirmed a fix. ' +
+              'It may have been fixed sooner than the count shows.',
           },
           { less: 'not-seen-since' },
         );
