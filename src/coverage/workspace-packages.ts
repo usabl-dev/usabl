@@ -18,7 +18,7 @@
 import { posix as path } from 'node:path';
 import yaml from 'js-yaml';
 import type { CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
-import { fsGlobBoundProblem, globUnderFolder } from '../deps/fs-glob-reading.js';
+import { FS_GLOB_BOUND, fsGlobBoundProblem, globUnderFolder, trimTrailingSlashes } from '../deps/fs-glob-reading.js';
 import { loadAliasConfig } from './alias-config.js';
 import { mentionsPackage } from './import-graph.js';
 
@@ -112,7 +112,7 @@ function insideRepository(file: string): string | null {
 }
 
 function cleanPattern(pattern: string): string {
-  return pattern.trim().replace(/^\.\//u, '').replace(/\/+$/u, '');
+  return trimTrailingSlashes(pattern.trim().replace(/^\.\//u, ''));
 }
 
 function isInstalledPath(file: string): boolean {
@@ -137,8 +137,22 @@ function manifestGlob(raw: string): string | null {
 // as one with an extglob group, which can take Node's fs.glob a very long time to match. The
 // packages such a pattern names are then unknown, so the root reads as one usabl cannot read,
 // never as one that names no package.
+// The list's size is agent input too, so a list of more than MAX_WORKSPACE_ENTRIES entries, or an
+// entry longer than the glob bound, is past the bound before any entry is read: reading a very
+// long entry, or very many, could hold the event loop past the stop hook's deadline.
+const MAX_WORKSPACE_ENTRIES = 1000;
+
 function checkGlobBound(file: string, listed: readonly string[]): void {
+  if (listed.length > MAX_WORKSPACE_ENTRIES) {
+    throw new UnreadableWorkspaceRoot(file, `lists ${listed.length} workspace patterns, more than the 1,000 entries usabl reads`);
+  }
   for (const raw of listed) {
+    if (raw.length > FS_GLOB_BOUND.length) {
+      throw new UnreadableWorkspaceRoot(
+        file,
+        `lists the workspace pattern "${raw.slice(0, 200)}", which usabl does not run because it is longer than 1,024 characters`,
+      );
+    }
     const glob = manifestGlob(raw);
     const problem = glob === null ? null : fsGlobBoundProblem(glob);
     if (problem !== null) {
