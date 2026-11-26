@@ -510,6 +510,35 @@ describe('buildLedger after the last sighting of an open row', () => {
     expect(ledger.totals.open).toMatchObject({ exactRows: 1, medianDays: 36 });
   });
 
+  it('counts the scan that withdraws a fix as a sighting in the span it reopens', () => {
+    // A is floored at c2. Scans of tree-y at c3 and of tree-x at c5 see none, so the history fixes
+    // it at c5. The scan of tree-y at c7, the head, sees it: the same tree gave two readings, so the
+    // fix is withdrawn and the span is open again. That scan saw it, at the head.
+    const floor = floorOf([A, B]);
+    const ledger = buildLedger(
+      input(
+        [snap(0, floorOf([B])), snap(2, floor)],
+        historyOn([
+          scanAt(3, floor, [[A, 0], [B, 1]], 'tree-y'),
+          scanAt(5, floor, [[A, 0], [B, 1]], 'tree-x'),
+          scanAt(7, floor, [[A, 1], [B, 1]], 'tree-y'),
+        ]),
+        { head: commitAt(7), headDate: dayAt(7) },
+      ),
+    );
+    const a = rowFor(ledger, A);
+    expect(a).toMatchObject({
+      state: 'open',
+      intermittent: true,
+      daysOpen: 5,
+      mayBeMore: false,
+      mayBeLess: false,
+      mayBeLessReasons: [],
+      lastSeen: { commit: commitAt(7) },
+    });
+    expect(daysCell(a)).toBe('5 days');
+  });
+
   it('never calls a span that ended at a gap "at least" when no scan saw it at the end', () => {
     // A is floored at c5 and seen at c6. The floor is rewritten at c20 without A, so its span ends
     // at that gap. No scan saw it between c6 and c20, so it may have been fixed before the gap.
