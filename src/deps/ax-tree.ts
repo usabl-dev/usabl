@@ -73,8 +73,36 @@ function nameMayHoldValue(rawName: unknown): boolean {
   if (!Array.isArray(sources)) {
     return true;
   }
-  const used = sources.find((source) => getProp(source, 'value') !== undefined && getProp(source, 'superseded') !== true);
+  const used = usedSource(sources);
   return used === undefined || getProp(used, 'type') === 'contents';
+}
+
+function usedSource(sources: unknown[]): unknown {
+  return sources.find((source) => getProp(source, 'value') !== undefined && getProp(source, 'superseded') !== true);
+}
+
+// The DOM nodes a name built from other elements, through aria-labelledby or a label element,
+// was built from. Empty for any other name.
+function relatedNodeIds(rawName: unknown): number[] {
+  const sources = getProp(rawName, 'sources');
+  const used = Array.isArray(sources) ? usedSource(sources) : undefined;
+  if (used === undefined || getProp(used, 'type') !== 'relatedElement') {
+    return [];
+  }
+  const ids: number[] = [];
+  for (const holder of [getProp(used, 'attributeValue'), getProp(used, 'nativeSourceValue')]) {
+    const related = getProp(holder, 'relatedNodes');
+    if (!Array.isArray(related)) {
+      continue;
+    }
+    for (const entry of related) {
+      const id = readNumber(getProp(entry, 'backendDOMNodeId'));
+      if (id !== null) {
+        ids.push(id);
+      }
+    }
+  }
+  return ids;
 }
 
 export interface AxTreeOptions {
@@ -97,8 +125,9 @@ export interface AxTreeOptions {
  * select, or a list box, keeps every name the browser gives, because the silent change rule compares
  * them. A name that may show its value is marked instead, and evidence never shows a marked name:
  * a name built from contents that hold such a control, the control's own name when it is built from
- * its contents, the name of a node inside it built from contents, and the name of an option inside
- * it, whatever its source.
+ * its contents, the name of a node inside it built from contents, the name of an option inside
+ * it, whatever its source, and a name built through aria-labelledby or a label element from such
+ * a control, from a node inside one, or from a node that holds one.
  *
  * With `browserNames`, every node with a DOM node is kept, the content of a field included, and
  * every name is the browser's own, so a second element with a design's name is always counted.
@@ -140,6 +169,31 @@ export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { d
   };
   const holdsField = browserNames ? new Set<unknown>() : holding((raw) => hasProperty(raw, 'editable'));
   const holdsValueControl = browserNames ? new Set<unknown>() : holding(isValueControl);
+  const byDomId = new Map<number, unknown>();
+  for (const raw of rawNodes) {
+    const domId = readNumber(getProp(raw, 'backendDOMNodeId'));
+    if (domId !== null && !byDomId.has(domId)) {
+      byDomId.set(domId, raw);
+    }
+  }
+  const hasValueControlAncestor = (raw: unknown): boolean => {
+    const seen = new Set<unknown>();
+    for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
+      seen.add(ancestor);
+      if (isValueControl(ancestor)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  // A name built from other elements takes their values too: a select gives its chosen option, a
+  // slider its value. So it may show a value when one of them is a value control, is inside one, or
+  // holds one.
+  const builtFromValue = (rawName: unknown): boolean =>
+    relatedNodeIds(rawName).some((id) => {
+      const related = byDomId.get(id);
+      return related !== undefined && (isValueControl(related) || holdsValueControl.has(related) || hasValueControlAncestor(related));
+    });
 
   let documentNodeId: number | null = null;
   const nodes: AxTreeNode[] = [];
@@ -178,7 +232,9 @@ export function axTreeFromCdp(result: unknown, options: AxTreeOptions = {}): { d
     const mayShowValue =
       !browserNames &&
       name !== null &&
-      (((holdsValueControl.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) || (insideValueControl && role === 'option'));
+      (((holdsValueControl.has(raw) || isValueControl(raw) || insideValueControl) && fromContents) ||
+        (insideValueControl && role === 'option') ||
+        builtFromValue(rawName));
     if (role === 'RootWebArea' && documentNodeId === null) {
       documentNodeId = nodeId;
     }

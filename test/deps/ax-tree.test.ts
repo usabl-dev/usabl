@@ -218,6 +218,43 @@ describe('axTreeFromCdp', () => {
       }
     });
 
+    it('marks a name built through aria-labelledby from a value control, an option inside one, or a node that holds one', () => {
+      const labelledBy = (value: string, ...ids: number[]): unknown => ({
+        value,
+        sources: [
+          {
+            type: 'relatedElement',
+            attribute: 'aria-labelledby',
+            value: { value },
+            attributeValue: { type: 'idrefList', relatedNodes: ids.map((id) => ({ backendDOMNodeId: id })) },
+          },
+          { type: 'contents', superseded: true, value: { value: 'Edit' } },
+        ],
+      });
+      const LABELLED = {
+        nodes: [
+          ...VALUES.nodes,
+          node(110, 1, 'StaticText', labelled('Owner')),
+          node(111, 1, 'button', labelledBy('Owner alice@example.com', 110, 61)),
+          node(112, 1, 'button', labelledBy('417', 52)),
+          node(113, 1, 'button', labelledBy('carol@example.com', 72)),
+          node(114, 1, 'button', labelledBy('alice@example.com', 60)),
+          // A name from a node that holds no value control is not marked.
+          node(115, 1, 'button', labelledBy('Owner', 110)),
+        ],
+      };
+      const labelledRead = axTreeFromCdp(LABELLED);
+      const marked = (nodeId: number) => labelledRead.nodes.find((entry) => entry.nodeId === nodeId)?.nameMayShowValue;
+      expect([111, 112, 113, 114, 115].map((nodeId) => [nodeId, marked(nodeId)])).toEqual([
+        [111, true],
+        [112, true],
+        [113, true],
+        [114, true],
+        [115, undefined],
+      ]);
+      expect(labelledRead.nodes.find((entry) => entry.nodeId === 111)?.name).toBe('Owner alice@example.com');
+    });
+
     it('keeps each control, its own name, and the nodes under it with their states', () => {
       for (const nodeId of [52, 61, 71, 74, 80, 91, 93, 99]) expect({ nodeId, shown: shownOf(nodeId) }).toEqual({ nodeId, shown: undefined });
       expect(nameOf(52)).toBe('Age');

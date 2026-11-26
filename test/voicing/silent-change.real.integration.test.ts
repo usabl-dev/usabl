@@ -354,6 +354,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       expect(shown).not.toContain('example.com');
     });
 
+    // The browser builds a name from aria-labelledby with the value of the select or slider it
+    // points at. Only the label text and the button's own text may reach the evidence.
+    it.each([
+      ['labelledby-select-row', ['Edit', 'Owner']],
+      ['labelledby-slider-row', ['Age', 'Edit']],
+    ])('never shows the value a name takes through aria-labelledby: %s', async (which, names) => {
+      const drafts = await flow(which, click('#add'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra?.addedNames).toEqual(names);
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('417');
+      expect(shown).not.toContain('example.com');
+    });
+
     // The rule compares the names the browser gives, so a control that holds a progress bar, or an
     // option whose text changes, is judged on its full name. Only the evidence leaves a value out.
     it('still reports a click that removes the progress bar inside the button and adds a row', async () => {
