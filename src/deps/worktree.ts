@@ -355,8 +355,8 @@ async function readObjects(repo: Repository, names: readonly string[]): Promise<
 class ObjectMismatchError extends Error {
   constructor(id: string) {
     super(
-      `The object ${id} in .git/objects does not hold the bytes its id names, so usabl cannot tell what HEAD holds ` +
-        'and checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
+      `The object ${id} in .git/objects does not hold the bytes its id names, so usabl cannot tell what the commits ` +
+        'it compares hold and checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
     );
   }
 }
@@ -388,6 +388,68 @@ function canonicalMode(octal: string): string {
   }
 }
 
+// HEAD that git cannot read: a damaged object when HEAD resolves to an id, never a new repository.
+async function headUnreadable(repo: Repository): Promise<Error> {
+  if ((await runGit(repo.top, ['rev-parse', '--verify', '-q', 'HEAD'])).code === 0) {
+    return new Error(
+      'HEAD names a commit that git cannot read, so .git/objects holds a damaged or overwritten object and usabl ' +
+        'checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
+    );
+  }
+  return new NoHeadError('HEAD does not name a commit yet.');
+}
+
+// The tree a checked commit's bytes name on their first line.
+function treeOfCommit(commit: { id: string; bytes: Buffer }): string {
+  const treeLine = /^tree ([0-9a-f]{40}|[0-9a-f]{64})\n/u.exec(commit.bytes.subarray(0, 80).toString('latin1'));
+  if (treeLine === null || treeLine[1] === undefined) {
+    throw new Error(`usabl could not find the tree of the commit ${commit.id}, so it could not read the working tree.`);
+  }
+  return treeLine[1];
+}
+
+/** One entry of a tree object: its name inside the tree, its mode as git prints it, and its id. */
+interface TreeItem {
+  name: Buffer;
+  mode: string;
+  id: string;
+}
+
+// The entries of a tree object's bytes, in the order the tree holds them.
+function treeItems(repo: Repository, id: string, tree: Buffer): TreeItem[] {
+  const idLength = repo.format === 'sha256' ? 32 : 20;
+  const items: TreeItem[] = [];
+  let at = 0;
+  while (at < tree.length) {
+    const space = tree.indexOf(0x20, at);
+    const nul = space < 0 ? -1 : tree.indexOf(0, space + 1);
+    if (space < 0 || nul < 0 || nul + 1 + idLength > tree.length) {
+      throw new Error(`usabl could not read the tree ${id}, so it could not read the working tree.`);
+    }
+    items.push({
+      mode: canonicalMode(tree.subarray(at, space).toString('latin1')),
+      name: tree.subarray(space + 1, nul),
+      id: tree.subarray(nul + 1, nul + 1 + idLength).toString('hex'),
+    });
+    at = nul + 1 + idLength;
+  }
+  return items;
+}
+
+// Tree objects by id, read with one git process and each checked against its id. A tree two
+// folders share is read once.
+async function readTrees(repo: Repository, ids: readonly string[]): Promise<Map<string, Buffer>> {
+  const unique = [...new Set(ids)];
+  const objects = await readObjects(repo, unique);
+  const byId = new Map<string, Buffer>();
+  unique.forEach((id, index) => {
+    const object = verified(repo, objects[index] ?? null, 'tree', id);
+    if (object.id !== id) throw new ObjectMismatchError(id);
+    byId.set(id, object.bytes);
+  });
+  return byId;
+}
+
 /**
  * Every entry of a commit's tree, read in Node so that each object is checked against its id: the
  * commit, and every tree below it. An object in .git/objects whose bytes do not hash to its id
@@ -398,59 +460,162 @@ async function readBaseTree(repo: Repository, base: string): Promise<Array<{ raw
   const [commit] = await readObjects(repo, [base]);
   if (commit === null || commit === undefined) {
     if (base === 'HEAD') {
-      // HEAD that resolves to an id git cannot read is a damaged object, never a new repository.
-      if ((await runGit(repo.top, ['rev-parse', '--verify', '-q', 'HEAD'])).code === 0) {
-        throw new Error(
-          'HEAD names a commit that git cannot read, so .git/objects holds a damaged or overwritten object and usabl ' +
-            'checked nothing. Run git fsck to find the damaged objects, then run usabl again.',
-        );
-      }
-      throw new NoHeadError('HEAD does not name a commit yet.');
+      throw await headUnreadable(repo);
     }
     throw new Error(`git could not read the commit ${operatorText(base)}, so usabl could not read the working tree.`);
   }
-  const { bytes } = verified(repo, commit, 'commit', operatorText(base));
-  const treeLine = /^tree ([0-9a-f]{40}|[0-9a-f]{64})\n/u.exec(bytes.subarray(0, 80).toString('latin1'));
-  if (treeLine === null || treeLine[1] === undefined) {
-    throw new Error(`usabl could not find the tree of the commit ${commit.id}, so it could not read the working tree.`);
-  }
-  const idLength = repo.format === 'sha256' ? 32 : 20;
   const entries: Array<{ raw: Buffer; mode: string; id: string }> = [];
-  let level: Array<{ id: string; prefix: Buffer }> = [{ id: treeLine[1], prefix: Buffer.alloc(0) }];
-  // One git process per level of folders. A tree shared by two folders is read once.
+  let level: Array<{ id: string; prefix: Buffer }> = [{ id: treeOfCommit(verified(repo, commit, 'commit', operatorText(base))), prefix: Buffer.alloc(0) }];
+  // One git process per level of folders.
   while (level.length > 0) {
-    const unique = [...new Set(level.map((tree) => tree.id))];
-    const objects = await readObjects(repo, unique);
-    const byId = new Map<string, Buffer>();
-    unique.forEach((id, index) => {
-      const object = verified(repo, objects[index] ?? null, 'tree', id);
-      if (object.id !== id) throw new ObjectMismatchError(id);
-      byId.set(id, object.bytes);
-    });
+    const byId = await readTrees(
+      repo,
+      level.map((tree) => tree.id),
+    );
     const next: typeof level = [];
     for (const { id, prefix } of level) {
-      const tree = byId.get(id) ?? Buffer.alloc(0);
-      let at = 0;
-      while (at < tree.length) {
-        const space = tree.indexOf(0x20, at);
-        const nul = space < 0 ? -1 : tree.indexOf(0, space + 1);
-        if (space < 0 || nul < 0 || nul + 1 + idLength > tree.length) {
-          throw new Error(`usabl could not read the tree ${id}, so it could not read the working tree.`);
-        }
-        const mode = canonicalMode(tree.subarray(at, space).toString('latin1'));
-        const raw = Buffer.concat([prefix, tree.subarray(space + 1, nul)]);
-        const entryId = tree.subarray(nul + 1, nul + 1 + idLength).toString('hex');
-        at = nul + 1 + idLength;
-        if (mode === TREE_MODE) {
-          next.push({ id: entryId, prefix: Buffer.concat([raw, Buffer.from('/')]) });
+      for (const item of treeItems(repo, id, byId.get(id) ?? Buffer.alloc(0))) {
+        const raw = Buffer.concat([prefix, item.name]);
+        if (item.mode === TREE_MODE) {
+          next.push({ id: item.id, prefix: Buffer.concat([raw, Buffer.from('/')]) });
         } else {
-          entries.push({ raw, mode, id: entryId });
+          entries.push({ raw, mode: item.mode, id: item.id });
         }
       }
     }
     level = next;
   }
   return entries;
+}
+
+/** Thrown when the trusted ref names no commit git can read. */
+export class MissingCommitError extends Error {
+  override name = 'MissingCommitError';
+}
+
+// Tags a trusted ref may pass through on its way to a commit, as git peels them. A longer chain is
+// read as a ref that names no commit.
+const MAX_TAG_DEPTH = 10;
+
+/**
+ * The commit a ref names, read in Node and checked against its id. A tag is peeled one checked
+ * object at a time. git peels with a read that checks the id and answers "missing" when it does
+ * not match, so the ref itself is read as stored and every object on the way is checked here,
+ * which names the damaged object instead.
+ */
+async function checkedCommit(repo: Repository, ref: string): Promise<{ id: string; bytes: Buffer }> {
+  let name = ref;
+  for (let depth = 0; depth <= MAX_TAG_DEPTH; depth += 1) {
+    const [object] = await readObjects(repo, [name]);
+    if (object === null || object === undefined) {
+      if (ref === 'HEAD') throw await headUnreadable(repo);
+      throw new MissingCommitError(`git cannot read the commit ${operatorText(ref)}.`);
+    }
+    if (object.type === 'commit') {
+      return verified(repo, object, 'commit', operatorText(ref));
+    }
+    if (object.type !== 'tag') {
+      throw new MissingCommitError(`${operatorText(ref)} names a ${operatorText(object.type)}, not a commit.`);
+    }
+    const tag = verified(repo, object, 'tag', operatorText(ref));
+    const target = /^object ([0-9a-f]{40}|[0-9a-f]{64})\n/u.exec(tag.bytes.subarray(0, 80).toString('latin1'))?.[1];
+    if (target === undefined) {
+      throw new MissingCommitError(`usabl could not read the tag ${tag.id} that ${operatorText(ref)} names.`);
+    }
+    name = target;
+  }
+  throw new MissingCommitError(`${operatorText(ref)} names a chain of tags longer than usabl reads.`);
+}
+
+/**
+ * The names that differ between two trees, read in Node with every tree object checked against
+ * its id. Two folders with the same tree id hold the same files, so only folders whose ids differ
+ * are read: one git process per level of folders. A file counts as changed when its mode or its id
+ * differs, or when one side lacks it; every file in a folder that only one side has is listed. A
+ * name that a tree holds twice is listed, with everything under it.
+ */
+async function treeDifference(repo: Repository, before: string, after: string): Promise<Buffer[]> {
+  const names: Buffer[] = [];
+  let level: Array<{ before: string | null; after: string | null; prefix: Buffer }> = [{ before, after, prefix: Buffer.alloc(0) }];
+  while (level.length > 0) {
+    const pairs = level.filter((pair) => pair.before !== pair.after);
+    const ids = pairs.flatMap((pair) => [pair.before, pair.after].filter((id): id is string => id !== null));
+    const trees = await readTrees(repo, ids);
+    const next: typeof level = [];
+    for (const pair of pairs) {
+      const sides = new Map<string, { name: Buffer; before: TreeItem[]; after: TreeItem[] }>();
+      const add = (items: TreeItem[], side: 'before' | 'after'): void => {
+        for (const item of items) {
+          const key = item.name.toString('latin1');
+          let entry = sides.get(key);
+          if (entry === undefined) {
+            entry = { name: item.name, before: [], after: [] };
+            sides.set(key, entry);
+          }
+          entry[side].push(item);
+        }
+      };
+      add(pair.before === null ? [] : treeItems(repo, pair.before, trees.get(pair.before) ?? Buffer.alloc(0)), 'before');
+      add(pair.after === null ? [] : treeItems(repo, pair.after, trees.get(pair.after) ?? Buffer.alloc(0)), 'after');
+      for (const entry of sides.values()) {
+        const full = Buffer.concat([pair.prefix, entry.name]);
+        const folder = Buffer.concat([full, Buffer.from('/')]);
+        if (entry.before.length > 1 || entry.after.length > 1) {
+          names.push(full);
+          for (const item of entry.before) if (item.mode === TREE_MODE) next.push({ before: item.id, after: null, prefix: folder });
+          for (const item of entry.after) if (item.mode === TREE_MODE) next.push({ before: null, after: item.id, prefix: folder });
+          continue;
+        }
+        const [old] = entry.before;
+        const now = entry.after[0];
+        const oldTree = old?.mode === TREE_MODE ? old.id : null;
+        const nowTree = now?.mode === TREE_MODE ? now.id : null;
+        if (oldTree !== nowTree) {
+          next.push({ before: oldTree, after: nowTree, prefix: folder });
+        }
+        const oldFile = old !== undefined && old.mode !== TREE_MODE ? old : null;
+        const nowFile = now !== undefined && now.mode !== TREE_MODE ? now : null;
+        if ((oldFile !== null || nowFile !== null) && (oldFile?.mode !== nowFile?.mode || oldFile?.id !== nowFile?.id)) {
+          names.push(full);
+        }
+      }
+    }
+    level = next;
+  }
+  return names;
+}
+
+/**
+ * The files that differ between the merge base of the ref and HEAD, and HEAD: what git diff
+ * --name-only <ref>...HEAD lists, with a rename listed by both names. The trusted commit, HEAD,
+ * the merge base and every tree the compare reads are checked against their ids in Node, so an
+ * object overwritten in .git/objects stops the read. git diff read the trees as stored, so a tree
+ * only the trusted side holds, rewritten to list a committed edit, hid that edit.
+ *
+ * git still finds the merge base, from the commit parents as stored. A commit rewritten between
+ * the two can move the merge base, which is what moving the trusted branch with git update-ref
+ * does too.
+ */
+async function committedChanges(repo: Repository, ref: string): Promise<Buffer[]> {
+  const tip = await checkedCommit(repo, ref);
+  const head = await checkedCommit(repo, 'HEAD');
+  const found = await runGit(repo.top, ['merge-base', tip.id, head.id]);
+  const base = found.stdout.toString('latin1').trim();
+  if (found.code === 1) {
+    throw new Error(
+      `git finds no commit that HEAD shares with ${operatorText(ref)}, so usabl cannot tell which committed files ` +
+        'changed and checked nothing. In a shallow clone, fetch more history, such as fetch-depth: 0 in ' +
+        'actions/checkout or git fetch --unshallow, then run usabl again.',
+    );
+  }
+  if (found.code !== 0 || !FULL_OBJECT_ID.test(base)) {
+    throw new Error(`git merge-base failed, so usabl could not list the committed changes. ${firstLineOf(found.stderr)}`.trim());
+  }
+  if (base === head.id) {
+    return [];
+  }
+  const start = base === tip.id ? tip : await checkedCommit(repo, base);
+  return treeDifference(repo, treeOfCommit(start), treeOfCommit(head));
 }
 
 // Files hashed by one git process at most. Larger sets are split over a few processes at once.
@@ -979,6 +1144,8 @@ export interface WorktreeReader {
   tree(): Promise<string>;
   /** The paths whose content on disk is not what HEAD holds, from the repository root, sorted. */
   changes(): Promise<WorktreeChange[]>;
+  /** The files that differ between the merge base of the ref and HEAD, and HEAD, sorted. */
+  committed(ref: string): Promise<string[]>;
 }
 
 // A tree id that never matches any earlier read, for a tree usabl cannot build from the bytes the
@@ -1164,6 +1331,16 @@ export function makeWorktreeReader(options: WorktreeOptions): WorktreeReader {
       }
       // Plain code-unit order, so the list never depends on the order the reads finished in.
       return changes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    },
+    async committed(ref) {
+      const repo = await openRepository(options.cwd);
+      const names = await committedChanges(repo, ref);
+      // The same limit git diff's listing had: the names and one separator each.
+      if (names.reduce((size, name) => size + name.length + 1, 0) > options.maxBuffer) {
+        throw options.tooLong('diff');
+      }
+      const unique = [...new Set(names.map((name) => name.toString('utf8')))];
+      return unique.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     },
   };
 }

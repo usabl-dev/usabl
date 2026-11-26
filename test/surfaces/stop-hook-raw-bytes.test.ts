@@ -562,3 +562,88 @@ describe('a HEAD commit object overwritten with other bytes, after a verified st
     expect(block.reason).toMatch(/git fsck/u);
   });
 });
+
+/** A tree object written to the store from a listing in git ls-tree's form: its id and bytes. */
+function makeTree(listing: string): { id: string; raw: Buffer } {
+  const id = execFileSync('git', ['mktree'], { cwd: repo, input: listing, encoding: 'utf8' }).trim();
+  return { id, raw: execFileSync('git', ['cat-file', 'tree', id], { cwd: repo }) };
+}
+
+async function forgeObject(id: string, type: 'tree' | 'commit', content: Buffer): Promise<void> {
+  const object = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
+  await chmod(object, 0o644);
+  await writeFile(object, deflateSync(Buffer.concat([Buffer.from(`${type} ${String(content.length)}\0`), content])));
+}
+
+// The src tree of a commit that holds the edited screen and the other screen as `commit` has it.
+function srcWithEdit(commit: string): { id: string; raw: Buffer } {
+  const edited = git('rev-parse', 'HEAD:src/App.tsx').trim();
+  const other = git('rev-parse', `${commit}:src/Other.tsx`).trim();
+  return makeTree(`100644 blob ${edited}\tApp.tsx\n100644 blob ${other}\tOther.tsx\n`);
+}
+
+describe('a committed edit hidden by a forged object on the trusted side', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks the stop, naming git fsck, when a tree only the trusted side holds is forged to list the edit', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const trustedSrc = git('rev-parse', 'origin/main:src').trim();
+    await forgeObject(trustedSrc, 'tree', srcWithEdit('origin/main').raw);
+    // git diff reads the forged tree as stored, so it lists the other screen only.
+    expect(git('diff', '--name-only', 'origin/main...HEAD').trim()).toBe('src/Other.tsx');
+    const next = await stop();
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toEqual([]);
+    const block = blockOf(next.stdout);
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/git fsck/u);
+  });
+
+  it('fails usabl check --trusted-ref, naming git fsck, when the merge base commit is forged to name a tree that holds the edit', async () => {
+    await setUp();
+    // The trusted branch moves on, so the merge base is a commit git reaches only through parents.
+    git('switch', '-q', 'main');
+    await write('README.md', 'notes\n');
+    git('add', 'README.md');
+    git('commit', '-q', '-m', 'the trusted branch moves on');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const base = git('merge-base', 'origin/main', 'HEAD').trim();
+    const root = makeTree(
+      `100644 blob ${git('rev-parse', `${base}:.gitignore`).trim()}\t.gitignore\n` +
+        `040000 tree ${srcWithEdit(base).id}\tsrc\n` +
+        `100644 blob ${git('rev-parse', `${base}:usabl.config.json`).trim()}\tusabl.config.json\n`,
+    );
+    const text = git('cat-file', 'commit', base);
+    await forgeObject(base, 'commit', Buffer.from(text.replace(/^tree [0-9a-f]+\n/u, `tree ${root.id}\n`)));
+    expect(git('diff', '--name-only', 'origin/main...HEAD').trim()).toBe('src/Other.tsx');
+    state.scanned = [];
+    // A listing that fails stops the check with an error, never a run on a list it could not read.
+    const result = await checkOutput('--trusted-ref', 'origin/main').then(
+      (done) => done.printed,
+      (err: unknown) => `failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    expect(result).not.toMatch(/VERIFIED \(exit 0\)/u);
+    expect(result).toMatch(/^failed: .*git fsck/u);
+    expect(state.scanned).toEqual([]);
+  });
+
+  it('blocks the stop when the starting commit itself is forged', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const start = git('rev-parse', 'origin/main').trim();
+    const text = git('cat-file', 'commit', start);
+    await forgeObject(start, 'commit', Buffer.from(text.replace(/^tree [0-9a-f]+\n/u, `tree ${git('rev-parse', 'HEAD^{tree}').trim()}\n`)));
+    const next = await stop();
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toEqual([]);
+    expect(blockOf(next.stdout).decision).toBe('block');
+  });
+});
