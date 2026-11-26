@@ -123,13 +123,13 @@ function isInstalledPath(file: string): boolean {
 // pattern that is never globbed. A leading ! is left out: it marks folders to remove.
 function manifestGlob(raw: string): string | null {
   const trimmed = raw.trim();
-  const pattern = cleanPattern(trimmed.startsWith('!') ? trimmed.slice(1) : raw);
-  // A brace group can hold .. or an absolute path, such as {..,packages/*}, and the glob expands
-  // it, so a pattern with .. anywhere in a brace group is refused before it is globbed.
-  // A pattern that starts with /, itself or in a brace group, is past the glob bound, so the
-  // root reads as unreadable (see checkGlobBound). It is never globbed.
-  if (pattern === '' || pattern.split('/').includes('..')) return null;
-  if (/[{}]/u.test(pattern) && pattern.includes('..')) return null;
+  // Node's glob reads every \ as /, so every check below reads the pattern the same way.
+  const pattern = cleanPattern((trimmed.startsWith('!') ? trimmed.slice(1) : raw).replace(/\\/gu, '/'));
+  if (pattern === '') return null;
+  // A pattern that names a path outside the repository is past the glob bound, so the root reads
+  // as unreadable (see checkGlobBound), and it is never globbed: one that starts with /, one that
+  // climbs above the repository with .., such as ../outside/* or {..,packages/*}, and one that
+  // starts with a drive such as C:. Each brace expansion is checked too.
   return `${pattern}/package.json`;
 }
 
