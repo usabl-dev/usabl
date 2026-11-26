@@ -454,23 +454,33 @@
   to read was already reported this way. Doctor's reader for the gate path is now a required
   input, so no caller can fall back to the old read. Every other doctor line is unchanged. Gate
   effect: none.
-- `usabl debt ledger` no longer calls a row exact, or "at least N", for days no scan saw. An open
-  row was counted to the head commit as exact even when no full scan of main saw it after an
-  earlier date, or the scan of the head commit saw none there. The part of a span after its last
-  sighting now sets `mayBeLess` with the reason `not-seen-since`, for a span open now and for one
-  that ended at a gap in the floor history. Such a row prints "at most N", or "not known (N by the
-  floor)" when it may also be older, and it is left out of the median and the longest. A span open
-  now is exact only when the scan of the head commit saw it. Measurement only: no verdict reads
-  the ledger.
+- `usabl debt ledger` no longer calls a row exact, or "at least N", for days no scan saw. A row
+  was counted as exact even when no full scan of main saw it after an earlier date, or when the
+  scan of the head commit saw none there. The part of a span after its last sighting now sets
+  `mayBeLess` with the reason `not-seen-since`: for a span open now, unless the scan of the head
+  commit saw it; for a span that ended at a gap in the floor history; and for a span the history
+  fixed, because the fix may have landed at any commit after the last sighting. Such a row prints
+  "at most N", or "not known (N by the floor)" when it may also be older, and it is left out of
+  the median and the longest. So a fixed row is never exact, and the fixed totals have no median.
+  Measurement only: no verdict reads the ledger.
 - The silent change evidence never shows the value of a slider, a spin button, a progress bar, a
   meter, a select, or a list box. A row built from its contents took that value as its name, so
   an added row with a range input at 417 showed `["417","Age"]`, and an option's name is a choice
-  a person made. These controls now count as fields in the tree read: a name built from contents
-  that hold one is left out, an option inside one has no name, and the control keeps its own
-  author-given name. The design checks read the same tree, so a button, link, or heading named
-  from contents that hold such a control is not found by that name. Gate effect: none for the
-  silent change rule, which is preview; a design requirement that named such an element by its
-  contents now reads it as missing.
+  a person made. The tree read now marks each name that may show such a value: a name built from
+  contents that hold one of these controls, the control's own name when built from its contents, a
+  name built from contents inside it, and an option's name inside it. `addedNames` leaves a marked
+  name out, and the control's author-given name stays. The rule still compares every name the
+  browser gives, so its findings and gaps are the same as before. Gate effect: none; the rule is
+  preview.
+- The design checks count a second element with the design's name even when its name comes from
+  contents that hold an empty field. The design read left out such a name, as the silent change
+  read does, so a second same-named button in a closed shadow root that held an empty
+  `contenteditable` span dropped out of the tree count, and the check read one match and could
+  pass. The design read now keeps every node and every name as the browser gives them; none of
+  those names reaches a draft. It also keeps the nodes inside an editable field, so a heading
+  inside a `contenteditable` region is counted in the tree too. Gate effect: the closed shadow
+  root page above now asks for review, where it could pass; an element inside an editable field
+  that the document search found is now confirmed by the tree count, where it asked for review.
 - The ground truth module map lists today's source folders, `src/judge/`, `src/app/`, and
   `src/import/` among them, one line each.
 - Every list in a requirement file has a size limit: 1,000 requirements in one file, 1,000 steps
