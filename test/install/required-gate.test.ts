@@ -10,12 +10,20 @@
  */
 import { spawnSync } from 'node:child_process';
 import { runInThisContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { REQUIRED_GATE_JOB, REQUIRED_GATE_SCRIPT } from '../../src/install/ci.js';
 
 // Each spawned case starts a real node process, which is slow enough on a busy machine that
 // the 5s default trips on the multi-case tests. The rule itself is instant.
 const SPAWN_TIMEOUT_MS = 60_000;
+
+// Every test here blocks, on node processes or on the sweep below, and vitest gives the event loop
+// no turn between tests. Under load the whole file then ran past the 60 seconds the worker waits
+// for a reply from the test runner, and the run failed with no test named. A turn after each test
+// lets those messages through.
+afterEach(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 interface GateInput {
   event: string;
