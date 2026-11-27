@@ -345,6 +345,57 @@ describe('doctor checks the branch the gate names', () => {
     });
   }
 
+  // A comment line above on: holds a second trigger, for trunk, behind a character that a YAML 1.1
+  // reader counts as a line break: U+0085, U+2028 or U+2029. js-yaml and the line reader end a
+  // comment only at LF or CR, so both read the visible trigger, main, which is protected and the
+  // default. A reader that breaks the line there reads the hidden one, trunk, and a quoted
+  // run-name that holds the visible block. Each one must read as a trigger usabl cannot read.
+  const noRunName = real.replace(/\nrun-name: [^\n]*\n/, '\n');
+  const hiddenInComment = (lineBreak: string): string =>
+    noRunName
+      .replace('\non:\n', `\n# note${lineBreak}on:${lineBreak}  pull_request:${lineBreak}    branches: ["trunk"]${lineBreak}run-name: 'x\non:\n`)
+      .replace('\npermissions:', `  # end${lineBreak}'\n\npermissions:`);
+  const lineBreaks: Array<[string, string]> = [
+    ['U+0085', '\u0085'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+  for (const [label, lineBreak] of lineBreaks) {
+    it(`reads a gate file that holds ${label} in a comment as a trigger usabl cannot read, in install and doctor`, async () => {
+      const raw = hiddenInComment(lineBreak);
+      expect(raw).toContain(lineBreak);
+      const gh = ghWithRuleset('main', { ref_name: { include: ['refs/heads/main'], exclude: [] } });
+      const target = await gateBranchTarget(async (path) => (path === USABL_GATE_WORKFLOW_PATH ? raw : null));
+      expect(target).toMatchObject({ name: 'main', source: 'assumed', gatePresent: true });
+      const result = await verifyBranchRule(gh.reader, target);
+      expect(result.exitCode).toBe(2);
+      expect(result.action).toBe('cannot-verify');
+      const report = await branchRule({ [USABL_GATE_WORKFLOW_PATH]: raw }, gh.reader);
+      expect(report.state).toBe('unknown');
+    });
+  }
+
+  // A YAML 1.1 reader reads true:, yes:, y: and on: in another case as the same boolean key as on:,
+  // and keeps the last one. js-yaml with the failsafe schema reads them as other keys. Here the
+  // fake trigger for trunk sits under on: and the real one for main under the other key.
+  for (const key of ['true', 'True', 'TRUE', 'yes', 'Yes', 'y', 'Y', 'On', 'ON']) {
+    it(`reads a gate with a top-level ${key}: key beside on: as a trigger usabl cannot read, in install and doctor`, async () => {
+      const raw = real.replace(
+        '\non:\n  pull_request:\n    branches: ["main"]\n',
+        `\non:\n${FAKE}${key}:\n  pull_request:\n    branches: ["main"]\n`,
+      );
+      expect(raw).toContain(`\n${key}:\n`);
+      const gh = ghWithRuleset('trunk', { ref_name: { include: ['refs/heads/trunk'], exclude: [] } });
+      const target = await gateBranchTarget(async (path) => (path === USABL_GATE_WORKFLOW_PATH ? raw : null));
+      expect(target).toMatchObject({ name: 'main', source: 'assumed', gatePresent: true });
+      const result = await verifyBranchRule(gh.reader, target);
+      expect(result.exitCode).toBe(2);
+      expect(result.action).toBe('cannot-verify');
+      const report = await branchRule({ [USABL_GATE_WORKFLOW_PATH]: raw }, gh.reader);
+      expect(report.state).toBe('unknown');
+    });
+  }
+
   it('reads a docs gate with text shaped like a trigger above its real on: as a trigger usabl cannot read', async () => {
     const raw = pinEngineRef(docsGateWorkflowFor('main'), SHA).replace('\non:\n', `\nenv:\n  X: 'x\non:\n${FAKE}  y'\non:\n`);
     expect(raw).not.toBe(pinEngineRef(docsGateWorkflowFor('main'), SHA));

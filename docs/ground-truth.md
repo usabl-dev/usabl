@@ -5352,9 +5352,9 @@ repository, head SHA, and base SHA, in this repository and workflow file, whose 
 moved, so that review fails closed until the pull request runs again.
 
 What the required check is worth. Any pull request, from a branch or a fork, runs the workflow as
-the pull request changed it, so one that edits `.github/workflows/` can make `usabl-required`
-pass whatever the judge found. The verdict on a pull request that edits the workflow is not
-evidence. The protection is a branch rule or ruleset that requires review from code owners, with
+the pull request changed it, so one that edits `.github/workflows/` can make `usabl-required` pass
+whatever the judge found. The verdict on a pull request that edits the workflow is not evidence. The
+protection is a branch rule or ruleset that requires review from code owners, with
 `.github/workflows/` and the guarded paths owned in `CODEOWNERS`, so such a pull request cannot
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
 `usabl install --branch-rule` verifies the required check, code-owner review, at least one required
@@ -5365,51 +5365,55 @@ usabl writes: after the first line that is exactly `on:` and before the next lin
 text other than a comment, the line `  pull_request:` with `    branches: ["<name>"]` straight below
 it. The whole file is also read as YAML with the failsafe schema, which reads every value as text
 and builds no custom type, and its `on.pull_request.branches` must be exactly that one name. A file
-YAML cannot read (a duplicate key such as a second `on:`, or a line break YAML refuses, such as
-U+2028), any other shape, or a different name is a trigger it cannot read. So text shaped like a
-trigger in a `run-name: |` block, or in a quoted value that runs over several lines, never names the
-branch. `usabl install --ci` and the doctor lines for each workflow read the lines only. A lone CR
-counts as a line break for the line the steps name, as an editor shows it. A branch name over 255
-characters is a trigger it cannot read, so no long name is printed. With no gate workflow, it reads
-the branch the docs gate workflow names, since the docs gate requires the same check, and its advice
-names `install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a
-folder, or no permission), it checks `main` and says it assumed it in each line that names it. An
-assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
+that holds U+0085, U+2028 or U+2029 anywhere, even in a comment, is a trigger it cannot read: a YAML
+1.1 reader counts each as a line break, js-yaml and the line reader do not, so a comment could hide
+a second trigger from both. So is a file with a top-level key that a YAML 1.1 reader reads as the
+same key as `on` (`true`, `yes`, `y`, or `on` in another case, such as `True:` or `ON:`). So is a
+file YAML cannot read (such as one with a duplicate key, a second `on:`), any other shape, or a
+different name. So text shaped like a trigger in a `run-name: |` block, in a quoted value that runs
+over several lines, in a comment behind one of those characters, or under one of those keys does not
+name the branch. `usabl install --ci` and the doctor lines for each workflow read the lines only. A
+lone CR counts as a line break for the line the steps name, as an editor shows it. A branch name
+over 255 characters is a trigger it cannot read, so no long name is printed. With no gate workflow,
+it reads the branch the docs gate workflow names, since the docs gate requires the same check, and
+its advice names `install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot
+read (a folder, or no permission), it checks `main` and says it assumed it in each line that names
+it. An assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
 default branch. When GitHub reports another default branch, or cannot say which one it is, the
-result is "cannot verify": it names both branches when it can, and the next step. A default
-branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
-`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. A branch a
-gate names is verified only when GitHub reports it as the default branch. When GitHub reports
-another default branch, pull requests into it are not gated; when usabl cannot read the default
-branch (the read failed, or its answer named no plain branch), it cannot confirm they are. In
-both cases the result is "cannot verify" (exit 2) whatever the protection on the gate's branch
-reads. Its first line says that, and whether the branch rule on the gate's branch is set; the
-next lines say what that protection reads, the line of the gate file on disk to change, and how
-to gate both branches instead. When the docs gate runs on the default branch and the app gate
-does not, it says the app's pull requests into it are not gated. Otherwise each part that is off
-is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same
-facts and the same next step. It reads the gate path the way `install --branch-rule` does, with
-a reader every caller must pass, so a folder or a file it cannot read there is never a missing
-gate. Its branch protection line is wired only when `install --branch-rule` is verified. When
-the default branch is not the gate's branch, or cannot be read, it is drifted (protected, other
-default branch), unknown (protected, default branch not read), missing (not protected), or
-unknown (protection not read). It also reports `workflow-owners`: wired only when the last
-`CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
-rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
-email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
-reads as unknown. Only an organization-required workflow takes the
-workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
-and "CI trust boundary") for what each job holds. The engine's own repo checks in the generated
-gate, byte for byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor`
-built at the pin reads it as `wired`; a build whose gate template changed after the pin reads it
-as `drifted` until the pin moves. Its judge serves `fixtures/live` (repository variables
-`USABL_APP_BUILD_COMMAND=true` and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one
-screen, `self-gate` (`fixtures/live/self-gate-screen.html`, a page made to pass every check). The pin moves only forward, to a commit on main, by the rule in
-`docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
-from the base commit to hold it there, and reads the head's gate only as data. The required
-status check named in branch protection is `usabl-required` (the workflow *file* is named
-`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this
-repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
+result is "cannot verify": it names both branches when it can, and the next step. A default branch
+name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. A branch a gate
+names is verified only when GitHub reports it as the default branch. When GitHub reports another
+default branch, pull requests into it are not gated; when usabl cannot read the default branch (the
+read failed, or its answer named no plain branch), it cannot confirm they are. In both cases the
+result is "cannot verify" (exit 2) whatever the protection on the gate's branch reads. Its first
+line says that, and whether the branch rule on the gate's branch is set; the next lines say what
+that protection reads, the line of the gate file on disk to change, and how to gate both branches
+instead. When the docs gate runs on the default branch and the app gate does not, it says the app's
+pull requests into it are not gated. Otherwise each part that is off is "not applied", and each it
+cannot read is "cannot verify". `usabl doctor` reports the same facts and the same next step. It
+reads the gate path the way `install --branch-rule` does, with a reader every caller must pass, so a
+folder or a file it cannot read there is never a missing gate. Its branch protection line is wired
+only when `install --branch-rule` is verified. When the default branch is not the gate's branch, or
+cannot be read, it is drifted (protected, other default branch), unknown (protected, default branch
+not read), missing (not protected), or unknown (protection not read). It also reports
+`workflow-owners`: wired only when the last `CODEOWNERS` rule that matches each `.yml` or `.yaml`
+file in `.github/workflows/`, and the last rule for any such file a pull request could add, names
+valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes ownership away,
+and a pattern usabl cannot evaluate reads as unknown. Only an organization-required workflow takes
+the workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15 and "CI trust
+boundary") for what each job holds. The engine's own repo checks in the generated gate, byte for
+byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor` built at the pin
+reads it as `wired`; a build whose gate template changed after the pin reads it as `drifted` until
+the pin moves. Its judge serves `fixtures/live` (repository variables `USABL_APP_BUILD_COMMAND=true`
+and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one screen, `self-gate`
+(`fixtures/live/self-gate-screen.html`, a page made to pass every check). The pin moves only
+forward, to a commit on main, by the rule in `docs/threat-model.md`. The `engine-pin` job in
+`usabl.yml` runs `scripts/check-engine-pin.ts` from the base commit to hold it there, and reads the
+head's gate only as data. The required status check named in branch protection is `usabl-required`
+(the workflow *file* is named `usabl-gate`), and the protected branch is the one the gate's trigger
+names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never
+call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape
