@@ -252,11 +252,12 @@ async function checkEmptyToastGroups(
   }
   for (const groupRef of groups) {
     // The group is left to the alert walk only when the walk gave an alert it holds a gap, or a
-    // draft while that alert sat in a toast group. Otherwise it is checked as an empty group is. The page can change during the check: an
-    // alert can appear in the group after the alert list was read, for example from the dialog's
-    // own save action. Its selector can match an alert the walk listed and passed, when the same
-    // element moved or a new toast reuses that alert's id. The group can also be hidden after its
-    // alert was read and passed. In each case the walk reported nothing for the group.
+    // draft while that alert sat in a toast group. Otherwise it is checked as an empty group is.
+    // The page can change during the check: an alert can appear in the group after the alert list
+    // was read, for example from the dialog's own save action. Its selector can match an alert the
+    // walk listed and passed, when the same element moved or a new toast reuses that alert's id.
+    // The group can also be hidden after its alert was read and passed. In each case the walk
+    // reported nothing for the group.
     const held = await ctx.page.queryAll(`${groupRef.selector} ${SEL.alert}`);
     if (held.some((alertRef) => reportedAlerts.has(alertRef.selector))) {
       continue;
