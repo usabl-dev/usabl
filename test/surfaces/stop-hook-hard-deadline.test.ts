@@ -213,9 +213,11 @@ describe('the Stop hook deadline while the checks hold their thread', () => {
     const run = await stop(realDist, repo);
 
     expectAnsweredInTime(run, repo);
+    // The check finishes in time and blocks on the file it could not place, or the deadline
+    // blocks first. Either is a block that says the change is not verified.
     const answer = answerOf(run);
     expect(answer?.['decision']).toBe('block');
-    expect(String(answer?.['reason'])).toMatch(/^NOT verified/u);
+    expect(String(answer?.['reason'])).toMatch(/^(NOT COVERED \(exit 3\): )?NOT verified/u);
   }, 60_000);
 
   it('answers in time when placement would compare 20,000 test files with 4,000 unresolved imports', async () => {
