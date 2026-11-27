@@ -869,6 +869,8 @@ describe('honest checkout changes that block as drift', { timeout: REAL_PROCESS_
     expect(reason).toMatch(/sparse checkout or submodule state changed/u);
     expect(reason).toMatch(/git submodule update --init/u);
     expect(reason).toMatch(/pin fix: /u);
+    expect(reason).toMatch(/the user deletes the pin file/u);
+    expect(reason).toMatch(/Do not delete the pin file or change the state yourself to clear this block\./u);
     expect(reason).not.toMatch(/Do not edit those files/u);
   });
 });

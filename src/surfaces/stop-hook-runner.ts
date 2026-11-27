@@ -359,12 +359,14 @@ function driftMessage(drift: string[], continuation: boolean, pinPath: string | 
     'rebase, or branch switch that adds or removes a submodule changes it too. usabl keeps the pins, so every later ' +
     'stop of this session blocks the same way.';
   const steps =
-    'If the change was meant, review what changed since the session started, then delete the pin file named under ' +
-    '"pin fix" in the untrusted text below; the next stop records new pins. Otherwise put the state back.';
+    'to review what changed since the session started. If the change was meant, the user deletes the pin file named ' +
+    'under "pin fix" in the untrusted text below, and the next stop records new pins; otherwise the user puts the ' +
+    'state back.';
   const policy = files.length > 0 ? ' The guarded policy files named there need review too.' : '';
+  const own = ' Do not delete the pin file or change the state yourself to clear this block.';
   const next = continuation
-    ? `usabl let this stop through without blocking again (continuation already active). Next: tell the user. ${steps}${policy}`
-    : `Next: tell the user. ${steps}${policy}`;
+    ? `usabl let this stop through without blocking again (continuation already active). Next: tell the user ${steps}${policy}${own}`
+    : `Next: tell the user ${steps}${policy}${own}`;
   const pieces = [`drifted files: ${drift.join(', ')}`, ...(pinPath === null ? [] : [`pin fix: ${deletePinFileFix(pinPath)}`])];
   return framedMessage([head, why, next], pieces);
 }
