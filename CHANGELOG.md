@@ -461,7 +461,9 @@
   case, a link named `POLICY` at the entry `policy` is found as the entry. Gate effect: these stops
   block for approval. Listing change: a name with only `*` or `?`, such as `reqs*`, no longer adds
   the files of the other folders its pattern matched, a glob entry keeps what it matched, and a
-  link committed above a literal entry is reported on every check. A file reader that cannot list
+  link committed above a literal entry is reported on every check: in a repository that keeps
+  one, every local stop blocks for approval and `usabl check` exits 2, while the CI policy check
+  reports nothing, so name the real folder the link points at in the entry instead. A file reader that cannot list
   a folder by name or look a path up lists a name with no glob syntax as before and throws for a
   name with glob syntax, which blocks the stop as a guard failure. Cost: one `lstat` for each part
   of an entry's path, and no listing of the folder that holds it. On this repository (15 literal
