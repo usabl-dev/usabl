@@ -1035,14 +1035,24 @@ the tool errored, not because the page is accessible.
   entry read this way and say how to write it. The `requirements` folder is read as a literal
   path; a `guardedPaths` entry with the same text is read both as that path and as a glob.
   On the working tree the local guard lists a literal entry by its name, never through a
-  pattern: the files under it with the entry as the walk's start, and the entry itself, when it
-  is a file or a link, found by name in its folder. Node's glob has no escape, so before, a
+  pattern. The files under it are listed with the entry as the walk's start. The entry's path is
+  also looked up one part at a time from the root, with `lstat`, the way the file system opens
+  it, and the first part that is a link, a file, or anything but a real folder is listed by its
+  own name and compared. So on a volume that ignores case, as macOS and Windows do by default, a
+  link named `POLICY` at the entry `policy` is the entry, and a folder above the entry that is now
+  a link or a file is reported, since every path below a link reads as nothing on both sides and
+  cannot be compared. That holds for a link committed above a literal entry too: it is reported
+  on every check, until a real folder takes its place or the entry names another path. Node's glob has no escape, so before, a
   requirements folder named `reqs[1]` put into a pattern listed `reqs1`, a name past the glob
   reading bound listed nothing, and a new untracked file in that folder was not seen until it was
-  committed. A file reader that cannot list a folder that way still lists a name with no glob
-  syntax through the patterns, and throws for a name with glob syntax, which blocks the stop as a
-  guard failure. The listing now holds only paths under the entry's exact name: a pattern from a
-  name with `*` or `?`, such as `reqs*`, no longer adds the files of the other folders it matched.
+  committed. A folder above a literal entry with nothing at `HEAD`, replaced by a link to a folder
+  inside the repository (`a -> stuff` for the entry `a/policy`), hid every file below it, and the
+  stop said VERIFIED. A file reader that cannot list a folder that way, or cannot look a path up,
+  still lists a name with no glob syntax through the patterns, and throws for a name with glob
+  syntax, which blocks the stop as a guard failure. The listing now holds only paths under the
+  entry's exact name: a pattern from a name with `*` or `?`, such as `reqs*`, no longer adds the
+  files of the other folders it matched. Finding the entry costs one `lstat` for each part of its
+  path; it never lists the folder that holds the entry.
 
 - The Stop hook blocks once when the guard or the session pin computation fails, because it then
   cannot tell whether guarded policy changed, and lets the continuation through marked NOT

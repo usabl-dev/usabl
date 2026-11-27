@@ -4007,12 +4007,17 @@ The two places select from different lists:
   such an entry guards them on the working tree as the git listings do. It leaves out `.git/` in
   that dot listing, because git never tracks it.
 - A literal entry, such as the requirements folder, is listed on the working tree by its name,
-  never through a pattern: the files under it with the entry as the walk's start, and the entry
-  itself when its folder holds a file or a link by that name. Node's glob has no escape, so a
-  name such as `reqs[1]` put into a pattern would list `reqs1`, and a name past the glob reading
-  bound would list nothing. A file reader that cannot list a folder that way lists a name with no
-  glob syntax through the patterns, and throws for a name with glob syntax, so the guard fails
-  closed. An entry read wide as the whole tree, and every glob entry, keep their patterns.
+  never through a pattern: the files under it with the entry as the walk's start. Its path is also
+  looked up one part at a time from the root with `lstat`, the way the file system opens it, so a
+  volume that ignores case finds a name written in another case. The first part that is a link, a
+  file, or anything but a real folder is listed by its own name: the entry itself when it is a
+  file or a link, or a folder above it that is now a link or a file, since a path below a link
+  reads as nothing on both sides. A link committed above a literal entry is therefore reported on
+  every check. Node's glob has no escape, so a name such as `reqs[1]` put into a pattern would
+  list `reqs1`, and a name past the glob reading bound would list nothing. A file reader that
+  cannot list a folder that way, or cannot look a path up, lists a name with no glob syntax
+  through the patterns, and throws for a name with glob syntax, so the guard fails closed. An
+  entry read wide as the whole tree, and every glob entry, keep their patterns.
 
 For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
 mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
