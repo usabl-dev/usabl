@@ -116,6 +116,87 @@ describe('the byte limit counts the file as stored', () => {
   });
 });
 
+describe('a trusted ref that moves while the overlay reads it', () => {
+  // A branch name names one commit when its size is read and another when its text is read, as
+  // when a fetch or a commit lands during a local run. Commit c1 holds a small file with r1, and
+  // c2 a file over the limit with r2.
+  const small = VALID;
+  const large = `${VALID.replace('id: r1', 'id: r2')}${'x'.repeat(LIMIT_BYTES)}`;
+  const files: Record<string, string> = { c1: small, c2: large };
+
+  function movingGit() {
+    let head = 'c1';
+    const at = (ref: string): string => (ref === 'main' ? head : ref);
+    const calls: string[] = [];
+    const git: Pick<GitReader, 'lsFiles' | 'show' | 'blobSize' | 'commitOf'> = {
+      commitOf: async (ref) => {
+        calls.push(`commitOf ${ref}`);
+        return ref === 'main' ? head : null;
+      },
+      lsFiles: async (ref) => {
+        calls.push(`lsFiles ${ref}`);
+        return [PATH];
+      },
+      blobSize: async (ref) => {
+        calls.push(`blobSize ${ref}`);
+        const size = Buffer.byteLength(files[at(ref)] ?? '', 'utf8');
+        // The branch moves right after its size is read.
+        head = 'c2';
+        return size;
+      },
+      show: async (ref) => {
+        calls.push(`show ${ref}`);
+        return files[at(ref)] ?? null;
+      },
+    };
+    return { git, calls };
+  }
+
+  const ids = (result: Awaited<ReturnType<typeof loadRequirements>>): string[] =>
+    result.ok ? result.bundle.requirements.map((requirement) => requirement.id) : [];
+
+  it('reads the size and the text from one commit, so the limit counts the text it loads', async () => {
+    const { git, calls } = movingGit();
+    const fs = overlayRequirementsFs({ readFile: async () => null, glob: async () => [PATH] }, git, config, 'main');
+    expect(ids(await loadRequirements(fs, config))).toEqual(['r1']);
+    expect(calls).toEqual(['commitOf main', 'lsFiles c1', 'blobSize c1', 'show c1']);
+  });
+
+  it('reads by the ref name when the reader cannot name its commit', async () => {
+    const { git, calls } = movingGit();
+    const unnamed = { ...git, commitOf: async (ref: string) => (calls.push(`commitOf ${ref}`), null) };
+    const fs = overlayRequirementsFs({ readFile: async () => null, glob: async () => [PATH] }, unnamed, config, 'main');
+    await loadRequirements(fs, config);
+    expect(calls).toEqual(['commitOf main', 'lsFiles main', 'blobSize main', 'show main']);
+  });
+});
+
+describe('the git reader names the commit of a ref', () => {
+  it(
+    'gives the commit id for a branch and a commit id, null for a ref that names no commit, and refuses a ref it cannot use',
+    async () => {
+      const dir = await folder();
+      const git = async (args: string[]): Promise<string> => (await execFileAsync('git', args, { cwd: dir })).stdout.trim();
+      await git(['init', '--initial-branch=main']);
+      await git(['config', 'user.name', 'Test User']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await writeFile(join(dir, PATH), VALID);
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'one']);
+      const id = await git(['rev-parse', 'HEAD']);
+      const tree = await git(['rev-parse', 'HEAD^{tree}']);
+      const reader = makeGitReader({ cwd: dir });
+      expect(await reader.commitOf?.('main')).toBe(id);
+      expect(await reader.commitOf?.(id)).toBe(id);
+      expect(await reader.commitOf?.('no-such-branch')).toBeNull();
+      expect(await reader.commitOf?.(tree)).toBeNull();
+      // A ref usabl refuses is refused here too, with the same error the other reads give.
+      await expect(reader.commitOf?.('-main')).rejects.toThrow(/usabl cannot use "-main" as a git ref/);
+    },
+    30_000,
+  );
+});
+
 describe('a Figma import whose drafted file is over the byte limit', () => {
   it('says no file was written and why, and how to import the design', async () => {
     // 400 heading stamps in one frame draft about 400 requirements, more than 128 KiB of YAML.

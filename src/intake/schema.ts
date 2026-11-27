@@ -695,8 +695,10 @@ function toRequirementBundle(bundle: z.infer<typeof requirementBundleSchema>): R
 
 const TOO_MANY_PROBLEMS = 'this file has too many problems to check, so it is refused; shorten or fix its longest list';
 
-// The message the JavaScript engine gives when a call goes over its stack or argument limit.
-const STACK_LIMIT_MESSAGE = 'Maximum call stack size exceeded';
+// The message the JavaScript engine gives when a call goes over its stack or argument limit. V8
+// gives it with no final period. Another engine, or a later V8, may add one or change the case,
+// so the match allows both. The whole message must match, so a longer text is thrown on.
+const STACK_LIMIT_MESSAGE = /^maximum call stack size exceeded\.?$/i;
 
 export function parseBundle(raw: unknown): ParseBundleResult {
   // The schema library collects the problems of a list entry with one function call that takes
@@ -714,7 +716,7 @@ export function parseBundle(raw: unknown): ParseBundleResult {
   try {
     parsed = requirementBundleSchema.safeParse(raw, { error: issueMessage });
   } catch (error: unknown) {
-    if (error instanceof RangeError && error.message === STACK_LIMIT_MESSAGE) {
+    if (error instanceof RangeError && STACK_LIMIT_MESSAGE.test(error.message)) {
       return { ok: false, verdict: 'approval_required', reason: TOO_MANY_PROBLEMS };
     }
     throw error;
