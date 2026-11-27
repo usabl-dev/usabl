@@ -202,7 +202,10 @@ export async function findStartingCommit(run: ScopeGit): Promise<StartingCommit>
     return gitFailed(branch, tip);
   }
 
-  const base = await git(['merge-base', tipCommit, 'HEAD']);
+  // Parents are read from the commit objects, never from .git/objects/info/commit-graph, which git
+  // reads without checking: a patched file made HEAD the starting commit, so a committed screen
+  // edit read as nothing to check.
+  const base = await git(['-c', 'core.commitGraph=false', 'merge-base', tipCommit, 'HEAD']);
   if (base.code === 1) {
     return { kind: 'not-found', branch, problem: 'no-common-commit', detail: null };
   }
@@ -213,7 +216,7 @@ export async function findStartingCommit(run: ScopeGit): Promise<StartingCommit>
 
   // A merge base is an ancestor of HEAD by definition. This is checked anyway, because the scope
   // and the receipt both rest on it, and a commit that is not one would scope the wrong changes.
-  const ancestor = await git(['merge-base', '--is-ancestor', commit, 'HEAD']);
+  const ancestor = await git(['-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', commit, 'HEAD']);
   if (ancestor.code === 1) {
     return { kind: 'not-found', branch, problem: 'not-ancestor', detail: null };
   }

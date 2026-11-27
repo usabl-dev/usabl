@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import type { GitReader, TreeEntry } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 import { GIT_ENVIRONMENT, gitProcessEnvironment } from './git-environment.js';
-import { makeWorktreeReader, NoHeadError } from './worktree.js';
+import { makeWorktreeReader, MissingCommitError, NoHeadError } from './worktree.js';
 
 const execFileAsync = promisify(execFile);
 const NUL = '\0';
@@ -205,10 +205,6 @@ function parseLsTree(output: string): Record<string, string> {
 
 function parseLsFiles(output: string): string[] {
   return [...new Set(splitNul(output))].sort();
-}
-
-function parseNameOnly(output: string): string[] {
-  return [...new Set(splitNul(output))];
 }
 
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
@@ -420,14 +416,20 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     },
     async diffNameOnly(ref) {
       assertReadableRef(ref);
-      // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      // The closing -- keeps git from reading <ref>...HEAD as a path when a file has that name.
-      const output = await runListing(
-        cwd,
-        ['diff', '--name-only', '-z', '--end-of-options', `${ref}...HEAD`, '--'],
-        maxBuffer,
-      );
-      return parseNameOnly(output);
+      // The files that changed from the merge base to HEAD, so CI sees what a pull request changes
+      // even when the working tree is clean. Both trees come from objects checked against their
+      // ids: see worktree.ts.
+      try {
+        return await worktree.committed(ref);
+      } catch (err) {
+        if (err instanceof MissingCommitError) {
+          throw await refNotFoundError(ref, () => listRemotes(cwd), cwd);
+        }
+        if (err instanceof NoHeadError) {
+          throw firstCommitError();
+        }
+        throw err;
+      }
     },
     async show(ref, path) {
       assertReadableRef(ref);
@@ -577,6 +579,10 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
     },
     async headRef() {
       return (await runGit(cwd, ['rev-parse', 'HEAD'])).trim();
+    },
+    async checkoutState() {
+      // Read from the same repository and pattern file the working tree walk uses: see worktree.ts.
+      return worktree.checkoutState();
     },
   };
 }

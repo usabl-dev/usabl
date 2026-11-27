@@ -1164,8 +1164,18 @@ export interface GitReader {
   // walk as writeTree, so no index flag, saved file info, fsmonitor hook, attribute, or filter can
   // hide an edit. A change of line endings alone or of the executable bit alone is not listed.
   statusZ(): Promise<Array<{ code: string; path: string }>>;
-  // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
+  // The files that differ between the merge base of the ref and HEAD, and HEAD, so CI sees what a
+  // pull request changes on a clean checkout. Read from commit and tree objects checked against
+  // their ids. A rename is listed by both names.
   diffNameOnly(ref: string): Promise<string[]>;
+  // The local checkout state that decides which committed files statusZ reads as left out on
+  // purpose rather than deleted, as stable text by name. `.git/info/sparse-checkout`: whether
+  // sparse checkout is on, cone mode, and what the pattern file is (missing, its bytes, a link, or
+  // something else), for the repository and each submodule the walk reads. `.git/modules`: the
+  // submodule folders that are empty, which statusZ reads as never set up. A name whose state is the
+  // default (no sparse checkout and no pattern file, or no empty submodule folder) has no key. The
+  // Stop hook pins it with the guarded files, so a change during the session is drift.
+  checkoutState(): Promise<Record<string, string>>;
   // For each path at the ref, its mode and object id as `<mode> <id>`, such as `100644 <id>`. The
   // receipt policy hash is built from these, so a change of mode alone, such as an executable bit
   // or a file swapped for a symbolic link with the same text, changes the hash.

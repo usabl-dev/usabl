@@ -1071,14 +1071,24 @@ describe('the scope in the cases that look like a missing starting commit', { ti
   });
 });
 
+// The git subcommand and its arguments, after any `-c <setting>` pairs the lookup puts first.
+function withoutSettings(args: readonly string[]): readonly string[] {
+  let at = 0;
+  while (args[at] === '-c') at += 2;
+  return args.slice(at);
+}
+
 describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
   const COMMIT = 'c'.repeat(40);
 
   function scripted(answers: Record<string, ScopeGitResult>): ScopeGit {
-    return async (args) => answers[args[0] === 'merge-base' && args[1] === '--is-ancestor' ? 'is-ancestor' : args[0]!] ?? {
-      code: 0,
-      stdout: '',
-      stderr: '',
+    return async (given) => {
+      const args = withoutSettings(given);
+      return answers[args[0] === 'merge-base' && args[1] === '--is-ancestor' ? 'is-ancestor' : args[0]!] ?? {
+        code: 0,
+        stdout: '',
+        stderr: '',
+      };
     };
   }
 
@@ -1161,7 +1171,8 @@ describe('findStartingCommit reads exit codes, never a failure as "no"', () => {
     const answerFor = (commit: string): ConfigAnswer => (commit === COMMIT ? answers.start : answers.tip);
     const others = answers.others ?? {};
     const refs = others.refs ?? [];
-    return async (args, options) => {
+    return async (given, options) => {
+      const args = withoutSettings(given);
       if (args[0] === 'symbolic-ref') return ok('refs/remotes/origin/main');
       if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { code: 0, stdout: '', stderr: '' } : ok(COMMIT);
       if (args[0] === 'for-each-ref') {
