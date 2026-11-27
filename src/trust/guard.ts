@@ -4,7 +4,8 @@
  * It must never mint a verdict or hide unguarded policy edits.
  */
 import { createHash } from 'node:crypto';
-import type { Deps, GitReader, StoredEntry, TreeEntry, UsablConfig } from '../contracts/index.js';
+import type { Deps, FsGlob, GitReader, StoredEntry, TreeEntry, UsablConfig } from '../contracts/index.js';
+import { holdsNodeGlobSyntax } from '../deps/fs-glob-reading.js';
 import { operatorText } from '../intake/config-error.js';
 import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
@@ -609,9 +610,60 @@ function trackablePaths(paths: string[]): string[] {
   return paths.filter((path) => !path.split('/').includes('.git'));
 }
 
-// What fs.glob finds for one entry: the plain listing as found, as before, joined with the dot
-// listing less git's own data. Listing more can only report more.
+// Every file under a folder, listed from the folder itself: the plain names, and the dot-named
+// files and the files in dot-named folders, which fs.glob skips under `**` unless a pattern names
+// a dot.
+const EVERY_FILE_UNDER = ['**', '**/.*', '**/.*/**'];
+
+/**
+ * What the working tree holds at a literal entry, with its name read as plain text. Node's glob
+ * has no escape, so a name such as `reqs[1]` put into a pattern lists `reqs1`, and a name past the
+ * glob reading bound lists nothing. So the files under the entry are listed with the entry as the
+ * walk's start, less git's own data below it. The entry itself is looked up by name in its folder:
+ * a file or a link there is listed, as a pattern that names it lists it, and a folder is not.
+ *
+ * Null when the reader cannot list a folder that way and the name holds no glob syntax: the
+ * patterns then read the name as written. When the name does hold glob syntax, no pattern can
+ * name it, so this throws rather than list another folder. A guard that throws blocks the stop.
+ */
+async function literalEntryFiles(fs: FsGlob, path: string): Promise<string[] | null> {
+  const globUnder = fs.globUnder;
+  if (globUnder === undefined) {
+    if (holdsNodeGlobSyntax(path)) {
+      throw new Error(
+        `usabl cannot list the guarded path ${operatorText(path)} on the working tree: its name holds characters a ` +
+          'glob reads as a pattern, and this file reader lists files only with patterns.',
+      );
+    }
+    return null;
+  }
+  const slash = path.lastIndexOf('/');
+  const folder = slash === -1 ? '' : path.slice(0, slash);
+  const name = path.slice(slash + 1);
+  const [under, beside] = await Promise.all([
+    globUnder.call(fs, path, EVERY_FILE_UNDER),
+    globUnder.call(fs, folder, [name.startsWith('.') ? '.*' : '*']),
+  ]);
+  const prefix = path + '/';
+  // Only the part below the entry is checked for `.git`, so an entry inside such a folder still
+  // lists its plain files, as its patterns did. Node lists the walk's start as `<path>/` when it is
+  // not a folder; the lookup by name finds it instead.
+  const files = under.filter(
+    (found) => found.startsWith(prefix) && found.length > prefix.length && !found.slice(prefix.length).split('/').includes('.git'),
+  );
+  return [...new Set([...(beside.includes(path) ? [path] : []), ...files])].sort();
+}
+
+// What fs.glob finds for one entry. A literal entry is listed by its name. Any other entry gets the
+// plain listing as found, as before, joined with the dot listing less git's own data. Listing more
+// can only report more.
 async function workingTreeFiles(deps: Deps, entry: GuardedEntry): Promise<string[]> {
+  if (!entry.glob && entry.path !== '') {
+    const byName = await literalEntryFiles(deps.fs, entry.path);
+    if (byName !== null) {
+      return byName;
+    }
+  }
   const dotGlobs = workingTreeDotGlobs(entry);
   const [plain, dots] = await Promise.all([
     deps.fs.glob(workingTreeGlobs(entry)),
