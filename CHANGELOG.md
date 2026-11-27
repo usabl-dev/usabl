@@ -498,6 +498,52 @@
   message; and a file outside honest sparse patterns that is still on disk, which the agent flags
   skip-worktree and deletes. Each stop reads the state with a few git processes, about 90 to
   150 ms in a small repository under load.
+- Node's `fs.glob` no longer gets a pattern part that can backtrack. usabl hands it each
+  `guardedPaths` entry (the guard's working-tree listing and `usabl doctor`), `uiFileGlobs` and
+  `discovery.wideBlastGlobs` (test-file placement, `usabl baseline`, and the docs output), and the
+  `workspaces` patterns of a `package.json`. Node tests a part with wildcards with a regular
+  expression, and `src/` then `*a` twelve times then `*b` took 11 seconds against one file name of
+  30 letters, so a stop could outlast the host's limit with nothing checked. The file system
+  adapter now reads each pattern as Node does (backslashes as slashes, brace groups, and Node's
+  rewrites and merges of the parts). When no part holds more than one run of `*`, Node runs the
+  written pattern itself. Otherwise each such part is listed as `*` and usabl's own matcher keeps
+  the paths the pattern matches, and every other part stays as written, so Node's walk keeps its
+  shape. That pattern now takes about 50 milliseconds. On macOS and Windows fixed parts stay as
+  written too, a wildcard part Node was given as written keeps Node's answer, and a part listed
+  as `*` is folded for letter case as Node does, so one guard expansion costs about what it costs
+  on Linux. Where the filter cannot give Node's exact answer it lists more: a file reached through
+  a link to a folder Node's walk does not follow, a file named by the part before a trailing
+  `/**`, a listing that ends with `.`, and a file Node's walk cache skips. A comparison with Node on generated trees found no file Node lists that the adapter does
+  not. Other syntax, such as a character class or an extglob group, runs in Node only inside a
+  bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and at
+  most 256 brace expansions. A pattern that names a path outside the repository is past the bound
+  too, itself or in a brace expansion: one that is empty or starts with `/` (the `workspaces`
+  entry `{,zz}/**` becomes `/**/package.json`, which Node walked across the whole machine for
+  more than 30 seconds), one that climbs above the repository with `..` (including `..\outside\*`
+  written with backslashes), and, on Windows, one that starts with a drive such as `C:`. So is a
+  pattern with a `..` after a wildcard part, such as `src/{a,**/..}/*.tsx`: Node's walk of it
+  depends on which expansions it walks together, so usabl could list fewer files than Node. Past
+  the bound the pattern is not run. A workspace package folder and the requirements folder are now listed with
+  the folder as the walk's start, so a name such as `pkg[1]` or `reqs[1]` is read as plain text.
+  Before, Node read it as a pattern: `reqs[1]` loaded the requirement files of `reqs1`, and a
+  package folder named `pkg[1]` listed no sources, so an undeclared import in it was missed. Gate
+  effect: config load already refuses the other syntax in every policy glob list, and now also
+  refuses a `uiFileGlobs` or `discovery.wideBlastGlobs` entry that names a path outside the
+  repository or has a `..` after a wildcard part. A `workspaces` pattern past the bound makes the
+  workspace root unreadable, so every changed file the workspace check tests is a `not-covered` gap
+  that names the pattern. So does a `workspaces` entry longer than 1,024 characters, a list of
+  more than 1,000 entries, or a list whose brace groups expand to more than 4,096 patterns or
+  262,144 characters in all, each counted for `package.json` and `pnpm-workspace.yaml` on its own:
+  none of it is read. The largest lists inside these bounds, in both files, took about 4 seconds
+  to read, and about 14 seconds over a whole coverage run that reads them on the working tree and
+  at the trusted ref, with no single block over 2 seconds. A folder name now loses its trailing
+  slashes in linear time. Known
+  limits: the local guard still puts the requirements folder into its working-tree patterns as
+  text, so a requirements folder named with a class, a brace group, or an extglob group names
+  another folder there, and a new untracked file in it is not seen until it is committed. When
+  `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper that cannot
+  list a folder that way, so a workspace package folder named with glob syntax has unknown
+  sources in that run, whose verdict is `approval_required`. Both fixes are in guarded paths.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
@@ -707,13 +753,9 @@
   took 17 seconds. Gate effect: a changed file left untested when the step budget runs out is a
   gap whose reason names the budget, so the run is `not_covered`, never nothing to check. A call
   past a bound or the character budget, and every glob once the step budget is spent, may load any
-  file, so a changed test file it could reach is a gap. Known limits: the guard's own matching has
+  file, so a changed test file it could reach is a gap. Known limit: the guard's own matching has
   no budget, and a `guardedPaths` list inside the bounds took 9.2 seconds against one committed
-  path of 3999 characters. Node's `fs.glob` still backtracks. usabl hands it each `guardedPaths`
-  entry, in the guard's working-tree listing and in `usabl doctor`; `uiFileGlobs` and
-  `discovery.wideBlastGlobs` when a changed test file is placed; `workspaces` patterns; and
-  `uiFileGlobs` in `usabl baseline` and the docs output. A pattern with many wildcards and a long
-  file name there can still outlast the host's limit.
+  path of 3999 characters.
 - `pf-toast-live-region` no longer passes an alert in a toast group that an open modal hides. A
   modal hides the body's other children, and PatternFly places its toast group there, so an alert
   shown while the dialog is open is not announced. When the hidden body child is the alert's

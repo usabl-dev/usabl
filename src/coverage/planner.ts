@@ -332,15 +332,24 @@ export async function computeCoverage(
     }
     if (unreached.length > 0 || placeable.length > 0) {
       const packageStarts: string[] = [];
+      // A package whose sources cannot be listed may import any test file in it, so no test file
+      // in a workspace package is placed, and each keeps its gap.
+      let startsUnknown = false;
       if (placeable.length > 0) {
-        for (const dir of dependedDirs) packageStarts.push(...(await packageSourceFiles(fs, dir)));
+        for (const dir of dependedDirs) {
+          const sources = await packageSourceFiles(fs, dir);
+          if (sources === null) startsUnknown = true;
+          else packageStarts.push(...sources);
+        }
       }
+      const placed = startsUnknown ? [] : placeable;
+      if (startsUnknown) workspaceTestGaps.push(...placeable.map((entry) => entry.gap));
       const placements = await placeTestFiles(
         fs,
         config,
         attributedRoutes.map((route) => route.entryFile),
         aliasConfig,
-        [...unreached, ...placeable.map((entry) => entry.gap.ref)],
+        [...unreached, ...placed.map((entry) => entry.gap.ref)],
         packageStarts,
         storyToolPage,
         budgets,
@@ -359,7 +368,7 @@ export async function computeCoverage(
           excludedFiles.push({ ref: file, reason: excludedTestFileReason(file, wide, storyToolPage) });
         }
       }
-      for (const entry of placeable) {
+      for (const entry of placed) {
         const placement = placements.get(entry.gap.ref) ?? { state: 'none' };
         if (placement.state === 'none') {
           const ref = entry.gap.ref;

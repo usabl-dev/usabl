@@ -17,6 +17,7 @@ import type {
   TreeEntry,
 } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
+import { trimTrailingSlashes } from './fs-glob-reading.js';
 
 export interface FakeDepsSpec {
   now: string;
@@ -251,6 +252,12 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           : { kind: 'file', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.byteLength };
       },
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
+      globUnder: async (folder, patterns) => {
+        const under = trimTrailingSlashes(folder);
+        return Object.keys(spec.files).filter(
+          (f) => (under === '' || f.startsWith(`${under}/`)) && patterns.some((p) => matchGlob(p, under === '' ? f : f.slice(under.length + 1))),
+        );
+      },
     },
     requirements: spec.requirements ?? { version: 1, requirements: [] },
     checkRunner: {

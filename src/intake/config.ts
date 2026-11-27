@@ -15,7 +15,7 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { braceRangeIn, countBraceExpansions, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
+import { braceRangeIn, countBraceExpansions, expandBraces, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { checkGlobListBounds } from './glob-list-bounds.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { parseKeyboardWalkConfig } from './keyboard-walk-config.js';
@@ -93,7 +93,66 @@ function checkGuardedPathCounts(entries: readonly string[]): void {
 function expectBoundedGlobArray(value: unknown, label: string): string[] {
   const globs = expectGlobArray(value, label);
   checkGlobListBounds(globs, label);
+  for (const glob of globs) {
+    checkNoExpansionFromRoot(glob, label);
+    checkInsideRepository(glob, label);
+  }
   return globs;
+}
+
+// The fewest names a path the parts can match has at each part: `**` may be none, `.` stays, and
+// `..` goes up one. Below zero, the path is above the repository root.
+function climbsOut(expansion: string): boolean {
+  let depth = 0;
+  for (const part of expansion.split('/')) {
+    if (part === '..') depth -= 1;
+    else if (part !== '.' && part !== '**' && part !== '') depth += 1;
+    if (depth < 0) return true;
+  }
+  return false;
+}
+
+// A pattern that climbs above the repository root with `..`, such as `../shared/**`, or whose
+// first part is a drive such as `C:`, names files outside the repository, and Node's glob would
+// walk outside it, up to the whole drive. A `..` after a wildcard part is refused too. The file
+// system adapter never runs the first two on Windows or the last anywhere, and a policy file is
+// read on every platform. Refuse them.
+function checkInsideRepository(glob: string, label: string): void {
+  const expansions = glob.includes('{') ? (expandBraces(glob) ?? [glob]) : [glob];
+  for (const expansion of expansions) {
+    const first = expansion.split('/').find((part) => part !== '.') ?? '';
+    if (climbsOut(expansion) || (first.endsWith(':') && !/[*?]/u.test(first))) {
+      throw configError`${label} pattern "${glob}" names a path outside the repository: it climbs above the repository root with .., or starts with a drive such as C:. Write it as a path inside the repository.`;
+    }
+    if (dotsAfterWildcard(expansion)) {
+      throw configError`${label} pattern "${glob}" has a .. after a wildcard part. Node's glob walks such a part in a way usabl cannot match, so the file system adapter does not run it. Write the path without .., or name the folders it means.`;
+    }
+  }
+}
+
+// A `..` after a part with `*` or `?`, as the guard reads it. Node's glob walks `**/..` in a way
+// that depends on the pattern's other brace expansions, so the adapter does not run such a pattern.
+function dotsAfterWildcard(expansion: string): boolean {
+  let afterWildcard = false;
+  for (const part of expansion.split('/')) {
+    if (part === '..' && afterWildcard) return true;
+    if (/[*?]/u.test(part)) afterWildcard = true;
+  }
+  return false;
+}
+
+// A brace group can leave an expansion empty or starting with /, as `{,src}/**` gives `/**`. Node's
+// glob walks such a pattern from the root of the machine, so the file system adapter never runs
+// it, and the files its other expansions name would then be left out of every listing. Refuse it.
+// The count of expansions is already inside the bounds above.
+function checkNoExpansionFromRoot(glob: string, label: string): void {
+  if (!glob.includes('{') || glob.startsWith('/')) {
+    return;
+  }
+  const expansions = expandBraces(glob) ?? [];
+  if (expansions.some((expansion) => expansion === '' || expansion.startsWith('/'))) {
+    throw configError`${label} pattern "${glob}" has a brace expansion that is empty or starts with /, so it names no path from the repository root. Write each alternative as a path from the repository root.`;
+  }
 }
 
 // A guarded entry with white space at the start or end names a path no file has, so it would

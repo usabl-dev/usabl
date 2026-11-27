@@ -1146,16 +1146,107 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   but a list inside the bounds (256 entries of `**/a/` parts) took 9.2 seconds against one
   committed path of 3999 characters and 0.3 seconds against one of 199. Such a list must be in
   committed policy, which a code owner approves, and the paths must be in a commit.
-- Known limit: Node's `fs.glob` still turns a pattern into a regular expression that can
-  backtrack. usabl hands it these patterns: each `guardedPaths` entry, to list new files on the
-  working tree (the guard) and to sample the files under it (`usabl doctor`); `uiFileGlobs` and
-  `discovery.wideBlastGlobs` when a changed test file is placed; the `workspaces` patterns of a
-  `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs output. The pattern `src/`
-  then `*a` twelve times then `*b` took Node 1.1 seconds against a file name of 26 letters and 9.2
-  seconds against one of 30. usabl's Stop hook deadline is a timer in the same process, so it
-  cannot end such a match, and the host can end the hook before usabl answers. A policy pattern
-  must be in committed policy, which a code owner approves; a `workspaces` pattern is in the
-  working tree, and the file name is the agent's choice. A later change replaces these calls.
+- Node's `fs.glob` turns each part of a pattern that holds a wildcard into a regular expression
+  that can backtrack: `src/` then `*a` twelve times then `*b` took Node 11 seconds against one
+  file name of 30 letters. usabl hands `fs.glob` each `guardedPaths` entry (the guard's
+  working-tree listing and `usabl doctor`), `uiFileGlobs` and `discovery.wideBlastGlobs` (test-file
+  placement, `usabl baseline`, and the docs output), and the `workspaces` patterns of a
+  `package.json`, which the agent can write with no code owner. The file system adapter
+  (`src/deps/fs.ts`) no longer hands Node a part that can backtrack. It first reads each pattern
+  as Node does: `\` as `/`, brace groups expanded, and Node's two rewrites of the parts, including
+  the merge of two expansions into one wider set (`x/a/**/y` and `x/**/a/y` become
+  `x/**/a/**/y`). When no part holds more than one run of `*`, Node cannot backtrack, and Node
+  runs the written pattern itself, so the answer is Node's own. Otherwise the adapter lists wide:
+  each part with more than one run of `*` becomes `*`, or `.*` when it starts with a dot, and every
+  other part stays as written, so the walk keeps Node's depth, its pruning by fixed text, its rule
+  for dot names, and its rule for links. Then it keeps each listed path the set matches, with a
+  matcher whose time is at most the part's length times the name's length. The slow pattern now
+  takes about 50 milliseconds. Expansions that cannot clash in Node's walk cache share one walk.
+  On macOS and Windows, where Node matches without regard to letter case, fixed parts also stay as
+  written, since a volume that ignores case finds `SRC` through `src`. A wildcard part Node was
+  given as written keeps the answer Node gave it, since Node's own tests there (such as its fast
+  test for `??ß`, which compares the end of the name in lower case) are ones no folding fully
+  matches. A part listed as `*` is folded the way Node's regular expressions do, and also by
+  lower and by upper case. Before, a second
+  listing there turned every fixed part into `*`, so an entry such as `usabl.config.json/**`
+  walked the whole repository: one guard expansion of a tree of 100,006 files took 96 seconds and
+  3.5 GB of memory on an injected `darwin`, and now takes about 110 milliseconds and 65 MB, as on
+  Linux. Where the filter cannot give Node's exact answer it lists more: a file the wide walk
+  reaches through a link to a folder where Node's walk does not follow the link, a file that the
+  part before a trailing `/**` names, every file a listing that ends with a `.` part finds (that
+  listing is kept whole), and a file Node skips because its walk cache already saw the rest of
+  another expansion at the same folder. A comparison with Node on generated trees (dot names,
+  nested folders, long names, unicode, links, and brace groups that span `/`) found no file Node
+  lists that the adapter does not, in 26,400 patterns, 9,386 of them through the filter. That is
+  what was measured, not a proof. The case rules were checked on Linux with the platform injected,
+  not on a real volume that ignores case.
+- Syntax the filter does not read (a character class such as `[a-z]`, an extglob group such as
+  `+(a|b)`, a brace range, and a nested or unbalanced brace) is handed to Node unchanged only inside
+  a bound: at most 1024 characters, no extglob group, at most one run of `*` in any part, and
+  braces usabl can count, at most 256 expansions. Past the bound the pattern is not run. The bound
+  is tight because Node backtracks on very little: five runs of `*` in one part took 18.5 seconds
+  against one name of 250 letters, and the one extglob group `+(a|aa)b` took 27 seconds against a
+  name of 40. The policy lists cannot hold such syntax: config load refuses it in `uiFileGlobs`,
+  `discovery.wideBlastGlobs`, and `guardedPaths`, and the guard reads such an entry at a trusted
+  ref as the literal folder above it. A `workspaces` pattern past the bound makes the workspace
+  root unreadable, so every changed file usabl would test against the workspace packages is a gap
+  that names the pattern, never a file outside every package.
+- A pattern that names a path outside the folder it is listed from is past the bound whatever its
+  syntax, itself or in one of its brace expansions: one that is empty or starts with `/`, which
+  Node walks from the root of the machine (the `workspaces` entry `{,zz}/**` becomes
+  `/**/package.json`, which Node had not finished after 30 seconds); one that climbs above the
+  folder with `..`, such as `..\outside\*` or a run of `..\` that reaches `/`; and, on Windows,
+  one whose first part is a drive such as `C:`, which Node walks from the root of that drive. On
+  Linux and macOS a first name that ends with `:` is a plain folder name and is listed as one, so
+  a guarded folder `x:` or a requirements folder `reqs:` keeps its working-tree listing. Node
+  reads `\` as `/`, so the checks read it that way first. Config load refuses a `uiFileGlobs` or
+  `discovery.wideBlastGlobs` entry of any of these kinds, on every platform, as it already refused
+  a root brace expansion in `guardedPaths`. A `workspaces` entry of any of these kinds makes the
+  workspace root unreadable, so it is a gap, never a walk.
+- A pattern with a `..` after a wildcard part, itself or in a brace expansion, is past the bound
+  too. Node's walk of `**/..` writes to state it shares with the pattern's other expansions, so
+  which files it finds depends on what it walks together, and no listing the adapter makes is sure
+  to hold them all: for a folder `bab/x/aa` and a file `x`, Node lists `x` for
+  `{*a*,**/a,*}/{b,*a*/**,**/..}/*`, and none of the four listings the adapter made for it did.
+  The guard already reads such an entry as past its own rules. Config load refuses it in
+  `uiFileGlobs` and `discovery.wideBlastGlobs`, such as `src/{a,**/..}/*.tsx`, and a `workspaces`
+  entry like it makes the workspace root unreadable, so it is a gap.
+- The bound does not cap the walk a brace group costs. A `workspaces` pattern such as
+  `**/{a0,...,a63}/package.json` is inside it, and Node took about 17 seconds to walk its 64
+  expansions once on this repository's 18,506 files, as it did before this change. The adapter
+  walks them once too; before this change it walked each expansion on its own, which took 40
+  seconds. Node's walk yields between folders, so usabl's deadline ends a long one, and the result
+  is a gap or no verdict, never a pass.
+- Known limit: Node's own walk can hold the event loop for seconds in one piece, whatever the
+  pattern. `fs.glob('**/package.json')` over 20,000 files in one folder 400 levels deep took 5.4
+  seconds, 5.2 of them in one block, and the block grows with the number of files times the
+  depth. The patterns can be honest ones, such as `src/**/*.tsx` or the guard's `src/trust/**`,
+  and the agent writes the tree. By scaling, not by a run, about 100,000 files at that depth would
+  use up the 30 seconds between usabl's deadline and the host's limit, and the stop would then go
+  on with nothing checked. Running the Stop hook's work in a process the runner can end addresses
+  it; this change does not.
+- Node's glob has no escape, so a folder name put into a pattern is read as a pattern: `reqs[1]`
+  there means `reqs1`. usabl lists the files under a folder whose name it does not control with
+  that folder as the walk's start, so the name is read as plain text: the source files of each
+  workspace package folder, which the agent can name, and the requirements folder the loader
+  reads, on the working tree and at the trusted ref. A reader that cannot list a folder that way
+  reads a workspace package's sources as unknown (it may import any package, and its test files
+  keep their gaps), and fails the requirements load closed.
+- Known limit: the local guard still puts the requirements folder into its working-tree patterns
+  as text (`src/trust/guard.ts`, a guarded path). For a name with a character class, a brace
+  group, or an extglob group, such as `reqs[1]`, Node reads the pattern as another folder
+  (`reqs1`) or as none, so a new untracked file in the requirements folder is not seen until it is
+  committed. For a name whose only glob syntax is `*` or `?`, the pattern also matches the folder
+  itself, so a new file there is seen, and files in other folders it matches are added too, which
+  is wider. The git listings at the trusted ref and at `HEAD` read the folder as text. Such a name
+  must be in committed policy, which a code owner approves.
+- Known limit: when `usabl.routes.json` or `usabl.docs.json` diverged from the trusted ref,
+  coverage reads the working tree through a wrapper in `src/run.ts` (a guarded path) that cannot
+  list a folder with the folder as the walk's start. A workspace package folder named with glob
+  syntax then has unknown sources: the workspace test files keep their gaps, but another test file
+  that placement does not reach can still be excluded although only that package loads it. Such a
+  run's verdict is `approval_required`, since a guarded path diverged, so it is never a pass. Its
+  accessibility half, which CI can read on its own, can still miss that test file.
 
 **Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
 per-surface budget is not yet exposed.
