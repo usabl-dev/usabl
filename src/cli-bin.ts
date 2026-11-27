@@ -6,7 +6,11 @@
  * its own build entry prevents code splitting from moving import.meta.url into a
  * shared chunk and turning the installed binary into a successful no-op.
  */
-import { main } from './cli.js';
+// First, so the stop-hook command starts its worker before the rest of usabl loads, and both load
+// at once. The rest is loaded after it for the same reason.
+import './surfaces/stop-hook-early.js';
+
+const { main } = await import('./cli.js');
 
 main()
   .then((code) => {
