@@ -18,6 +18,8 @@
 import { posix as path } from 'node:path';
 import yaml from 'js-yaml';
 import type { CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
+import { FS_GLOB_BOUND, fsGlobBoundProblem, globUnderFolder, trimTrailingSlashes } from '../deps/fs-glob-reading.js';
+import { countBraceExpansions } from '../primitives/match-glob.js';
 import { loadAliasConfig } from './alias-config.js';
 import { mentionsPackage } from './import-graph.js';
 
@@ -81,6 +83,7 @@ async function workspacePatterns(read: (file: string) => Promise<string | null>)
     const workspaces = root['workspaces'];
     const listed = isRecord(workspaces) ? patternList(workspaces['packages']) : patternList(workspaces);
     if (listed === null) throw new UnreadableWorkspaceRoot('package.json', 'has a "workspaces" field that is not a list of patterns');
+    checkGlobBound('package.json', listed);
     patterns.push(...listed);
   }
   const pnpm = await read('pnpm-workspace.yaml');
@@ -95,6 +98,7 @@ async function workspacePatterns(read: (file: string) => Promise<string | null>)
     if (parsed !== undefined && parsed !== null) {
       const listed = isRecord(parsed) ? patternList(parsed['packages']) : null;
       if (listed === null) throw new UnreadableWorkspaceRoot('pnpm-workspace.yaml', 'does not hold a "packages" list of patterns');
+      checkGlobBound('pnpm-workspace.yaml', listed);
       patterns.push(...listed);
     }
   }
@@ -109,11 +113,80 @@ function insideRepository(file: string): string | null {
 }
 
 function cleanPattern(pattern: string): string {
-  return pattern.trim().replace(/^\.\//u, '').replace(/\/+$/u, '');
+  return trimTrailingSlashes(pattern.trim().replace(/^\.\//u, ''));
 }
 
 function isInstalledPath(file: string): boolean {
   return file.split('/').includes('node_modules');
+}
+
+// The glob that lists the package.json of each folder a workspace pattern names, or null for a
+// pattern that is never globbed. A leading ! is left out: it marks folders to remove.
+function manifestGlob(raw: string): string | null {
+  const trimmed = raw.trim();
+  // Node's glob reads every \ as /, so every check below reads the pattern the same way.
+  const pattern = cleanPattern((trimmed.startsWith('!') ? trimmed.slice(1) : raw).replace(/\\/gu, '/'));
+  if (pattern === '') return null;
+  // A pattern that names a path outside the repository is past the glob bound, so the root reads
+  // as unreadable (see checkGlobBound), and it is never globbed: one that starts with /, one that
+  // climbs above the repository with .., such as ../outside/* or {..,packages/*}, and one that
+  // starts with a drive such as C:. Each brace expansion is checked too.
+  return `${pattern}/package.json`;
+}
+
+// The file system adapter does not run a glob past its bound (see deps/fs-glob-reading.ts), such
+// as one with an extglob group, which can take Node's fs.glob a very long time to match. The
+// packages such a pattern names are then unknown, so the root reads as one usabl cannot read,
+// never as one that names no package.
+// The list's size is agent input too, so a list of more than MAX_WORKSPACE_ENTRIES entries, or an
+// entry longer than the glob bound, is past the bound before any entry is read: reading a very
+// long entry, or very many, could hold the event loop past the stop hook's deadline.
+const MAX_WORKSPACE_ENTRIES = 1000;
+
+// Reading an entry the way Node does compares each pair of its brace expansions part by part, so
+// one entry with 256 expansions and many parts takes about half a second, and many such entries
+// could hold the event loop past the stop hook's deadline. The whole list is bounded first: at
+// most MAX_WORKSPACE_EXPANSIONS expansions, and MAX_WORKSPACE_CHARACTERS characters of expansions,
+// in all. Each expansion counts as long as its entry. An entry whose braces this count cannot read
+// counts as the most expansions one entry may have.
+const MAX_WORKSPACE_EXPANSIONS = 4096;
+const MAX_WORKSPACE_CHARACTERS = 262_144;
+
+function listExpansionProblem(listed: readonly string[]): string | null {
+  let expansions = 0;
+  let characters = 0;
+  for (const raw of listed) {
+    const count = countBraceExpansions(raw.replace(/\\/gu, '/')) ?? FS_GLOB_BOUND.expansions;
+    expansions += count;
+    characters += count * raw.length;
+  }
+  if (expansions > MAX_WORKSPACE_EXPANSIONS || characters > MAX_WORKSPACE_CHARACTERS) {
+    return 'lists workspace patterns whose brace groups expand to more than 4,096 patterns, or 262,144 characters, in all';
+  }
+  return null;
+}
+
+function checkGlobBound(file: string, listed: readonly string[]): void {
+  if (listed.length > MAX_WORKSPACE_ENTRIES) {
+    throw new UnreadableWorkspaceRoot(file, `lists ${listed.length} workspace patterns, more than the 1,000 entries usabl reads`);
+  }
+  for (const raw of listed) {
+    if (raw.length > FS_GLOB_BOUND.length) {
+      throw new UnreadableWorkspaceRoot(
+        file,
+        `lists the workspace pattern "${raw.slice(0, 200)}", which usabl does not run because it is longer than 1,024 characters`,
+      );
+    }
+  }
+  const total = listExpansionProblem(listed);
+  if (total !== null) throw new UnreadableWorkspaceRoot(file, total);
+  for (const raw of listed) {
+    const glob = manifestGlob(raw);
+    const problem = glob === null ? null : fsGlobBoundProblem(glob);
+    if (problem !== null) {
+      throw new UnreadableWorkspaceRoot(file, `lists the workspace pattern "${raw.slice(0, 200)}", which usabl does not run because ${problem}`);
+    }
+  }
 }
 
 // The folders the workspace patterns name, each one that holds a package.json. A pattern that
@@ -123,12 +196,9 @@ async function workspaceDirs(fs: FsGlob, patterns: string[]): Promise<string[]> 
   const excluded = new Set<string>();
   for (const raw of patterns) {
     const negated = raw.trim().startsWith('!');
-    const pattern = cleanPattern(negated ? raw.trim().slice(1) : raw);
-    // A brace group can hold .. or an absolute path, such as {..,packages/*}, and the glob expands
-    // it, so a pattern with .. anywhere in a brace group is refused before it is globbed.
-    if (pattern === '' || pattern.startsWith('/') || pattern.split('/').includes('..')) continue;
-    if (/[{}]/u.test(pattern) && pattern.includes('..')) continue;
-    for (const found of await fs.glob([`${pattern}/package.json`])) {
+    const glob = manifestGlob(raw);
+    if (glob === null) continue;
+    for (const found of await fs.glob([glob])) {
       // Whatever the pattern, a result outside the repository is never read.
       const manifest = insideRepository(found);
       if (manifest === null || isInstalledPath(manifest)) continue;
@@ -259,6 +329,7 @@ function appPackages(config: UsablConfig, packages: readonly PackageManifest[]):
 }
 
 const SOURCE_EXTENSIONS = ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'vue', 'svelte'];
+const SOURCE_PATTERNS = SOURCE_EXTENSIONS.map((extension) => `**/*.${extension}`);
 
 // What a package links to without declaring it: the names its source files import, and the
 // folders its path aliases point into. With npm, Yarn classic, or Bun hoisting, a package can import
@@ -272,7 +343,10 @@ interface Undeclared {
 
 async function undeclaredLinks(fs: FsGlob, pkg: PackageManifest, workspace: readonly PackageManifest[]): Promise<Undeclared> {
   const prefix = pkg.dir === '' ? '' : `${pkg.dir}/`;
-  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+  // The folder comes from the disk, so its name is read as plain text, never as a pattern. A
+  // package whose sources cannot be listed that way may import any package.
+  const found = await globUnderFolder(fs, pkg.dir, SOURCE_PATTERNS);
+  if (found === null) return { sources: null, aliasTargets: [] };
   const sources: string[] = [];
   for (const raw of found) {
     const file = insideRepository(raw);
@@ -283,7 +357,11 @@ async function undeclaredLinks(fs: FsGlob, pkg: PackageManifest, workspace: read
     sources.push(text);
   }
   // The package's own configs, read the way init reads an app's, and the repository root's.
-  const scoped: FsGlob = { readFile: (file) => fs.readFile(`${prefix}${file}`), glob: (patterns) => fs.glob(patterns) };
+  const scoped: FsGlob = {
+    readFile: (file) => fs.readFile(`${prefix}${file}`),
+    glob: (patterns) => fs.glob(patterns),
+    ...(fs.globUnder === undefined ? {} : { globUnder: fs.globUnder.bind(fs) }),
+  };
   const aliasTargets = (await loadAliasConfig(scoped)).mappings.map(({ target }) => path.normalize(path.join(pkg.dir === '' ? '.' : pkg.dir, target)));
   if (pkg.dir !== '') aliasTargets.push(...(await loadAliasConfig(fs)).mappings.map(({ target }) => path.normalize(target)));
   return { sources, aliasTargets };
@@ -595,11 +673,12 @@ export async function workspacePackages(fs: FsGlob): Promise<WorkspacePackage[]>
 
 /**
  * The source files of one workspace package, sorted: every file with a source extension under its
- * folder, outside node_modules.
+ * folder, outside node_modules. The folder comes from the disk, so its name is read as plain text,
+ * never as a pattern. Null when the reader cannot list the folder that way.
  */
-export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[]> {
-  const prefix = dir === '' ? '' : `${dir}/`;
-  const found = await fs.glob(SOURCE_EXTENSIONS.map((extension) => `${prefix}**/*.${extension}`));
+export async function packageSourceFiles(fs: FsGlob, dir: string): Promise<string[] | null> {
+  const found = await globUnderFolder(fs, dir, SOURCE_PATTERNS);
+  if (found === null) return null;
   const files = found.map(insideRepository).filter((file): file is string => file !== null && !isInstalledPath(file));
   return [...new Set(files)].sort();
 }
