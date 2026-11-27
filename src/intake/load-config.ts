@@ -5,7 +5,7 @@
  * overlay host, does not load every command the CLI holds. The CLI re-exports it.
  * This unit reads config only. It must never decide a verdict.
  */
-import { readFile } from 'node:fs/promises';
+import { readRegularFile, readRegularText } from '../deps/regular-file.js';
 import type { UsablConfig } from '../contracts/index.js';
 import { configUrlWarningsByUrl, parseUsablConfig } from './config.js';
 import { operatorPathText } from './config-error.js';
@@ -75,7 +75,7 @@ export async function loadConfigWithBytes(
   // Targets come from config so the same engine can run in local, CI, and preview environments.
   let bytes: Buffer;
   try {
-    bytes = await readFile(path);
+    bytes = await readRegularFile(path);
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
       throw new Error(missingConfigMessage(path, options.caller ?? 'cli'));
@@ -96,7 +96,7 @@ export async function loadConfigWithBytes(
 // error counts as no manifest.
 async function readText(path: string): Promise<string | null> {
   try {
-    return await readFile(path, 'utf8');
+    return await readRegularText(path);
   } catch {
     return null;
   }

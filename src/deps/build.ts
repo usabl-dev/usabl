@@ -5,7 +5,7 @@
  * deps does run the headless shell once per process with --version, to read the Chromium version a
  * receipt binds (see scanner-versions.ts).
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserDriver, Capability, Deps, UsablConfig } from "../contracts/index.js";
@@ -23,6 +23,7 @@ import type { BrowserIsolation } from "../judge/request-filter.js";
 import { makeGitReader } from "./git.js";
 import { makeHistoryGit } from "../history/git.js";
 import { makeFsGlob } from "./fs.js";
+import { readRegularText, type ReadRefusals } from "./regular-file.js";
 import { resolveStorageStatePath, type EnvReader } from "./session.js";
 import { readScannerVersions } from "./scanner-versions.js";
 
@@ -44,7 +45,7 @@ function readVersion(value: unknown): string | null {
 async function readPackageVersion(): Promise<string> {
   for (const path of RUNNER_PACKAGE_PATHS) {
     try {
-      const raw = await readFile(path, "utf8");
+      const raw = await readRegularText(path);
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== "object" || parsed === null) {
         throw new Error("package.json must be a JSON object");
@@ -117,7 +118,7 @@ export async function collectEngineFiles(
     const absolute = join(entry.parentPath, entry.name);
     files.push({
       path: normalizeSeparators(relative(root, absolute)),
-      content: await readFile(absolute, "utf8"),
+      content: await readRegularText(absolute),
     });
   }
   return files;
@@ -191,6 +192,9 @@ export async function buildDeps(
     // The judge's isolated browser: service workers blocked, every request outside the allowed
     // origins aborted, and Chromium's sandbox required. Only `check --isolated-browser` sets it.
     isolation?: BrowserIsolation;
+    // Where the working-tree readers record each path they refused because it is not a regular
+    // file. The Stop hook passes one and blocks on any path in it. See regular-file.ts.
+    refusals?: ReadRefusals;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
@@ -205,8 +209,9 @@ export async function buildDeps(
     cwd,
     trustedRef: options.trustedRef,
     warn: options.warn ?? ((line) => process.stderr.write(`${line}\n`)),
+    ...(options.refusals === undefined ? {} : { refusals: options.refusals }),
   });
-  const fs = makeFsGlob({ cwd });
+  const fs = makeFsGlob({ cwd, ...(options.refusals === undefined ? {} : { refusals: options.refusals }) });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(
     git,

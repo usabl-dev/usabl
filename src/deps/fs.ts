@@ -5,9 +5,10 @@
  */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { glob, lstat, open, readFile, readlink } from 'node:fs/promises';
+import { glob, lstat, open, readlink } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
+import { NotRegularFileError, readRegularText, type ReadRefusals } from './regular-file.js';
 import { nodeGlobIgnoresCase, nodeGlobReading, trimTrailingSlashes } from './fs-glob-reading.js';
 
 function asBytes(buffer: Buffer): Uint8Array {
@@ -37,7 +38,7 @@ function isMissingFile(err: unknown): boolean {
 export function makeWorkflowReader(cwd: string = process.cwd()): (path: string) => Promise<string | null> {
   return async (path) => {
     try {
-      return await readFile(resolve(cwd, path), 'utf8');
+      return await readRegularText(resolve(cwd, path), { name: path });
     } catch (err) {
       const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
       if (code === 'ENOENT' || code === 'ENOTDIR') return null;
@@ -46,8 +47,17 @@ export function makeWorkflowReader(cwd: string = process.cwd()): (path: string) 
   };
 }
 
-export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform } = {}): FsGlob {
+export function makeFsGlob(
+  options: {
+    cwd?: string;
+    platform?: NodeJS.Platform;
+    // Where each read records a path it refused because it is not a regular file. The Stop hook
+    // passes one, and blocks when it holds any path. See regular-file.ts.
+    refusals?: ReadRefusals;
+  } = {},
+): FsGlob {
   const cwd = options.cwd ?? process.cwd();
+  const refusals = options.refusals;
   // Node's fs.glob matches without regard to letter case on macOS and Windows. The platform is
   // injected in tests, so the rule is tested on any machine.
   const platform = options.platform ?? process.platform;
@@ -56,7 +66,8 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
   return {
     async readFile(path) {
       try {
-        return await readFile(resolve(cwd, path), 'utf8');
+        // A pipe or a device at the path is refused without waiting, never read as an empty file.
+        return await readRegularText(resolve(cwd, path), { name: path, ...(refusals === undefined ? {} : { refusals }) });
       } catch (err) {
         if (isMissingFile(err)) {
           return null;
@@ -186,6 +197,12 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
         const opened = await handle.stat();
         if (opened.isDirectory()) {
           return null;
+        }
+        // A pipe opened with O_NONBLOCK and no writer reads as no bytes, which is not an empty
+        // file. Anything but a regular file is refused.
+        if (!opened.isFile()) {
+          refusals?.add(path);
+          throw new NotRegularFileError(path);
         }
         // The size is checked before any byte is read, so a huge file, or a sparse one that costs
         // nothing to make, is never read.

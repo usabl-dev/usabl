@@ -37,6 +37,7 @@ const VERDICT_ENTRY_POINTS = [
   'src/surfaces/stop-hook.ts',
   'src/surfaces/stop-hook-runner.ts',
   'src/surfaces/stop-hook-bin.ts',
+  'src/surfaces/stop-hook-worker.ts',
   'src/surfaces/playwright-helper.ts',
   'src/surfaces/vite-plugin.ts',
   'src/surfaces/webpack-plugin.ts',
@@ -255,8 +256,13 @@ function codeRunnersOf(file: string, source: string): string[] {
   return found;
 }
 
-// Places in src/ that run code from a string or start a thread, each with a reason. None today.
-const ALLOWED_CODE_RUNNERS = new Set<string>([]);
+// Places in src/ that run code from a string or start a thread, each with a reason.
+const ALLOWED_CODE_RUNNERS = new Set<string>([
+  // The stop-hook command runs the checks in a worker so its deadline can always fire. The worker
+  // runs one fixed file, src/surfaces/stop-hook-worker.ts, which is a verdict entry point above, so
+  // this test follows what it imports. The test below pins the file it names.
+  'src/surfaces/stop-hook-worker-start.ts: new Worker(new URL(`./${STOP_HOOK_WORKER_FILE}`, import.meta.url))',
+]);
 
 function resolveSpecifier(from: string, specifier: string): string {
   return relative(ROOT, resolve(ROOT, dirname(from), specifier)).replace(/\.js$/u, '.ts');
@@ -411,6 +417,14 @@ describe('the Figma API is reachable only from the import and drift design comma
       found.push(...codeRunnersOf(file, await readRepoFile(file)).filter((site) => !ALLOWED_CODE_RUNNERS.has(site)));
     }
     expect(found).toEqual([]);
+  });
+
+  it('starts the one worker from the fixed file that this test reads as an entry point', async () => {
+    const source = await readRepoFile('src/surfaces/stop-hook-worker-start.ts');
+    expect(source).toContain("export const STOP_HOOK_WORKER_FILE = 'stop-hook-worker.js';");
+    expect(source.match(/new Worker\(/gu)).toHaveLength(1);
+    const tsup = await readRepoFile('tsup.config.ts');
+    expect(tsup).toContain("'stop-hook-worker': 'src/surfaces/stop-hook-worker.ts',");
   });
 
   it('finds eval, Function, and Worker, and not a string, a comment, or a property name', () => {

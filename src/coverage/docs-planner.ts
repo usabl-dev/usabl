@@ -40,14 +40,18 @@ function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScr
   }
 }
 
-export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles: string[]): DocsCoverage {
+export function computeDocsCoverage(
+  manifest: DocsManifest | null,
+  changedFiles: string[],
+  // Only a test passes a smaller budget, to check the work by its step count.
+  budget: GlobMatchBudget = new GlobMatchBudget(RUN_GLOB_MATCH_STEPS),
+): DocsCoverage {
   if (manifest === null) {
     return { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
 
   // This planner carries its own glob matching budget, the same size as the app planner's. A
   // changed file usabl could not test against sharedGlobs before it ran out is a gap.
-  const budget = new GlobMatchBudget(RUN_GLOB_MATCH_STEPS);
   const sharedMatchers = manifest.sharedGlobs.map((glob) => globMatcher(glob, { budget }));
   const sharedFiles = new Set<string>();
   const untested = new Set<string>();

@@ -190,15 +190,7 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
   // quoted or a plain name, such as tests: './src/tests'.
   const objectBlock = raw2.match(/alias\s*:\s*\{([^}]+)\}/);
   if (objectBlock?.[1] !== undefined) {
-    const entries = objectBlock[1].matchAll(
-      /(?:['"`]([^'"`]+)['"`]|(?<![\w$.])([A-Za-z_$][\w$]*))\s*:\s*((?:path\.resolve\([^)]+\)|['"`][^'"`]*['"`]|[^,}\n]+))/g,
-    );
-    for (const match of entries) {
-      const find = match[1] ?? match[2];
-      const replacement = match[3];
-      if (typeof find !== 'string' || typeof replacement !== 'string') {
-        continue;
-      }
+    for (const { find, replacement } of aliasObjectEntries(objectBlock[1])) {
       const target = parseViteAliasString(replacement, configDir);
       if (target === null) {
         continue;
@@ -239,6 +231,132 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
   }
 
   return mappings;
+}
+
+/**
+ * The entries of an alias object, as the pattern below reads them, match for match: a key, quoted or
+ * a plain name, a colon, and a value that is a path.resolve(...) call, a quoted string, or the text
+ * up to the next comma, closing brace, or line break. The pattern took time that grew with the
+ * square of the text when many values start a call or a string that never closes, and a config
+ * file is text an agent can write. This reads the same entries in time that grows with the text.
+ * The tests compare the two on generated text.
+ *   /(?:['"`]([^'"`]+)['"`]|(?<![\w$.])([A-Za-z_$][\w$]*))\s*:\s*((?:path\.resolve\([^)]+\)|['"`][^'"`]*['"`]|[^,}\n]+))/g
+ */
+export function aliasObjectEntries(text: string): Array<{ find: string; replacement: string }> {
+  const entries: Array<{ find: string; replacement: string }> = [];
+  const after = keptSearch(text);
+  let at = 0;
+  while (at < text.length) {
+    const entry = aliasEntryAt(text, at, after);
+    if (entry === null) {
+      at += 1;
+      continue;
+    }
+    entries.push({ find: entry.find, replacement: text.slice(entry.value, entry.end) });
+    at = entry.end;
+  }
+  return entries;
+}
+
+const QUOTE_CHARS = '\'"`';
+const VALUE_END_CHARS = ',}\n';
+
+function isQuoteChar(char: string): boolean {
+  return char !== '' && QUOTE_CHARS.includes(char);
+}
+
+// JavaScript's \s, one character at a time.
+function isSpaceChar(char: string): boolean {
+  return char !== '' && /\s/u.test(char);
+}
+
+function isNameStart(char: string): boolean {
+  return /^[A-Za-z_$]$/u.test(char);
+}
+
+function isNameChar(char: string): boolean {
+  return /^[\w$]$/u.test(char);
+}
+
+/**
+ * The first place at or after `from` that holds one of `chars`, or -1. Each answer is kept, since
+ * it holds for every place from where it was asked up to where it was found, so a search that
+ * finds nothing to the end of the text is made once, not once for each value that asks.
+ */
+function keptSearch(text: string): (chars: string, from: number) => number {
+  const known = new Map<string, { from: number; at: number }>();
+  return (chars, from) => {
+    const last = known.get(chars);
+    if (last !== undefined && from >= last.from && (last.at === -1 || from <= last.at)) return last.at;
+    let at = -1;
+    for (let index = from; index < text.length; index += 1) {
+      if (chars.includes(text.charAt(index))) {
+        at = index;
+        break;
+      }
+    }
+    known.set(chars, { from, at });
+    return at;
+  };
+}
+
+function skipSpaces(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && isSpaceChar(text.charAt(index))) index += 1;
+  return index;
+}
+
+// The entry whose key starts at `at`, or null. `value` and `end` bound the value's text.
+function aliasEntryAt(
+  text: string,
+  at: number,
+  after: (chars: string, from: number) => number,
+): { find: string; value: number; end: number } | null {
+  const char = text.charAt(at);
+  let find: string;
+  let keyEnd: number;
+  if (isQuoteChar(char)) {
+    const close = after(QUOTE_CHARS, at + 1);
+    if (close === -1 || close === at + 1) return null;
+    find = text.slice(at + 1, close);
+    keyEnd = close + 1;
+  } else if (isNameStart(char) && (at === 0 || !/^[\w$.]$/u.test(text.charAt(at - 1)))) {
+    keyEnd = at + 1;
+    while (keyEnd < text.length && isNameChar(text.charAt(keyEnd))) keyEnd += 1;
+    find = text.slice(at, keyEnd);
+  } else {
+    return null;
+  }
+  const colon = skipSpaces(text, keyEnd);
+  if (text.charAt(colon) !== ':') return null;
+  const spacesEnd = skipSpaces(text, colon + 1);
+  const value = valueAt(text, spacesEnd, after);
+  if (value !== null) return { find, value: spacesEnd, end: value };
+  // The pattern gives back the spaces after the colon one at a time, and a space other than a
+  // line break starts a value of the third kind.
+  for (let start = spacesEnd - 1; start > colon; start -= 1) {
+    if (text.charAt(start) !== '\n') return { find, value: start, end: plainValueEnd(text, start, after) };
+  }
+  return null;
+}
+
+// Where a value that starts at `start` ends, or null when no value starts there.
+function valueAt(text: string, start: number, after: (chars: string, from: number) => number): number | null {
+  if (text.startsWith('path.resolve(', start)) {
+    const close = after(')', start + 13);
+    if (close !== -1 && close > start + 13) return close + 1;
+  }
+  if (isQuoteChar(text.charAt(start))) {
+    const close = after(QUOTE_CHARS, start + 1);
+    if (close !== -1) return close + 1;
+  }
+  if (start < text.length && !VALUE_END_CHARS.includes(text.charAt(start))) return plainValueEnd(text, start, after);
+  return null;
+}
+
+function plainValueEnd(text: string, start: number, after: (chars: string, from: number) => number): number {
+  const end = after(VALUE_END_CHARS, start);
+  return end === -1 ? text.length : end;
 }
 
 // Returns the balanced-brace body of the first `resolve: { ... }` block, or null. Scoping alias

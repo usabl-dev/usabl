@@ -9,8 +9,9 @@
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { readFileSync, realpathSync } from 'node:fs';
+import { readRegularFile, readRegularText } from './deps/regular-file.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -292,7 +293,7 @@ async function isRootConfig(configPath: string): Promise<boolean> {
 // receipt and the Stop hook reads, or null when it cannot be read.
 async function readRootConfigBytes(): Promise<Buffer | null> {
   try {
-    return await readFile(join(await repositoryRoot(), ROOT_CONFIG));
+    return await readRegularFile(join(await repositoryRoot(), ROOT_CONFIG));
   } catch {
     return null;
   }
@@ -406,7 +407,7 @@ async function runHistory(opts: CliOptions): Promise<number> {
     }
     let text: string;
     try {
-      text = await readFile(opts.historyFile, 'utf8');
+      text = await readRegularText(opts.historyFile);
     } catch {
       process.stderr.write('usabl: refused: the record file could not be read. Nothing was appended.\n');
       return 2;
@@ -738,7 +739,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       const floorFs: FloorPruneFs = {
         readFile: async (path) => {
           try {
-            return await readFile(path, 'utf8');
+            return await readRegularText(path);
           } catch (error) {
             if (isErrnoException(error) && error.code === 'ENOENT') {
               return null;
@@ -799,7 +800,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         return git.show(opts.trustedRef, '.usabl-evidence.json');
       }
       try {
-        return await readFile('.usabl-evidence.json', 'utf8');
+        return await readRegularText('.usabl-evidence.json');
       } catch (error) {
         if (isErrnoException(error) && error.code === 'ENOENT') {
           return null;
@@ -974,7 +975,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       readAtRef: (ref, path) => git.show(ref, path),
       readWorking: async (path) => {
         try {
-          return await readFile(path, 'utf8');
+          return await readRegularText(path);
         } catch (error) {
           if (isErrnoException(error) && error.code === 'ENOENT') {
             return null;

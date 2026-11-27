@@ -273,6 +273,23 @@ try {
   assert.equal(stopHookNpmExec.status, 0, failure('installed npm exec --no -- usabl stop-hook', stopHookNpmExec));
   assert.match(stopHookNpmExec.stderr, /NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked/);
 
+  // A stop that reaches the checks runs them in a worker, from the file beside the runner. So the
+  // package must hold that file, and the command and the linked runner must both start it.
+  assert.equal(
+    existsSync(join(installedPackage, 'dist', 'stop-hook-worker.js')),
+    true,
+    'dist/stop-hook-worker.js is missing from the package',
+  );
+  for (const [label, args] of [
+    ['installed usabl stop-hook', [cli, 'stop-hook']],
+    ['linked Stop hook', [join(linkedPackage, 'dist', 'stop-hook-runner.js')]],
+  ]) {
+    const checkedStop = run(process.execPath, args, { cwd: consumer, input: '{}' });
+    assert.equal(checkedStop.status, 0, failure(`${label} with a stop to check`, checkedStop));
+    assert.match(checkedStop.stderr, /^NO VERDICT: IDLE \(exit 0[,)]/, failure(`${label} with a stop to check`, checkedStop));
+    assert.doesNotMatch(checkedStop.stderr, /stop hook error/, failure(`${label} with a stop to check`, checkedStop));
+  }
+
   process.stdout.write(
     'usabl package smoke: installed CLI, stop-hook command, and direct or linked Stop hooks executed.\n',
   );

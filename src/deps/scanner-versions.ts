@@ -6,7 +6,8 @@
  * gap and mints no receipt, and doctor reports it, so a read that fails is never silent.
  */
 import { execFile } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import { readRegularText } from "./regular-file.js";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { chromium } from "playwright";
@@ -207,7 +208,7 @@ export async function readPlaywrightBrowsersList(): Promise<string | null> {
   try {
     const playwrightRequire = createRequire(require.resolve("playwright/package.json"));
     const corePackage = playwrightRequire.resolve("playwright-core/package.json");
-    return await readFile(join(dirname(corePackage), "browsers.json"), "utf8");
+    return await readRegularText(join(dirname(corePackage), "browsers.json"));
   } catch {
     return null;
   }

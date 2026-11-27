@@ -11,16 +11,19 @@
  *                          {"status":"...","loop_count":N} on stdin; loop_count > 0
  *                          maps to stopHookActive to prevent recursive loops.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { realpathSync, statSync } from 'node:fs';
-import { readFile, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import type { MessagePort } from 'node:worker_threads';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { gitProcessEnvironment } from '../deps/git-environment.js';
+import { isNotRegularFile, readRegularFile, type ReadRefusals } from '../deps/regular-file.js';
 import { EMPTY_SUBMODULES_NAME, SPARSE_STATE_NAME } from '../deps/worktree.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
@@ -63,15 +66,25 @@ import {
   type HookContext,
   type StoredReceiptPinState,
 } from './stop-hook.js';
-import { BYPASS_ONCE_PATH, loadReceipt, makeReceiptFs, receiptToSave, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import {
+  BYPASS_ONCE_PATH,
+  loadReceipt,
+  makeReceiptFs,
+  ReceiptWriteRefused,
+  receiptToSave,
+  saveReceipt,
+  type ReceiptFs,
+} from './receipt-store.js';
 import { noReceiptMessage, receiptConfigCheck } from '../evidence/planned-config.js';
 import {
   currentUid,
   deletePinFileFix,
   makeFsSessionPinStore,
   resolveSessionPinDir,
+  type PinWriteResult,
   type SessionPinStore,
 } from './session-pin-store.js';
+import { takeStopHookWorker, type StartedWorker } from './stop-hook-worker-start.js';
 
 export interface StopHookInput {
   stopHookActive: boolean;
@@ -133,6 +146,14 @@ export interface StopHookRunnerPorts {
   // tree of its own folder instead, which follows the assistant. Every decision then says which
   // repository it checked. See hookRepository and ownRepositoryNote.
   repositoryFromOwnFolder?: boolean;
+  // The repository the real ports work in, which the stop-hook command hands to the worker that
+  // runs the checks. Absent in ports a test builds.
+  repository?: HookRepository;
+  // Every path the stop's readers refused so far because it is not a regular file, sorted. A pipe
+  // or a device in the working tree is never read: a plain read of a pipe waits for a writer and
+  // keeps the process from exiting. While the list holds a path, every allow becomes a block that
+  // names it (see emitProtocolAllow). Absent in ports a test builds by hand.
+  readRefusals?: () => string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -256,7 +277,15 @@ async function emitCursorAllow(ports: StopHookRunnerPorts): Promise<void> {
 }
 
 async function consumeBypassOnce(fs: StopHookRunnerFs): Promise<boolean> {
-  const bypass = await fs.readFile(BYPASS_ONCE_PATH);
+  let bypass: string | null;
+  try {
+    bypass = await fs.readFile(BYPASS_ONCE_PATH);
+  } catch (err) {
+    // A pipe or a device at the path is no bypass. The reader recorded it, so the stop runs its
+    // checks and then blocks on that path (see emitProtocolAllow).
+    if (isNotRegularFile(err)) return false;
+    throw err;
+  }
   if (bypass === null) {
     return false;
   }
@@ -389,6 +418,7 @@ function olderPinsMessage(pinPath: string, continuation: boolean): string {
 
 // The config file the hook compares with the last commit before it parses anything.
 const CONFIG_FILE = 'usabl.config.json';
+const execFileAsync = promisify(execFile);
 
 /** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
 // `removed-on-both` is a removal on a branch whose trusted branch has no config any more either.
@@ -759,13 +789,14 @@ function errorMessage(err: unknown): string {
  * work tree, such as `.git`. A folder in no work tree is its own root, and the hook does not look
  * for a last commit there.
  */
-export function findRepositoryRoot(startDir: string): { root: string; inRepository: boolean } {
+export function findRepositoryRoot(startDir: string, budget?: GitBudget): { root: string; inRepository: boolean } {
   try {
     const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: startDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       env: gitProcessEnvironment(),
+      ...gitTimeout(budget),
     });
     const root = out.replace(/\r?\n$/, '');
     if (root.length > 0) {
@@ -774,30 +805,59 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
       // folder would check files the dev server does not serve. The hook then works in its own
       // folder, where the git reader refuses to read such a work tree, so the stop blocks and says
       // so.
-      if (!holds(root, startDir) || gitDirOf(root) !== gitDirOf(startDir)) {
+      if (!holds(root, startDir) || gitDirOf(root, budget) !== gitDirOf(startDir, budget)) {
         return { root: resolve(startDir), inRepository: true };
       }
       return { root: resolve(root), inRepository: true };
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof RepositorySearchOutOfTime || timedOut(err, budget)) throw new RepositorySearchOutOfTime();
     // Not a repository, or git is missing. Both mean there is no last commit to compare with.
   }
   return { root: resolve(startDir), inRepository: false };
 }
 
 // The repository git finds from a folder, as a real path, or null when it finds none.
-function gitDirOf(folder: string): string | null {
+function gitDirOf(folder: string, budget?: GitBudget): string | null {
   try {
     const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
       cwd: folder,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       env: gitProcessEnvironment(),
+      ...gitTimeout(budget),
     });
     return realpathSync.native(out.replace(/\r?\n$/, ''));
-  } catch {
+  } catch (err) {
+    if (timedOut(err, budget)) throw new RepositorySearchOutOfTime();
     return null;
   }
+}
+
+/**
+ * The time left, in milliseconds, before usabl's deadline. The git commands that find the
+ * repository run in the hook's own thread before the deadline's timer starts, and git waits on a
+ * named pipe at `.git/HEAD` or `.git/config` until something writes to it. So each command gets
+ * the time left and is killed when it runs out, and the stop then gives the deadline's answer.
+ */
+type GitBudget = () => number;
+
+/** Thrown when a git command that finds the repository ran until usabl's deadline. */
+export class RepositorySearchOutOfTime extends Error {
+  constructor() {
+    super('git did not find the repository before the deadline');
+    this.name = 'RepositorySearchOutOfTime';
+  }
+}
+
+function gitTimeout(budget: GitBudget | undefined): { timeout?: number; killSignal?: NodeJS.Signals } {
+  // A timeout of 0 means none, so a spent budget still gets one millisecond.
+  return budget === undefined ? {} : { timeout: Math.max(1, Math.floor(budget())), killSignal: 'SIGKILL' };
+}
+
+function timedOut(err: unknown, budget: GitBudget | undefined): boolean {
+  if (budget === undefined || typeof err !== 'object' || err === null) return false;
+  return Reflect.get(err, 'code') === 'ETIMEDOUT' || Reflect.get(err, 'signal') === 'SIGKILL';
 }
 
 // Whether the folder is the root or inside it, by real paths. A path that cannot be resolved is
@@ -811,9 +871,10 @@ function holds(root: string, folder: string): boolean {
   }
 }
 
-async function readWorkingConfig(root: string): Promise<FileBytes> {
+async function readWorkingConfig(root: string, refusals: ReadRefusals): Promise<FileBytes> {
   try {
-    const bytes = await readFile(resolve(root, CONFIG_FILE));
+    // A pipe at the config path is refused without waiting, and the stop blocks on it.
+    const bytes = await readRegularFile(resolve(root, CONFIG_FILE), { name: CONFIG_FILE, refusals });
     return { status: 'found', text: bytes.toString('utf8'), bytes };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -828,8 +889,11 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
     return { status: 'no-work-tree' };
   }
   try {
-    // A repository with no commits has no HEAD, so it has no committed config either.
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore', env: gitProcessEnvironment() });
+    // A repository with no commits has no HEAD, so it has no committed config either. git runs
+    // in its own process and is waited for without holding this thread: a pipe in the git folder
+    // can hold git, and a thread held in a call that waits for a process cannot be ended, so the
+    // stop could not end after its deadline answered.
+    await execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, env: gitProcessEnvironment() });
   } catch {
     return { status: 'missing' };
   }
@@ -841,10 +905,10 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
   }
 }
 
-function defaultFs(root: string): StopHookRunnerFs {
+function defaultFs(root: string, refusals: ReadRefusals): StopHookRunnerFs {
   // Receipt writes never follow a symbolic link. See makeReceiptFs.
   return {
-    ...makeReceiptFs(root),
+    ...makeReceiptFs(root, refusals),
     unlink: async (path: string) => {
       try {
         await unlink(resolve(root, path));
@@ -872,6 +936,20 @@ export interface StopHookRunnerPortOptions {
   // the start of the process, so ports built inside a long-lived process, such as a test worker,
   // leave it off.
   deadline?: boolean;
+  // The repository the hook already found, so the worker that runs the checks works in the same
+  // one the hook's answer names. Absent means the ports find it as hookRepository says.
+  repository?: HookRepository;
+  // Which host's default limit the deadline plans to when the hook sets none. With the deadline
+  // on, the git commands that find the repository are killed at the deadline, and the ports
+  // throw RepositorySearchOutOfTime.
+  cursorMode?: boolean;
+}
+
+/** The repository a stop works in. See hookRepository. */
+export interface HookRepository {
+  root: string;
+  inRepository: boolean;
+  ownFolderInstead: boolean;
 }
 
 function startRealTimer(ms: number): StopTimer {
@@ -895,6 +973,40 @@ function drained(stream: NodeJS.WriteStream): Promise<void> {
   });
 }
 
+/**
+ * Kills every process this one started that still runs when the stop ends at its deadline. The
+ * checks run git in processes of their own, and git waits on a named pipe in the working tree or
+ * the git folder (a `.gitignore`, a ref) until something writes to it, so a git the stop started
+ * could wait on after the stop ended. A browser that did not close in its wait ends here too.
+ * The worker thread's children are this process's children, so one list holds them all.
+ */
+function endChildProcesses(): void {
+  if (process.platform === 'win32') return;
+  let listed = '';
+  try {
+    listed = execFileSync('pgrep', ['-P', String(process.pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+      killSignal: 'SIGKILL',
+    });
+  } catch (err) {
+    // pgrep exits 1 when it finds none. With no pgrep at all nothing is listed, and the stop ends
+    // as before.
+    const stdout = typeof err === 'object' && err !== null ? Reflect.get(err, 'stdout') : undefined;
+    listed = typeof stdout === 'string' ? stdout : '';
+  }
+  for (const line of listed.split('\n')) {
+    const pid = Number(line.trim());
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // It ended already.
+    }
+  }
+}
+
 function realDeadline(env: Record<string, string | undefined>): StopHookDeadlinePort {
   return {
     timeoutSetting: env[STOP_HOOK_TIMEOUT_ENV],
@@ -902,6 +1014,7 @@ function realDeadline(env: Record<string, string | undefined>): StopHookDeadline
     startTimer: startRealTimer,
     endProcess: async () => {
       await Promise.all([drained(process.stdout), drained(process.stderr)]);
+      endChildProcesses();
       process.exit(0);
     },
   };
@@ -935,18 +1048,15 @@ function claudeProjectDir(env: Record<string, string | undefined>): string | nul
  * a work tree, the hook says so, naming CLAUDE_PROJECT_DIR when it was set, as before. The rule is
  * the same for both protocols.
  */
-function hookRepository(
-  projectDir: string | null,
-  ownDir: string,
-): { root: string; inRepository: boolean; ownFolderInstead: boolean } {
+function hookRepository(projectDir: string | null, ownDir: string, budget?: GitBudget): HookRepository {
   if (projectDir === null) {
-    return { ...findRepositoryRoot(ownDir), ownFolderInstead: false };
+    return { ...findRepositoryRoot(ownDir, budget), ownFolderInstead: false };
   }
-  const fromProject = findRepositoryRoot(projectDir);
+  const fromProject = findRepositoryRoot(projectDir, budget);
   if (fromProject.inRepository) {
     return { ...fromProject, ownFolderInstead: false };
   }
-  const fromOwn = findRepositoryRoot(ownDir);
+  const fromOwn = findRepositoryRoot(ownDir, budget);
   return fromOwn.inRepository ? { ...fromOwn, ownFolderInstead: true } : { ...fromProject, ownFolderInstead: false };
 }
 
@@ -954,10 +1064,22 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
   const uid = options.uid === undefined ? currentUid() : options.uid;
   const env = options.env ?? process.env;
   const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
-  const { root, inRepository, ownFolderInstead } = hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
+  const deadline = options.deadline === true ? realDeadline(env) : null;
+  const budget =
+    deadline === null
+      ? undefined
+      : () =>
+          runnerDeadlineSeconds(hostLimit(deadline.timeoutSetting, options.cursorMode === true).seconds) * 1000 -
+          deadline.elapsedMs();
+  const repository = options.repository ?? hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd(), budget);
+  const { root, inRepository, ownFolderInstead } = repository;
+  // Every path this stop's readers refused because it is not a regular file. See readRefusals.
+  const refusals: ReadRefusals = new Set();
   return {
+    repository,
     ...(ownFolderInstead ? { repositoryFromOwnFolder: true } : {}),
-    fs: defaultFs(root),
+    readRefusals: () => [...refusals].sort(),
+    fs: defaultFs(root, refusals),
     pins: makeFsSessionPinStore({ dir, uid }),
     cwd: () => root,
     stdoutWrite: async (text: string) => {
@@ -967,29 +1089,38 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
       process.stderr.write(text);
     },
     readConfigBytes: async () => {
-      const [working, head] = await Promise.all([readWorkingConfig(root), readHeadConfig(root, inRepository)]);
+      const [working, head] = await Promise.all([readWorkingConfig(root, refusals), readHeadConfig(root, inRepository)]);
       return { working, head };
     },
     loadConfig: async (text: string) => parseConfigText(text),
-    buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
+    buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root, refusals }),
     runEngine: async (deps: Deps, config: UsablConfig, opts?: RunOptions) => run(deps, config, opts ?? {}),
     // Outside a work tree the hook stops before it looks (see configStep), and there is no branch
     // and no committed work to compare. Inside one, git answers.
     findStartingCommit: async () =>
       inRepository ? findStartingCommit(scopeGit(root)) : { kind: 'no-trusted-branch' as const },
     evaluateDecision: evaluateStopDecision,
-    ...(options.deadline === true ? { deadline: realDeadline(env) } : {}),
+    ...(deadline === null ? {} : { deadline }),
   };
 }
 
 export interface StopHookOptions {
   cursorMode: boolean;
+  // The input's stop_hook_active, set by runStopChecks for the emitters. A refused read then lets
+  // the continuation through, as every other block does.
+  continuation?: boolean;
 }
 
 const DEFAULT_OPTIONS: StopHookOptions = { cursorMode: false };
 
 // Protocol-aware block emitter. Claude uses decision: block, Cursor uses followup_message.
 async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, options: StopHookOptions): Promise<void> {
+  // A block says first which paths the stop did not read, so the fix is named with the block.
+  const refused = ports.readRefusals?.() ?? [];
+  await emitBlockAnswer(ports, refused.length === 0 ? reason : `${notRegularMessage(refused, false)}\n${reason}`, options);
+}
+
+async function emitBlockAnswer(ports: StopHookRunnerPorts, reason: string, options: StopHookOptions): Promise<void> {
   if (options.cursorMode) {
     await emitCursorBlock(ports, reason);
   } else {
@@ -1021,6 +1152,23 @@ function ownRepositoryNote(ports: StopHookRunnerPorts): string | null {
     ],
     [`repository checked: ${basename(ports.cwd())}`],
   );
+}
+
+/**
+ * What a stop says when it refused to read paths that are not regular files. The names come from
+ * the working tree, so they are printed only inside the frame.
+ */
+function notRegularMessage(paths: readonly string[], continuation: boolean): string {
+  const head =
+    `NOT verified - usabl did not read ${paths.length} path(s) in this repository, named under "not regular files" in the ` +
+    'untrusted text below, because each is not a regular file: it may be a named pipe, a device, or a socket. A read of a ' +
+    'pipe waits until something writes to it, which would hold this stop past its time limit. Nothing is proven about ' +
+    'this change, and no receipt was saved.';
+  const fix = 'replace each one with a regular file, or remove it, then stop again.';
+  const next = continuation
+    ? `usabl let this stop through without blocking again (continuation already active). Next: ${fix}`
+    : `Next: ${fix}`;
+  return framedMessage([head, next], [`not regular files: ${paths.join(', ')}`]);
 }
 
 /** What an allow says, in the order it is written. */
@@ -1060,7 +1208,16 @@ function isQuietDecision(result: Result, message: string): boolean {
  * also writes one JSON object with a systemMessage field, which Claude Code shows to the person.
  * The text is the same text stderr gets, so its carried values are already scrubbed and framed.
  */
-async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, options: StopHookOptions): Promise<void> {
+async function emitProtocolAllow(ports: StopHookRunnerPorts, given: AllowText, options: StopHookOptions): Promise<void> {
+  // A path the stop did not read because it is not a regular file means the stop did not read
+  // everything it checks, whatever the allow says. It blocks once, and the continuation is let
+  // through with the same paths named, never with the allow's own words.
+  const refused = ports.readRefusals?.() ?? [];
+  if (refused.length > 0 && options.continuation !== true) {
+    await emitBlockAnswer(ports, notRegularMessage(refused, false), options);
+    return;
+  }
+  const text: AllowText = refused.length > 0 ? { message: notRegularMessage(refused, true) } : given;
   const note = ownRepositoryNote(ports);
   const lines = [text.message, ...(note === null ? [] : [note]), ...(text.notices ?? [])];
   for (const line of lines) {
@@ -1313,16 +1470,52 @@ export async function runStopHook(
   ports: StopHookRunnerPorts,
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
-  const state: StopRunState = { deps: null, checkCommand: 'usabl check' };
   const deadline = ports.deadline;
   if (deadline === undefined) {
+    const state: StopRunState = { deps: null, checkCommand: 'usabl check' };
     try {
       return await runStopChecks(input, ports, options, state);
     } finally {
       await closeBrowser(state);
     }
   }
+  return superviseStop(input, ports, options, deadline, (claimed) => checksInThisThread(input, claimed, options));
+}
 
+/**
+ * The checks of one stop, as the deadline sees them wherever they run. `work` settles once the
+ * checks wrote their answer. `closeBrowser` stops the scan. `checkCommand` is the check the
+ * deadline's advice names.
+ */
+interface StopChecks {
+  work: Promise<number>;
+  closeBrowser(): Promise<void>;
+  checkCommand(): CheckCommand;
+  // Ends checks that run in a worker, once the answer is written or the deadline holds it.
+  end?(): Promise<void>;
+}
+
+// The checks in the thread that keeps the deadline. Ports a test builds run them this way.
+function checksInThisThread(input: StopHookInput, ports: StopHookRunnerPorts, options: StopHookOptions): StopChecks {
+  const state: StopRunState = { deps: null, checkCommand: 'usabl check' };
+  return {
+    work: runStopChecks(input, ports, options, state),
+    closeBrowser: () => closeBrowser(state),
+    checkCommand: () => state.checkCommand,
+  };
+}
+
+/**
+ * Races the checks against the runner's deadline. See runStopHook. `start` gets the ports the
+ * checks write their answer through, which hold the answer for whoever claims it first.
+ */
+async function superviseStop(
+  input: StopHookInput,
+  ports: StopHookRunnerPorts,
+  options: StopHookOptions,
+  deadline: StopHookDeadlinePort,
+  start: (claimed: StopHookRunnerPorts) => StopChecks,
+): Promise<number> {
   const limit = hostLimit(deadline.timeoutSetting, options.cursorMode);
   const timer = deadline.startTimer(Math.max(0, runnerDeadlineSeconds(limit.seconds) * 1000 - deadline.elapsedMs()));
   const claim: AnswerClaim = { owner: 'none' };
@@ -1338,7 +1531,7 @@ export async function runStopHook(
   // After the checks answered, the browser closes before the deadline or is not waited for: the
   // answer is written, and the process ends so the host reads it in time.
   const closeAfterAnswer = async (): Promise<void> => {
-    const closing = closeBrowser(state).then(() => 'closed' as const);
+    const closing = checks.closeBrowser().then(() => 'closed' as const);
     closing.catch(noop);
     const ended = await Promise.race([closing, timer.expired.then(() => 'late' as const)]);
     timer.cancel();
@@ -1347,17 +1540,27 @@ export async function runStopHook(
     }
   };
 
-  const work = runStopChecks(input, claimedPorts(ports, claim), options, state);
+  const checks = start(claimedPorts(ports, claim));
+  const work = checks.work;
+  // A worker that does not end when asked is not waited for past a short limit: the process ends
+  // next, and that ends it.
+  const endChecks = async (): Promise<void> => {
+    if (checks.end !== undefined) {
+      await boundedWait(deadline, checks.end(), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
+    }
+  };
   let outcome: { kind: 'done'; code: number } | Awaited<typeof reached>;
   try {
     outcome = await Promise.race([work.then((code) => ({ kind: 'done' as const, code })), reached]);
   } catch (err) {
     // The checks failed before the deadline. The timer still runs and the browser is open.
     await closeAfterAnswer().catch(noop);
+    await endChecks().catch(noop);
     throw err;
   }
   if (outcome.kind === 'done') {
     await closeAfterAnswer();
+    await endChecks();
     return outcome.code;
   }
 
@@ -1368,8 +1571,9 @@ export async function runStopHook(
     // deadline writes none of its own.
     try {
       await boundedWait(deadline, work, afterDeadlineWaitMs(limit.seconds, ANSWER_FINISH_WAIT_MS));
-      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
+      await boundedWait(deadline, checks.closeBrowser(), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
     } finally {
+      await endChecks();
       await deadline.endProcess();
     }
     return 0;
@@ -1378,7 +1582,7 @@ export async function runStopHook(
     limit,
     cursorMode: options.cursorMode,
     continuation: input.stopHookActive,
-    checkCommand: state.checkCommand,
+    checkCommand: checks.checkCommand(),
   });
   try {
     if (input.stopHookActive) {
@@ -1390,8 +1594,9 @@ export async function runStopHook(
     // Closing the browser stops the scan. A close that hangs is not waited for past a short limit,
     // because the process ends next anyway.
     try {
-      await boundedWait(deadline, closeBrowser(state), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
+      await boundedWait(deadline, checks.closeBrowser(), afterDeadlineWaitMs(limit.seconds, BROWSER_CLOSE_WAIT_MS));
     } finally {
+      await endChecks();
       await deadline.endProcess();
     }
   }
@@ -1401,9 +1606,10 @@ export async function runStopHook(
 async function runStopChecks(
   input: StopHookInput,
   ports: StopHookRunnerPorts,
-  options: StopHookOptions,
+  hookOptions: StopHookOptions,
   state: StopRunState,
 ): Promise<number> {
+  const options: StopHookOptions = { ...hookOptions, continuation: input.stopHookActive };
   let pinNotice: PinNotice | null = null;
   try {
     if (await consumeBypassOnce(ports.fs)) {
@@ -1622,7 +1828,8 @@ async function runStopChecks(
 
     const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
-    const receipt = receiptToSave(result, { ci: false });
+    // A stop that refused to read a path blocks (see emitProtocolAllow), so it saves no receipt.
+    const receipt = (ports.readRefusals?.() ?? []).length > 0 ? null : receiptToSave(result, { ci: false });
     // The run binds the root config's bytes when it starts, after this stop read them to plan. The
     // file is read once more here, and the receipt is saved only while it holds the planned bytes
     // and the receipt binds those bytes. See planned-config.ts.
@@ -1700,20 +1907,25 @@ async function runStopChecks(
     await emitProtocolAllow(
       ports,
       {
-        message: framedMessage(
-          [
-            'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
-              'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
-            `Next: run ${state.checkCommand}, or check the change by hand, before you call this change accessible.`,
-          ],
-          [`error: ${message}`],
-        ),
+        message: hookErrorMessage(message, state.checkCommand),
         notices: pinNotices(pinNotice),
       },
       options,
     );
     return 0;
   }
+}
+
+/** The allow line for a hook that failed before it reached a verdict. */
+function hookErrorMessage(error: string, checkCommand: CheckCommand): string {
+  return framedMessage(
+    [
+      'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
+        'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
+      `Next: run ${checkCommand}, or check the change by hand, before you call this change accessible.`,
+    ],
+    [`error: ${error}`],
+  );
 }
 
 // The note for hook input that is not JSON. The hook cannot tell what sent it, so it names both
@@ -1725,19 +1937,313 @@ const INVALID_INPUT_MESSAGE =
 
 export async function runStopHookFromStdin(
   stdinText: string,
-  // The default is the stop-hook command's own ports, with the deadline on.
-  ports: StopHookRunnerPorts = makeStopHookRunnerPorts({ deadline: true }),
+  // Absent for the stop-hook command, which builds its own ports with the deadline on and runs the
+  // checks in a worker (see runStopHookInWorker). Ports a test builds run them in this thread.
+  ports?: StopHookRunnerPorts,
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
+  let own: StopHookRunnerPorts;
+  let searchOutOfTime = false;
+  try {
+    own = ports ?? makeStopHookRunnerPorts({ deadline: true, cursorMode: options.cursorMode });
+  } catch (err) {
+    if (!(err instanceof RepositorySearchOutOfTime)) throw err;
+    // git held the search for the repository until the deadline. These ports run no git: the
+    // stop gives the deadline's answer and ends.
+    searchOutOfTime = true;
+    own = makeStopHookRunnerPorts({
+      deadline: true,
+      cursorMode: options.cursorMode,
+      repository: { root: resolve(process.cwd()), inRepository: false, ownFolderInstead: false },
+    });
+  }
+  let input: StopHookInput;
   try {
     const parsed: unknown = JSON.parse(stdinText);
     // Cursor sends a different stdin shape (status, loop_count) than Claude (stop_hook_active, session_id).
-    const input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
-    return runStopHook(input, ports, options);
+    input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
   } catch {
-    await emitProtocolAllow(ports, { message: INVALID_INPUT_MESSAGE }, options);
+    await emitProtocolAllow(own, { message: INVALID_INPUT_MESSAGE }, options);
     return 0;
   }
+  if (searchOutOfTime && own.deadline !== undefined) {
+    return superviseStop(input, own, options, own.deadline, () => NO_CHECKS);
+  }
+  return ports === undefined ? runStopHookInWorker(input, own, options) : runStopHook(input, own, options);
+}
+
+// The checks of a stop whose repository search ran out of time: none. They never answer, so the
+// deadline, already reached, gives its answer.
+const NO_CHECKS: StopChecks = {
+  work: new Promise<number>(noop),
+  closeBrowser: async () => {},
+  checkCommand: () => 'usabl check',
+};
+
+// ---- the checks in a worker ----
+//
+// A timer fires only between pieces of work in its thread. Code that runs for minutes in one piece,
+// such as a slow pattern match on a long line that an agent wrote, would hold the deadline back
+// until the host ends the hook, and a hook the host ends lets the stop go on with nothing checked.
+// So the stop-hook command runs the checks in a worker thread. This thread keeps the deadline,
+// reads nothing, and checks nothing. The worker reads for itself, and sends every write of the
+// answer here: the output, the receipt, the bypass file it removes, and the session pins. This
+// thread writes each one through the same claim as the checks in this thread use (see
+// claimedPorts), so only one answer reaches the host, and nothing the worker sends after the
+// deadline took the answer is written. At the deadline this thread asks the worker to close the
+// browser, waits a short time, ends the worker, and ends the process.
+
+/** What the worker starts with. Plain data, so it reaches the worker as it is. */
+export interface StopWorkerData {
+  input: StopHookInput;
+  options: StopHookOptions;
+  // The repository this thread found, so the worker checks the one the answer names.
+  repository: HookRepository;
+}
+
+/** One write of the answer that the worker asks this thread to make. */
+type WorkerWrite =
+  | { op: 'stdout' | 'stderr'; text: string }
+  | { op: 'writeFile'; path: string; contents: string }
+  | { op: 'mkdir' | 'unlink'; path: string }
+  | { op: 'pinCreate' | 'pinReplace'; name: string; contents: string };
+
+type FromWorker =
+  | { type: 'write'; id: number; write: WorkerWrite }
+  | { type: 'check-command'; value: CheckCommand }
+  | { type: 'answered'; code: number }
+  | { type: 'failed'; message: string }
+  | { type: 'browser-closed' };
+
+// Why a write failed. A refused receipt write keeps its path, so the receipt notice names it.
+interface WriteFailure {
+  message: string;
+  refusedPath?: string;
+}
+
+type ToWorker =
+  | { type: 'start'; data: StopWorkerData }
+  | { type: 'reply'; id: number; value: unknown }
+  | { type: 'reply'; id: number; failure: WriteFailure }
+  | { type: 'close-browser' };
+
+function applyWrite(ports: StopHookRunnerPorts, write: WorkerWrite): Promise<unknown> {
+  switch (write.op) {
+    case 'stdout':
+      return Promise.resolve(ports.stdoutWrite(write.text));
+    case 'stderr':
+      return Promise.resolve(ports.stderrWrite(write.text));
+    case 'writeFile':
+      return ports.fs.writeFile(write.path, write.contents);
+    case 'mkdir':
+      return ports.fs.mkdir(write.path);
+    case 'unlink':
+      return ports.fs.unlink(write.path);
+    case 'pinCreate':
+      return ports.pins.create(write.name, write.contents);
+    case 'pinReplace':
+      return ports.pins.replace(write.name, write.contents);
+  }
+}
+
+function writeFailure(err: unknown): WriteFailure {
+  if (err instanceof ReceiptWriteRefused) {
+    return { message: err.message, refusedPath: err.path };
+  }
+  return { message: errorMessage(err) };
+}
+
+function failureError(failure: WriteFailure): Error {
+  const path = failure.refusedPath;
+  return path === undefined ? new Error(failure.message) : new ReceiptWriteRefused(path, failure.message.slice(path.length + 1));
+}
+
+/**
+ * Runs one stop with its checks in a worker thread, and the deadline in this one. See runStopHook
+ * for the deadline's rules, which are the same here.
+ */
+async function runStopHookInWorker(
+  input: StopHookInput,
+  ports: StopHookRunnerPorts,
+  options: StopHookOptions,
+): Promise<number> {
+  const deadline = ports.deadline;
+  const repository = ports.repository;
+  if (deadline === undefined || repository === undefined) {
+    // Only the stop-hook command's own ports come here, and they always carry both.
+    throw new Error('the stop-hook command built ports without a deadline or a repository');
+  }
+  const data: StopWorkerData = { input, options, repository };
+  return superviseStop(input, ports, options, deadline, (claimed) => checksInWorker(claimed, data, takeStopHookWorker()));
+}
+
+function checksInWorker(claimed: StopHookRunnerPorts, data: StopWorkerData, started: StartedWorker): StopChecks {
+  const { worker } = started;
+  let command: CheckCommand = 'usabl check';
+  let wroteOutput = false;
+  // True once the worker answered or failed. Anything it does after that adds no answer.
+  let settled = false;
+  // The writes are made one after another, in the order the worker sent them.
+  let writes: Promise<unknown> = Promise.resolve();
+  const send = (message: ToWorker): void => {
+    try {
+      worker.postMessage(message);
+    } catch {
+      // The worker has ended, so nothing waits for the reply.
+    }
+  };
+  const ended = started.exited.then(noop);
+  let browserClosed: () => void = noop;
+  const closed = new Promise<void>((resolve) => {
+    browserClosed = resolve;
+  });
+  let closing: Promise<void> | null = null;
+
+  const work = new Promise<number>((resolve, reject) => {
+    // A worker that failed before it answered gets the answer a failed check gets, unless the
+    // checks already wrote some of theirs, or the deadline holds the answer.
+    const failed = (error: string): void => {
+      if (settled) return;
+      settled = true;
+      if (wroteOutput) {
+        resolve(0);
+        return;
+      }
+      emitProtocolAllow(claimed, { message: hookErrorMessage(error, command) }, data.options).then(() => resolve(0), reject);
+    };
+    worker.on('message', (message: FromWorker) => {
+      if (message.type === 'write') {
+        if (message.write.op === 'stdout' || message.write.op === 'stderr') wroteOutput = true;
+        const write = message.write;
+        writes = writes.then(
+          () =>
+            applyWrite(claimed, write).then(
+              (value) => send({ type: 'reply', id: message.id, value }),
+              (err: unknown) => send({ type: 'reply', id: message.id, failure: writeFailure(err) }),
+            ),
+          noop,
+        );
+      } else if (message.type === 'check-command') {
+        command = message.value;
+      } else if (message.type === 'answered') {
+        settled = true;
+        writes.then(() => resolve(message.code), noop);
+      } else if (message.type === 'failed') {
+        writes.then(() => failed(message.message), noop);
+      } else {
+        browserClosed();
+      }
+    });
+    void started.failed.then((err) => writes.then(() => failed(errorMessage(err)), noop));
+    void started.exited.then((code) =>
+      writes.then(() => failed(`the worker that runs the checks ended with exit code ${code} before it answered`), noop),
+    );
+  });
+  send({ type: 'start', data });
+
+  return {
+    work,
+    closeBrowser: () => {
+      closing ??= (async () => {
+        send({ type: 'close-browser' });
+        await Promise.race([closed, ended]);
+      })();
+      return closing;
+    },
+    checkCommand: () => command,
+    end: async () => {
+      await worker.terminate();
+    },
+  };
+}
+
+/**
+ * The worker side of a stop. It runs the checks with ports that read for themselves and send every
+ * write of the answer to the thread that keeps the deadline. `adjust` changes the ports the checks
+ * get; only a test's worker passes it.
+ */
+export async function runStopHookWorker(
+  port: MessagePort,
+  data: StopWorkerData,
+  adjust: (ports: StopHookRunnerPorts) => StopHookRunnerPorts = (ports) => ports,
+): Promise<void> {
+  let nextId = 0;
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
+  const ask = (write: WorkerWrite): Promise<unknown> =>
+    new Promise((resolve, reject) => {
+      const id = nextId;
+      nextId += 1;
+      pending.set(id, { resolve, reject });
+      port.postMessage({ type: 'write', id, write } satisfies FromWorker);
+    });
+
+  let command: CheckCommand = 'usabl check';
+  const state: StopRunState = {
+    deps: null,
+    get checkCommand(): CheckCommand {
+      return command;
+    },
+    set checkCommand(value: CheckCommand) {
+      command = value;
+      port.postMessage({ type: 'check-command', value } satisfies FromWorker);
+    },
+  };
+  let closing: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    closing ??= closeBrowser(state)
+      .catch(noop)
+      .then(() => port.postMessage({ type: 'browser-closed' } satisfies FromWorker));
+    return closing;
+  };
+  port.on('message', (message: ToWorker) => {
+    if (message.type === 'close-browser') {
+      void close();
+      return;
+    }
+    if (message.type !== 'reply') return;
+    const waiting = pending.get(message.id);
+    pending.delete(message.id);
+    if (waiting === undefined) return;
+    if ('failure' in message) waiting.reject(failureError(message.failure));
+    else waiting.resolve(message.value);
+  });
+
+  const own = makeStopHookRunnerPorts({ repository: data.repository });
+  const ports = adjust({
+    ...own,
+    fs: {
+      readFile: (path) => own.fs.readFile(path),
+      writeFile: async (path, contents) => {
+        await ask({ op: 'writeFile', path, contents });
+      },
+      mkdir: async (path) => {
+        await ask({ op: 'mkdir', path });
+      },
+      unlink: async (path) => {
+        await ask({ op: 'unlink', path });
+      },
+    },
+    pins: {
+      read: (name) => own.pins.read(name),
+      locate: (name) => own.pins.locate(name),
+      create: async (name, contents) => (await ask({ op: 'pinCreate', name, contents })) as PinWriteResult,
+      replace: async (name, contents) => (await ask({ op: 'pinReplace', name, contents })) as PinWriteResult,
+    },
+    stdoutWrite: async (text) => {
+      await ask({ op: 'stdout', text });
+    },
+    stderrWrite: async (text) => {
+      await ask({ op: 'stderr', text });
+    },
+  });
+
+  try {
+    const code = await runStopChecks(data.input, ports, data.options, state);
+    port.postMessage({ type: 'answered', code } satisfies FromWorker);
+  } catch (err) {
+    port.postMessage({ type: 'failed', message: errorMessage(err) } satisfies FromWorker);
+  }
+  await close();
 }
 
 async function readStdin(): Promise<string> {
@@ -1750,5 +2256,5 @@ async function readStdin(): Promise<string> {
 
 export async function main(): Promise<number> {
   const cursorMode = process.argv.includes('--cursor');
-  return runStopHookFromStdin(await readStdin(), makeStopHookRunnerPorts({ deadline: true }), { cursorMode });
+  return runStopHookFromStdin(await readStdin(), undefined, { cursorMode });
 }

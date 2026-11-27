@@ -116,6 +116,16 @@ export type UnresolvableImport =
     }
   | {
       importer: string;
+      // Empty: the entry is about the whole file, not one import in it.
+      specifier: string;
+      // A file usabl did not read for imports, because it is longer than MAX_SOURCE_CHARACTERS or
+      // has a line longer than MAX_SOURCE_LINE_CHARACTERS. Its imports are unknown, so it may load
+      // any file.
+      kind: 'unread-source';
+      why: 'size' | 'line';
+    }
+  | {
+      importer: string;
       specifier: string;
       // A bare import, such as 'tests/Widget', that the tsconfig baseUrl resolves to a file in
       // the repository. The compiler reads baseUrl, but a bundler reads it only with a plugin, and
@@ -189,10 +199,152 @@ export interface ImportGraphView {
   visited: ReadonlySet<string>;
 }
 
-// This pattern stays single-line by design. A multiline static import can be missed,
-// which under-reports edges. Under-reporting is safer here because discovery must
-// never invent import edges that were not proven by concrete source text and files.
-const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
+// The static imports of a file: `import`, white space, an optional `type` and white space, then
+// one or more characters on the same line that are not a quote or a semicolon, white space, `from`,
+// any white space, and a quoted path. A multiline static import can be missed, which under-reports
+// edges. Under-reporting is safer here because discovery must never invent import edges that were
+// not proven by concrete source text and files.
+//
+// This reads what the pattern below reads, match for match, in time that grows with the length of
+// the text. The pattern itself took time that grew with the square of a line's length, so one
+// long line could hold a check for minutes. The pattern stays here as the definition, and the
+// tests compare the two on generated text.
+//   /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g
+export function staticImportSpecifiers(source: string): string[] {
+  const found: string[] = [];
+  let at = source.indexOf('import');
+  if (at === -1) return found;
+  const scan = new StaticImportScan(source);
+  while (at !== -1) {
+    const match = at === 0 || !isWordCode(source.charCodeAt(at - 1)) ? scan.matchAt(at) : null;
+    if (match === null) {
+      at = source.indexOf('import', at + 1);
+      continue;
+    }
+    found.push(source.slice(match.open + 1, match.close));
+    at = source.indexOf('import', match.close + 1);
+  }
+  return found;
+}
+
+// JavaScript's \s, which also takes the Unicode space characters, the line separators, and the
+// byte order mark.
+function isSpaceCode(code: number): boolean {
+  return (
+    (code >= 9 && code <= 13) ||
+    code === 32 ||
+    code === 0xa0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
+}
+
+// A character of \w, as \b reads it.
+function isWordCode(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95;
+}
+
+function isQuoteCode(code: number): boolean {
+  return code === 34 || code === 39 || code === 96;
+}
+
+// A character the part between the import and `from` may hold: not a quote, a semicolon, or \n.
+function isClauseCode(code: number): boolean {
+  return !isQuoteCode(code) && code !== 59 && code !== 10;
+}
+
+/**
+ * What the scan works out once for the whole text, from the end to the start: where each run of
+ * clause characters ends, and the first place at or after each position where white space,
+ * `from`, any white space, and a quoted path start. A start then needs only a few lookups for each
+ * way the pattern could split its white space, and each run of white space is walked once.
+ */
+class StaticImportScan {
+  private readonly clauseEnd: Int32Array;
+  private readonly nextFrom: Int32Array;
+  // For each place `from` starts a path, where the path's quotes are.
+  private readonly paths = new Map<number, { open: number; close: number }>();
+
+  constructor(private readonly source: string) {
+    const length = source.length;
+    this.clauseEnd = new Int32Array(length + 2);
+    this.nextFrom = new Int32Array(length + 2);
+    this.clauseEnd[length] = length;
+    this.clauseEnd[length + 1] = length;
+    this.nextFrom[length] = length;
+    this.nextFrom[length + 1] = length;
+    for (let index = length - 1; index >= 0; index -= 1) {
+      this.clauseEnd[index] = isClauseCode(source.charCodeAt(index)) ? this.clauseEnd[index + 1]! : index;
+      this.nextFrom[index] = this.fromPath(index) ? index : this.nextFrom[index + 1]!;
+    }
+  }
+
+  // Whether white space at `at` is followed by `from`, any white space, and a quoted path with at
+  // least one character before the next quote. Each `from` is read once, and each path's text is
+  // walked once, so this costs the length of the text in all.
+  private fromPath(at: number): boolean {
+    const source = this.source;
+    if (!isSpaceCode(source.charCodeAt(at)) || !source.startsWith('from', at + 1)) return false;
+    let open = at + 5;
+    while (open < source.length && isSpaceCode(source.charCodeAt(open))) open += 1;
+    if (open >= source.length || !isQuoteCode(source.charCodeAt(open))) return false;
+    let close = open + 1;
+    while (close < source.length && !isQuoteCode(source.charCodeAt(close))) close += 1;
+    if (close >= source.length || close === open + 1) return false;
+    this.paths.set(at, { open, close });
+    return true;
+  }
+
+  // The path the pattern matches when its lazy part starts at `start`, whose clause characters end
+  // at `end`: the first `from` path after at least one character, or null.
+  private tryStart(start: number, end: number): { open: number; close: number } | null {
+    const from = this.nextFrom[start + 1]!;
+    return from < this.source.length && from <= end ? (this.paths.get(from) ?? null) : null;
+  }
+
+  /**
+   * The match of the pattern that starts at `at`, where `import` is, or null. The pattern takes
+   * its white space and its `type` in the order the pattern's own matching tries them: first all
+   * the white space, with `type` and then each shorter run of the white space after it, then all
+   * the white space without `type`, then each shorter run of the white space after the import. A
+   * lazy part that starts inside white space ends at the first \n in it, since \n is not a clause
+   * character.
+   */
+  matchAt(at: number): { open: number; close: number } | null {
+    const source = this.source;
+    const afterImport = at + 6;
+    if (afterImport >= source.length || !isSpaceCode(source.charCodeAt(afterImport))) return null;
+    let word = afterImport;
+    while (word < source.length && isSpaceCode(source.charCodeAt(word))) word += 1;
+    if (source.startsWith('type', word) && word + 4 < source.length && isSpaceCode(source.charCodeAt(word + 4))) {
+      let after = word + 4;
+      while (after < source.length && isSpaceCode(source.charCodeAt(after))) after += 1;
+      const found = this.tryWithin(word + 5, after);
+      if (found !== null) return found;
+    }
+    return this.tryWithin(afterImport + 1, word);
+  }
+
+  // Tries each start from `last` down to `first`, where [first, last) is white space and `last` is
+  // the first character after it.
+  private tryWithin(first: number, last: number): { open: number; close: number } | null {
+    const atLast = this.tryStart(last, this.clauseEnd[last]!);
+    if (atLast !== null) return atLast;
+    let newline = -1;
+    for (let start = last - 1; start >= first; start -= 1) {
+      if (this.source.charCodeAt(start) === 10) newline = start;
+      const found = this.tryStart(start, newline === -1 ? this.clauseEnd[last]! : newline);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+}
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
 // Candidate suffixes for an extensionless import, split into a file tier and a directory-index
 // tier. The list is fixed: Vite's default JS and TS extensions, plus .vue and .svelte, which a
@@ -208,12 +360,7 @@ const INDEX_SUFFIXES = EXTENSIONS.map((extension) => `/index${extension}`);
 
 function extractSpecifiers(source: string): string[] {
   const found: string[] = [];
-  for (const match of source.matchAll(FROM_IMPORT_RE)) {
-    const [, specifier] = match;
-    if (typeof specifier === 'string') {
-      found.push(specifier);
-    }
-  }
+  found.push(...staticImportSpecifiers(source));
   for (const match of source.matchAll(DYNAMIC_IMPORT_RE)) {
     const [, specifier] = match;
     // A template literal with a ${...} part is a path built at run time, not a file name. It is
@@ -259,20 +406,40 @@ const MAX_CALL_TEXT = 80;
 const GLOB_CALL_RE = /\bimport\.meta\.glob(?:Eager)?(?![\w$])/g;
 const DYNAMIC_CALL_RE = /(?<![\w$.])(?:import|require)\s*\(/g;
 
+/**
+ * The first place at or after `from` where `text` starts in the file, or -1. A file with many
+ * loader calls asks the same question from many places, such as where a comment or a call closes,
+ * and a search from each call to the end of a file that never closes it would take time that grows
+ * with the square of the count. So each answer is kept: it holds for every place from where it was
+ * asked up to where it found the text.
+ */
+type Finder = (text: string, from: number) => number;
+
+function makeFinder(source: string): Finder {
+  const known = new Map<string, { from: number; at: number }>();
+  return (text, from) => {
+    const last = known.get(text);
+    if (last !== undefined && from >= last.from && (last.at === -1 || from <= last.at)) return last.at;
+    const at = source.indexOf(text, from);
+    known.set(text, { from, at });
+    return at;
+  };
+}
+
 // Skips spaces, line breaks, and comments. A comment inside a call, such as a webpack chunk name,
 // is common and is not part of the path.
-function skipBlank(source: string, from: number): number {
+function skipBlank(source: string, from: number, find: Finder): number {
   let index = from;
   for (;;) {
     while (index < source.length && /\s/u.test(source.charAt(index))) index += 1;
     if (source.startsWith('/*', index)) {
-      const close = source.indexOf('*/', index + 2);
+      const close = find('*/', index + 2);
       if (close === -1) return source.length;
       index = close + 2;
       continue;
     }
     if (source.startsWith('//', index)) {
-      const end = source.indexOf('\n', index);
+      const end = find('\n', index);
       if (end === -1) return source.length;
       index = end + 1;
       continue;
@@ -345,13 +512,13 @@ type LoaderCall =
   | { kind: 'glob'; text: string; patterns: string[] | null; base?: true };
 
 // The first argument of the import() or require() whose opening parenthesis is at `open`.
-function readDynamicCall(source: string, start: number, open: number): LoaderCall {
+function readDynamicCall(source: string, start: number, open: number, find: Finder): LoaderCall {
   const text = callText(source, start);
-  const at = skipBlank(source, open + 1);
+  const at = skipBlank(source, open + 1, find);
   const quoted = readQuoted(source, at);
   if (quoted === null) return { kind: 'built', text, prefix: null };
   if (quoted.interpolated) return { kind: 'built', text, prefix: quoted.text };
-  const after = source.charAt(skipBlank(source, quoted.end));
+  const after = source.charAt(skipBlank(source, quoted.end, find));
   // A string followed by anything other than the end of the argument, such as + name, is a path
   // built at run time. Only its fixed start would be known, and usabl does not read past a string.
   if (after === ')' || after === ',') return { kind: 'literal', path: quoted.text };
@@ -385,39 +552,39 @@ function optionsSetNoBase(options: string): boolean {
 // The patterns of the import.meta.glob call that starts at `start`: one string or a list of
 // strings. Null when the argument is anything else, or when the options may set `base`, which
 // moves where relative patterns start.
-function readGlobCall(source: string, start: number, nameEnd: number): LoaderCall {
+function readGlobCall(source: string, start: number, nameEnd: number, find: Finder): LoaderCall {
   const text = callText(source, start);
-  let at = skipBlank(source, nameEnd);
+  let at = skipBlank(source, nameEnd, find);
   // A type argument, such as import.meta.glob<Module>('./x/*.ts').
   if (source.charAt(at) === '<') {
-    const close = source.indexOf('>', at);
+    const close = find('>', at);
     if (close === -1) return { kind: 'glob', text, patterns: null };
-    at = skipBlank(source, close + 1);
+    at = skipBlank(source, close + 1, find);
   }
   if (source.charAt(at) !== '(') return { kind: 'glob', text, patterns: null };
-  at = skipBlank(source, at + 1);
+  at = skipBlank(source, at + 1, find);
   const patterns: string[] = [];
   const readOne = (from: number): number | null => {
     const quoted = readQuoted(source, from);
     if (quoted === null || quoted.interpolated) return null;
     patterns.push(quoted.text);
-    return skipBlank(source, quoted.end);
+    return skipBlank(source, quoted.end, find);
   };
   if (source.charAt(at) === '[') {
-    at = skipBlank(source, at + 1);
+    at = skipBlank(source, at + 1, find);
     for (;;) {
       if (source.charAt(at) === ']') break;
       const next = readOne(at);
       if (next === null) return { kind: 'glob', text, patterns: null };
       if (source.charAt(next) === ',') {
-        at = skipBlank(source, next + 1);
+        at = skipBlank(source, next + 1, find);
         continue;
       }
       if (source.charAt(next) !== ']') return { kind: 'glob', text, patterns: null };
       at = next;
       break;
     }
-    at = skipBlank(source, at + 1);
+    at = skipBlank(source, at + 1, find);
   } else {
     const next = readOne(at);
     if (next === null) return { kind: 'glob', text, patterns: null };
@@ -425,7 +592,7 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
   }
   if (source.charAt(at) === ')') return { kind: 'glob', text, patterns };
   if (source.charAt(at) !== ',') return { kind: 'glob', text, patterns: null };
-  const close = source.indexOf(')', at);
+  const close = find(')', at);
   const options = source.slice(at, close === -1 ? source.length : close);
   return optionsSetNoBase(options) ? { kind: 'glob', text, patterns } : { kind: 'glob', text, patterns: null, base: true };
 }
@@ -433,11 +600,11 @@ function readGlobCall(source: string, start: number, nameEnd: number): LoaderCal
 // A webpack require.context(folder, recursive, pattern) call. It loads files under the folder, so
 // the folder is the fixed start of what it may load. Its other arguments only narrow that set, so
 // they are not read. A first argument that is not a string may point anywhere.
-function readContextCall(source: string, start: number, open: number): LoaderCall {
+function readContextCall(source: string, start: number, open: number, find: Finder): LoaderCall {
   const text = callText(source, start);
-  const quoted = readQuoted(source, skipBlank(source, open + 1));
+  const quoted = readQuoted(source, skipBlank(source, open + 1, find));
   if (quoted === null || quoted.interpolated) return { kind: 'built', text, prefix: quoted === null ? null : quoted.text };
-  const after = source.charAt(skipBlank(source, quoted.end));
+  const after = source.charAt(skipBlank(source, quoted.end, find));
   if (after !== ')' && after !== ',') return { kind: 'built', text, prefix: null };
   return { kind: 'built', text, prefix: quoted.text.endsWith('/') ? quoted.text : `${quoted.text}/` };
 }
@@ -449,14 +616,15 @@ type FoundCall = LoaderCall & { at: number };
 
 function findLoaderCalls(source: string): FoundCall[] {
   const calls: FoundCall[] = [];
+  const find = makeFinder(source);
   for (const match of source.matchAll(GLOB_CALL_RE)) {
-    calls.push({ ...readGlobCall(source, match.index, match.index + match[0].length), at: match.index });
+    calls.push({ ...readGlobCall(source, match.index, match.index + match[0].length, find), at: match.index });
   }
   for (const match of source.matchAll(DYNAMIC_CALL_RE)) {
-    calls.push({ ...readDynamicCall(source, match.index, match.index + match[0].length - 1), at: match.index });
+    calls.push({ ...readDynamicCall(source, match.index, match.index + match[0].length - 1, find), at: match.index });
   }
   for (const match of source.matchAll(CONTEXT_CALL_RE)) {
-    calls.push({ ...readContextCall(source, match.index, match.index + match[0].length - 1), at: match.index });
+    calls.push({ ...readContextCall(source, match.index, match.index + match[0].length - 1, find), at: match.index });
   }
   return calls;
 }
@@ -469,7 +637,38 @@ function findLoaderCallsInCode(source: string, file: string): FoundCall[] {
   if (calls.length === 0) return calls;
   const comments = commentRanges(source, syntaxForFile(file));
   if (comments === null) return calls;
-  return calls.filter((call) => !comments.some((comment) => call.at >= comment.start && call.at < comment.end));
+  const inComment = commentLookup(comments);
+  return calls.filter((call) => !inComment(call.at));
+}
+
+/**
+ * Whether a place in the file is inside one of the comments. The comments are joined where they
+ * touch or overlap and sorted once, and each place is found by halving, so a file with many calls
+ * and many comments does not test every call against every comment.
+ */
+function commentLookup(comments: ReadonlyArray<{ start: number; end: number }>): (at: number) => boolean {
+  const sorted = comments.filter((comment) => comment.end > comment.start).sort((a, b) => a.start - b.start);
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (const comment of sorted) {
+    const last = ends.length - 1;
+    if (last >= 0 && comment.start <= ends[last]!) {
+      ends[last] = Math.max(ends[last]!, comment.end);
+    } else {
+      starts.push(comment.start);
+      ends.push(comment.end);
+    }
+  }
+  return (at) => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if (starts[middle]! <= at) low = middle + 1;
+      else high = middle - 1;
+    }
+    return high >= 0 && at < ends[high]!;
+  };
 }
 
 // What the graph knows when it reads a load: the aliases, the baseUrl folders, and, in the
@@ -832,7 +1031,9 @@ export function importMayLoad(
   budget?: GlobMatchBudget,
 ): boolean {
   if (entry.kind === 'glob-import') {
-    if (entry.patterns === null || budget?.exhausted === true) return true;
+    // Each call costs one step, even for a call with no pattern to match, so a run of many such
+    // calls against many files is counted too.
+    if (entry.patterns === null || !chargeStep(budget, 1)) return true;
     const { patterns, below } = globEntryMatchers(entry, entry.patterns, budget);
     try {
       return patterns.some((matches) => matches(file)) || below.some((matches) => matches(file));
@@ -842,6 +1043,9 @@ export function importMayLoad(
     }
   }
   if (entry.kind === 'dynamic-import') {
+    // A test costs about the length of the path for each fixed start and each name start.
+    const starts = (entry.prefixes?.length ?? 0) + (entry.nameStarts?.length ?? 0);
+    if (entry.prefixes !== null && !chargeStep(budget, 1 + starts * (file.length + 1))) return true;
     return (
       entry.prefixes === null ||
       entry.prefixes.some((prefix) => file.startsWith(prefix)) ||
@@ -850,6 +1054,9 @@ export function importMayLoad(
   }
   if (entry.kind === 'base-url') {
     return entry.candidates.includes(file);
+  }
+  if (entry.kind === 'unread-source') {
+    return true;
   }
   if (entry.kind === 'package-subpath') {
     return entry.packageDir === null || file.startsWith(`${entry.packageDir}/`);
@@ -871,6 +1078,114 @@ export function importMayLoad(
     if (targetsMayName(folder.targets, file)) return true;
   }
   return false;
+}
+
+// Charges the budget, if there is one. False once it is spent, which means the load may load the
+// file.
+function chargeStep(budget: GlobMatchBudget | undefined, steps: number): boolean {
+  if (budget === undefined) return true;
+  if (budget.exhausted) return false;
+  try {
+    budget.charge(steps);
+    return true;
+  } catch (err) {
+    if (err instanceof GlobBudgetExhausted) return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether importMayLoad answers for a load by testing it against each file, charging the budget.
+ * Every other load is answered by a LoadIndex.
+ */
+export function testedForEachFile(entry: UnresolvableImport): boolean {
+  return (entry.kind === 'glob-import' && entry.patterns !== null) || (entry.kind === 'dynamic-import' && entry.prefixes !== null);
+}
+
+/**
+ * The loads of one placement, sorted by what a file must have for each of them to load it: a name,
+ * a folder above it, or nothing at all. A file is then checked against the few loads that could
+ * reach it, not against every load, and each answer is the one importMayLoad gives for the pair.
+ * The loads testedForEachFile names are left out: the caller asks importMayLoad for those.
+ *
+ * A package folder whose package.json names files costs a test for each file. That work is charged
+ * to the budget, and once the budget is spent, the loads that name the folder may load the file.
+ */
+export class LoadIndex {
+  private readonly anyFile: number[] = [];
+  private readonly byLastSegment = new Map<string, number[]>();
+  private readonly byName = new Map<string, number[]>();
+  // Loads that may load any file below a folder: by the folder path, as the file starts with it.
+  private readonly byFolder = new Map<string, number[]>();
+  private readonly byFile = new Map<string, number[]>();
+  private readonly folderTargets: Array<{ targets: NonNullable<PackageFolder['targets']>; loads: number[] }> = [];
+
+  constructor(
+    loads: readonly UnresolvableImport[],
+    packageFolders: PackageFolders,
+    private readonly budget?: GlobMatchBudget,
+  ) {
+    const add = (map: Map<string, number[]>, key: string, index: number): void => {
+      const list = map.get(key);
+      if (list === undefined) map.set(key, [index]);
+      else if (list[list.length - 1] !== index) list.push(index);
+    };
+    loads.forEach((entry, index) => {
+      if (testedForEachFile(entry)) return;
+      if (entry.kind === 'glob-import' || entry.kind === 'dynamic-import' || entry.kind === 'unread-source') {
+        // A glob with no patterns usabl can read, or a dynamic import with no fixed start.
+        this.anyFile.push(index);
+      } else if (entry.kind === 'base-url') {
+        for (const candidate of entry.candidates) add(this.byFile, candidate, index);
+      } else if (entry.kind === 'package-subpath') {
+        if (entry.packageDir === null) this.anyFile.push(index);
+        else add(this.byFolder, entry.packageDir, index);
+      } else {
+        const { lastSegments, names } = namesOf(entry);
+        for (const segment of lastSegments) add(this.byLastSegment, segment, index);
+        if (names === null) {
+          this.anyFile.push(index);
+          return;
+        }
+        for (const name of names) add(this.byName, name, index);
+      }
+    });
+    for (const [dir, folder] of packageFolders) {
+      const named = this.byName.get(path.basename(dir).toLowerCase());
+      if (named === undefined) continue;
+      for (const index of named) add(this.byFolder, dir, index);
+      if (folder.targets === null) this.anyFile.push(...named);
+      else this.folderTargets.push({ targets: folder.targets, loads: named });
+    }
+  }
+
+  /** The loads that may load any file, by their place in the list the index was built from. */
+  get everyFile(): readonly number[] {
+    return this.anyFile;
+  }
+
+  /**
+   * The other loads that may load the file, by their place in the list the index was built from,
+   * sorted. With everyFile, these are every load not testedForEachFile that may load it.
+   */
+  matches(file: string): number[] {
+    const found = new Set<number>();
+    const own = fileNamesOf(file);
+    for (const index of this.byLastSegment.get(own.inItsCase) ?? []) found.add(index);
+    for (const name of own.lowered) for (const index of this.byName.get(name) ?? []) found.add(index);
+    for (const index of this.byFile.get(file) ?? []) found.add(index);
+    // Each folder the file is below, as `file.startsWith(folder + '/')` reads it.
+    for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) {
+      for (const index of this.byFolder.get(file.slice(0, slash)) ?? []) found.add(index);
+    }
+    for (const { targets, loads } of this.folderTargets) {
+      if (loads.every((index) => found.has(index))) continue;
+      if (!chargeStep(this.budget, 1 + targets.prefixes.length) || targetsMayName(targets, file)) {
+        for (const index of loads) found.add(index);
+      }
+    }
+    return [...found].sort((a, b) => a - b);
+  }
 }
 
 // What an unresolved import names, worked out once per import: placement asks about every file
@@ -1016,7 +1331,7 @@ export async function readPackageFolders(
  * or a bare import no package explains. The other kinds name the files they may load by path.
  */
 export function namesFilesByName(entry: UnresolvableImport): boolean {
-  return !['glob-import', 'dynamic-import', 'base-url', 'package-subpath'].includes(entry.kind);
+  return !['glob-import', 'dynamic-import', 'base-url', 'package-subpath', 'unread-source'].includes(entry.kind);
 }
 
 /** Every folder that holds a file, nearest first, without the repository root. */
@@ -1252,9 +1567,20 @@ async function resolveAliasImport(
   return { targets: candidates, disclosure: { importer, specifier, kind: 'alias-conflict', targets: aliasPaths, candidates } };
 }
 
+// The keys of the entries in each list, so a list with many entries is not searched for each new
+// one. Only pushUniqueUnresolvable adds to a list it keys.
+const UNRESOLVABLE_KEYS = new WeakMap<UnresolvableImport[], Set<string>>();
+
 function pushUniqueUnresolvable(list: UnresolvableImport[], entry: UnresolvableImport): void {
-  const key = `${entry.importer}:${entry.specifier}:${entry.kind}`;
-  if (!list.some((item) => `${item.importer}:${item.specifier}:${item.kind}` === key)) {
+  const keyOf = (item: UnresolvableImport): string => `${item.importer}:${item.specifier}:${item.kind}`;
+  let keys = UNRESOLVABLE_KEYS.get(list);
+  if (keys === undefined) {
+    keys = new Set(list.map(keyOf));
+    UNRESOLVABLE_KEYS.set(list, keys);
+  }
+  const key = keyOf(entry);
+  if (!keys.has(key)) {
+    keys.add(key);
     list.push(entry);
   }
 }
@@ -1310,6 +1636,32 @@ async function baseUrlCandidates(fs: FsGlob, specifier: string, baseUrlDirs: rea
   return [...found].sort();
 }
 
+/**
+ * The most text the import reader reads in one file, and on one line of it, in UTF-16 code units.
+ * The reader's time grows with the length of the text, and honest source files and lines are far
+ * shorter. A file past either bound is not read for imports: it is an `unread-source` entry that
+ * may load any file, never a file with no imports.
+ */
+export const MAX_SOURCE_CHARACTERS = 4_194_304;
+export const MAX_SOURCE_LINE_CHARACTERS = 1_048_576;
+
+function unreadSource(file: string, source: string): UnresolvableImport | null {
+  if (source.length > MAX_SOURCE_CHARACTERS) {
+    return { importer: file, specifier: '', kind: 'unread-source', why: 'size' };
+  }
+  let start = 0;
+  while (start <= source.length) {
+    const end = source.indexOf('\n', start);
+    const lineEnd = end === -1 ? source.length : end;
+    if (lineEnd - start > MAX_SOURCE_LINE_CHARACTERS) {
+      return { importer: file, specifier: '', kind: 'unread-source', why: 'line' };
+    }
+    if (end === -1) break;
+    start = end + 1;
+  }
+  return null;
+}
+
 export async function buildImportGraph(
   rawFs: FsGlob,
   entryFiles: string[],
@@ -1341,6 +1693,12 @@ export async function buildImportGraph(
     }
 
     const fileEdges = edges.get(file) ?? [];
+    const unread = unreadSource(file, source);
+    if (unread !== null) {
+      pushUniqueUnresolvable(unresolvable, unread);
+      edges.set(file, fileEdges);
+      continue;
+    }
     const calls = findLoaderCallsInCode(source, file);
     for (const entry of loaderEntries(file, calls, context)) pushUniqueUnresolvable(unresolvable, entry);
     for (const specifier of complete ? extractEverySpecifier(source, calls) : extractSpecifiers(source)) {
@@ -1431,8 +1789,17 @@ export async function buildImportGraph(
   };
 }
 
+// The values in each edge list, for the same reason as UNRESOLVABLE_KEYS.
+const EDGE_VALUES = new WeakMap<string[], Set<string>>();
+
 function pushUnique(list: string[], value: string): void {
-  if (!list.includes(value)) {
+  let values = EDGE_VALUES.get(list);
+  if (values === undefined) {
+    values = new Set(list);
+    EDGE_VALUES.set(list, values);
+  }
+  if (!values.has(value)) {
+    values.add(value);
     list.push(value);
   }
 }
@@ -1445,6 +1812,10 @@ export async function inspectDirectImports(
   const source = await fs.readFile(file);
   if (source === null) {
     return [];
+  }
+  const unread = unreadSource(file, source);
+  if (unread !== null) {
+    return [unread];
   }
   const aliases = aliasConfig ?? NO_ALIASES;
   const unresolvable: UnresolvableImport[] = [];

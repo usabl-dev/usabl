@@ -16,9 +16,10 @@
  * message, because all of them can be private.
  */
 import { execFile } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { gitProcessEnvironment } from './git-environment.js';
+import { readRegularText, type ReadRefusals } from './regular-file.js';
 import { promisify } from 'node:util';
 
 export const STORAGE_STATE_ENV_VAR = 'USABL_STORAGE_STATE';
@@ -305,6 +306,8 @@ export async function resolveStorageStatePath(options: {
   // The ref the run is judged against. When it is set, or the run is in CI, the saved file is
   // never loaded. See savedSessionBlock.
   trustedRef?: string | undefined;
+  // Where the read of the saved session records its path when the path is not a regular file.
+  refusals?: ReadRefusals;
 }): Promise<string | null> {
   if (options.explicit !== undefined) {
     return options.explicit;
@@ -323,7 +326,7 @@ export async function resolveStorageStatePath(options: {
   }
   let raw: string;
   try {
-    raw = await readFile(path, 'utf8');
+    raw = await readRegularText(path);
   } catch {
     // The path is deliberately absent from this message. It can name a private location, and
     // the operator who set the variable is the one person who can already read its value.
@@ -382,11 +385,13 @@ async function resolveSavedSession(options: {
   now?: number;
   gitIgnoreState?: (cwd: string, path: string) => Promise<GitIgnoreState>;
   warn?: (line: string) => void;
+  refusals?: ReadRefusals;
 }): Promise<string | null> {
   const absolute = join(options.cwd, SESSION_STATE_PATH);
   let raw: string;
   try {
-    raw = await readFile(absolute, 'utf8');
+    // A pipe at the path is refused without waiting, never read as an empty file.
+    raw = await readRegularText(absolute, { name: SESSION_STATE_PATH, ...(options.refusals === undefined ? {} : { refusals: options.refusals }) });
   } catch (error) {
     if (typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'ENOENT') {
       return null;

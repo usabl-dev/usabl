@@ -6,7 +6,7 @@
  */
 import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
-import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
+import { aliasConfigConflictReason, buildUnresolvedReason, describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type PackageFolder, readPackageFolders } from './import-graph.js';
 import {
   excludedTestFileReason,
@@ -194,6 +194,10 @@ interface RouteGraph {
   aliasConfig: AliasConfig;
   // The import closure of each route entry file, keyed by screen id.
   closures: Map<string, Set<string>>;
+  // For each screen whose closure holds a file usabl did not read for imports, the first such
+  // file by name and why it was not read. That file may load any file, so the screen reaches
+  // every changed UI file.
+  unreadOnPath: Map<string, { file: string; reason: string }>;
 }
 
 async function buildRouteGraph(
@@ -212,7 +216,17 @@ async function buildRouteGraph(
   for (const route of attributedRoutes) {
     closures.set(route.screenId, importClosure(graph, route.entryFile));
   }
-  return { graph, aliasConfig, closures };
+  const unread = new Map<string, string>();
+  for (const entry of graph.unresolvable) {
+    if (entry.kind === 'unread-source' && !unread.has(entry.importer)) unread.set(entry.importer, describeLoad(entry) ?? '');
+  }
+  const unreadFiles = [...unread.keys()].sort();
+  const unreadOnPath = new Map<string, { file: string; reason: string }>();
+  for (const [screenId, closure] of closures) {
+    const file = unreadFiles.find((name) => closure.has(name));
+    if (file !== undefined) unreadOnPath.set(screenId, { file, reason: unread.get(file) ?? '' });
+  }
+  return { graph, aliasConfig, closures, unreadOnPath };
 }
 
 /**
@@ -228,6 +242,8 @@ export async function computeCoverage(
   // Reads a file at the trusted ref. The workspace manifests are read from it as well as from the
   // tree, so a change cannot unlink the app from a workspace package it also edits.
   trustedRead?: TrustedRead,
+  // The run's glob budgets. Only a test passes smaller ones, to check the work by its step count.
+  budgets: RunGlobBudgets = runGlobBudgets(),
 ): Promise<Coverage> {
   // affectedByScreen below is keyed by surface id, so a blank or repeated id silently drops a
   // screen while its changed files still read as mapped. Config parsing refuses that document,
@@ -254,7 +270,6 @@ export async function computeCoverage(
   // Every glob match of this run charges a budget: test-file placement its own, the rest one
   // shared budget. A file usabl could not test against the globs before the budget ran out is a
   // gap: usabl cannot tell whether it is app code, so it is never read as outside the globs.
-  const budgets = runGlobBudgets();
   // Each entry is expanded and compiled once for the run, not once for each changed file.
   const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
   const wideBlastMatchers = config.discovery.wideBlastGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
@@ -487,8 +502,10 @@ export async function computeCoverage(
   }
 
   // Graph unresolvable entries are diagnostics about discovery fidelity.
-  // They are not coverage gaps unless a changed UI file maps to no screen.
-  const { graph, aliasConfig, closures: routeClosures } = await loadRouteGraph();
+  // They are not coverage gaps unless a changed UI file maps to no screen. A file usabl did not
+  // read for imports is the one exception: it may load any file, so the screen whose closure holds
+  // it reaches every changed UI file. See unreadOnPath.
+  const { graph, aliasConfig, closures: routeClosures, unreadOnPath } = await loadRouteGraph();
   // What each folder's package.json says, read once for every unresolved file's discovery detail.
   const packageFolderReads = new Map<string, PackageFolder | null>();
 
@@ -517,8 +534,24 @@ export async function computeCoverage(
     }
 
     let mapped = false;
+    // The unread files that may load this file, on the screens planned for it only because of
+    // them. They plan the screen, but they are a guess, so they never count as mapping the file.
+    const unreadGuesses: string[] = [];
     for (const route of attributedRoutes) {
       const closure = routeClosures.get(route.screenId);
+      const unread = unreadOnPath.get(route.screenId);
+      if (closure !== undefined && !closure.has(file) && unread !== undefined) {
+        // The screen may reach the file through a file whose imports usabl did not read.
+        if (!unreadGuesses.includes(unread.reason)) unreadGuesses.push(unread.reason);
+        addAffected(affectedByScreen, {
+          screenId: route.screenId,
+          url: manualUrlOverride(config, file, route.screenId) ?? routeUrl(config.appBaseUrl, route.url),
+          provenance: 'route-graph',
+          importChain: [route.entryFile, unread.file, file],
+          reason: `${unread.reason}, including ${file}.`,
+        });
+        continue;
+      }
       if (closure === undefined || !closure.has(file)) {
         continue;
       }
@@ -571,7 +604,13 @@ export async function computeCoverage(
         budgets.steps,
       );
       const note = budgets.steps.exhausted ? `${globBudgetLoadsNote(RUN_GLOB_MATCH_STEPS, 'the changed files')} ` : '';
-      gaps.push({ ref: file, state: 'unresolved', reason: `${note}${reason}` });
+      // A screen planned only because an unread file on its path may load this file is checked,
+      // but no import usabl read shows that it renders the file, so the file stays a gap.
+      const guess =
+        unreadGuesses.length === 0
+          ? ''
+          : `${unreadGuesses.join('; ')}. usabl checks each screen whose imports reach such a file, but no import usabl read reaches ${file}, so it stays a gap. `;
+      gaps.push({ ref: file, state: 'unresolved', reason: `${note}${guess}${reason}` });
     }
   }
 

@@ -155,6 +155,10 @@ const PRIVATE_FILE_MODE = 0o600;
 // Zero where the platform has no such flag, which turns the open into an ordinary one; the lstat
 // check before every open covers that case.
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+// A pipe at a pin file name would hold a plain open until something writes to it, and keep the
+// process from exiting. Opened with O_NONBLOCK, it is opened at once and refused as not a regular
+// file by checkFile before any byte is read.
+const NON_BLOCK = constants.O_NONBLOCK ?? 0;
 
 function errorCode(err: unknown): string | undefined {
   return typeof err === 'object' && err !== null && 'code' in err ? String((err as { code: unknown }).code) : undefined;
@@ -342,7 +346,7 @@ export function makeFsSessionPinStore(options: FsSessionPinStoreOptions): Sessio
       }
       let handle: FileHandle;
       try {
-        handle = await open(prepared.path, constants.O_RDONLY | NO_FOLLOW);
+        handle = await open(prepared.path, constants.O_RDONLY | NON_BLOCK | NO_FOLLOW);
       } catch (err) {
         if (errorCode(err) === 'ENOENT') {
           return { status: 'missing' };
@@ -389,7 +393,7 @@ export function makeFsSessionPinStore(options: FsSessionPinStoreOptions): Sessio
       // rather than quietly swapped out.
       let handle: FileHandle;
       try {
-        handle = await open(path, constants.O_RDONLY | NO_FOLLOW);
+        handle = await open(path, constants.O_RDONLY | NON_BLOCK | NO_FOLLOW);
       } catch (err) {
         if (isSymlinkRefusal(err)) {
           return refused('the session pin file is a symbolic link', deletePinFileFix(path));

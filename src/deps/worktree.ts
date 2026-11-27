@@ -23,12 +23,13 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, type BigIntStats } from 'node:fs';
+import { lstatSync, readdirSync, readlinkSync, realpathSync, type BigIntStats } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
 import { operatorText } from '../intake/config-error.js';
 import { GIT_ENVIRONMENT, gitProcessEnvironment } from './git-environment.js';
+import { openRegularFile, readRegularFileSync } from './regular-file.js';
 
 /** One changed path, from the repository root, with a status letter like git status prints. */
 export interface WorktreeChange {
@@ -752,19 +753,24 @@ function crlfToLf(bytes: Buffer): Buffer {
 // An LFS pointer, exactly: the version line, the sha256 of the content, its size, and nothing else.
 const LFS_POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (0|[1-9][0-9]*)\n$/u;
 
-function sha256OfFile(path: Buffer): Promise<{ hex: string; size: number }> {
-  return new Promise((resolve, reject) => {
+// The walk found a regular file here, but a pipe put in its place since then is refused without
+// waiting (see regular-file.ts), so the file reads as not the committed content.
+async function sha256OfFile(path: Buffer): Promise<{ hex: string; size: number }> {
+  const handle = await openRegularFile(path);
+  try {
     const hash = createHash('sha256');
+    const piece = Buffer.alloc(64 * 1024);
     let size = 0;
-    createReadStream(path)
-      .on('data', (chunk) => {
-        const bytes = chunk as Buffer;
-        size += bytes.length;
-        hash.update(bytes);
-      })
-      .on('end', () => resolve({ hex: hash.digest('hex'), size }))
-      .on('error', reject);
-  });
+    for (;;) {
+      const { bytesRead } = await handle.read(piece, 0, piece.length, null);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+      hash.update(piece.subarray(0, bytesRead));
+    }
+    return { hex: hash.digest('hex'), size };
+  } finally {
+    await handle.close();
+  }
 }
 
 // What checkout writes for the $Id$ markers in a blob: each one holds the blob id. It is a function
@@ -795,7 +801,7 @@ async function sameContent(path: Buffer, id: string, blob: Buffer | undefined): 
   if (!blob.includes('$Id')) {
     return false;
   }
-  const disk = readFileSync(path);
+  const disk = readRegularFileSync(path);
   if (disk.length > BLOB_READ_LIMIT * 2) {
     return false;
   }
@@ -871,7 +877,7 @@ async function outsideSparseSet(repo: Repository, raws: readonly Buffer[]): Prom
   try {
     const kind = kindOf(Buffer.from(repo.sparsePatterns));
     if (kind.kind !== 'file') return outside;
-    patterns = readFileSync(repo.sparsePatterns, 'latin1');
+    patterns = readRegularFileSync(repo.sparsePatterns).toString('latin1');
   } catch {
     return outside;
   }
@@ -1159,7 +1165,7 @@ function folderIsEmpty(folder: string): boolean {
 function patternFileState(path: string): string[] {
   const found = kindOf(Buffer.from(path));
   try {
-    if (found.kind === 'file') return ['file', createHash('sha256').update(readFileSync(path)).digest('hex')];
+    if (found.kind === 'file') return ['file', createHash('sha256').update(readRegularFileSync(path)).digest('hex')];
     if (found.kind === 'link') return ['link', readLinkBytes(Buffer.from(path)).toString('hex')];
   } catch {
     return ['unreadable'];

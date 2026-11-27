@@ -2,7 +2,14 @@
  * Formats import-graph unresolvable entries into human-readable discovery detail.
  * Used when a changed file lands in unresolvedFiles so the gap reason names a fix path.
  */
-import { importMayLoad, MAX_BRACE_ALTERNATIVES, type PackageFolders, type UnresolvableImport } from './import-graph.js';
+import {
+  importMayLoad,
+  MAX_BRACE_ALTERNATIVES,
+  MAX_SOURCE_CHARACTERS,
+  MAX_SOURCE_LINE_CHARACTERS,
+  type PackageFolders,
+  type UnresolvableImport,
+} from './import-graph.js';
 import { MAX_GLOB_LENGTH, MAX_GLOB_PATTERN_CHARACTERS, MAX_GLOB_PATTERNS } from '../intake/glob-list-bounds.js';
 import type { GlobMatchBudget } from '../primitives/match-glob.js';
 import { GLOB_IMPORT_CHARACTERS } from './import-graph.js';
@@ -104,6 +111,13 @@ export function describeLoad(entry: UnresolvableImport): string | null {
       'cannot follow by path (the package has an exports field, which usabl does not read, or no file has that path), ' +
       'so it may load any file of that package'
     );
+  }
+  if (entry.kind === 'unread-source') {
+    const why =
+      entry.why === 'size'
+        ? `it is longer than the ${grouped(MAX_SOURCE_CHARACTERS)} characters usabl reads in one file`
+        : `it has a line longer than the ${grouped(MAX_SOURCE_LINE_CHARACTERS)} characters usabl reads on one line`;
+    return `${entry.importer} was not read for imports, because ${why}, so it may load any file`;
   }
   if (entry.kind === 'base-url') {
     return (

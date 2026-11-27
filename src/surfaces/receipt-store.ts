@@ -11,9 +11,10 @@
  */
 import { randomBytes } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, open, readFile, rename, unlink, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, open, rename, unlink, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import type { Receipt, Result } from '../contracts/index.js';
+import { readRegularText, type ReadRefusals } from '../deps/regular-file.js';
 import { boundField } from '../output/bounded-text.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { frameUntrustedBlock } from './scrub.js';
@@ -196,11 +197,12 @@ async function lstatOrNull(path: string): Promise<Stats | null> {
  * folder is opened with O_NOFOLLOW and O_EXCL, and a rename puts it in place. A rename replaces
  * the name and never follows a link at the target.
  */
-export function makeReceiptFs(root: string): ReceiptFs {
+export function makeReceiptFs(root: string, refusals?: ReadRefusals): ReceiptFs {
   return {
     readFile: async (path) => {
       try {
-        return await readFile(resolve(root, path), 'utf8');
+        // A pipe at the receipt or the bypass file is refused without waiting. See regular-file.ts.
+        return await readRegularText(resolve(root, path), { name: path, ...(refusals === undefined ? {} : { refusals }) });
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return null;

@@ -4901,8 +4901,69 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     hook that states no limit can still be ended by Claude Code before usabl answers, and the
     stop then goes on, as in earlier releases of usabl. This lasts until `usabl install --claude`
     runs again and the hook states its limit. `usabl doctor` reports such a hook as drifted.
-  - Limit: the deadline is a timer in the same process, so it fires only between steps that wait,
-    such as a browser call. It cannot end work that runs without waiting. usabl's own glob
+  - The stop-hook command runs the checks in a worker thread, and its own thread keeps the
+    deadline. That thread reads nothing and checks nothing, so the deadline fires even while the
+    checks run for minutes without a break, such as a slow pattern on a long line. The worker reads
+    for itself and sends each write of the answer here: the output, the receipt, the bypass file it
+    removes, and the session pins. This thread writes each one through the same claim as before, so
+    only one answer reaches the host, a receipt or pin the worker sends after the deadline took the
+    answer is not written, and an answer the worker started first stands. At the deadline this
+    thread blocks with the out-of-time message, asks the worker to close the browser, waits at most
+    the browser close wait, ends the worker, and ends the process. A real stop held by the old slow
+    pattern on a long line answered 15.06 seconds after it started against a 15 second deadline,
+    and ended at 20.1 seconds against a 30 second limit; before, the same stop answered at 38.0
+    seconds. The worker starts before the rest of usabl loads, so
+    both load at once, and it gets the hook's own environment and nothing more: an idle stop took
+    about 4.3 seconds against 3.75 before, on a loaded 8-core machine. A worker that ends or fails
+    before it answers gets the answer a failed check gets, `NOT verified - stop hook error`, which
+    does not block, as before. Ports a test builds run the checks in the test's own thread.
+  - No working-tree read can keep the process from ending. A plain read of a named pipe waits for
+    a writer and holds a thread of Node's shared pool, and a process with such a read pending does
+    not exit: one `mkfifo .usabl/bypass-once` kept a stop running past 40 seconds against a 30
+    second limit, after its deadline answered at 15 seconds. Every read from the working tree (the
+    source files the import graph reads, the config, the route and docs manifests, the
+    requirements, the receipt, the bypass file, the saved session) now checks that the path is a
+    regular file, opens it with `O_NONBLOCK`, and checks the opened file again, so a pipe, a
+    device, or a socket is refused at once, never read as an empty file. The Stop hook writes down
+    each refused path. While one is written down, every answer says so first: an allow becomes the
+    block "NOT verified - usabl did not read 1 path(s) in this repository", naming the paths,
+    once, with no receipt saved, and an active continuation is let through with the same words.
+    A pipe at a session pin file is a pin refusal, which the stop states and goes on from, as
+    before. Each of these stops ended in 3 to 7 seconds on a loaded machine.
+  - git waits on a pipe it reads, in the git folder (`.git/HEAD`, `.git/config`, a ref) or in
+    the working tree (a `.gitignore`), and usabl cannot refuse those paths, because git opens them.
+    So no git command holds one of usabl's threads past the deadline. The three commands that find
+    the repository run in the hook's own thread before the deadline's timer, so each gets the time
+    left before the deadline, is killed when it runs out, and the stop then gives the deadline's
+    answer; before, a pipe at `.git/HEAD` gave no answer at all. The command that checks for a last
+    commit, and the checks' other git commands, run in processes the worker waits for without
+    holding its thread. At the deadline the hook kills every direct child process of the stop,
+    found with `pgrep -P`, before it ends, so no git it ran waits on after the stop. A process one
+    of those children started is not killed. A pipe at `.git/HEAD`,
+    `.git/config`, a ref, or `.gitignore` each gave the block "NOT verified - usabl ran out of
+    time" at about 15.4 seconds against a 15 second deadline and a 30 second limit, with no git
+    left running. The block does not name the pipe, and with the default limit the stop takes the
+    full 570 seconds. Limit: Playwright reads the saved session file again by its path, so a pipe
+    put there after usabl's check, by a process running during the stop, would hold that read.
+  - The checks also carry their own bounds, for `usabl check` and CI, where no host limit applies
+    but a stall is still a failure. The import reader reads in time that grows with the length of
+    the text: the static import pattern took time that grew with the square of a line's length
+    (80,000 characters took 20.9 seconds), and the loader call readers, the comment check, and the
+    lists of loads and edges grew with the square of a file's calls (10,000 calls took 13.4
+    seconds). A hand-written reader gives the pattern's answers, and a test compares the two on
+    30,000 generated texts. A file longer than 4,194,304 characters, or with a line longer than
+    1,048,576, is not read for imports: it is a load that may load any file, never a file with no
+    imports. So a screen whose imports reach such a file is checked for every changed UI file, and
+    its import chain names the file. A changed file that no import usabl read reaches, and that no
+    surface lists, is still an unresolved gap, and the gap's reason names the unread file: that it
+    may load the file is a guess, and a wrong guess is a gap, never a pass. The vite alias reader reads its entries in time linear in the text too; the pattern
+    it replaced took 14.5 seconds on 340,000 characters of `k: path.resolve(` lines. Test-file
+    placement finds the loads that could reach each file in an index, by name, by folder, or
+    because they may load any file, with the answers `importMayLoad` gives for each pair, so
+    20,000 test files against 4,000 unresolved imports took 0.6 seconds instead of 25. The globs
+    and dynamic imports it still tests file by file, the walk from each load, and the tests of a
+    package folder's targets are charged to the placement budget, and a glob call with no pattern
+    to match costs one step for each file. Past the budget, the files left are gaps. usabl's own glob
     matcher does not backtrack, so one match takes at most the pattern's length times the path's
     length. Many matches can still add up: a list inside the policy bounds took about 24 seconds
     to rule out one changed path of 3999 characters. So the app planner and the docs planner each
@@ -4914,9 +4975,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     same set of changed files gives the same gaps in any order. A changed file left untested when
     a budget runs out is a gap whose reason names the budget, never nothing to check. The guard's own matching carries no budget: a
     `guardedPaths` list inside the bounds took 9.2 seconds against one committed path of 3999
-    characters. A long guarded list and many
-    deep committed paths can take long enough that the host ends the hook before usabl answers,
-    and the stop then goes on with nothing checked (threat model, Threat 8). Node's `fs.glob`,
+    characters. On a stop, the deadline now ends such a run with the out-of-time block; in `usabl
+    check` and CI it is slow, never a pass (threat model, Threat 8). Node's `fs.glob`,
     which lists files on the working tree for the guard, test-file placement, and the
     `workspaces` patterns, never gets a part that can backtrack. The file system adapter reads
     `\` as `/`, expands brace groups, and rewrites and merges the parts as Node does. When no part
@@ -4948,8 +5008,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     the walk's start, so a workspace
     package folder named with glob syntax has unknown sources: its test files keep their gaps, but
     another unreached test file that only that package loads can be excluded. That run's verdict
-    is `approval_required`, never a pass. Node's own walk can also hold the event loop for seconds
-    in one deep folder with many files (threat model, Threat 8).
+    is `approval_required`, never a pass. Node's own walk can also hold the worker's thread for
+    seconds in one deep folder with many files; on a stop the deadline still fires (threat model,
+    Threat 8).
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -4959,6 +5020,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     of usabl's process, and the timer is injected, so tests never wait. Limit: npm's own start
     is not counted, and for a host limit of a few seconds starting npm and node can use the whole
     limit, so usabl cannot answer inside it. `usabl doctor` reports any limit below 60 seconds.
+    Limit: the hook reads its input and finds the repository with git before the deadline's
+    timer starts, so a git that does not return there holds the answer, as before.
   - When the deadline comes before the check starts its answer, the runner closes the browser,
     which stops the scan, saves no receipt, and blocks once: "NOT verified - usabl ran out of
     time: this stop took longer than usabl's own limit of 570 seconds, so usabl stopped the
