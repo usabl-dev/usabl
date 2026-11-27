@@ -466,7 +466,9 @@
   that took 20.9 seconds at 80,000 characters takes milliseconds, and 10,000 loader calls in one
   file take 0.1 seconds instead of 13.4. A source file longer than 4,194,304 characters, or with a
   line longer than 1,048,576, is read as one that may load any file, never as one with no imports,
-  so a screen whose imports reach it is checked for every changed UI file. Test-file placement finds the loads that name each file in an index, with the same placements
+  so a screen whose imports reach it is checked for every changed UI file. A changed file that no
+  import usabl read reaches, and no surface lists, stays an unresolved gap naming the unread file,
+  even when that screen is checked for it. Test-file placement finds the loads that name each file in an index, with the same placements
   (0.6 seconds instead of 25 for the shape above), and charges its walks, its dynamic import
   tests, and each test of a glob call with no pattern to match to the placement budget; past it,
   the files left are gaps. The package now holds `dist/stop-hook-worker.js`.
@@ -475,10 +477,14 @@
   .usabl/bypass-once`, or a pipe at a source file a changed page imports, kept a stop running past
   40 seconds against a 30 second limit, after its answer. Every read usabl makes from the working
   tree now refuses a path that is not a regular file at once, never reads it as an empty file, and
-  the stop blocks once naming each refused path, with no receipt saved. The git check for a last
-  commit no longer holds the worker's thread, so a pipe in the git folder holds only git and the
-  deadline ends the stop. Limits: git run before the deadline starts, and Playwright's own read of
-  the saved session file after usabl checked it, are not covered (threat model, the timeout rule).
+  the stop blocks once naming each refused path, with no receipt saved. git waits on a pipe it
+  reads, in the git folder or the working tree (a `.gitignore`): a pipe at `.git/HEAD` gave no
+  answer at all, because the git commands that find the repository ran before the deadline with
+  no limit. Now no git command holds one of usabl's threads past the deadline, those commands are
+  killed when it comes, the stop blocks with the out-of-time answer (which does not name the
+  pipe), and every process the stop started is killed before it ends, so no git waits on after
+  it. Limit: Playwright's own read of the saved session file after usabl checked it is not covered
+  (threat model, the timeout rule).
 - The local guard lists a literal guarded entry, such as the requirements folder, by its name on
   the working tree. It put the name into `fs.glob` patterns as text, and Node's glob has no
   escape, so a requirements folder named with a class, a brace group, or an extglob group, such as
