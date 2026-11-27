@@ -447,6 +447,20 @@
 
 ### Fixed
 
+- The local guard lists a literal guarded entry, such as the requirements folder, by its name on
+  the working tree. It put the name into `fs.glob` patterns as text, and Node's glob has no
+  escape, so a requirements folder named with a class, a brace group, or an extglob group, such as
+  `reqs[1]`, listed another folder (`reqs1`) or none, and a name past the glob reading bound listed
+  nothing. A new untracked file in that folder was then not seen until it was committed, and the
+  Stop hook said VERIFIED. Now the files under the entry are listed with the entry as the walk's
+  start, and the entry itself, when it is a file or a link, is found by name in its folder. Gate
+  effect: such a file is a guarded change, so the stop blocks for approval. Listing change: a name
+  with only `*` or `?`, such as `reqs*`, no longer adds the files of the other folders its pattern
+  matched, and a glob entry keeps what it matched. A file reader without the folder listing lists
+  a name with no glob syntax as before and throws for a name with glob syntax, which blocks the
+  stop as a guard failure. Cost on this repository (15 literal entries): the same 60 listings per
+  guard check and pin computation, and the same time within noise, 73 to 79 ms for the guard and
+  194 to 212 ms for the pins, with the same pins.
 - The merge-base diff, the committed part of the changed list for `usabl check --trusted-ref`,
   `usabl check --branch-scope`, and the Stop hook, is now built from commits and trees checked
   against their ids. `git diff <ref>...HEAD` read trees as stored, so an agent that overwrote a
@@ -538,12 +552,10 @@
   to read, and about 14 seconds over a whole coverage run that reads them on the working tree and
   at the trusted ref, with no single block over 2 seconds. A folder name now loses its trailing
   slashes in linear time. Known
-  limits: the local guard still puts the requirements folder into its working-tree patterns as
-  text, so a requirements folder named with a class, a brace group, or an extglob group names
-  another folder there, and a new untracked file in it is not seen until it is committed. When
-  `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper that cannot
-  list a folder that way, so a workspace package folder named with glob syntax has unknown
-  sources in that run, whose verdict is `approval_required`. Both fixes are in guarded paths.
+  limit: when `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper
+  that cannot list a folder that way, so a workspace package folder named with glob syntax has
+  unknown sources in that run, whose verdict is `approval_required`. The fix is in a guarded
+  path.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
