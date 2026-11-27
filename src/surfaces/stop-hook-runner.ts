@@ -11,9 +11,10 @@
  *                          {"status":"...","loop_count":N} on stdin; loop_count > 0
  *                          maps to stopHookActive to prevent recursive loops.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { realpathSync, statSync } from 'node:fs';
-import { readFile, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -22,6 +23,7 @@ import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { makeGitReader, NO_HEAD_MESSAGE } from '../deps/git.js';
 import { gitProcessEnvironment } from '../deps/git-environment.js';
+import { isNotRegularFile, readRegularFile, type ReadRefusals } from '../deps/regular-file.js';
 import { EMPTY_SUBMODULES_NAME, SPARSE_STATE_NAME } from '../deps/worktree.js';
 import { receiptFailureReasons, verifyReceipt } from '../evidence/receipt.js';
 import { run, type RunOptions } from '../run.js';
@@ -147,6 +149,11 @@ export interface StopHookRunnerPorts {
   // The repository the real ports work in, which the stop-hook command hands to the worker that
   // runs the checks. Absent in ports a test builds.
   repository?: HookRepository;
+  // Every path the stop's readers refused so far because it is not a regular file, sorted. A pipe
+  // or a device in the working tree is never read: a plain read of a pipe waits for a writer and
+  // keeps the process from exiting. While the list holds a path, every allow becomes a block that
+  // names it (see emitProtocolAllow). Absent in ports a test builds by hand.
+  readRefusals?: () => string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -270,7 +277,15 @@ async function emitCursorAllow(ports: StopHookRunnerPorts): Promise<void> {
 }
 
 async function consumeBypassOnce(fs: StopHookRunnerFs): Promise<boolean> {
-  const bypass = await fs.readFile(BYPASS_ONCE_PATH);
+  let bypass: string | null;
+  try {
+    bypass = await fs.readFile(BYPASS_ONCE_PATH);
+  } catch (err) {
+    // A pipe or a device at the path is no bypass. The reader recorded it, so the stop runs its
+    // checks and then blocks on that path (see emitProtocolAllow).
+    if (isNotRegularFile(err)) return false;
+    throw err;
+  }
   if (bypass === null) {
     return false;
   }
@@ -403,6 +418,7 @@ function olderPinsMessage(pinPath: string, continuation: boolean): string {
 
 // The config file the hook compares with the last commit before it parses anything.
 const CONFIG_FILE = 'usabl.config.json';
+const execFileAsync = promisify(execFile);
 
 /** Why the config stops this stop before anything parses it, or why it cannot be parsed. */
 // `removed-on-both` is a removal on a branch whose trusted branch has no config any more either.
@@ -825,9 +841,10 @@ function holds(root: string, folder: string): boolean {
   }
 }
 
-async function readWorkingConfig(root: string): Promise<FileBytes> {
+async function readWorkingConfig(root: string, refusals: ReadRefusals): Promise<FileBytes> {
   try {
-    const bytes = await readFile(resolve(root, CONFIG_FILE));
+    // A pipe at the config path is refused without waiting, and the stop blocks on it.
+    const bytes = await readRegularFile(resolve(root, CONFIG_FILE), { name: CONFIG_FILE, refusals });
     return { status: 'found', text: bytes.toString('utf8'), bytes };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -842,8 +859,11 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
     return { status: 'no-work-tree' };
   }
   try {
-    // A repository with no commits has no HEAD, so it has no committed config either.
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, stdio: 'ignore', env: gitProcessEnvironment() });
+    // A repository with no commits has no HEAD, so it has no committed config either. git runs
+    // in its own process and is waited for without holding this thread: a pipe in the git folder
+    // can hold git, and a thread held in a call that waits for a process cannot be ended, so the
+    // stop could not end after its deadline answered.
+    await execFileAsync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root, env: gitProcessEnvironment() });
   } catch {
     return { status: 'missing' };
   }
@@ -855,10 +875,10 @@ async function readHeadConfig(root: string, inRepository: boolean): Promise<Head
   }
 }
 
-function defaultFs(root: string): StopHookRunnerFs {
+function defaultFs(root: string, refusals: ReadRefusals): StopHookRunnerFs {
   // Receipt writes never follow a symbolic link. See makeReceiptFs.
   return {
-    ...makeReceiptFs(root),
+    ...makeReceiptFs(root, refusals),
     unlink: async (path: string) => {
       try {
         await unlink(resolve(root, path));
@@ -977,10 +997,13 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
   const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
   const repository = options.repository ?? hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
   const { root, inRepository, ownFolderInstead } = repository;
+  // Every path this stop's readers refused because it is not a regular file. See readRefusals.
+  const refusals: ReadRefusals = new Set();
   return {
     repository,
     ...(ownFolderInstead ? { repositoryFromOwnFolder: true } : {}),
-    fs: defaultFs(root),
+    readRefusals: () => [...refusals].sort(),
+    fs: defaultFs(root, refusals),
     pins: makeFsSessionPinStore({ dir, uid }),
     cwd: () => root,
     stdoutWrite: async (text: string) => {
@@ -990,11 +1013,11 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
       process.stderr.write(text);
     },
     readConfigBytes: async () => {
-      const [working, head] = await Promise.all([readWorkingConfig(root), readHeadConfig(root, inRepository)]);
+      const [working, head] = await Promise.all([readWorkingConfig(root, refusals), readHeadConfig(root, inRepository)]);
       return { working, head };
     },
     loadConfig: async (text: string) => parseConfigText(text),
-    buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root }),
+    buildDeps: async (config: UsablConfig) => buildDeps(config, { cwd: root, refusals }),
     runEngine: async (deps: Deps, config: UsablConfig, opts?: RunOptions) => run(deps, config, opts ?? {}),
     // Outside a work tree the hook stops before it looks (see configStep), and there is no branch
     // and no committed work to compare. Inside one, git answers.
@@ -1007,12 +1030,21 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
 
 export interface StopHookOptions {
   cursorMode: boolean;
+  // The input's stop_hook_active, set by runStopChecks for the emitters. A refused read then lets
+  // the continuation through, as every other block does.
+  continuation?: boolean;
 }
 
 const DEFAULT_OPTIONS: StopHookOptions = { cursorMode: false };
 
 // Protocol-aware block emitter. Claude uses decision: block, Cursor uses followup_message.
 async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, options: StopHookOptions): Promise<void> {
+  // A block says first which paths the stop did not read, so the fix is named with the block.
+  const refused = ports.readRefusals?.() ?? [];
+  await emitBlockAnswer(ports, refused.length === 0 ? reason : `${notRegularMessage(refused, false)}\n${reason}`, options);
+}
+
+async function emitBlockAnswer(ports: StopHookRunnerPorts, reason: string, options: StopHookOptions): Promise<void> {
   if (options.cursorMode) {
     await emitCursorBlock(ports, reason);
   } else {
@@ -1044,6 +1076,23 @@ function ownRepositoryNote(ports: StopHookRunnerPorts): string | null {
     ],
     [`repository checked: ${basename(ports.cwd())}`],
   );
+}
+
+/**
+ * What a stop says when it refused to read paths that are not regular files. The names come from
+ * the working tree, so they are printed only inside the frame.
+ */
+function notRegularMessage(paths: readonly string[], continuation: boolean): string {
+  const head =
+    `NOT verified - usabl did not read ${paths.length} path(s) in this repository, named under "not regular files" in the ` +
+    'untrusted text below, because each is not a regular file: it may be a named pipe, a device, or a socket. A read of a ' +
+    'pipe waits until something writes to it, which would hold this stop past its time limit. Nothing is proven about ' +
+    'this change, and no receipt was saved.';
+  const fix = 'replace each one with a regular file, or remove it, then stop again.';
+  const next = continuation
+    ? `usabl let this stop through without blocking again (continuation already active). Next: ${fix}`
+    : `Next: ${fix}`;
+  return framedMessage([head, next], [`not regular files: ${paths.join(', ')}`]);
 }
 
 /** What an allow says, in the order it is written. */
@@ -1083,7 +1132,16 @@ function isQuietDecision(result: Result, message: string): boolean {
  * also writes one JSON object with a systemMessage field, which Claude Code shows to the person.
  * The text is the same text stderr gets, so its carried values are already scrubbed and framed.
  */
-async function emitProtocolAllow(ports: StopHookRunnerPorts, text: AllowText, options: StopHookOptions): Promise<void> {
+async function emitProtocolAllow(ports: StopHookRunnerPorts, given: AllowText, options: StopHookOptions): Promise<void> {
+  // A path the stop did not read because it is not a regular file means the stop did not read
+  // everything it checks, whatever the allow says. It blocks once, and the continuation is let
+  // through with the same paths named, never with the allow's own words.
+  const refused = ports.readRefusals?.() ?? [];
+  if (refused.length > 0 && options.continuation !== true) {
+    await emitBlockAnswer(ports, notRegularMessage(refused, false), options);
+    return;
+  }
+  const text: AllowText = refused.length > 0 ? { message: notRegularMessage(refused, true) } : given;
   const note = ownRepositoryNote(ports);
   const lines = [text.message, ...(note === null ? [] : [note]), ...(text.notices ?? [])];
   for (const line of lines) {
@@ -1472,9 +1530,10 @@ async function superviseStop(
 async function runStopChecks(
   input: StopHookInput,
   ports: StopHookRunnerPorts,
-  options: StopHookOptions,
+  hookOptions: StopHookOptions,
   state: StopRunState,
 ): Promise<number> {
+  const options: StopHookOptions = { ...hookOptions, continuation: input.stopHookActive };
   let pinNotice: PinNotice | null = null;
   try {
     if (await consumeBypassOnce(ports.fs)) {
@@ -1693,7 +1752,8 @@ async function runStopChecks(
 
     const result = await ports.runEngine(guardDeps, config, scope.runOptions);
     let receiptNotice: string | null = null;
-    const receipt = receiptToSave(result, { ci: false });
+    // A stop that refused to read a path blocks (see emitProtocolAllow), so it saves no receipt.
+    const receipt = (ports.readRefusals?.() ?? []).length > 0 ? null : receiptToSave(result, { ci: false });
     // The run binds the root config's bytes when it starts, after this stop read them to plan. The
     // file is read once more here, and the receipt is saved only while it holds the planned bytes
     // and the receipt binds those bytes. See planned-config.ts.

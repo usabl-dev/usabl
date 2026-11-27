@@ -4903,6 +4903,24 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     about 4.3 seconds against 3.75 before, on a loaded 8-core machine. A worker that ends or fails
     before it answers gets the answer a failed check gets, `NOT verified - stop hook error`, which
     does not block, as before. Ports a test builds run the checks in the test's own thread.
+  - No working-tree read can keep the process from ending. A plain read of a named pipe waits for
+    a writer and holds a thread of Node's shared pool, and a process with such a read pending does
+    not exit: one `mkfifo .usabl/bypass-once` kept a stop running past 40 seconds against a 30
+    second limit, after its deadline answered at 15 seconds. Every read from the working tree (the
+    source files the import graph reads, the config, the route and docs manifests, the
+    requirements, the receipt, the bypass file, the saved session) now checks that the path is a
+    regular file, opens it with `O_NONBLOCK`, and checks the opened file again, so a pipe, a
+    device, or a socket is refused at once, never read as an empty file. The Stop hook writes down
+    each refused path. While one is written down, every answer says so first: an allow becomes the
+    block "NOT verified - usabl did not read 1 path(s) in this repository", naming the paths,
+    once, with no receipt saved, and an active continuation is let through with the same words.
+    A pipe at a session pin file is a pin refusal, which the stop states and goes on from, as
+    before. The git command that checks for a last commit runs without holding the worker's
+    thread, so a pipe in the git folder holds git alone and the deadline ends the stop. Each of
+    these stops ended in 3 to 7 seconds on a loaded machine, and the git folder one at 15.3
+    seconds, at the deadline. Limits: a git process held that way is left waiting after the stop
+    ends, and Playwright reads the saved session file again by its path, so a pipe put there after
+    usabl's check, by a process running during the stop, would hold that read.
   - The checks also carry their own bounds, for `usabl check` and CI, where no host limit applies
     but a stall is still a failure. The import reader reads in time that grows with the length of
     the text: the static import pattern took time that grew with the square of a line's length

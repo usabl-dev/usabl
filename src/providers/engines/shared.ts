@@ -8,7 +8,8 @@
  * server ends in that named note and never in a stalled run. Nothing here mints a verdict, and
  * nothing here lets a credential reach a message.
  */
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
+import { readRegularText } from '../../deps/regular-file.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { EvidenceClass, Page, ProviderNote, ProviderOutput } from '../../contracts/index.js';
@@ -163,7 +164,7 @@ const realFs: PackageProbeFs = {
   },
   async readFile(path) {
     try {
-      return await readFile(path, 'utf8');
+      return await readRegularText(path);
     } catch {
       return null;
     }

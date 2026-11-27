@@ -328,7 +328,17 @@ re-baseline to green.
   pattern on a long line an agent wrote. The worker sends each write of the answer (the output, the
   receipt, the bypass file, and the session pins) to the deadline's thread, which writes it only
   while the checks hold the answer. At the deadline that thread asks the worker to close the
-  browser, waits a short time, ends the worker, and ends the process. The generated Claude Code hook states `"timeout": 600`, and
+  browser, waits a short time, ends the worker, and ends the process. No read usabl makes from the
+  working tree can hold the process: a plain read of a named pipe waits for a writer, holds a
+  thread of Node's shared pool, and keeps the process from exiting even after the answer is
+  written. So every working-tree read (the source files, the config, the manifests, the
+  requirements, the receipt, the bypass file, the saved session) checks that the path is a regular
+  file, opens it with `O_NONBLOCK`, and checks the opened file again. A pipe, a device, or a socket
+  is refused at once, never read as an empty file, and the stop blocks once naming it, "NOT
+  verified - usabl did not read 1 path(s) in this repository", with no receipt saved. A pipe at a
+  session pin file is refused the same way, as the other pin refusals are. The one git command the
+  worker ran in a call that held its thread now runs as the others do, so a pipe in the git folder
+  holds only git, and the deadline ends the stop. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
   hook states `"timeout": 300`, and the generated adapter script passes the stop entry's
   timeout to the runner in the same variable. Both set the variable themselves, so a value in
@@ -353,7 +363,13 @@ re-baseline to green.
   An answer the check started before the deadline and has not finished when its wait ends is
   cut short when the process ends.
 - Limit, stated plainly: the hook reads its input and finds the repository with git before the
-  deadline's timer starts, so a git command that does not return there holds the answer. A
+  deadline's timer starts, so a git command that does not return there holds the answer, for
+  example git reading a named pipe at `.git/HEAD` or `.git/config`. A git process the worker
+  started that waits on a pipe in the git folder is left waiting after the stop ends; it holds
+  none of the hook's output. Playwright reads the saved session file by its path for each page,
+  after usabl checked it, so a pipe put there between the two reads, by a process that runs during
+  the stop, would hold that read. usabl's own installed files, which Node loads as code, are
+  trusted as before. A
   worker that ends or fails before it answers gets the answer a failed check gets, "NOT verified -
   stop hook error", which does not block, as for any other hook error. The checks the worker runs
   carry their own bounds too, for `usabl check` and CI, where no host limit applies: the import
@@ -1119,9 +1135,11 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
-- On a stop, the checks run in a worker thread and the deadline in the hook's own thread, so no
-  input the agent writes can hold the stop past the host's limit: a stop held by the checks blocks
-  with "NOT verified - usabl ran out of time" (the timeout rule above). The import reader reads
+- On a stop, the checks run in a worker thread and the deadline in the hook's own thread, and no
+  working-tree read waits on a named pipe, so no input the agent writes can hold the stop past the
+  host's limit, apart from the limits stated under the timeout rule above: a stop held by the
+  checks blocks with "NOT verified - usabl ran out of time", and a pipe, device, or socket usabl
+  would read blocks the stop naming it. The import reader reads
   each file in time that grows with its length, with the answers the old pattern gave: one import
   line of 80,000 spaces took the old pattern 20.9 seconds, and the time grew four times for each
   doubling. A source file longer than 4,194,304 characters, or with a line longer than 1,048,576,
