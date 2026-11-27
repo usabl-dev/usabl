@@ -4820,13 +4820,44 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     same set of changed files gives the same gaps in any order. A changed file left untested when
     a budget runs out is a gap whose reason names the budget, never nothing to check. The guard's own matching carries no budget: a
     `guardedPaths` list inside the bounds took 9.2 seconds against one committed path of 3999
-    characters. Node's `fs.glob` can still take long too. usabl hands it each `guardedPaths` entry,
-    to list new files on the working tree (the guard) and to sample the files under it (`usabl
-    doctor`); `uiFileGlobs` and `discovery.wideBlastGlobs` when a changed test file is placed; the
-    `workspaces` patterns of a `package.json`; and `uiFileGlobs` in `usabl baseline` and the docs
-    output. A pattern with many wildcards and a long file name there, or a long guarded list and
-    many deep committed paths, can take long enough that the host ends the hook before usabl
-    answers, and the stop then goes on with nothing checked (threat model, Threat 8).
+    characters. A long guarded list and many
+    deep committed paths can take long enough that the host ends the hook before usabl answers,
+    and the stop then goes on with nothing checked (threat model, Threat 8). Node's `fs.glob`,
+    which lists files on the working tree for the guard, test-file placement, and the
+    `workspaces` patterns, never gets a part that can backtrack. The file system adapter reads
+    `\` as `/`, expands brace groups, and rewrites and merges the parts as Node does. When no part
+    holds more than one run of `*`, Node runs the written pattern itself. Otherwise each such part
+    is listed as `*`, every other part stays as written, and usabl's own matcher filters what Node
+    lists, so `src/` then `*a` twelve times then `*b` against a file name of 30 letters takes about
+    50 milliseconds instead of 11 seconds. Expansions that cannot clash in Node's walk cache share
+    one walk. On macOS and Windows fixed parts stay as written, as on Linux, a wildcard part Node
+    was given as written keeps Node's answer, and a part listed as `*` is folded the way Node's
+    regular expressions fold letter case, so one guard expansion costs about what it costs on
+    Linux. Where the filter cannot match Node exactly it lists more (a file reached through a link
+    to a folder, a file named before a trailing `/**`, a listing that ends with `.`, and a file
+    Node's walk cache skips). Other syntax, such as a character class or an extglob group, runs in
+    Node only inside a bound: at most 1024 characters, no extglob group, at most one run of `*` in
+    any part, and at most 256 brace expansions. A pattern that names a path outside the folder is
+    past the bound too, itself or in a brace expansion: one that is empty or starts with `/`, such
+    as `{,zz}/**`; one that climbs above the folder with `..`, such as `..\outside\*`; and, on
+    Windows, one that starts with a drive such as `C:` (elsewhere `x:` is a plain folder name). So
+    is a pattern with a `..` after a wildcard part, such as `src/{a,**/..}/*.tsx`, since Node's walk
+    of it depends on which expansions it walks together. Past the bound
+    the pattern is not run. Config load refuses that syntax and those patterns in every policy
+    glob list, and a `workspaces` pattern past the bound makes the workspace root unreadable, so
+    every changed file the workspace check tests is a gap. A folder whose name usabl does not
+    control (a workspace package folder, the requirements folder the loader reads) is listed with
+    the folder as the walk's start, so its name is read as plain text, never as a pattern. Two
+    limits remain, both in guarded paths. The local guard's working-tree patterns still hold the
+    requirements folder as text: a name with a class, a brace group, or an extglob group, such as
+    `reqs[1]`, names another folder or none there until a guarded change fixes it, and a name with
+    only `*` or `?` also matches the folder itself, so it lists more. And when `usabl.routes.json`
+    or `usabl.docs.json` diverged, coverage reads the working tree through a wrapper in
+    `src/run.ts` that cannot list a folder with the folder as the walk's start, so a workspace
+    package folder named with glob syntax has unknown sources: its test files keep their gaps, but
+    another unreached test file that only that package loads can be excluded. That run's verdict
+    is `approval_required`, never a pass. Node's own walk can also hold the event loop for seconds
+    in one deep folder with many files (threat model, Threat 8).
   - The deadline is the host's limit less 30 seconds (570 seconds for Claude Code, 270 for
     Cursor). The 30 seconds cover npm starting the hook before the runner's clock starts, up to
     10 seconds to finish or write the answer, up to 10 seconds to close the browser, and the
@@ -5841,7 +5872,10 @@ workspace package folder it sits in. A change in a package the app does not depe
 change in a repository with no workspaces, reads as before.
 
 When the root `package.json` or `pnpm-workspace.yaml` exists and does not parse, or holds its
-workspace field in a shape no package manager reads, the workspace packages are unknown. Every
+workspace field in a shape no package manager reads, or lists a pattern past the file system
+adapter's glob bound (such as one with an extglob group, which Node can take minutes to match, or
+one that starts with `/` or has a brace expansion that does, such as `{,zz}/**`), the workspace
+packages are unknown. Every
 changed file that is not a test, not UI, and not Markdown is then a `not-covered` gap whose
 reason names the file usabl could not read. A workspace pattern with `..` in a brace group is
 refused, and a glob result that is absolute or leaves the repository is never read.

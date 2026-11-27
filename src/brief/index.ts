@@ -129,6 +129,7 @@ function localCoverageFs(fs: FsGlob, divergedPaths: readonly string[]): { fs: Fs
   return {
     fs: {
       glob: (patterns) => fs.glob(patterns),
+      ...(fs.globUnder === undefined ? {} : { globUnder: fs.globUnder.bind(fs) }),
       readFile: async (path) => (hidden.includes(path) ? null : fs.readFile(path)),
     },
     hidden,

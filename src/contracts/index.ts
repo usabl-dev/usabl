@@ -1202,6 +1202,11 @@ export interface FsGlob {
   // is checked against the limit after.
   readTextUpTo?(path: string, maxBytes: number): Promise<BoundedTextRead | null>;
   glob(patterns: string[]): Promise<string[]>;
+  // The files the patterns match under one folder, with the folder's name read as plain text,
+  // never as a pattern: Node's glob has no escape, so a folder named `pkg[1]` put into a pattern
+  // would be read as `pkg1`. Paths are from the repository root, as glob gives them. It is
+  // optional: see globUnderFolder in deps/fs-glob-reading.ts for how a reader without it is read.
+  globUnder?(folder: string, patterns: string[]): Promise<string[]>;
 }
 
 /** The text of a file read up to a byte limit, or the fact that the file is larger. */

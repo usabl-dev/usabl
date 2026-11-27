@@ -1273,6 +1273,7 @@ function readOnce(fs: FsGlob): FsGlob {
       return read;
     },
     glob: (patterns) => fs.glob(patterns),
+    ...(fs.globUnder === undefined ? {} : { globUnder: fs.globUnder.bind(fs) }),
   };
 }
 
