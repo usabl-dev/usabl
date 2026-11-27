@@ -789,13 +789,14 @@ function errorMessage(err: unknown): string {
  * work tree, such as `.git`. A folder in no work tree is its own root, and the hook does not look
  * for a last commit there.
  */
-export function findRepositoryRoot(startDir: string): { root: string; inRepository: boolean } {
+export function findRepositoryRoot(startDir: string, budget?: GitBudget): { root: string; inRepository: boolean } {
   try {
     const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: startDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       env: gitProcessEnvironment(),
+      ...gitTimeout(budget),
     });
     const root = out.replace(/\r?\n$/, '');
     if (root.length > 0) {
@@ -804,30 +805,59 @@ export function findRepositoryRoot(startDir: string): { root: string; inReposito
       // folder would check files the dev server does not serve. The hook then works in its own
       // folder, where the git reader refuses to read such a work tree, so the stop blocks and says
       // so.
-      if (!holds(root, startDir) || gitDirOf(root) !== gitDirOf(startDir)) {
+      if (!holds(root, startDir) || gitDirOf(root, budget) !== gitDirOf(startDir, budget)) {
         return { root: resolve(startDir), inRepository: true };
       }
       return { root: resolve(root), inRepository: true };
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof RepositorySearchOutOfTime || timedOut(err, budget)) throw new RepositorySearchOutOfTime();
     // Not a repository, or git is missing. Both mean there is no last commit to compare with.
   }
   return { root: resolve(startDir), inRepository: false };
 }
 
 // The repository git finds from a folder, as a real path, or null when it finds none.
-function gitDirOf(folder: string): string | null {
+function gitDirOf(folder: string, budget?: GitBudget): string | null {
   try {
     const out = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
       cwd: folder,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       env: gitProcessEnvironment(),
+      ...gitTimeout(budget),
     });
     return realpathSync.native(out.replace(/\r?\n$/, ''));
-  } catch {
+  } catch (err) {
+    if (timedOut(err, budget)) throw new RepositorySearchOutOfTime();
     return null;
   }
+}
+
+/**
+ * The time left, in milliseconds, before usabl's deadline. The git commands that find the
+ * repository run in the hook's own thread before the deadline's timer starts, and git waits on a
+ * named pipe at `.git/HEAD` or `.git/config` until something writes to it. So each command gets
+ * the time left and is killed when it runs out, and the stop then gives the deadline's answer.
+ */
+type GitBudget = () => number;
+
+/** Thrown when a git command that finds the repository ran until usabl's deadline. */
+export class RepositorySearchOutOfTime extends Error {
+  constructor() {
+    super('git did not find the repository before the deadline');
+    this.name = 'RepositorySearchOutOfTime';
+  }
+}
+
+function gitTimeout(budget: GitBudget | undefined): { timeout?: number; killSignal?: NodeJS.Signals } {
+  // A timeout of 0 means none, so a spent budget still gets one millisecond.
+  return budget === undefined ? {} : { timeout: Math.max(1, Math.floor(budget())), killSignal: 'SIGKILL' };
+}
+
+function timedOut(err: unknown, budget: GitBudget | undefined): boolean {
+  if (budget === undefined || typeof err !== 'object' || err === null) return false;
+  return Reflect.get(err, 'code') === 'ETIMEDOUT' || Reflect.get(err, 'signal') === 'SIGKILL';
 }
 
 // Whether the folder is the root or inside it, by real paths. A path that cannot be resolved is
@@ -909,6 +939,10 @@ export interface StopHookRunnerPortOptions {
   // The repository the hook already found, so the worker that runs the checks works in the same
   // one the hook's answer names. Absent means the ports find it as hookRepository says.
   repository?: HookRepository;
+  // Which host's default limit the deadline plans to when the hook sets none. With the deadline
+  // on, the git commands that find the repository are killed at the deadline, and the ports
+  // throw RepositorySearchOutOfTime.
+  cursorMode?: boolean;
 }
 
 /** The repository a stop works in. See hookRepository. */
@@ -939,6 +973,40 @@ function drained(stream: NodeJS.WriteStream): Promise<void> {
   });
 }
 
+/**
+ * Kills every process this one started that still runs when the stop ends at its deadline. The
+ * checks run git in processes of their own, and git waits on a named pipe in the working tree or
+ * the git folder (a `.gitignore`, a ref) until something writes to it, so a git the stop started
+ * could wait on after the stop ended. A browser that did not close in its wait ends here too.
+ * The worker thread's children are this process's children, so one list holds them all.
+ */
+function endChildProcesses(): void {
+  if (process.platform === 'win32') return;
+  let listed = '';
+  try {
+    listed = execFileSync('pgrep', ['-P', String(process.pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+      killSignal: 'SIGKILL',
+    });
+  } catch (err) {
+    // pgrep exits 1 when it finds none. With no pgrep at all nothing is listed, and the stop ends
+    // as before.
+    const stdout = typeof err === 'object' && err !== null ? Reflect.get(err, 'stdout') : undefined;
+    listed = typeof stdout === 'string' ? stdout : '';
+  }
+  for (const line of listed.split('\n')) {
+    const pid = Number(line.trim());
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // It ended already.
+    }
+  }
+}
+
 function realDeadline(env: Record<string, string | undefined>): StopHookDeadlinePort {
   return {
     timeoutSetting: env[STOP_HOOK_TIMEOUT_ENV],
@@ -946,6 +1014,7 @@ function realDeadline(env: Record<string, string | undefined>): StopHookDeadline
     startTimer: startRealTimer,
     endProcess: async () => {
       await Promise.all([drained(process.stdout), drained(process.stderr)]);
+      endChildProcesses();
       process.exit(0);
     },
   };
@@ -979,15 +1048,15 @@ function claudeProjectDir(env: Record<string, string | undefined>): string | nul
  * a work tree, the hook says so, naming CLAUDE_PROJECT_DIR when it was set, as before. The rule is
  * the same for both protocols.
  */
-function hookRepository(projectDir: string | null, ownDir: string): HookRepository {
+function hookRepository(projectDir: string | null, ownDir: string, budget?: GitBudget): HookRepository {
   if (projectDir === null) {
-    return { ...findRepositoryRoot(ownDir), ownFolderInstead: false };
+    return { ...findRepositoryRoot(ownDir, budget), ownFolderInstead: false };
   }
-  const fromProject = findRepositoryRoot(projectDir);
+  const fromProject = findRepositoryRoot(projectDir, budget);
   if (fromProject.inRepository) {
     return { ...fromProject, ownFolderInstead: false };
   }
-  const fromOwn = findRepositoryRoot(ownDir);
+  const fromOwn = findRepositoryRoot(ownDir, budget);
   return fromOwn.inRepository ? { ...fromOwn, ownFolderInstead: true } : { ...fromProject, ownFolderInstead: false };
 }
 
@@ -995,7 +1064,14 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
   const uid = options.uid === undefined ? currentUid() : options.uid;
   const env = options.env ?? process.env;
   const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
-  const repository = options.repository ?? hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd());
+  const deadline = options.deadline === true ? realDeadline(env) : null;
+  const budget =
+    deadline === null
+      ? undefined
+      : () =>
+          runnerDeadlineSeconds(hostLimit(deadline.timeoutSetting, options.cursorMode === true).seconds) * 1000 -
+          deadline.elapsedMs();
+  const repository = options.repository ?? hookRepository(claudeProjectDir(env), options.startDir ?? process.cwd(), budget);
   const { root, inRepository, ownFolderInstead } = repository;
   // Every path this stop's readers refused because it is not a regular file. See readRefusals.
   const refusals: ReadRefusals = new Set();
@@ -1024,7 +1100,7 @@ export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {})
     findStartingCommit: async () =>
       inRepository ? findStartingCommit(scopeGit(root)) : { kind: 'no-trusted-branch' as const },
     evaluateDecision: evaluateStopDecision,
-    ...(options.deadline === true ? { deadline: realDeadline(env) } : {}),
+    ...(deadline === null ? {} : { deadline }),
   };
 }
 
@@ -1866,7 +1942,21 @@ export async function runStopHookFromStdin(
   ports?: StopHookRunnerPorts,
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
-  const own = ports ?? makeStopHookRunnerPorts({ deadline: true });
+  let own: StopHookRunnerPorts;
+  let searchOutOfTime = false;
+  try {
+    own = ports ?? makeStopHookRunnerPorts({ deadline: true, cursorMode: options.cursorMode });
+  } catch (err) {
+    if (!(err instanceof RepositorySearchOutOfTime)) throw err;
+    // git held the search for the repository until the deadline. These ports run no git: the
+    // stop gives the deadline's answer and ends.
+    searchOutOfTime = true;
+    own = makeStopHookRunnerPorts({
+      deadline: true,
+      cursorMode: options.cursorMode,
+      repository: { root: resolve(process.cwd()), inRepository: false, ownFolderInstead: false },
+    });
+  }
   let input: StopHookInput;
   try {
     const parsed: unknown = JSON.parse(stdinText);
@@ -1876,8 +1966,19 @@ export async function runStopHookFromStdin(
     await emitProtocolAllow(own, { message: INVALID_INPUT_MESSAGE }, options);
     return 0;
   }
+  if (searchOutOfTime && own.deadline !== undefined) {
+    return superviseStop(input, own, options, own.deadline, () => NO_CHECKS);
+  }
   return ports === undefined ? runStopHookInWorker(input, own, options) : runStopHook(input, own, options);
 }
+
+// The checks of a stop whose repository search ran out of time: none. They never answer, so the
+// deadline, already reached, gives its answer.
+const NO_CHECKS: StopChecks = {
+  work: new Promise<number>(noop),
+  closeBrowser: async () => {},
+  checkCommand: () => 'usabl check',
+};
 
 // ---- the checks in a worker ----
 //

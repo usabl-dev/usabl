@@ -336,9 +336,15 @@ re-baseline to green.
   file, opens it with `O_NONBLOCK`, and checks the opened file again. A pipe, a device, or a socket
   is refused at once, never read as an empty file, and the stop blocks once naming it, "NOT
   verified - usabl did not read 1 path(s) in this repository", with no receipt saved. A pipe at a
-  session pin file is refused the same way, as the other pin refusals are. The one git command the
-  worker ran in a call that held its thread now runs as the others do, so a pipe in the git folder
-  holds only git, and the deadline ends the stop. The generated Claude Code hook states `"timeout": 600`, and
+  session pin file is refused the same way, as the other pin refusals are. git reads files usabl
+  does not open itself, and waits on a pipe there: in the git folder (`.git/HEAD`, `.git/config`,
+  a ref) or in the working tree (a `.gitignore`). No git command holds one of usabl's threads past
+  the deadline. The three that find the repository run before the deadline's timer, so each gets
+  the time left and is killed when it runs out; the checks' own git commands run in processes the
+  worker waits for without holding its thread. At the deadline usabl kills every process the stop
+  started (git, and a browser that did not close) before it ends, so none waits on after the stop.
+  Such a stop blocks with "NOT verified - usabl ran out of time", which does not name the pipe:
+  git does not say which file it waits on. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
   hook states `"timeout": 300`, and the generated adapter script passes the stop entry's
   timeout to the runner in the same variable. Both set the variable themselves, so a value in
@@ -362,11 +368,10 @@ re-baseline to green.
   in `guardedPaths`. Doctor reports a command or script whose number differs from the timeout.
   An answer the check started before the deadline and has not finished when its wait ends is
   cut short when the process ends.
-- Limit, stated plainly: the hook reads its input and finds the repository with git before the
-  deadline's timer starts, so a git command that does not return there holds the answer, for
-  example git reading a named pipe at `.git/HEAD` or `.git/config`. A git process the worker
-  started that waits on a pipe in the git folder is left waiting after the stop ends; it holds
-  none of the hook's output. Playwright reads the saved session file by its path for each page,
+- Limit, stated plainly: a stop whose git waits on a pipe runs to the full deadline (570 seconds
+  with the default limit) and blocks with the out-of-time answer, which does not name the path,
+  and a continuation is then let through. That is a delay, never a pass. The processes are found
+  with `pgrep`, so where it is missing they are not killed, as before. Playwright reads the saved session file by its path for each page,
   after usabl checked it, so a pipe put there between the two reads, by a process that runs during
   the stop, would hold that read. usabl's own installed files, which Node loads as code, are
   trusted as before. A

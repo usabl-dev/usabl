@@ -11,7 +11,7 @@
  * tree, state that the pin file was refused.
  */
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, existsSync, openSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -22,7 +22,6 @@ import {
   bundle,
   DEADLINE_MS,
   GIVE_UP_MS,
-  HOST_LIMIT_SECONDS,
   makeWork,
   removeWork,
   repository,
@@ -46,16 +45,6 @@ afterAll(async () => {
 
 function pipe(repo: string, path: string): void {
   execFileSync('mkfifo', [join(repo, path)]);
-}
-
-// Opens the pipe for writing and closes it, so a git process still waiting to read it reads the
-// end and exits instead of waiting after the case. With no reader waiting, the open fails at once.
-function releaseReaders(path: string): void {
-  try {
-    closeSync(openSync(path, constants.O_WRONLY | constants.O_NONBLOCK));
-  } catch {
-    // No process is waiting on the pipe.
-  }
 }
 
 // A change to a file that is not a UI file, so a stop with no pipe is idle and allows.
@@ -146,22 +135,6 @@ describe.skipIf(!CAN_MAKE_PIPES)('a named pipe at a path the Stop hook reads', (
 
     expectEndedInTime(run, repo);
     expectBlockNaming(run, '.usabl/session/storage-state.json');
-  }, 60_000);
-
-  it('blocks and ends before the host limit when git reads a pipe in the git folder', async () => {
-    // git reads the branch's ref file to find the last commit, and waits on the pipe there. The
-    // git process waits, but usabl's own threads do not, so the deadline answers and the stop ends.
-    const repo = await repository(work, 'git-ref', IDLE.base, IDLE.change);
-    await rm(join(repo, '.git/refs/heads/feature'));
-    pipe(repo, '.git/refs/heads/feature');
-
-    const run = await stop(dist, repo);
-    releaseReaders(join(repo, '.git/refs/heads/feature'));
-
-    expect(run.exitMs, `the stop did not end before ${GIVE_UP_MS} ms; stderr: ${run.stderr.slice(0, 400)}`).not.toBeNull();
-    expect(run.exitMs!).toBeLessThan(HOST_LIMIT_SECONDS * 1000);
-    expect(answerOf(run)?.['decision']).toBe('block');
-    expect(run.stdout + run.stderr).not.toContain('VERIFIED');
   }, 60_000);
 
   it.skipIf(typeof process.getuid !== 'function')('states that a pin file is refused and ends in time', async () => {

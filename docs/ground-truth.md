@@ -4929,12 +4929,21 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     block "NOT verified - usabl did not read 1 path(s) in this repository", naming the paths,
     once, with no receipt saved, and an active continuation is let through with the same words.
     A pipe at a session pin file is a pin refusal, which the stop states and goes on from, as
-    before. The git command that checks for a last commit runs without holding the worker's
-    thread, so a pipe in the git folder holds git alone and the deadline ends the stop. Each of
-    these stops ended in 3 to 7 seconds on a loaded machine, and the git folder one at 15.3
-    seconds, at the deadline. Limits: a git process held that way is left waiting after the stop
-    ends, and Playwright reads the saved session file again by its path, so a pipe put there after
-    usabl's check, by a process running during the stop, would hold that read.
+    before. Each of these stops ended in 3 to 7 seconds on a loaded machine.
+  - git waits on a pipe it reads, in the git folder (`.git/HEAD`, `.git/config`, a ref) or in
+    the working tree (a `.gitignore`), and usabl cannot refuse those paths, because git opens them.
+    So no git command holds one of usabl's threads past the deadline. The three commands that find
+    the repository run in the hook's own thread before the deadline's timer, so each gets the time
+    left before the deadline, is killed when it runs out, and the stop then gives the deadline's
+    answer; before, a pipe at `.git/HEAD` gave no answer at all. The command that checks for a last
+    commit, and the checks' other git commands, run in processes the worker waits for without
+    holding its thread. At the deadline the hook kills every process the stop started, found with
+    `pgrep -P`, before it ends, so no git waits on after the stop. A pipe at `.git/HEAD`,
+    `.git/config`, a ref, or `.gitignore` each gave the block "NOT verified - usabl ran out of
+    time" at about 15.4 seconds against a 15 second deadline and a 30 second limit, with no git
+    left running. The block does not name the pipe, and with the default limit the stop takes the
+    full 570 seconds. Limit: Playwright reads the saved session file again by its path, so a pipe
+    put there after usabl's check, by a process running during the stop, would hold that read.
   - The checks also carry their own bounds, for `usabl check` and CI, where no host limit applies
     but a stall is still a failure. The import reader reads in time that grows with the length of
     the text: the static import pattern took time that grew with the square of a line's length
