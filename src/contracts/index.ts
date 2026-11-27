@@ -1221,7 +1221,16 @@ export interface FsGlob {
   // would be read as `pkg1`. Paths are from the repository root, as glob gives them. It is
   // optional: see globUnderFolder in deps/fs-glob-reading.ts for how a reader without it is read.
   globUnder?(folder: string, patterns: string[]): Promise<string[]>;
+  // What is at a path, looked up the way the file system opens it, so a volume that ignores case
+  // finds `POLICY` for `policy`. A link at the last part is never followed, and its target is never
+  // read; a link in a folder above it is followed, so a caller that must not follow one looks at
+  // each part in turn. Null for nothing there and for a path below a file. Nothing is read from a
+  // file. It is optional: the local guard given a reader without it uses readBytes.
+  pathKind?(path: string): Promise<PathKind>;
 }
+
+/** What is at a path: a regular file, a symbolic link, a folder, anything else, or nothing. */
+export type PathKind = 'file' | 'link' | 'folder' | 'other' | null;
 
 /** The text of a file read up to a byte limit, or the fact that the file is larger. */
 export type BoundedTextRead = { kind: 'text'; text: string } | { kind: 'too-large' };
