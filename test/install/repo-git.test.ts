@@ -30,10 +30,12 @@ function fsOf(files: Record<string, string>): InstallFs {
 describe('workflowTrigger', () => {
   it('reads the event line only inside the top-level on: block', () => {
     // A run-name block scalar above on: holds text shaped like a trigger. GitHub reads it as the
-    // run name. The trigger the gate runs on is the one under on:, and it names main.
-    const raw = `run-name: |\n  pull_request:\n    branches: ["trunk"]\n${gateWorkflowFor('main')}`;
-    expect(raw.split('\n')[10]).toBe('    branches: ["main"]');
-    expect(workflowTrigger(raw, 'pull_request')).toEqual({ name: 'main', line: 11 });
+    // run name. The trigger the gate runs on is the one under on:, and it names main. The draft's
+    // own run-name line is taken out, so the file has one run-name key and stays valid YAML.
+    const draft = gateWorkflowFor('main').replace(/\nrun-name: [^\n]*\n/, '\n');
+    const raw = `run-name: |\n  pull_request:\n    branches: ["trunk"]\n${draft}`;
+    expect(raw.split('\n')[9]).toBe('    branches: ["main"]');
+    expect(workflowTrigger(raw, 'pull_request')).toEqual({ name: 'main', line: 10 });
   });
 
   it('names no branch when the event is only outside the on: block', () => {
