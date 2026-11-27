@@ -347,15 +347,14 @@ async function decide(
     // The clean and mutated scans are two loads of the page. A finding that is new away from the
     // change can come from the page itself differing between loads, so it says nothing about the
     // defect either way. For an entry reported on the screen, that is a finding of another rule
-    // away from the changed element.
+    // that is not on the changed element itself. It can be inside it, such as one more row in a
+    // results list that is a live region, so the reason does not call it away from the change.
     const rules = sortedUnique(definite.map((finding) => finding.rule));
-    return result(
-      entry,
-      screen,
-      'unreadable',
-      rules,
-      `a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: ${rules.join(', ')}`,
-    );
+    const where =
+      entry.reportedOn === 'screen'
+        ? 'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect'
+        : 'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect';
+    return result(entry, screen, 'unreadable', rules, `${where}: ${rules.join(', ')}`);
   }
 
   const cleanPreview = new Set(cleanGate.findings.filter((finding) => finding.evidenceClass === 'preview').map(findingKey));

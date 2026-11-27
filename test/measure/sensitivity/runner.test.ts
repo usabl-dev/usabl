@@ -273,7 +273,7 @@ describe('measureEntry', () => {
         outcome: 'unreadable',
         rules: ['button-name'],
         reason:
-          'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+          'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
       });
     }
   });
@@ -325,7 +325,7 @@ describe('measureEntry', () => {
       outcome: 'unreadable',
       rules: ['button-name'],
       reason:
-        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+        'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
     });
     // The same rule on the live region itself still counts.
     const onRegion = setup([secondLoadOnly('button-name', '#results')], { dom: resultsDom });
@@ -351,7 +351,7 @@ describe('measureEntry', () => {
       outcome: 'unreadable',
       rules: ['button-name'],
       reason:
-        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+        'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
     });
     const parent = setup([secondLoadOnly('button-name', 'main')]);
     expect(await measureEntry(parent.deps, headingEntry, SCREEN)).toMatchObject({
