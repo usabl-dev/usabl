@@ -322,7 +322,13 @@ re-baseline to green.
 - The timeout rule. A hook the assistant ends at its time limit is not a block: the assistant
   reads no answer and the stop goes on. An agent that can make a stop slow (a slow app, a large
   change, a file that is slow to read) could then stop without the accessibility work. So every
-  stop ends inside the host's limit. The generated Claude Code hook states `"timeout": 600`, and
+  stop ends inside the host's limit. The stop-hook command runs the checks in a worker thread and
+  keeps the deadline in its own thread, which reads nothing and checks nothing, so the deadline
+  fires whatever the checks do, even work that runs for minutes without a break, such as a slow
+  pattern on a long line an agent wrote. The worker sends each write of the answer (the output, the
+  receipt, the bypass file, and the session pins) to the deadline's thread, which writes it only
+  while the checks hold the answer. At the deadline that thread asks the worker to close the
+  browser, waits a short time, ends the worker, and ends the process. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor
   hook states `"timeout": 300`, and the generated adapter script passes the stop entry's
   timeout to the runner in the same variable. Both set the variable themselves, so a value in
@@ -346,6 +352,15 @@ re-baseline to green.
   in `guardedPaths`. Doctor reports a command or script whose number differs from the timeout.
   An answer the check started before the deadline and has not finished when its wait ends is
   cut short when the process ends.
+- Limit, stated plainly: the hook reads its input and finds the repository with git before the
+  deadline's timer starts, so a git command that does not return there holds the answer. A
+  worker that ends or fails before it answers gets the answer a failed check gets, "NOT verified -
+  stop hook error", which does not block, as for any other hook error. The checks the worker runs
+  carry their own bounds too, for `usabl check` and CI, where no host limit applies: the import
+  reader and the vite alias reader read in time that grows with the length of the text, a source
+  file longer than 4,194,304 characters or with a line longer than 1,048,576 is read as one that
+  may load any file, and test-file placement looks up the loads that name each file and charges
+  the rest to its budget (ground truth, section 11.2).
 - Limit, stated plainly: the Claude Code command and the Cursor script earlier releases wrote
   set no `USABL_STOP_HOOK_TIMEOUT`, so a value the assistant's process inherits wins, for
   example one a person exported in a shell profile. If it is larger than the host's limit, the
@@ -1103,6 +1118,16 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   (exit 3), not an infinite block.
 - `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
   than passing as green. There is no warn-only mode; usabl is on or off.
+- On a stop, the checks run in a worker thread and the deadline in the hook's own thread, so no
+  input the agent writes can hold the stop past the host's limit: a stop held by the checks blocks
+  with "NOT verified - usabl ran out of time" (the timeout rule above). The import reader reads
+  each file in time that grows with its length, with the answers the old pattern gave: one import
+  line of 80,000 spaces took the old pattern 20.9 seconds, and the time grew four times for each
+  doubling. A source file longer than 4,194,304 characters, or with a line longer than 1,048,576,
+  is not read for imports and may load any file, so a file it imports is a gap. The vite alias
+  reader is linear too, and test-file placement finds the loads that name each file in an index:
+  20,000 test files against 4,000 unresolved `#` imports took 25 seconds in one piece before and
+  0.6 seconds now, with the same placements.
 - usabl's own glob matcher does not backtrack. With the default dot rule it reads the path once
   and keeps the set of places a match can be at. With Node's dot rule, as the guard reads
   `guardedPaths`, it matches part by part between slashes. Either way, the time to match one
@@ -1145,7 +1170,9 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   `guardedPaths` entry against every path at the trusted ref and at `HEAD`. Each match is bounded,
   but a list inside the bounds (256 entries of `**/a/` parts) took 9.2 seconds against one
   committed path of 3999 characters and 0.3 seconds against one of 199. Such a list must be in
-  committed policy, which a code owner approves, and the paths must be in a commit.
+  committed policy, which a code owner approves, and the paths must be in a commit. On a stop the
+  guard runs in the worker, so a long match there ends in the out-of-time block, never in a stop
+  the host ends with nothing checked.
 - Node's `fs.glob` turns each part of a pattern that holds a wildcard into a regular expression
   that can backtrack: `src/` then `*a` twelve times then `*b` took Node 11 seconds against one
   file name of 30 letters. usabl hands `fs.glob` each `guardedPaths` entry (the guard's
@@ -1217,14 +1244,12 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   walks them once too; before this change it walked each expansion on its own, which took 40
   seconds. Node's walk yields between folders, so usabl's deadline ends a long one, and the result
   is a gap or no verdict, never a pass.
-- Known limit: Node's own walk can hold the event loop for seconds in one piece, whatever the
-  pattern. `fs.glob('**/package.json')` over 20,000 files in one folder 400 levels deep took 5.4
-  seconds, 5.2 of them in one block, and the block grows with the number of files times the
-  depth. The patterns can be honest ones, such as `src/**/*.tsx` or the guard's `src/trust/**`,
-  and the agent writes the tree. By scaling, not by a run, about 100,000 files at that depth would
-  use up the 30 seconds between usabl's deadline and the host's limit, and the stop would then go
-  on with nothing checked. Running the Stop hook's work in a process the runner can end addresses
-  it; this change does not.
+- Node's own walk can hold its thread for seconds in one piece, whatever the pattern.
+  `fs.glob('**/package.json')` over 20,000 files in one folder 400 levels deep took 5.4 seconds,
+  5.2 of them in one block, and the block grows with the number of files times the depth. The
+  patterns can be honest ones, such as `src/**/*.tsx` or the guard's `src/trust/**`, and the agent
+  writes the tree. On a stop that walk runs in the worker, so the deadline still fires and the stop
+  blocks with the out-of-time message. In `usabl check` and CI a long walk is slow, never a pass.
 - Node's glob has no escape, so a folder name put into a pattern is read as a pattern: `reqs[1]`
   there means `reqs1`. usabl lists the files under a folder whose name it does not control with
   that folder as the walk's start, so the name is read as plain text: the source files of each
