@@ -42,6 +42,7 @@ const config = {
 let work = '';
 let realDist = '';
 let heldDist = '';
+let endingDist = '';
 
 async function bundle(outDir: string, workerEntry: string | null): Promise<void> {
   const { build } = await import('tsup');
@@ -69,12 +70,14 @@ beforeAll(async () => {
   // Each bundle is laid out as the package is: dist/ beside the package.json the engine reads.
   realDist = join(work, 'real', 'dist');
   heldDist = join(work, 'held', 'dist');
-  for (const dist of [realDist, heldDist]) {
+  endingDist = join(work, 'ending', 'dist');
+  for (const dist of [realDist, heldDist, endingDist]) {
     await mkdir(dist, { recursive: true });
     await copyFile(join(SOURCE_ROOT, 'package.json'), join(dist, '..', 'package.json'));
   }
   await bundle(realDist, null);
   await bundle(heldDist, join(ROOT, 'test/support/held-stop-hook-worker.ts'));
+  await bundle(endingDist, join(ROOT, 'test/support/ending-stop-hook-worker.ts'));
 }, 120_000);
 
 afterAll(async () => {
@@ -188,6 +191,18 @@ describe('the Stop hook deadline while the checks hold their thread', () => {
     expect(answer?.['decision']).toBe('block');
     expect(String(answer?.['reason'])).toMatch(/^NOT verified - usabl ran out of time: .* 15 seconds/u);
     expect(String(answer?.['reason'])).toContain('Nothing is proven about this change, and no receipt was saved.');
+  }, 60_000);
+
+  it('gives the stop hook error answer, without blocking, when the worker ends before it answers', async () => {
+    const repo = await repository('ending', {}, { 'src/App.tsx': 'export const App = 2;\n' });
+
+    const run = await stop(endingDist, repo);
+
+    expectAnsweredInTime(run, repo);
+    const message = String(answerOf(run)?.['systemMessage']);
+    expect(message).toMatch(/^NOT verified - stop hook error: /u);
+    expect(message).toContain('ended with exit code 3 before it answered');
+    expect(answerOf(run)?.['decision']).toBeUndefined();
   }, 60_000);
 
   it('answers in time when one changed file has a line that a slow pattern would read for minutes', async () => {
