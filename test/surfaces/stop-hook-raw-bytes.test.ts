@@ -10,7 +10,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -235,11 +235,13 @@ describe('an edit a local git setting hides, after a verified stop', { timeout: 
     await setUp();
     git('config', 'core.trustctime', 'false');
     await verifiedStop();
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    // A whole second a minute in the past, recorded by git status, restores exactly. A time read
+    // back with stat() is a Date rounded to the millisecond, so it can move to the next second.
+    const past = Math.floor(Date.now() / 1000) - 60;
+    await utimes(join(repo, 'src/App.tsx'), past, past);
     git('status', '--porcelain');
-    const { mtime } = await stat(join(repo, 'src/App.tsx'));
     await write('src/App.tsx', APP_EDITED);
-    await utimes(join(repo, 'src/App.tsx'), mtime, mtime);
+    await utimes(join(repo, 'src/App.tsx'), past, past);
     expect(git('status', '--porcelain')).toBe('');
     await expectChecked('home');
   });

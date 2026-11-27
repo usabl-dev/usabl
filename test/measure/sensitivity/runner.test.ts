@@ -84,12 +84,12 @@ interface Harness {
   pages: Page[];
 }
 
-function setup(providers: Provider[], options: { refuse?: string; check?: EditCheck } = {}) {
+function setup(providers: Provider[], options: { refuse?: string; check?: EditCheck; dom?: () => ReturnType<typeof makeFakeDom> } = {}) {
   const harness: Harness = { opened: 0, closed: 0, pages: [] };
   const base: BrowserDriver = {
     async open(url) {
       harness.opened += 1;
-      const page = makeFakeDomPage(freshDom(), {
+      const page = makeFakeDomPage((options.dom ?? freshDom)(), {
         currentUrl: async () => url,
         close: async () => {
           harness.closed += 1;
@@ -273,12 +273,12 @@ describe('measureEntry', () => {
         outcome: 'unreadable',
         rules: ['button-name'],
         reason:
-          'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+          'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
       });
     }
   });
 
-  it('is caught by another rule when another rule is new on the changed element or inside it, for an entry reported on the screen', async () => {
+  it('is caught by another rule only when another rule is new on the changed element itself, for an entry reported on the screen', async () => {
     const onTarget = setup([namesProvider('button-name', '#save')]);
     expect(await measureEntry(onTarget.deps, titleEntry, SCREEN)).toEqual({
       entry: 'page-title-removed',
@@ -287,13 +287,52 @@ describe('measureEntry', () => {
       rules: ['button-name'],
       reason: 'reported by button-name; expected document-title',
     });
-    // #save sits inside x-toolbar, the changed element here.
-    const inside = setup([secondLoadOnly('button-name', '#save')]);
+    // #save sits inside x-toolbar, the changed element here. Inside is not the element itself.
     const onToolbar = { ...titleEntry, mutation: { target: { selector: 'x-toolbar' }, edit: { kind: 'set-attribute', name: 'aria-label', value: '' } } } as CatalogEntry;
-    expect(await measureEntry(inside.deps, onToolbar, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
+    const inside = setup([secondLoadOnly('button-name', '#save')]);
+    expect(await measureEntry(inside.deps, onToolbar, SCREEN)).toMatchObject({ outcome: 'unreadable', rules: ['button-name'] });
+    const onElement = setup([secondLoadOnly('button-name', 'x-toolbar')]);
+    expect(await measureEntry(onElement.deps, onToolbar, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
     // A finding of another rule away from the change does not join the rules of a catch on the element.
     const both = setup([namesProvider('button-name', '#save'), secondLoadOnly('color-contrast', '#other')]);
     expect(await measureEntry(both.deps, titleEntry, SCREEN)).toMatchObject({ outcome: 'caught by another rule', rules: ['button-name'] });
+  });
+
+  it('does not credit another rule on a row inside a large live region, for an entry reported on the screen', async () => {
+    // A results list that is a polite live region. The second load has one more row, and that row
+    // has an unnamed button. Taking aria-live and role off the list cannot cause that finding.
+    const resultsDom = () =>
+      makeFakeDom({
+        elements: [
+          { path: 'main', role: 'main', name: null },
+          { path: '#results', parent: 'main', role: 'list', name: null, attributes: { 'aria-live': 'polite', role: 'list' } },
+          { path: '#row-1', parent: '#results', role: 'listitem', name: null },
+          { path: '#row-2', parent: '#results', role: 'listitem', name: null },
+          { path: '#row-2-button', parent: '#row-2', role: 'button', name: '' },
+        ],
+        selectors: { '#results': ['#results'] },
+      });
+    const liveRegionEntry = entry({
+      id: 'flow-live-region-broken',
+      expectedRules: ['intake:*'],
+      reportedOn: 'screen',
+      mutation: { target: { selector: '#results' }, edit: { kind: 'remove-attribute', names: ['aria-live', 'role'] } },
+    });
+    const { deps } = setup([secondLoadOnly('button-name', '#row-2-button')], { dom: resultsDom });
+    expect(await measureEntry(deps, liveRegionEntry, SCREEN)).toEqual({
+      entry: 'flow-live-region-broken',
+      screen: 'basic',
+      outcome: 'unreadable',
+      rules: ['button-name'],
+      reason:
+        'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
+    });
+    // The same rule on the live region itself still counts.
+    const onRegion = setup([secondLoadOnly('button-name', '#results')], { dom: resultsDom });
+    expect(await measureEntry(onRegion.deps, liveRegionEntry, SCREEN)).toMatchObject({
+      outcome: 'caught by another rule',
+      rules: ['button-name'],
+    });
   });
 
   it('counts another rule only on the element that held a removed one, for an entry reported on the screen', async () => {
@@ -312,7 +351,7 @@ describe('measureEntry', () => {
       outcome: 'unreadable',
       rules: ['button-name'],
       reason:
-        'a new finding appeared away from the change, so the two loads differ and this proves nothing about the defect: button-name',
+        'a new finding appeared, but not on the changed element, so it can come from the two loads differing and proves nothing about the defect: button-name',
     });
     const parent = setup([secondLoadOnly('button-name', 'main')]);
     expect(await measureEntry(parent.deps, headingEntry, SCREEN)).toMatchObject({

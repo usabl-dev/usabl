@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { USABL_HISTORY_WORKFLOW } from '../../src/install/history-ci.js';
 import { FETCH_ARTIFACT_SCRIPT } from '../../src/install/artifact-fetch.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 import { makeZip, startArtifactApi, storeArtifact, type ArtifactApi, type ZipEntry } from '../support/zip.js';
 
 interface Step {
@@ -123,7 +124,10 @@ function expectNothingWritten(r: Runner, into: string): void {
   expect(readdirSync(r.workspace)).toEqual([]);
 }
 
-describe('the generated fetch steps', () => {
+// Each test runs bash and node as child processes, about two seconds each when the machine is
+// idle. Under load that passed the default five second limit, so these use the shared budget for
+// tests that wait on a real process.
+describe('the generated fetch steps', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   it('write the fetcher with the exact script bytes', async () => {
     const r = await runner();
     expect(readFileSync(join(r.temp, 'usabl-fetch-artifact.cjs'), 'utf8')).toBe(`${FETCH_ARTIFACT_SCRIPT}\n`);
@@ -174,7 +178,7 @@ describe('the generated fetch steps', () => {
   });
 });
 
-describe('the fetcher refuses a hostile zip and writes nothing', () => {
+describe('the fetcher refuses a hostile zip and writes nothing', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   const cases: Array<{ name: string; zip: () => Buffer; reason: RegExp }> = [
     {
       name: 'the expected file plus an entry that climbs out through a .. in the middle of its name',

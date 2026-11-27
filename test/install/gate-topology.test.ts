@@ -97,8 +97,12 @@ function scratch(): string {
   tempDirs.push(dir);
   return dir;
 }
-afterEach(() => {
+// Most tests here block on child processes, and vitest gives the event loop no turn between tests.
+// Under load the whole file then ran past the 60 seconds the worker waits for a reply from the test
+// runner, and the run failed with no test named. A turn after each test lets those messages through.
+afterEach(async () => {
   while (tempDirs.length > 0) rmSync(tempDirs.pop() as string, { recursive: true, force: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 // The engine tree digest, computed by the same command the generated engine job runs.

@@ -9,6 +9,9 @@ vi.mock('../../src/intake/requirement-ids.js', async (importOriginal) => {
     ...original,
     describeRequirementIdProblem: (id: string) => {
       if (id === 'stack-overflow') throw new RangeError('Maximum call stack size exceeded');
+      if (id === 'stack-overflow-period') throw new RangeError('Maximum call stack size exceeded.');
+      if (id === 'stack-overflow-case') throw new RangeError('maximum call stack size exceeded');
+      if (id === 'stack-overflow-longer') throw new RangeError('Maximum call stack size exceeded while parsing');
       if (id === 'other-range-error') throw new RangeError('Invalid count value: -1');
       if (id === 'type-error') throw new TypeError('not a function');
       return original.describeRequirementIdProblem(id);
@@ -32,6 +35,21 @@ describe('an error inside the requirement schema parse', () => {
       verdict: 'approval_required',
       reason: 'this file has too many problems to check, so it is refused; shorten or fix its longest list',
     });
+  });
+
+  // Another engine, or a later Node, can end the text with a period or change its case.
+  it.each(['stack-overflow-period', 'stack-overflow-case'])('reads the stack overflow wording %s the same way', (id) => {
+    expect(parseBundle(bundleWithId(id))).toEqual({
+      ok: false,
+      verdict: 'approval_required',
+      reason: 'this file has too many problems to check, so it is refused; shorten or fix its longest list',
+    });
+  });
+
+  it('throws a RangeError on when the stack overflow text is only its start', () => {
+    expect(() => parseBundle(bundleWithId('stack-overflow-longer'))).toThrow(
+      new RangeError('Maximum call stack size exceeded while parsing'),
+    );
   });
 
   // Any other error is a fault in usabl, not a fact about the file, so it is not named as one.
