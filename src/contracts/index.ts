@@ -226,7 +226,9 @@ export interface AffectedScreen {
   provenance: 'route-graph' | 'wide-blast' | 'manual' | 'docs-manifest';
   importChain?: string[];
   // Why a wide-blast screen is checked, naming the changed file, when a dependency change of the
-  // app queued it: a change to the app's dependencies or to a lockfile. Absent otherwise.
+  // app queued it: a change to the app's dependencies or to a lockfile. For a route-graph screen,
+  // why it is checked when its import chain passes a file usabl did not read for imports, which
+  // may load any file. Absent otherwise.
   reason?: string;
   profile?: ProfileName;
 }

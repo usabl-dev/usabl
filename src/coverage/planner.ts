@@ -6,7 +6,7 @@
  */
 import type { AffectedScreen, Coverage, CoverageGap, DiscoveryNote, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { type AliasConfig, loadAppAliasConfig } from './alias-config.js';
-import { aliasConfigConflictReason, buildUnresolvedReason } from './discovery-diagnostics.js';
+import { aliasConfigConflictReason, buildUnresolvedReason, describeLoad } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type PackageFolder, readPackageFolders } from './import-graph.js';
 import {
   excludedTestFileReason,
@@ -194,6 +194,10 @@ interface RouteGraph {
   aliasConfig: AliasConfig;
   // The import closure of each route entry file, keyed by screen id.
   closures: Map<string, Set<string>>;
+  // For each screen whose closure holds a file usabl did not read for imports, the first such
+  // file by name and why it was not read. That file may load any file, so the screen reaches
+  // every changed UI file.
+  unreadOnPath: Map<string, { file: string; reason: string }>;
 }
 
 async function buildRouteGraph(
@@ -212,7 +216,17 @@ async function buildRouteGraph(
   for (const route of attributedRoutes) {
     closures.set(route.screenId, importClosure(graph, route.entryFile));
   }
-  return { graph, aliasConfig, closures };
+  const unread = new Map<string, string>();
+  for (const entry of graph.unresolvable) {
+    if (entry.kind === 'unread-source' && !unread.has(entry.importer)) unread.set(entry.importer, describeLoad(entry) ?? '');
+  }
+  const unreadFiles = [...unread.keys()].sort();
+  const unreadOnPath = new Map<string, { file: string; reason: string }>();
+  for (const [screenId, closure] of closures) {
+    const file = unreadFiles.find((name) => closure.has(name));
+    if (file !== undefined) unreadOnPath.set(screenId, { file, reason: unread.get(file) ?? '' });
+  }
+  return { graph, aliasConfig, closures, unreadOnPath };
 }
 
 /**
@@ -488,8 +502,10 @@ export async function computeCoverage(
   }
 
   // Graph unresolvable entries are diagnostics about discovery fidelity.
-  // They are not coverage gaps unless a changed UI file maps to no screen.
-  const { graph, aliasConfig, closures: routeClosures } = await loadRouteGraph();
+  // They are not coverage gaps unless a changed UI file maps to no screen. A file usabl did not
+  // read for imports is the one exception: it may load any file, so the screen whose closure holds
+  // it reaches every changed UI file. See unreadOnPath.
+  const { graph, aliasConfig, closures: routeClosures, unreadOnPath } = await loadRouteGraph();
   // What each folder's package.json says, read once for every unresolved file's discovery detail.
   const packageFolderReads = new Map<string, PackageFolder | null>();
 
@@ -520,6 +536,19 @@ export async function computeCoverage(
     let mapped = false;
     for (const route of attributedRoutes) {
       const closure = routeClosures.get(route.screenId);
+      const unread = unreadOnPath.get(route.screenId);
+      if (closure !== undefined && !closure.has(file) && unread !== undefined) {
+        // The screen reaches the file through a file whose imports usabl did not read.
+        mapped = true;
+        addAffected(affectedByScreen, {
+          screenId: route.screenId,
+          url: manualUrlOverride(config, file, route.screenId) ?? routeUrl(config.appBaseUrl, route.url),
+          provenance: 'route-graph',
+          importChain: [route.entryFile, unread.file, file],
+          reason: `${unread.reason}, including ${file}.`,
+        });
+        continue;
+      }
       if (closure === undefined || !closure.has(file)) {
         continue;
       }

@@ -4911,7 +4911,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     seconds). A hand-written reader gives the pattern's answers, and a test compares the two on
     30,000 generated texts. A file longer than 4,194,304 characters, or with a line longer than
     1,048,576, is not read for imports: it is a load that may load any file, never a file with no
-    imports. The vite alias reader reads its entries in time linear in the text too; the pattern
+    imports. So a screen whose imports reach such a file is checked for every changed UI file, and
+    its import chain names the file. The vite alias reader reads its entries in time linear in the text too; the pattern
     it replaced took 14.5 seconds on 340,000 characters of `k: path.resolve(` lines. Test-file
     placement finds the loads that could reach each file in an index, by name, by folder, or
     because they may load any file, with the answers `importMayLoad` gives for each pair, so

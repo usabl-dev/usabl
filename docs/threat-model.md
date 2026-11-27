@@ -359,7 +359,8 @@ re-baseline to green.
   carry their own bounds too, for `usabl check` and CI, where no host limit applies: the import
   reader and the vite alias reader read in time that grows with the length of the text, a source
   file longer than 4,194,304 characters or with a line longer than 1,048,576 is read as one that
-  may load any file, and test-file placement looks up the loads that name each file and charges
+  may load any file (a screen whose imports reach it is checked for every changed UI file), and
+  test-file placement looks up the loads that name each file and charges
   the rest to its budget (ground truth, section 11.2).
 - Limit, stated plainly: the Claude Code command and the Cursor script earlier releases wrote
   set no `USABL_STOP_HOOK_TIMEOUT`, so a value the assistant's process inherits wins, for
@@ -1124,7 +1125,8 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
   each file in time that grows with its length, with the answers the old pattern gave: one import
   line of 80,000 spaces took the old pattern 20.9 seconds, and the time grew four times for each
   doubling. A source file longer than 4,194,304 characters, or with a line longer than 1,048,576,
-  is not read for imports and may load any file, so a file it imports is a gap. The vite alias
+  is not read for imports and may load any file, so a screen whose imports reach it is checked for
+  every changed UI file. The vite alias
   reader is linear too, and test-file placement finds the loads that name each file in an index:
   20,000 test files against 4,000 unresolved `#` imports took 25 seconds in one piece before and
   0.6 seconds now, with the same placements.
