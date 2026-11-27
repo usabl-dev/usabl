@@ -228,6 +228,8 @@ export async function computeCoverage(
   // Reads a file at the trusted ref. The workspace manifests are read from it as well as from the
   // tree, so a change cannot unlink the app from a workspace package it also edits.
   trustedRead?: TrustedRead,
+  // The run's glob budgets. Only a test passes smaller ones, to check the work by its step count.
+  budgets: RunGlobBudgets = runGlobBudgets(),
 ): Promise<Coverage> {
   // affectedByScreen below is keyed by surface id, so a blank or repeated id silently drops a
   // screen while its changed files still read as mapped. Config parsing refuses that document,
@@ -254,7 +256,6 @@ export async function computeCoverage(
   // Every glob match of this run charges a budget: test-file placement its own, the rest one
   // shared budget. A file usabl could not test against the globs before the budget ran out is a
   // gap: usabl cannot tell whether it is app code, so it is never read as outside the globs.
-  const budgets = runGlobBudgets();
   // Each entry is expanded and compiled once for the run, not once for each changed file.
   const uiMatchers = config.uiFileGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));
   const wideBlastMatchers = config.discovery.wideBlastGlobs.map((glob) => globMatcher(glob, { budget: budgets.steps }));

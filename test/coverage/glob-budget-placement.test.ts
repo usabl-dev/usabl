@@ -124,9 +124,13 @@ describe('import.meta.glob calls in one planner run', () => {
       const patterns = Array.from({ length: 60 }, (_, index) => `../${'**a'.repeat(337)}b${String(page)}x${String(index)}**`);
       pages[`src/pages/Page${String(page)}.tsx`] = `${call(patterns)}export function Page() { return <main />; }\n`;
     }
-    const { value: coverage, ms } = await timed(() => computeCoverage(fsOf(tree(pages)), config, [DEEP_TEST]));
-    // About 250 million placement steps, inside the placement budget.
-    expect(ms).toBeLessThan(40_000);
+    // The real placement budget spends about 250 million steps here. A small one checks the same
+    // rule by its step count, not by the clock: the matching stops at the budget, and the deep
+    // test file is still a gap.
+    const budgets = { ...runGlobBudgets(), placement: new GlobMatchBudget(5_000_000) };
+    const coverage = await computeCoverage(fsOf(tree(pages)), config, [DEEP_TEST], undefined, undefined, budgets);
+    expect(budgets.placement.exhausted).toBe(true);
+    expect(budgets.placement.steps - budgets.placement.remaining).toBeLessThanOrEqual(5_000_000 + 1100 * 4100);
     expectGapFor(coverage, DEEP_TEST, 'budget of 65,536 characters');
   });
 
