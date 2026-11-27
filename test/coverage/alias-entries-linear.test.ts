@@ -65,6 +65,8 @@ function generated(next: () => number): string {
   return text;
 }
 
+const COMPARISON_TIMEOUT_MS = 60_000;
+
 describe('the vite alias object reader', () => {
   it('reads the same entries as the old pattern on 30,000 generated texts', () => {
     const next = random(4242);
@@ -76,7 +78,9 @@ describe('the vite alias object reader', () => {
       if (expected.length > 0) withEntries += 1;
     }
     expect(withEntries).toBeGreaterThan(5_000);
-  });
+    // About 2.8 seconds alone, and past the 5 second default on a busy machine (load about 9).
+    // The comparison needs this many texts, so the case gets a limit well above its time.
+  }, COMPARISON_TIMEOUT_MS);
 
   it('reads the same entries as the old pattern on hand-written cases', () => {
     const cases = [

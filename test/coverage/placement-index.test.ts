@@ -107,7 +107,9 @@ describe('the load index', () => {
     }
     expect(pairs).toBeGreaterThan(50_000);
     expect(loaded).toBeGreaterThan(5_000);
-  });
+    // About 2.4 seconds alone, and past the 5 second default on a busy machine (load about 9).
+    // The comparison needs this many placements, so the case gets a limit well above its time.
+  }, 60_000);
 });
 
 const fsOf = (files: Record<string, string>): FsGlob => makeFakeDeps({ files }).fs;

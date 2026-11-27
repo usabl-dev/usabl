@@ -101,6 +101,8 @@ function generated(next: () => number, count: number): string {
   return text;
 }
 
+const COMPARISON_TIMEOUT_MS = 60_000;
+
 describe('the static import reader', () => {
   it('reads the same paths as the old pattern on 30,000 generated texts', () => {
     const next = random(20261127);
@@ -116,7 +118,9 @@ describe('the static import reader', () => {
     expect(compared).toBe(30_000);
     // The texts are not all empty of imports, so the comparison reads real matches.
     expect(withPaths).toBeGreaterThan(5_000);
-  });
+    // About 2.5 seconds alone, and past the 5 second default on a busy machine (load about 9).
+    // The comparison needs this many texts, so the case gets a limit well above its time.
+  }, COMPARISON_TIMEOUT_MS);
 
   it('reads the same paths as the old pattern on hand-written cases', () => {
     const cases = [
