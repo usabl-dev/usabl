@@ -19,6 +19,7 @@
  * the check pass, and the earlier approval still counts. Only an organization-required workflow,
  * an Enterprise feature, takes the workflow out of the pull request's hands.
  */
+import { FAILSAFE_SCHEMA, load } from 'js-yaml';
 import { REQUIRED_GATE_JOB, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW_PATH } from './ci.js';
 import { isSafeBranchName, workflowTrigger } from './repo-git.js';
 
@@ -86,6 +87,37 @@ function isPathSafeBranch(name: string): boolean {
   return name.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
+/**
+ * The pull request trigger branch, read from lines in the one form usabl writes, and taken only
+ * when a YAML reader of the whole file agrees. The line reader alone can be misled: a quoted value
+ * that runs over several lines, text above the real on: that holds on: itself, a line break YAML
+ * knows and the line reader does not (U+2028), or a second on: key. So the file must also parse,
+ * with the failsafe schema, which reads every value as plain text and builds no custom type, and
+ * its on.pull_request.branches must be exactly the one name the lines gave. A parse error, a
+ * duplicate key, any other shape, or a different name is a trigger usabl cannot read, and null.
+ */
+function readTriggerBranch(raw: string | null): { name: string; line: number } | null {
+  const trigger = workflowTrigger(raw, 'pull_request');
+  if (raw === null || trigger === null || !isPathSafeBranch(trigger.name)) return null;
+  let parsed: unknown;
+  try {
+    parsed = load(raw, { schema: FAILSAFE_SCHEMA });
+  } catch {
+    return null;
+  }
+  const on = recordField(parsed, 'on');
+  const pullRequest = recordField(on, 'pull_request');
+  const branches = recordField(pullRequest, 'branches');
+  if (!Array.isArray(branches) || branches.length !== 1 || branches[0] !== trigger.name) return null;
+  return trigger;
+}
+
+// The value at an own key of a plain mapping, or undefined for anything else.
+function recordField(value: unknown, key: string): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return Object.prototype.hasOwnProperty.call(value, key) ? (value as Record<string, unknown>)[key] : undefined;
+}
+
 // Why a file system read failed, in words, or null when the error is not a file system error. A
 // programmer error has no string code and is not absorbed here.
 function unreadableReason(error: unknown): string | null {
@@ -120,8 +152,8 @@ export async function gateBranchTarget(readFile: (path: string) => Promise<strin
       };
     }
     if (raw === null) continue;
-    const trigger = workflowTrigger(raw, 'pull_request');
-    if (trigger === null || !isPathSafeBranch(trigger.name)) {
+    const trigger = readTriggerBranch(raw);
+    if (trigger === null) {
       return {
         name: PROTECTED_BRANCH,
         source: 'assumed',
@@ -148,8 +180,7 @@ async function readDocsGateBranch(readFile: (path: string) => Promise<string | n
     if (unreadableReason(error) === null) throw error;
     return null;
   }
-  const trigger = workflowTrigger(raw, 'pull_request');
-  return trigger !== null && isPathSafeBranch(trigger.name) ? trigger.name : null;
+  return readTriggerBranch(raw)?.name ?? null;
 }
 
 // The read-only gh call. {owner}/{repo} are resolved by gh from the current repo context,

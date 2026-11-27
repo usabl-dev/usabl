@@ -5281,18 +5281,23 @@ pass whatever the judge found. The verdict on a pull request that edits the work
 evidence. The protection is a branch rule or ruleset that requires review from code owners, with
 `.github/workflows/` and the guarded paths owned in `CODEOWNERS`, so such a pull request cannot
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
-`usabl install --branch-rule` verifies the required check, code-owner review, at least one
-required approving review (a count of 0 requires no review at all), and dismissal of stale
-approvals on push, each by classic protection or by an active ruleset, on the branch the gate
-workflow on disk names in its trigger. The trigger is read only inside the top-level `on:` block:
-the line `  pull_request:` with `    branches: ["<name>"]` straight below it. Text of that shape
-anywhere else, such as in a `run-name: |` block above `on:`, is not the trigger and is not read.
-A lone CR counts as a line break for the line the steps name, as an editor shows it. A branch name
-over 255 characters is a trigger it cannot read, so no long name is printed. With no gate
-workflow, it reads the branch the docs gate
-workflow names, since the docs gate requires the same check, and its advice names
-`install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
-or no permission), it checks `main` and says it assumed it in each line that names it. An
+`usabl install --branch-rule` verifies the required check, code-owner review, at least one required
+approving review (a count of 0 requires no review at all), and dismissal of stale approvals on push,
+each by classic protection or by an active ruleset, on the branch the gate workflow on disk names in
+its trigger. The trigger is read two ways, and both must agree. The lines are read for the one form
+usabl writes: after the first line that is exactly `on:` and before the next line that starts with
+text other than a comment, the line `  pull_request:` with `    branches: ["<name>"]` straight below
+it. The whole file is also read as YAML with the failsafe schema, which reads every value as text
+and builds no custom type, and its `on.pull_request.branches` must be exactly that one name. A file
+YAML cannot read (a duplicate key such as a second `on:`, or a line break YAML refuses, such as
+U+2028), any other shape, or a different name is a trigger it cannot read. So text shaped like a
+trigger in a `run-name: |` block, or in a quoted value that runs over several lines, never names the
+branch. `usabl install --ci` and the doctor lines for each workflow read the lines only. A lone CR
+counts as a line break for the line the steps name, as an editor shows it. A branch name over 255
+characters is a trigger it cannot read, so no long name is printed. With no gate workflow, it reads
+the branch the docs gate workflow names, since the docs gate requires the same check, and its advice
+names `install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a
+folder, or no permission), it checks `main` and says it assumed it in each line that names it. An
 assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
 default branch. When GitHub reports another default branch, or cannot say which one it is, the
 result is "cannot verify": it names both branches when it can, and the next step. A default
