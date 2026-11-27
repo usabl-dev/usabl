@@ -1034,6 +1034,29 @@ the tool errored, not because the page is accessible.
   request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each
   entry read this way and say how to write it. The `requirements` folder is read as a literal
   path; a `guardedPaths` entry with the same text is read both as that path and as a glob.
+  On the working tree the local guard lists a literal entry by its name, never through a
+  pattern. The files under it are listed with the entry as the walk's start. The entry's path is
+  also looked up one part at a time from the root, with `lstat`, the way the file system opens
+  it, and the first part that is a link, a file, or anything but a real folder is listed by its
+  own name and compared. So on a volume that ignores case, as macOS and Windows do by default, a
+  link named `POLICY` at the entry `policy` is the entry, and a folder above the entry that is now
+  a link or a file is reported, since every path below a link reads as nothing on both sides and
+  cannot be compared. That holds for a link committed above a literal entry too: it is reported
+  on every check, until a real folder takes its place or the entry names another path. In an
+  honest repository that keeps such a link, every local stop blocks as approval required and
+  `usabl check` exits 2, while the CI policy check reports nothing, so no approval clears it and
+  `usabl doctor` does not name it. Name the real folder the link points at in the entry instead.
+  Node's glob has no escape, so before, a
+  requirements folder named `reqs[1]` put into a pattern listed `reqs1`, a name past the glob
+  reading bound listed nothing, and a new untracked file in that folder was not seen until it was
+  committed. A folder above a literal entry with nothing at `HEAD`, replaced by a link to a folder
+  inside the repository (`a -> stuff` for the entry `a/policy`), hid every file below it, and the
+  stop said VERIFIED. A file reader that cannot list a folder that way, or cannot look a path up,
+  still lists a name with no glob syntax through the patterns, and throws for a name with glob
+  syntax, which blocks the stop as a guard failure. The listing now holds only paths under the
+  entry's exact name: a pattern from a name with `*` or `?`, such as `reqs*`, no longer adds the
+  files of the other folders it matched. Finding the entry costs one `lstat` for each part of its
+  path; it never lists the folder that holds the entry.
 
 - The Stop hook blocks once when the guard or the session pin computation fails, because it then
   cannot tell whether guarded policy changed, and lets the continuation through marked NOT
@@ -1228,18 +1251,12 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 - Node's glob has no escape, so a folder name put into a pattern is read as a pattern: `reqs[1]`
   there means `reqs1`. usabl lists the files under a folder whose name it does not control with
   that folder as the walk's start, so the name is read as plain text: the source files of each
-  workspace package folder, which the agent can name, and the requirements folder the loader
-  reads, on the working tree and at the trusted ref. A reader that cannot list a folder that way
-  reads a workspace package's sources as unknown (it may import any package, and its test files
-  keep their gaps), and fails the requirements load closed.
-- Known limit: the local guard still puts the requirements folder into its working-tree patterns
-  as text (`src/trust/guard.ts`, a guarded path). For a name with a character class, a brace
-  group, or an extglob group, such as `reqs[1]`, Node reads the pattern as another folder
-  (`reqs1`) or as none, so a new untracked file in the requirements folder is not seen until it is
-  committed. For a name whose only glob syntax is `*` or `?`, the pattern also matches the folder
-  itself, so a new file there is seen, and files in other folders it matches are added too, which
-  is wider. The git listings at the trusted ref and at `HEAD` read the folder as text. Such a name
-  must be in committed policy, which a code owner approves.
+  workspace package folder, which the agent can name, the requirements folder the loader
+  reads, on the working tree and at the trusted ref, and each literal entry the local guard lists
+  on the working tree. A reader that cannot list a folder that way reads a workspace package's
+  sources as unknown (it may import any package, and its test files keep their gaps), fails the
+  requirements load closed, and makes the local guard throw for a literal entry whose name holds
+  glob syntax.
 - Known limit: when `usabl.routes.json` or `usabl.docs.json` diverged from the trusted ref,
   coverage reads the working tree through a wrapper in `src/run.ts` (a guarded path) that cannot
   list a folder with the folder as the walk's start. A workspace package folder named with glob

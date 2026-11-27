@@ -213,6 +213,20 @@ export function makeFsGlob(options: { cwd?: string; platform?: NodeJS.Platform }
         await handle.close();
       }
     },
+    async pathKind(path) {
+      try {
+        const found = await lstat(resolve(cwd, path));
+        if (found.isSymbolicLink()) return 'link';
+        if (found.isDirectory()) return 'folder';
+        return found.isFile() ? 'file' : 'other';
+      } catch (err) {
+        const code = typeof err === 'object' && err !== null ? Reflect.get(err, 'code') : undefined;
+        // Nothing there, or a path below a file. Any other error, such as a folder usabl may not
+        // open, is thrown, so a caller never reads it as nothing.
+        if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+        throw err;
+      }
+    },
     async globUnder(folder, patterns) {
       // The folder is the walk's starting folder, so Node never parses its name. A folder that is
       // missing lists nothing.

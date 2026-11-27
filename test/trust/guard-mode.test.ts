@@ -198,8 +198,9 @@ describe('the guard compares the file mode', { timeout: 60_000 }, () => {
     await rm(join(root, 'vendor'), { recursive: true, force: true });
     await symlink('real', join(root, 'vendor'));
     // vendor/policy now resolves to real/policy, which holds the old content. git sees no file at
-    // vendor/policy, so the guard does not either.
-    await expect(checkGuard(realDeps(root), 'HEAD')).resolves.toEqual([GUARDED]);
+    // vendor/policy, so the guard does not either. The link vendor, above the guarded file, is
+    // reported too: nothing below it can be compared.
+    await expect(checkGuard(realDeps(root), 'HEAD')).resolves.toEqual(['vendor', GUARDED]);
   });
 });
 
