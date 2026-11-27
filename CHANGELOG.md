@@ -477,8 +477,7 @@
   repository and each submodule the walk reads, and which submodule folders are empty. A
   submodule's own submodules are taken from the commit the outer repository records, as the walk
   reads them, so one dropped from the submodule's own commit and emptied is still named. The
-  changed list reads a
-  missing file under that state as left out on purpose, so an agent that turned sparse checkout
+  changed list reads a missing file under that state as left out on purpose, so an agent that turned sparse checkout
   on, wrote its own patterns, or emptied a submodule folder, and deleted a screen file, got a stop
   that read "nothing to check", or VERIFIED after checking only the other screens. Now a change to
   that state blocks the next stop as session drift and names `.git/info/sparse-checkout` or
@@ -488,8 +487,8 @@
   removes a submodule during a session also blocks as drift. The pins are kept, so every later
   stop of that session blocks until the state is put back, the pin file is deleted, or a new
   session starts. That drift message says the sparse checkout or submodule state changed, not
-  guarded files, lists those commands, and names the pin file to delete once the change is
-  reviewed. A repository that uses either reads as drift for the rest of a session that was
+  guarded files, lists those commands, names the pin file the user deletes once the change is
+  reviewed, and tells the agent not to delete it or change the state itself. A repository that uses either reads as drift for the rest of a session that was
   running when usabl was upgraded. The default state adds no pin. Separately, a missing file is
   now left out only when `git sparse-checkout check-rules` says so with `core.ignorecase` both
   false and true: with the agent's `core.ignorecase=true`, `!/docs/` also matched `Docs/`, so a
