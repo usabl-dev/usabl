@@ -447,6 +447,28 @@
 
 ### Fixed
 
+- The Stop hook's deadline now fires whatever the checks do. It was a timer in the same thread as
+  the checks, and a timer cannot fire while code runs without a break, so an agent could hold a
+  stop past the host's limit: one source line of `import` and many spaces made the import reader
+  run for minutes, and 20,000 test files against 4,000 unresolved `#` imports held test-file
+  placement for 25 seconds in one piece. The host then ended the hook with no answer, and the stop
+  went on with nothing checked. Now the stop-hook command runs the checks in a worker thread and
+  keeps the deadline in its own thread, which does no check work. At the deadline it gives the
+  same out-of-time answer as before, a block, or one continuation let through, and saves no
+  receipt; the rules for who owns the answer are unchanged. A stop held by the long line answered
+  at 15.06 seconds against a 15 second deadline and a 30 second limit, where before it answered at
+  38.0 seconds. A worker that ends before it answers gets the stop hook error answer, which does
+  not block, as any hook error does. Cost: the worker starts before the rest of usabl loads, so an
+  idle stop took about 4.3 seconds against 3.75 before, on a loaded 8-core machine. The checks
+  carry their own bounds too, for `usabl check` and CI: the import reader and the vite alias
+  reader read in time that grows with the length of the text, with the same answers, so the line
+  that took 20.9 seconds at 80,000 characters takes milliseconds, and 10,000 loader calls in one
+  file take 0.1 seconds instead of 13.4. A source file longer than 4,194,304 characters, or with a
+  line longer than 1,048,576, is read as one that may load any file, never as one with no imports.
+  Test-file placement finds the loads that name each file in an index, with the same placements
+  (0.6 seconds instead of 25 for the shape above), and charges its walks, its dynamic import
+  tests, and each test of a glob call with no pattern to match to the placement budget; past it,
+  the files left are gaps. The package now holds `dist/stop-hook-worker.js`.
 - The merge-base diff, the committed part of the changed list for `usabl check --trusted-ref`,
   `usabl check --branch-scope`, and the Stop hook, is now built from commits and trees checked
   against their ids. `git diff <ref>...HEAD` read trees as stored, so an agent that overwrote a
