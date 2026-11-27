@@ -6069,14 +6069,14 @@ huge file whole. A file at the trusted ref is sized by git from the stored objec
 only when it is within the limit. The trusted ref is turned into its commit id once, and every
 listing, size, and text of the requirement files is read at that id, so a branch that moves during
 the run cannot pair one file's size with another file's text. A ref that names no commit is read by
-its name, as before. A file with bytes that are not valid UTF-8, such as Latin-1
-letters, is counted by those bytes too, as it is stored. The message is `a requirement file can be
-at most 128 KiB; split it into smaller files`. A caller that hands the normalizer text it holds in
-memory, such as `usabl import figma` with the file it drafts, gets the same limit counted as the
-UTF-8 bytes of that text, which are the bytes it writes. Known limit: in a local run the guard
-(section 10) still reads every guarded file whole to compare it, requirement files included, before
-the loader runs. A 512 MiB requirement file costs the guard about 2 seconds and 570 MB, and the
-loader then refuses it. A size check in the guard is a separate change to a guarded path.
+its name, as before. A file with bytes that are not valid UTF-8, such as Latin-1 letters, is counted
+by those bytes too, as it is stored. The message is `a requirement file can be at most 128 KiB;
+split it into smaller files`. A caller that hands the normalizer text it holds in memory, such as
+`usabl import figma` with the file it drafts, gets the same limit counted as the UTF-8 bytes of that
+text, which are the bytes it writes. Known limit: in a local run the guard (section 10) still reads
+every guarded file whole to compare it, requirement files included, before the loader runs. A 512
+MiB requirement file costs the guard about 2 seconds and 570 MB, and the loader then refuses it. A
+size check in the guard is a separate change to a guarded path.
 
 The limit was picked by measurement: the densest bad file the list limits allow holds about 1.1
 problems for each byte, so a file at 128 KiB holds about 143,000 problems, and refusing it took
