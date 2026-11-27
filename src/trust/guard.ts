@@ -4,7 +4,7 @@
  * It must never mint a verdict or hide unguarded policy edits.
  */
 import { createHash } from 'node:crypto';
-import type { Deps, FsGlob, GitReader, StoredEntry, TreeEntry, UsablConfig } from '../contracts/index.js';
+import type { Deps, FsGlob, GitReader, PathKind, StoredEntry, TreeEntry, UsablConfig } from '../contracts/index.js';
 import { holdsNodeGlobSyntax } from '../deps/fs-glob-reading.js';
 import { operatorText } from '../intake/config-error.js';
 import { braceRangeIn, countBraceExpansions, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
@@ -615,20 +615,65 @@ function trackablePaths(paths: string[]): string[] {
 // a dot.
 const EVERY_FILE_UNDER = ['**', '**/.*', '**/.*/**'];
 
+// What is at a path without following a link at its last part: the reader's own look when it has
+// one, or else its byte read, which says the same of a folder, a link, and a file. Null when the
+// reader has neither.
+function kindReader(fs: FsGlob): ((path: string) => Promise<PathKind>) | null {
+  const pathKind = fs.pathKind;
+  if (pathKind !== undefined) {
+    return (path) => pathKind.call(fs, path);
+  }
+  const readBytes = fs.readBytes;
+  if (readBytes !== undefined) {
+    return async (path) => {
+      const found = await readBytes.call(fs, path);
+      return found === null ? null : found.kind === 'symlink' ? 'link' : found.kind;
+    };
+  }
+  return null;
+}
+
+// The first part of the path, from the root, that is there and is not a real folder: a link, a
+// file, or anything else. Each part is looked up on its own, so a link is never followed and the
+// file system resolves each name as it opens it. Null when every part is a folder, or when a part
+// is not there, since nothing is then below it.
+async function firstNonFolder(kindOf: (path: string) => Promise<PathKind>, path: string): Promise<string | null> {
+  const parts = path.split('/');
+  for (let end = 1; end <= parts.length; end += 1) {
+    const above = parts.slice(0, end).join('/');
+    const kind = await kindOf(above);
+    if (kind === null) {
+      return null;
+    }
+    if (kind !== 'folder') {
+      return above;
+    }
+  }
+  return null;
+}
+
 /**
  * What the working tree holds at a literal entry, with its name read as plain text. Node's glob
  * has no escape, so a name such as `reqs[1]` put into a pattern lists `reqs1`, and a name past the
  * glob reading bound lists nothing. So the files under the entry are listed with the entry as the
- * walk's start, less git's own data below it. The entry itself is looked up by name in its folder:
- * a file or a link there is listed, as a pattern that names it lists it, and a folder is not.
+ * walk's start, less git's own data below it.
  *
- * Null when the reader cannot list a folder that way and the name holds no glob syntax: the
- * patterns then read the name as written. When the name does hold glob syntax, no pattern can
- * name it, so this throws rather than list another folder. A guard that throws blocks the stop.
+ * The entry's path is also looked up one part at a time, from the root, the way the file system
+ * opens it, so a volume that ignores case finds a link named `POLICY` for the entry `policy`. The
+ * first part that is a link, a file, or anything but a real folder is listed by its own name: the
+ * entry itself when it is a file or a link, or a folder above it that is now a link or a file. A
+ * path below a link reads as nothing on both sides, so without that part the guard would compare
+ * nothing there. This costs one look per part, never a listing of the folder that holds the entry.
+ *
+ * Null when the reader cannot list a folder that way, or cannot look a path up, and the name holds
+ * no glob syntax: the patterns then read the name as written. When the name does hold glob syntax,
+ * no pattern can name it, so this throws rather than list another folder. A guard that throws
+ * blocks the stop.
  */
 async function literalEntryFiles(fs: FsGlob, path: string): Promise<string[] | null> {
   const globUnder = fs.globUnder;
-  if (globUnder === undefined) {
+  const kindOf = kindReader(fs);
+  if (globUnder === undefined || kindOf === null) {
     if (holdsNodeGlobSyntax(path)) {
       throw new Error(
         `usabl cannot list the guarded path ${operatorText(path)} on the working tree: its name holds characters a ` +
@@ -637,21 +682,15 @@ async function literalEntryFiles(fs: FsGlob, path: string): Promise<string[] | n
     }
     return null;
   }
-  const slash = path.lastIndexOf('/');
-  const folder = slash === -1 ? '' : path.slice(0, slash);
-  const name = path.slice(slash + 1);
-  const [under, beside] = await Promise.all([
-    globUnder.call(fs, path, EVERY_FILE_UNDER),
-    globUnder.call(fs, folder, [name.startsWith('.') ? '.*' : '*']),
-  ]);
+  const [under, notFolder] = await Promise.all([globUnder.call(fs, path, EVERY_FILE_UNDER), firstNonFolder(kindOf, path)]);
   const prefix = path + '/';
   // Only the part below the entry is checked for `.git`, so an entry inside such a folder still
   // lists its plain files, as its patterns did. Node lists the walk's start as `<path>/` when it is
-  // not a folder; the lookup by name finds it instead.
+  // not a folder; the lookup by part finds it instead.
   const files = under.filter(
     (found) => found.startsWith(prefix) && found.length > prefix.length && !found.slice(prefix.length).split('/').includes('.git'),
   );
-  return [...new Set([...(beside.includes(path) ? [path] : []), ...files])].sort();
+  return [...new Set([...(notFolder === null ? [] : [notFolder]), ...files])].sort();
 }
 
 // What fs.glob finds for one entry. A literal entry is listed by its name. Any other entry gets the

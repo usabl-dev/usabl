@@ -9,7 +9,7 @@
  * use: buildDeps is replaced so no browser starts, and the check runner records what it scanned.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ import type { Deps, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
+import { caseInsensitiveFolder, folderIgnoresCase } from '../support/case-insensitive-folder.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const state = vi.hoisted(() => ({ scanned: [] as string[] }));
@@ -48,6 +49,10 @@ const { makeStopHookRunnerPorts, runStopHookFromStdin } = await import('../../sr
 const { memoryPinStore } = await import('../support/memory-pin-store.js');
 
 const posixOnly = process.platform === 'win32' ? it.skip : it;
+const folded = await caseInsensitiveFolder();
+const onFoldedVolume = folded.base === null || process.platform === 'win32' ? it.skip : it;
+// On a file system that ignores case, a folder named in another case is the same folder.
+const onCaseKeepingVolume = process.platform === 'win32' || (await folderIgnoresCase(tmpdir())) ? it.skip : it;
 
 // One approved requirement, so the requirements folder loads.
 const REQUIREMENT = [
@@ -88,7 +93,7 @@ async function write(path: string, text: string): Promise<void> {
   await writeFile(join(repo, path), text);
 }
 
-function configFor(requirements: string): UsablConfig {
+function configFor(requirements: string, guardedPaths: string[] = []): UsablConfig {
   return {
     appBaseUrl: 'http://127.0.0.1:5173',
     uiFileGlobs: ['src/**'],
@@ -97,22 +102,28 @@ function configFor(requirements: string): UsablConfig {
       { id: 'home', url: 'http://127.0.0.1:5173/', files: ['src/App.tsx'] },
       { id: 'other', url: 'http://127.0.0.1:5173/other', files: ['src/Other.tsx'] },
     ],
-    guardedPaths: [],
+    guardedPaths,
     requirements,
   };
 }
 
 /**
- * A feature branch whose one commit changes src/Other.tsx, so a check has a screen to verify and
- * mints a receipt. The requirements folder holds one committed file.
+ * A repository in a new folder under the base folder, on a feature branch whose one commit changes
+ * src/Other.tsx, so a check has a screen to verify and mints a receipt. The requirements folder
+ * holds one committed file.
  */
-async function setUp(requirements: string): Promise<void> {
+async function setUp(requirements: string, options: { base?: string; guardedPaths?: string[]; files?: string[] } = {}): Promise<void> {
+  repo = await realpath(await mkdtemp(join(options.base ?? tmpdir(), 'usabl-literal-stop-')));
+  process.chdir(repo);
   git('init', '-q', '-b', 'main');
   await write('.gitignore', '.usabl/\n');
-  await write('usabl.config.json', JSON.stringify(configFor(requirements), null, 2) + '\n');
+  await write('usabl.config.json', JSON.stringify(configFor(requirements, options.guardedPaths), null, 2) + '\n');
   await write('src/App.tsx', 'export const App = 1;\n');
   await write('src/Other.tsx', 'export const Other = 1;\n');
   await write(`${requirements}/old.yaml`, REQUIREMENT);
+  for (const path of options.files ?? []) {
+    await write(path, '{}\n');
+  }
   git('add', '-A');
   git('commit', '-q', '-m', 'init');
   git('update-ref', 'refs/remotes/origin/main', 'main');
@@ -164,8 +175,7 @@ beforeEach(async () => {
   process.env['XDG_CONFIG_HOME'] = join(home, '.config');
   delete process.env['GIT_CONFIG_GLOBAL'];
   process.env['GIT_CONFIG_NOSYSTEM'] = '1';
-  repo = await realpath(await mkdtemp(join(tmpdir(), 'usabl-literal-stop-')));
-  process.chdir(repo);
+  repo = '';
   const capture = ((text: string | Uint8Array) => {
     printed.push(String(text));
     return true;
@@ -184,7 +194,9 @@ afterEach(async () => {
       process.env[key] = value;
     }
   }
-  await rm(repo, { recursive: true, force: true });
+  if (repo !== '') {
+    await rm(repo, { recursive: true, force: true });
+  }
   await rm(home, { recursive: true, force: true });
 });
 
@@ -233,12 +245,64 @@ describe('an honest repository with a requirements folder named with glob syntax
     expect(blockOf(next.stdout).decision).toBeUndefined();
   });
 
-  posixOnly('verifies a stop with a new file in a folder whose name differs only in case', async () => {
+  onCaseKeepingVolume('verifies a stop with a new file in a folder whose name differs only in case', async () => {
     await setUp('reqs[1]');
     await verifiedStop();
     await write('Reqs[1]/new.txt', 'notes\n');
     const next = await stop();
     expect(next.stderr).toMatch(/^VERIFIED/mu);
     expect(blockOf(next.stdout).decision).toBeUndefined();
+  });
+});
+
+/** The next stop blocks for approval, checks nothing from the receipt, and names the path. */
+async function expectGuardedBlock(name: string, input = '{}', pins = memoryPinStore()): Promise<void> {
+  const next = await stop(input, pins);
+  expect(next.stderr).not.toContain(FAST_PATH);
+  expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+  const block = blockOf(next.stdout);
+  expect(block.decision).toBe('block');
+  expect(block.reason).toContain(name);
+}
+
+describe(`a link at a literal entry named in another case${folded.reason === null ? '' : ` (skipped: ${folded.reason})`}`, { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  onFoldedVolume('blocks the next stop, and usabl check needs approval', async () => {
+    await setUp('reqs', { base: folded.base ?? tmpdir(), guardedPaths: ['policy'] });
+    await verifiedStop();
+    await write('stuff/p.json', '{}\n');
+    await symlink('stuff', join(repo, 'POLICY'));
+    await expectGuardedBlock('policy');
+    printed.length = 0;
+    expect(await main(['check', '--branch-scope']), printed.join('')).toBe(2);
+  });
+
+  onFoldedVolume('blocks every stop of a session that starts with the link in place', async () => {
+    await setUp('reqs', { base: folded.base ?? tmpdir(), guardedPaths: ['policy'] });
+    printed.length = 0;
+    expect(await main(['check', '--branch-scope']), printed.join('')).toBe(0);
+    await write('stuff/p.json', '{}\n');
+    await symlink('stuff', join(repo, 'POLICY'));
+    const pins = memoryPinStore();
+    await expectGuardedBlock('policy', '{"session_id":"s2"}', pins);
+    await expectGuardedBlock('policy', '{"session_id":"s2"}', pins);
+  });
+});
+
+describe('a folder above a literal entry replaced by a link inside the repository', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  posixOnly('blocks the next stop, and usabl check needs approval', async () => {
+    await setUp('reqs', { guardedPaths: ['a/policy'] });
+    await verifiedStop();
+    await write('stuff/policy/p.json', '{}\n');
+    await symlink('stuff', join(repo, 'a'));
+    await expectGuardedBlock('a');
+    printed.length = 0;
+    expect(await main(['check', '--branch-scope']), printed.join('')).toBe(2);
+  });
+
+  posixOnly('answers from the receipt when the folders above the entry are real folders', async () => {
+    await setUp('reqs', { guardedPaths: ['a/policy'], files: ['a/policy/p.json'] });
+    await verifiedStop();
+    const next = await stop();
+    expect(next.stderr).toContain(FAST_PATH);
   });
 });
