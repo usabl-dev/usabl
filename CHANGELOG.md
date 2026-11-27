@@ -453,14 +453,21 @@
   `reqs[1]`, listed another folder (`reqs1`) or none, and a name past the glob reading bound listed
   nothing. A new untracked file in that folder was then not seen until it was committed, and the
   Stop hook said VERIFIED. Now the files under the entry are listed with the entry as the walk's
-  start, and the entry itself, when it is a file or a link, is found by name in its folder. Gate
-  effect: such a file is a guarded change, so the stop blocks for approval. Listing change: a name
-  with only `*` or `?`, such as `reqs*`, no longer adds the files of the other folders its pattern
-  matched, and a glob entry keeps what it matched. A file reader without the folder listing lists
-  a name with no glob syntax as before and throws for a name with glob syntax, which blocks the
-  stop as a guard failure. Cost on this repository (15 literal entries): the same 60 listings per
-  guard check and pin computation, and the same time within noise, 73 to 79 ms for the guard and
-  194 to 212 ms for the pins, with the same pins.
+  start, and the entry's path is looked up one part at a time with `lstat`, the way the file
+  system opens it. The first part that is a link, a file, or anything but a real folder is listed
+  and compared. So a folder above a literal entry with nothing at `HEAD`, replaced by a link to a
+  folder inside the repository (`a -> stuff` for `a/policy`), is reported; before, every file
+  below it read as nothing on both sides and the stop said VERIFIED. On a volume that ignores
+  case, a link named `POLICY` at the entry `policy` is found as the entry. Gate effect: these stops
+  block for approval. Listing change: a name with only `*` or `?`, such as `reqs*`, no longer adds
+  the files of the other folders its pattern matched, a glob entry keeps what it matched, and a
+  link committed above a literal entry is reported on every check. A file reader that cannot list
+  a folder by name or look a path up lists a name with no glob syntax as before and throws for a
+  name with glob syntax, which blocks the stop as a guard failure. Cost: one `lstat` for each part
+  of an entry's path, and no listing of the folder that holds it. On this repository (15 literal
+  entries) the guard took 49 to 69 ms against 68 to 137 ms before, and the pins 161 to 169 ms
+  against 172 to 231 ms, with the same pins. On a repository with 100,000 files at its root, the
+  guard took 66 to 78 ms against 62 to 98 ms before.
 - `usabl install --branch-rule` and `usabl doctor` take the gate's trigger only when two readings
   agree. They took the first `  pull_request:` line anywhere in the file, so text shaped like a
   trigger named the branch: in a `run-name: |` block above `on:`, in a quoted value that runs over
