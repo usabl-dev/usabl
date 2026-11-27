@@ -896,14 +896,29 @@ export function pinsAreCurrent(pins: SessionPins): boolean {
  * Session pins fingerprint committed state for later stop-hook reuse: one listing of HEAD gives
  * each guarded path's mode and id. A link that does not resolve pins the same on every stop, and
  * the local guard reports it as changed on every stop instead.
+ *
+ * The pins also carry the local checkout state, by the names git.checkoutState gives: the sparse
+ * checkout settings and pattern file, and the empty submodule folders. The changed list reads a
+ * missing file as left out on purpose under that state, so an agent that wrote its own patterns,
+ * or emptied a submodule folder, and deleted a screen file got a list without it. Only the pins
+ * remember the state from the start of the session, so a change to it is drift, as a changed
+ * guarded file is. A guarded path with the same name pins both texts, so neither one hides the
+ * other.
  * This unit stays pure and does not write pin state to disk.
  */
 export async function computeSessionPins(deps: Deps, config: UsablConfig): Promise<SessionPins> {
   const { paths, listings } = await expandWithListings(deps, readGuardedEntries(config), ['HEAD']);
   const head = listings.get('HEAD') ?? new Map<string, TreeEntry>();
-  const pins: SessionPins = {};
+  const texts = new Map<string, string>();
   for (const path of paths) {
-    pins[path] = pinOf(await refIdentity(deps.git, 'HEAD', path, head.get(path) ?? null));
+    texts.set(path, (await refIdentity(deps.git, 'HEAD', path, head.get(path) ?? null)).text);
+  }
+  for (const [name, state] of Object.entries(await deps.git.checkoutState())) {
+    texts.set(name, JSON.stringify(['checkout state', state, texts.get(name) ?? null]));
+  }
+  const pins: SessionPins = {};
+  for (const name of [...texts.keys()].sort()) {
+    pins[name] = pinOf({ text: texts.get(name) ?? '' });
   }
   return pins;
 }

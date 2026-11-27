@@ -19,6 +19,7 @@ import type { Deps, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
+import { patchCommitGraphParent } from '../support/commit-graph.js';
 import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const state = vi.hoisted(() => ({ scanned: [] as string[] }));
@@ -127,13 +128,14 @@ async function verifiedStop(): Promise<void> {
   expect(first.stderr).toContain(FAST_PATH);
 }
 
-async function stop(input = '{}'): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
+// A stop with no session id compares no pins. A test of session drift passes one store to every stop.
+async function stop(input = '{}', pins = memoryPinStore()): Promise<{ stdout: string; stderr: string; scanned: string[] }> {
   const out: string[] = [];
   const decision: string[] = [];
   state.scanned = [];
   const ports = {
     ...makeStopHookRunnerPorts({ startDir: repo, env: {} }),
-    pins: memoryPinStore(),
+    pins,
     stdoutWrite: async (text: string) => {
       decision.push(text);
     },
@@ -562,5 +564,315 @@ describe('a HEAD commit object overwritten with other bytes, after a verified st
     const block = blockOf(next.stdout);
     expect(block.decision).toBe('block');
     expect(block.reason).toMatch(/git fsck/u);
+  });
+});
+
+/** A tree object written to the store from a listing in git ls-tree's form: its id and bytes. */
+function makeTree(listing: string): { id: string; raw: Buffer } {
+  const id = execFileSync('git', ['mktree'], { cwd: repo, input: listing, encoding: 'utf8' }).trim();
+  return { id, raw: execFileSync('git', ['cat-file', 'tree', id], { cwd: repo }) };
+}
+
+async function forgeObject(id: string, type: 'tree' | 'commit', content: Buffer): Promise<void> {
+  const object = join(repo, '.git/objects', id.slice(0, 2), id.slice(2));
+  await chmod(object, 0o644);
+  await writeFile(object, deflateSync(Buffer.concat([Buffer.from(`${type} ${String(content.length)}\0`), content])));
+}
+
+// The src tree of a commit that holds the edited screen and the other screen as `commit` has it.
+function srcWithEdit(commit: string): { id: string; raw: Buffer } {
+  const edited = git('rev-parse', 'HEAD:src/App.tsx').trim();
+  const other = git('rev-parse', `${commit}:src/Other.tsx`).trim();
+  return makeTree(`100644 blob ${edited}\tApp.tsx\n100644 blob ${other}\tOther.tsx\n`);
+}
+
+describe('a committed edit hidden by a forged object on the trusted side', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks the stop, naming git fsck, when a tree only the trusted side holds is forged to list the edit', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const trustedSrc = git('rev-parse', 'origin/main:src').trim();
+    await forgeObject(trustedSrc, 'tree', srcWithEdit('origin/main').raw);
+    // git diff reads the forged tree as stored, so it lists the other screen only.
+    expect(git('diff', '--name-only', 'origin/main...HEAD').trim()).toBe('src/Other.tsx');
+    const next = await stop();
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toEqual([]);
+    const block = blockOf(next.stdout);
+    expect(block.decision).toBe('block');
+    expect(block.reason).toMatch(/git fsck/u);
+  });
+
+  it('fails usabl check --trusted-ref, naming git fsck, when the merge base commit is forged to name a tree that holds the edit', async () => {
+    await setUp();
+    // The trusted branch moves on, so the merge base is a commit git reaches only through parents.
+    git('switch', '-q', 'main');
+    await write('README.md', 'notes\n');
+    git('add', 'README.md');
+    git('commit', '-q', '-m', 'the trusted branch moves on');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const base = git('merge-base', 'origin/main', 'HEAD').trim();
+    const root = makeTree(
+      `100644 blob ${git('rev-parse', `${base}:.gitignore`).trim()}\t.gitignore\n` +
+        `040000 tree ${srcWithEdit(base).id}\tsrc\n` +
+        `100644 blob ${git('rev-parse', `${base}:usabl.config.json`).trim()}\tusabl.config.json\n`,
+    );
+    const text = git('cat-file', 'commit', base);
+    await forgeObject(base, 'commit', Buffer.from(text.replace(/^tree [0-9a-f]+\n/u, `tree ${root.id}\n`)));
+    expect(git('diff', '--name-only', 'origin/main...HEAD').trim()).toBe('src/Other.tsx');
+    state.scanned = [];
+    // A listing that fails stops the check with an error, never a run on a list it could not read.
+    const result = await checkOutput('--trusted-ref', 'origin/main').then(
+      (done) => done.printed,
+      (err: unknown) => `failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    expect(result).not.toMatch(/VERIFIED \(exit 0\)/u);
+    expect(result).toMatch(/^failed: .*git fsck/u);
+    expect(state.scanned).toEqual([]);
+  });
+
+  it('blocks the stop when the starting commit itself is forged', async () => {
+    await setUp();
+    await verifiedStop();
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    const start = git('rev-parse', 'origin/main').trim();
+    const text = git('cat-file', 'commit', start);
+    await forgeObject(start, 'commit', Buffer.from(text.replace(/^tree [0-9a-f]+\n/u, `tree ${git('rev-parse', 'HEAD^{tree}').trim()}\n`)));
+    const next = await stop();
+    expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toEqual([]);
+    expect(blockOf(next.stdout).decision).toBe('block');
+  });
+});
+
+const SESSION = '{"session_id":"s1"}';
+type PinStore = ReturnType<typeof memoryPinStore>;
+
+/** The first stop of a session answers from the receipt the check minted, and records the pins. */
+async function firstSessionStop(pins: PinStore): Promise<void> {
+  state.scanned = [];
+  expect(await main(['check', '--branch-scope'])).toBe(0);
+  const first = await stop(SESSION, pins);
+  expect(first.stderr).toContain(FAST_PATH);
+  expect(pins.files.size).toBe(1);
+}
+
+/** A later stop of the session blocks as session drift, names the state, and checks nothing. */
+async function expectDrift(pins: PinStore, name: string): Promise<void> {
+  const next = await stop(SESSION, pins);
+  expect(next.stderr).not.toMatch(/^VERIFIED/mu);
+  expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+  expect(next.scanned).toEqual([]);
+  const block = blockOf(next.stdout);
+  expect(block.decision).toBe('block');
+  expect(block.reason).toMatch(/guarded policy drift during this session/u);
+  expect(block.reason).toContain(name);
+}
+
+async function changedPaths(): Promise<string[]> {
+  return (await makeGitReader({ cwd: repo }).statusZ()).map((entry) => entry.path);
+}
+
+// A folder the sparse patterns leave out of an honest checkout, set up before the session starts.
+async function withDocs(): Promise<void> {
+  await write('docs/Guide.md', 'guide\n');
+}
+
+describe('the sparse checkout state, pinned at the first stop of a session', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks as drift when the agent leaves a screen file out with its own patterns and deletes it', async () => {
+    const pins = memoryPinStore();
+    await setUp();
+    await firstSessionStop(pins);
+    git('config', 'core.sparseCheckout', 'true');
+    await write('.git/info/sparse-checkout', '/*\n!/src/App.tsx\n');
+    git('update-index', '--skip-worktree', 'src/App.tsx');
+    await rm(join(repo, 'src/App.tsx'));
+    // The walk reads the file as left out on purpose, so the changed list does not hold it.
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when sparse checkout is turned on during the session', async () => {
+    const pins = memoryPinStore();
+    await setUp();
+    await firstSessionStop(pins);
+    git('config', 'core.sparseCheckout', 'true');
+    await write('.git/info/sparse-checkout', '/*\n');
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when the pattern file is emptied', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    await writeFile(join(repo, '.git/info/sparse-checkout'), '');
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('blocks as drift when a folder stands in place of the pattern file', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    await rm(join(repo, '.git/info/sparse-checkout'));
+    await mkdir(join(repo, '.git/info/sparse-checkout'));
+    await expectDrift(pins, '.git/info/sparse-checkout');
+  });
+
+  it('never blocks an honest cone sparse checkout whose patterns do not change', async () => {
+    const pins = memoryPinStore();
+    await setUp(withDocs);
+    git('sparse-checkout', 'set', '--cone', 'src');
+    await firstSessionStop(pins);
+    const again = await stop(SESSION, pins);
+    expect(again.stdout).toBe('');
+    expect(again.stderr).toContain(FAST_PATH);
+    await write('src/App.tsx', APP_EDITED);
+    const edited = await stop(SESSION, pins);
+    expect(blockOf(edited.stdout).reason ?? '').not.toMatch(/drift/u);
+    expect(edited.stderr).not.toContain(FAST_PATH);
+    expect(edited.scanned).toContain('home');
+  });
+});
+
+describe('a submodule folder emptied during a session', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('blocks as drift when the agent empties an initialized submodule folder, its .git included', async () => {
+    const pins = memoryPinStore();
+    const lib = join(home, 'lib-source');
+    await mkdir(lib);
+    gitIn(lib, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = "<label>x</label>";\n', lib);
+    gitIn(lib, 'add', '-A');
+    gitIn(lib, 'commit', '-q', '-m', 'lib');
+    await setUp(async () => {
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'lib');
+    });
+    await firstSessionStop(pins);
+    await rm(join(repo, 'lib/ui'), { recursive: true });
+    await rm(join(repo, 'lib/.git'), { recursive: true, force: true });
+    // An empty submodule folder reads as never set up, so the changed list does not hold its files.
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/modules');
+  });
+
+  it('blocks as drift when a submodule inside a submodule is dropped from it and its folder emptied', async () => {
+    const pins = memoryPinStore();
+    const deep = join(home, 'deep-source');
+    await mkdir(deep);
+    gitIn(deep, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = "<label>x</label>";\n', deep);
+    gitIn(deep, 'add', '-A');
+    gitIn(deep, 'commit', '-q', '-m', 'deep');
+    const mid = join(home, 'mid-source');
+    await mkdir(mid);
+    gitIn(mid, 'init', '-q', '-b', 'main');
+    await write('README.md', 'mid\n', mid);
+    gitIn(mid, 'add', '-A');
+    gitIn(mid, 'commit', '-q', '-m', 'mid');
+    gitIn(mid, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', deep, 'ui');
+    gitIn(mid, 'commit', '-q', '-m', 'add deep');
+    await setUp(async () => {
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', mid, 'lib');
+      gitIn(repo, '-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init', '--recursive');
+    });
+    await firstSessionStop(pins);
+    // In the middle submodule: a commit without the nested gitlink, and the nested folder emptied.
+    const inner = join(repo, 'lib');
+    gitIn(inner, 'rm', '-q', '--cached', 'ui');
+    gitIn(inner, 'commit', '-q', '-m', 'drop ui');
+    await rm(join(inner, 'ui'), { recursive: true, force: true });
+    await mkdir(join(inner, 'ui'));
+    expect(await changedPaths()).toEqual([]);
+    await expectDrift(pins, '.git/modules');
+  });
+});
+
+describe('a case setting that changes what the sparse patterns answer', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('checks a screen file inside honest patterns that is deleted under core.ignorecase=true', async () => {
+    const pins = memoryPinStore();
+    await setUp(async () => {
+      await write('docs/a.md', 'a\n');
+      // Docs/Page.tsx is a screen file inside the honest patterns, so it is on disk.
+      await write('Docs/Page.tsx', 'export const Page = 1;\n');
+      const withDocs: UsablConfig = {
+        ...config,
+        uiFileGlobs: [...config.uiFileGlobs, 'Docs/**'],
+        surfaces: [...config.surfaces, { id: 'docs', url: 'http://127.0.0.1:5173/docs', files: ['Docs/Page.tsx'] }],
+      };
+      await write('usabl.config.json', JSON.stringify(withDocs, null, 2) + '\n');
+    });
+    git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await firstSessionStop(pins);
+    git('config', 'core.ignorecase', 'true');
+    git('update-index', '--skip-worktree', 'Docs/Page.tsx');
+    await rm(join(repo, 'Docs/Page.tsx'));
+    const next = await stop(SESSION, pins);
+    expect(next.stderr).not.toContain(FAST_PATH);
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toContain('docs');
+  });
+});
+
+describe('a commit-graph file that moves the merge base', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('checks a committed screen edit when the commit-graph makes HEAD a parent of a trusted commit', async () => {
+    await setUp();
+    git('switch', '-q', 'main');
+    await write('NOTES.md', 'n1\n');
+    git('add', 'NOTES.md');
+    git('commit', '-q', '-m', 'n1');
+    await write('NOTES.md', 'n2\n');
+    git('commit', '-q', '-am', 'n2');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    await write('src/App.tsx', APP_EDITED);
+    git('commit', '-q', '-am', 'edit the screen');
+    git('commit-graph', 'write', '--reachable', '--no-progress');
+    const graph = join(repo, '.git/objects/info/commit-graph');
+    await chmod(graph, 0o644);
+    const head = git('rev-parse', 'HEAD').trim();
+    patchCommitGraphParent(graph, git('rev-parse', 'origin/main~1').trim(), head);
+    expect(git('merge-base', 'origin/main', 'HEAD').trim()).toBe(head);
+    const next = await stop();
+    expect(next.stderr).not.toContain(NOTHING_TO_CHECK);
+    expect(next.scanned).toContain('home');
+  });
+});
+
+describe('honest checkout changes that block as drift', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  it('names the checkout state and says how to go on after a merge that adds a submodule', async () => {
+    const pins = memoryPinStore();
+    const lib = join(home, 'lib-source');
+    await mkdir(lib);
+    gitIn(lib, 'init', '-q', '-b', 'main');
+    await write('ui/Lib.tsx', 'export const Lib = 1;\n', lib);
+    gitIn(lib, 'add', '-A');
+    gitIn(lib, 'commit', '-q', '-m', 'lib');
+    await setUp();
+    await firstSessionStop(pins);
+    git('switch', '-q', 'main');
+    // A teammate's commit that adds a submodule: the gitlink and .gitmodules, nothing cloned here.
+    await write('.gitmodules', `[submodule "vendor/lib"]\n\tpath = vendor/lib\n\turl = ${lib}\n`);
+    git('add', '.gitmodules');
+    git('update-index', '--add', '--cacheinfo', `160000,${gitIn(lib, 'rev-parse', 'HEAD').trim()},vendor/lib`);
+    git('commit', '-q', '-m', 'add a submodule');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    git('switch', '-q', 'feature');
+    git('merge', '-q', '--no-edit', 'main');
+    await expectDrift(pins, '.git/modules');
+    const reason = blockOf((await stop(SESSION, pins)).stdout).reason ?? '';
+    expect(reason).toMatch(/sparse checkout or submodule state changed/u);
+    expect(reason).toMatch(/git submodule update --init/u);
+    expect(reason).toMatch(/pin fix: /u);
+    expect(reason).toMatch(/the user deletes the pin file/u);
+    expect(reason).toMatch(/Do not delete the pin file or change the state yourself to clear this block\./u);
+    expect(reason).not.toMatch(/Do not edit those files/u);
   });
 });

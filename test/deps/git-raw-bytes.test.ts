@@ -387,6 +387,19 @@ describe('a sparse pattern file git cannot answer from', { timeout: REAL_PROCESS
     await rm(join(repo, 'src/App.tsx'));
     expect(await paths()).toEqual(['src/App.tsx']);
   });
+
+  // With core.ignorecase true, git sparse-checkout check-rules matched !/docs/ against Docs/ too, so
+  // a deleted file inside the honest patterns read as left out on purpose.
+  it('lists a deleted skip-worktree file inside the patterns when core.ignorecase is true', async () => {
+    await write('docs/a.md', 'a\n');
+    await write('Docs/Page.tsx', 'export const Page = 1;\n');
+    await commitAll('docs');
+    await git('sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await git('config', 'core.ignorecase', 'true');
+    await git('update-index', '--skip-worktree', 'Docs/Page.tsx');
+    await rm(join(repo, 'Docs/Page.tsx'));
+    expect(await paths()).toEqual(['Docs/Page.tsx']);
+  });
 });
 
 // Overwrites the loose object file of an id with other bytes of the given type. git does not check
