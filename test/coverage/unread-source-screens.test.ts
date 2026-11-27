@@ -1,9 +1,10 @@
 /**
  * A file past the import reader's size caps is not read for imports, so it may load any file. A
- * screen whose import closure holds such a file therefore reaches every changed UI file, and is
- * planned for each one. Before this, the screen was planned only for the files it reached by
- * the imports usabl did read, so a shared component that the screen loads through the big file
- * was checked on another screen alone, with no gap.
+ * screen whose import closure holds such a file is therefore planned for every changed UI file.
+ * Before this, the screen was planned only for the files it reached by the imports usabl did
+ * read, so a shared component that the screen loads through the big file was checked on another
+ * screen alone, with no gap. A changed file that no read import reaches and no surface lists stays
+ * an unresolved gap too: that the unread file may load it is a guess, and a guess is never a pass.
  */
 import { describe, expect, it } from 'vitest';
 import type { UsablConfig } from '../../src/contracts/index.js';
@@ -64,20 +65,27 @@ describe.each(Object.entries(FILLERS))('a screen whose closure holds a file past
     expect(coverage.gaps).toEqual([]);
   });
 
-  it('is planned for a changed file only the unread file imports', async () => {
+  // No import usabl read reaches these files, so "the unread file may load it" is a guess, and a
+  // wrong guess must be a gap, never a pass. The screen is still planned, and the gap stays.
+  it('is planned for a changed file only the unread file imports, and the file stays a gap naming it', async () => {
     const coverage = await computeCoverage(fs, config, ['src/OnlyY.tsx']);
 
     expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['y']);
-    expect(coverage.unresolvedFiles).toEqual([]);
-    expect(coverage.gaps).toEqual([]);
+    expect(coverage.unresolvedFiles).toEqual(['src/OnlyY.tsx']);
+    expect(coverage.gaps).toHaveLength(1);
+    expect(coverage.gaps[0]).toMatchObject({ ref: 'src/OnlyY.tsx', state: 'unresolved' });
+    expect(coverage.gaps[0]?.reason).toContain('src/Big.tsx was not read for imports');
   });
 
-  it('is planned for a changed file that no import usabl read reaches', async () => {
+  it('is planned for a changed file that no import usabl read reaches, and the file stays a gap', async () => {
     const coverage = await computeCoverage(fs, config, ['src/Orphan.tsx']);
 
     expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['y']);
-    expect(coverage.gaps).toEqual([]);
+    expect(coverage.unresolvedFiles).toEqual(['src/Orphan.tsx']);
+    expect(coverage.gaps).toHaveLength(1);
+    expect(coverage.gaps[0]?.reason).toContain('src/Big.tsx was not read for imports');
   });
+
 });
 
 describe('screens with no unread file on their path', () => {
