@@ -458,17 +458,27 @@
   receipt; the rules for who owns the answer are unchanged. A stop held by the long line answered
   at 15.06 seconds against a 15 second deadline and a 30 second limit, where before it answered at
   38.0 seconds. A worker that ends before it answers gets the stop hook error answer, which does
-  not block, as any hook error does. Cost: the worker starts before the rest of usabl loads, so an
-  idle stop took about 4.3 seconds against 3.75 before, on a loaded 8-core machine. The checks
+  not block, as any hook error does. Cost: the worker starts before the rest of usabl loads, and a
+  stop takes about 0.5 to 0.9 seconds more on a loaded 8-core machine (medians: an idle stop 4.3
+  seconds against 3.75, and a stop that starts the browser 6.4 seconds against 5.55). The checks
   carry their own bounds too, for `usabl check` and CI: the import reader and the vite alias
   reader read in time that grows with the length of the text, with the same answers, so the line
   that took 20.9 seconds at 80,000 characters takes milliseconds, and 10,000 loader calls in one
   file take 0.1 seconds instead of 13.4. A source file longer than 4,194,304 characters, or with a
-  line longer than 1,048,576, is read as one that may load any file, never as one with no imports.
-  Test-file placement finds the loads that name each file in an index, with the same placements
+  line longer than 1,048,576, is read as one that may load any file, never as one with no imports,
+  so a screen whose imports reach it is checked for every changed UI file. Test-file placement finds the loads that name each file in an index, with the same placements
   (0.6 seconds instead of 25 for the shape above), and charges its walks, its dynamic import
   tests, and each test of a glob call with no pattern to match to the placement budget; past it,
   the files left are gaps. The package now holds `dist/stop-hook-worker.js`.
+- A named pipe in the working tree no longer keeps the Stop hook running. A plain read of a pipe
+  waits for a writer, and a process with such a read pending does not exit, so one `mkfifo
+  .usabl/bypass-once`, or a pipe at a source file a changed page imports, kept a stop running past
+  40 seconds against a 30 second limit, after its answer. Every read usabl makes from the working
+  tree now refuses a path that is not a regular file at once, never reads it as an empty file, and
+  the stop blocks once naming each refused path, with no receipt saved. The git check for a last
+  commit no longer holds the worker's thread, so a pipe in the git folder holds only git and the
+  deadline ends the stop. Limits: git run before the deadline starts, and Playwright's own read of
+  the saved session file after usabl checked it, are not covered (threat model, the timeout rule).
 - `usabl install --branch-rule` and `usabl doctor` take the gate's trigger only when two readings
   agree. They took the first `  pull_request:` line anywhere in the file, so text shaped like a
   trigger named the branch: in a `run-name: |` block above `on:`, in a quoted value that runs over
