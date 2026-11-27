@@ -447,13 +447,20 @@
 
 ### Fixed
 
-- `usabl install --branch-rule` and `usabl doctor` read the gate's trigger only inside the
-  top-level `on:` block. They took the first `  pull_request:` line anywhere in the file, so a
-  `run-name: |` block above `on:` that held text shaped like a trigger named the branch: with that
-  branch protected and GitHub's default, both said verified, exit 0 and wired, while the gate ran
-  on another branch. The CI install and the doctor workflow lines read the trigger the same way. A
-  lone CR now counts as a line break for the line the steps name, and a branch name over 255
-  characters reads as a trigger usabl cannot read, so no long name is printed. Gate effect: none.
+- `usabl install --branch-rule` and `usabl doctor` take the gate's trigger only when two readings
+  agree. They took the first `  pull_request:` line anywhere in the file, so text shaped like a
+  trigger named the branch: in a `run-name: |` block above `on:`, in a quoted value that runs over
+  several lines, behind a U+2028 line break, or under a second `on:` key. With that branch
+  protected and GitHub's default, both said verified, exit 0 and wired, while the gate ran on
+  another branch. Now the lines are read for the form usabl writes only after the first `on:`
+  line and before the next line that starts at the left margin, and the whole file is also read
+  as YAML with the failsafe schema. The trigger counts only when `on.pull_request.branches` is
+  exactly the one name the lines gave. A parse error, any other shape, or a different name is a
+  trigger usabl cannot read, so the check assumes `main`, exits 2 with "cannot verify", and doctor
+  reads unknown. The CI install and the doctor workflow lines read the lines the same way, without
+  the YAML check. A lone CR now counts as a line break for the line the steps name, and a branch
+  name over 255 characters reads as a trigger usabl cannot read, so no long name is printed. Gate
+  effect: none.
 - Node's `fs.glob` no longer gets a pattern part that can backtrack. usabl hands it each
   `guardedPaths` entry (the guard's working-tree listing and `usabl doctor`), `uiFileGlobs` and
   `discovery.wideBlastGlobs` (test-file placement, `usabl baseline`, and the docs output), and the
@@ -583,8 +590,9 @@
   dialog can be a large container, such as a results list, and one more row in the second load is
   not the change. When the edit removed an element (`heading-one-removed`, `page-title-removed`),
   the element that held the removed one counts as the changed element, because for a heading
-  straight in `main` the rest of it is the whole page. Elsewhere it makes the row `unreadable`,
-  because the two page loads differ. An expected rule anywhere on the screen still counts as
+  straight in `main` the rest of it is the whole page. Anywhere else it makes the row
+  `unreadable`, and the reason says the finding is not on the changed element, because the two
+  page loads can differ. An expected rule anywhere on the screen still counts as
   `caught`. The key and focus edits (`swallow-key` and `ignore-focus-calls`) also read
   as held when the page replaced the changed element with a new one, so a row could read `missed`
   with a false note. They now read as not held with the reason "an element the edit changed is no
