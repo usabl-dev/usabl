@@ -86,6 +86,37 @@ describe.each(Object.entries(FILLERS))('a screen whose closure holds a file past
     expect(coverage.gaps[0]?.reason).toContain('src/Big.tsx was not read for imports');
   });
 
+  it('keeps the gap when another screen may load the file through a template import', async () => {
+    const withW = makeFakeDeps({
+      files: {
+        ...files(filler),
+        'usabl.routes.json':
+          JSON.stringify({
+            routes: [
+              { screenId: 'x', url: '/x', entryFile: 'src/XPage.tsx' },
+              { screenId: 'y', url: '/y', entryFile: 'src/YPage.tsx' },
+              { screenId: 'w', url: '/w', entryFile: 'src/WPage.tsx' },
+            ],
+          }) + '\n',
+        'src/WPage.tsx': 'export const WPage = (name: string) => import(`./${name}`);\n',
+      },
+    }).fs;
+
+    const coverage = await computeCoverage(withW, config, ['src/Orphan.tsx']);
+
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['y']);
+    expect(coverage.unresolvedFiles).toEqual(['src/Orphan.tsx']);
+    expect(coverage.gaps).toHaveLength(1);
+  });
+
+  it('is planned with no gap, on its own screen too, for a changed file a surface lists', async () => {
+    const listed = { ...config, surfaces: [{ id: 'orphan', url: `${BASE}/orphan`, files: ['src/Orphan.tsx'] }] } as UsablConfig;
+
+    const coverage = await computeCoverage(fs, listed, ['src/Orphan.tsx']);
+
+    expect(coverage.affected.map((screen) => screen.screenId).sort()).toEqual(['orphan', 'y']);
+    expect(coverage.gaps).toEqual([]);
+  });
 });
 
 describe('screens with no unread file on their path', () => {

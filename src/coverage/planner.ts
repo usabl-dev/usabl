@@ -534,12 +534,15 @@ export async function computeCoverage(
     }
 
     let mapped = false;
+    // The unread files that may load this file, on the screens planned for it only because of
+    // them. They plan the screen, but they are a guess, so they never count as mapping the file.
+    const unreadGuesses: string[] = [];
     for (const route of attributedRoutes) {
       const closure = routeClosures.get(route.screenId);
       const unread = unreadOnPath.get(route.screenId);
       if (closure !== undefined && !closure.has(file) && unread !== undefined) {
-        // The screen reaches the file through a file whose imports usabl did not read.
-        mapped = true;
+        // The screen may reach the file through a file whose imports usabl did not read.
+        if (!unreadGuesses.includes(unread.reason)) unreadGuesses.push(unread.reason);
         addAffected(affectedByScreen, {
           screenId: route.screenId,
           url: manualUrlOverride(config, file, route.screenId) ?? routeUrl(config.appBaseUrl, route.url),
@@ -601,7 +604,13 @@ export async function computeCoverage(
         budgets.steps,
       );
       const note = budgets.steps.exhausted ? `${globBudgetLoadsNote(RUN_GLOB_MATCH_STEPS, 'the changed files')} ` : '';
-      gaps.push({ ref: file, state: 'unresolved', reason: `${note}${reason}` });
+      // A screen planned only because an unread file on its path may load this file is checked,
+      // but no import usabl read shows that it renders the file, so the file stays a gap.
+      const guess =
+        unreadGuesses.length === 0
+          ? ''
+          : `${unreadGuesses.join('; ')}. usabl checks each screen whose imports reach such a file, but no import usabl read reaches ${file}, so it stays a gap. `;
+      gaps.push({ ref: file, state: 'unresolved', reason: `${note}${guess}${reason}` });
     }
   }
 
