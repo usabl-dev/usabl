@@ -30,11 +30,14 @@ import {
   buildImportGraph,
   importMayLoad,
   type ImportGraphView,
+  LoadIndex,
   type PackageFolder,
   type PackageFolders,
   readPackageFolders,
+  testedForEachFile,
   type UnresolvableImport,
 } from './import-graph.js';
+import { GlobBudgetExhausted, type GlobMatchBudget } from '../primitives/match-glob.js';
 
 // The test file set. These are the files test tools load: tests, stories, test setup files, mocks,
 // and test helpers. Each one follows the same rule as any other test file. The names: a file
@@ -211,15 +214,25 @@ export type TestFilePlacement =
   // Nothing usabl found loads it.
   | { state: 'none' };
 
-// Every file reachable from `starts` along the graph's edges, the starts included.
-function reachable(graph: ImportGraphView, starts: Iterable<string>): Set<string> {
+// Every file reachable from `starts` along the graph's edges, the starts included. Each file it
+// reaches costs one step of the budget, and null means the budget ran out first.
+function reachable(graph: ImportGraphView, starts: Iterable<string>, budget?: GlobMatchBudget): Set<string> | null {
   const seen = new Set<string>();
   const queue = [...starts];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined || seen.has(current)) continue;
+  for (let at = 0; at < queue.length; at += 1) {
+    const current = queue[at]!;
+    if (seen.has(current)) continue;
+    if (budget !== undefined) {
+      if (budget.exhausted) return null;
+      try {
+        budget.charge(1);
+      } catch (err) {
+        if (err instanceof GlobBudgetExhausted) return null;
+        throw err;
+      }
+    }
     seen.add(current);
-    queue.push(...graph.get(current));
+    for (const next of graph.get(current)) queue.push(next);
   }
   return seen;
 }
@@ -299,6 +312,25 @@ export async function placeTestFiles(
     globImports: budgets.globImports,
   };
   const mayLoad = (entry: UnresolvableImport, file: string): boolean => importMayLoad(entry, file, packageFolders, budgets.placement);
+  // Whether any load may load the file, with the answer `loads.some(mayLoad)` gives and the same
+  // globs charged: the loads the index answers are looked up, and only the loads tested for each
+  // file that come before the first one found are tested.
+  let indexed: { loads: readonly UnresolvableImport[]; folders: PackageFolders; index: LoadIndex; firstEvery: number; tested: number[] } | null = null;
+  const anyLoadMayLoad = (loads: readonly UnresolvableImport[], file: string): boolean => {
+    if (indexed === null || indexed.loads !== loads || indexed.folders !== packageFolders) {
+      const index = new LoadIndex(loads, packageFolders, budgets.placement);
+      const tested = loads.flatMap((entry, at) => (testedForEachFile(entry) ? [at] : []));
+      let firstEvery = Infinity;
+      for (const at of index.everyFile) firstEvery = Math.min(firstEvery, at);
+      indexed = { loads, folders: packageFolders, index, firstEvery, tested };
+    }
+    const first = Math.min(indexed.index.matches(file)[0] ?? Infinity, indexed.firstEvery);
+    for (const at of indexed.tested) {
+      if (at > first) break;
+      if (mayLoad(loads[at]!, file)) return true;
+    }
+    return first !== Infinity;
+  };
   // The graph starts from every file the config names as app code, inside uiFileGlobs or not: the
   // files under uiFileGlobs that are not test files, the route entry files, the router file, the
   // files the wide-blast globs match that are not test files, and every surface's files. An
@@ -328,9 +360,7 @@ export async function placeTestFiles(
   for (;;) {
     const known = new Set(starts);
     packageFolders = await readPackageFolders(fs, universe, loads, packageFolderReads);
-    const found = universe.filter(
-      (file) => !loaded.visited.has(file) && !known.has(file) && loads.some((entry) => mayLoad(entry, file)),
-    );
+    const found = universe.filter((file) => !loaded.visited.has(file) && !known.has(file) && anyLoadMayLoad(loads, file));
     if (found.length === 0) break;
     starts = sortedUnique([...starts, ...found]);
     maybe = await buildImportGraph(fs, starts, aliases, options);
@@ -340,13 +370,27 @@ export async function placeTestFiles(
     loads = [...byKey.keys()].sort().map((key) => byKey.get(key)!);
   }
 
-  // For each load, the files it may reach. Worked out in memory from the graph already built.
+  // For each load, the files it may reach. Worked out in memory from the graph already built. The
+  // files each load names come from the index, one file at a time, so the work grows with the
+  // files and the loads that name them, not with every file times every load.
   const reachedBy = new Map<string, Set<string>>();
   if (maybe !== null) {
-    for (const entry of loads) {
-      const named = universe.filter((file) => !loaded.visited.has(file) && mayLoad(entry, file));
-      reachedBy.set(entryKey(entry), reachable(maybe, named));
-    }
+    const graph = maybe;
+    const candidates = universe.filter((file) => !loaded.visited.has(file));
+    const index = new LoadIndex(loads, packageFolders, budgets.placement);
+    const named: string[][] = loads.map(() => []);
+    for (const file of candidates) for (const at of index.matches(file)) named[at]!.push(file);
+    const everyFile = new Set(index.everyFile);
+    let everyReach: Set<string> | null = null;
+    // Once the budget is spent, a load reaches every file usabl knows of, so each is a gap.
+    const reach = (starts: readonly string[]): Set<string> => reachable(graph, starts, budgets.placement) ?? new Set(universe);
+    loads.forEach((entry, at) => {
+      let reached: Set<string>;
+      if (testedForEachFile(entry)) reached = reach(candidates.filter((file) => mayLoad(entry, file)));
+      else if (everyFile.has(at)) reached = everyReach ??= reach(candidates);
+      else reached = reach(named[at]!);
+      reachedBy.set(entryKey(entry), reached);
+    });
   }
 
   const placements = new Map<string, TestFilePlacement>();

@@ -1031,7 +1031,9 @@ export function importMayLoad(
   budget?: GlobMatchBudget,
 ): boolean {
   if (entry.kind === 'glob-import') {
-    if (entry.patterns === null || budget?.exhausted === true) return true;
+    // Each call costs one step, even for a call with no pattern to match, so a run of many such
+    // calls against many files is counted too.
+    if (entry.patterns === null || !chargeStep(budget, 1)) return true;
     const { patterns, below } = globEntryMatchers(entry, entry.patterns, budget);
     try {
       return patterns.some((matches) => matches(file)) || below.some((matches) => matches(file));
@@ -1041,6 +1043,9 @@ export function importMayLoad(
     }
   }
   if (entry.kind === 'dynamic-import') {
+    // A test costs about the length of the path for each fixed start and each name start.
+    const starts = (entry.prefixes?.length ?? 0) + (entry.nameStarts?.length ?? 0);
+    if (entry.prefixes !== null && !chargeStep(budget, 1 + starts * (file.length + 1))) return true;
     return (
       entry.prefixes === null ||
       entry.prefixes.some((prefix) => file.startsWith(prefix)) ||
@@ -1073,6 +1078,114 @@ export function importMayLoad(
     if (targetsMayName(folder.targets, file)) return true;
   }
   return false;
+}
+
+// Charges the budget, if there is one. False once it is spent, which means the load may load the
+// file.
+function chargeStep(budget: GlobMatchBudget | undefined, steps: number): boolean {
+  if (budget === undefined) return true;
+  if (budget.exhausted) return false;
+  try {
+    budget.charge(steps);
+    return true;
+  } catch (err) {
+    if (err instanceof GlobBudgetExhausted) return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether importMayLoad answers for a load by testing it against each file, charging the budget.
+ * Every other load is answered by a LoadIndex.
+ */
+export function testedForEachFile(entry: UnresolvableImport): boolean {
+  return (entry.kind === 'glob-import' && entry.patterns !== null) || (entry.kind === 'dynamic-import' && entry.prefixes !== null);
+}
+
+/**
+ * The loads of one placement, sorted by what a file must have for each of them to load it: a name,
+ * a folder above it, or nothing at all. A file is then checked against the few loads that could
+ * reach it, not against every load, and each answer is the one importMayLoad gives for the pair.
+ * The loads testedForEachFile names are left out: the caller asks importMayLoad for those.
+ *
+ * A package folder whose package.json names files costs a test for each file. That work is charged
+ * to the budget, and once the budget is spent, the loads that name the folder may load the file.
+ */
+export class LoadIndex {
+  private readonly anyFile: number[] = [];
+  private readonly byLastSegment = new Map<string, number[]>();
+  private readonly byName = new Map<string, number[]>();
+  // Loads that may load any file below a folder: by the folder path, as the file starts with it.
+  private readonly byFolder = new Map<string, number[]>();
+  private readonly byFile = new Map<string, number[]>();
+  private readonly folderTargets: Array<{ targets: NonNullable<PackageFolder['targets']>; loads: number[] }> = [];
+
+  constructor(
+    loads: readonly UnresolvableImport[],
+    packageFolders: PackageFolders,
+    private readonly budget?: GlobMatchBudget,
+  ) {
+    const add = (map: Map<string, number[]>, key: string, index: number): void => {
+      const list = map.get(key);
+      if (list === undefined) map.set(key, [index]);
+      else if (list[list.length - 1] !== index) list.push(index);
+    };
+    loads.forEach((entry, index) => {
+      if (testedForEachFile(entry)) return;
+      if (entry.kind === 'glob-import' || entry.kind === 'dynamic-import' || entry.kind === 'unread-source') {
+        // A glob with no patterns usabl can read, or a dynamic import with no fixed start.
+        this.anyFile.push(index);
+      } else if (entry.kind === 'base-url') {
+        for (const candidate of entry.candidates) add(this.byFile, candidate, index);
+      } else if (entry.kind === 'package-subpath') {
+        if (entry.packageDir === null) this.anyFile.push(index);
+        else add(this.byFolder, entry.packageDir, index);
+      } else {
+        const { lastSegments, names } = namesOf(entry);
+        for (const segment of lastSegments) add(this.byLastSegment, segment, index);
+        if (names === null) {
+          this.anyFile.push(index);
+          return;
+        }
+        for (const name of names) add(this.byName, name, index);
+      }
+    });
+    for (const [dir, folder] of packageFolders) {
+      const named = this.byName.get(path.basename(dir).toLowerCase());
+      if (named === undefined) continue;
+      for (const index of named) add(this.byFolder, dir, index);
+      if (folder.targets === null) this.anyFile.push(...named);
+      else this.folderTargets.push({ targets: folder.targets, loads: named });
+    }
+  }
+
+  /** The loads that may load any file, by their place in the list the index was built from. */
+  get everyFile(): readonly number[] {
+    return this.anyFile;
+  }
+
+  /**
+   * The other loads that may load the file, by their place in the list the index was built from,
+   * sorted. With everyFile, these are every load not testedForEachFile that may load it.
+   */
+  matches(file: string): number[] {
+    const found = new Set<number>();
+    const own = fileNamesOf(file);
+    for (const index of this.byLastSegment.get(own.inItsCase) ?? []) found.add(index);
+    for (const name of own.lowered) for (const index of this.byName.get(name) ?? []) found.add(index);
+    for (const index of this.byFile.get(file) ?? []) found.add(index);
+    // Each folder the file is below, as `file.startsWith(folder + '/')` reads it.
+    for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) {
+      for (const index of this.byFolder.get(file.slice(0, slash)) ?? []) found.add(index);
+    }
+    for (const { targets, loads } of this.folderTargets) {
+      if (loads.every((index) => found.has(index))) continue;
+      if (!chargeStep(this.budget, 1 + targets.prefixes.length) || targetsMayName(targets, file)) {
+        for (const index of loads) found.add(index);
+      }
+    }
+    return [...found].sort((a, b) => a - b);
+  }
 }
 
 // What an unresolved import names, worked out once per import: placement asks about every file
@@ -1218,7 +1331,7 @@ export async function readPackageFolders(
  * or a bare import no package explains. The other kinds name the files they may load by path.
  */
 export function namesFilesByName(entry: UnresolvableImport): boolean {
-  return !['glob-import', 'dynamic-import', 'base-url', 'package-subpath'].includes(entry.kind);
+  return !['glob-import', 'dynamic-import', 'base-url', 'package-subpath', 'unread-source'].includes(entry.kind);
 }
 
 /** Every folder that holds a file, nearest first, without the repository root. */
