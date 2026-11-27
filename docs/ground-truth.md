@@ -1989,8 +1989,8 @@ error that says so and names `git fetch --unshallow` for a shallow clone. The li
 same size limit as before. Cost, on a repository of 20,000 commits and 10,000 files whose
 feature branch has 50 commits and one merge of the trusted branch, under a load average near 10:
 the committed diff took 340 to 460 ms against 70 to 100 ms for `git diff`, and listed the same
-149 files. Near a load average of 5 it took 250 to 284 ms. Most of it is the dozen short git processes; the trees read are only the folders that
-differ.
+149 files. Near a load average of 5 it took 250 to 284 ms. Most of it is the dozen short git processes;
+the trees read are only the folders that differ.
 
 A rename is listed by both names, committed or not: the committed diff compares each name of the
 merge base tree with HEAD, and the working tree walk compares each name with HEAD. So a file moved
@@ -4132,8 +4132,10 @@ submodule. Pins are kept on drift, so after any of these every later stop of tha
 file is deleted, or a new session starts. When the drift holds a state name, the block reason
 says `the sparse checkout or submodule state changed` instead of counting it as a guarded file,
 says which honest commands also change it and that every later stop of the session blocks, and
-tells the person to review what changed since the session started, then delete the pin file
-named under "pin fix" if the change was meant, or put the state back. Deleting the pin file
+tells the agent to have the user review what changed since the session started: if the change
+was meant, the user deletes the pin file named under "pin fix"; otherwise the user puts the state
+back. It tells the agent not to delete the pin file or change the state itself to clear the
+block. Deleting the pin file
 starts a new baseline with no message (see "What this does not cover" below), and the next stop
 records new pins. A pin file from before this change lacks those names, so in a repository that
 uses either, the first stop after the upgrade reads as drift for the rest of that session.

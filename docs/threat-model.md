@@ -623,9 +623,11 @@ passing bundle from another run.
   a session blocks the next stop as drift. Pins are kept on drift, so every later stop of that
   session blocks the same way (once each, as for any drift) until the state is put back, the pin
   file is deleted, or a new session starts. The drift message says that the sparse checkout or
-  submodule state changed, lists those commands, and tells the person to review what changed
-  since the session started, then delete the pin file it names under "pin fix" if the change was
-  meant; the next stop then records new pins. It no longer calls the state guarded files.
+  submodule state changed, lists those commands, and tells the agent to have the user review
+  what changed since the session started: if the change was meant, the user deletes the pin file
+  it names under "pin fix", and the next stop records new pins. It tells the agent not to delete
+  the pin file or change the state itself to clear the block. It no longer calls the state
+  guarded files.
 - Limits of the pin, stated plainly:
   - the pins are recorded at the first stop, so a change made before it is not seen (the tree
     still moves, so no stored receipt answers);
