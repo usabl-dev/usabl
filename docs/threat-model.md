@@ -1042,7 +1042,11 @@ the tool errored, not because the page is accessible.
   link named `POLICY` at the entry `policy` is the entry, and a folder above the entry that is now
   a link or a file is reported, since every path below a link reads as nothing on both sides and
   cannot be compared. That holds for a link committed above a literal entry too: it is reported
-  on every check, until a real folder takes its place or the entry names another path. Node's glob has no escape, so before, a
+  on every check, until a real folder takes its place or the entry names another path. In an
+  honest repository that keeps such a link, every local stop blocks as approval required and
+  `usabl check` exits 2, while the CI policy check reports nothing, so no approval clears it and
+  `usabl doctor` does not name it. Name the real folder the link points at in the entry instead.
+  Node's glob has no escape, so before, a
   requirements folder named `reqs[1]` put into a pattern listed `reqs1`, a name past the glob
   reading bound listed nothing, and a new untracked file in that folder was not seen until it was
   committed. A folder above a literal entry with nothing at `HEAD`, replaced by a link to a folder

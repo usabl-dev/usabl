@@ -4013,7 +4013,9 @@ The two places select from different lists:
   file, or anything but a real folder is listed by its own name: the entry itself when it is a
   file or a link, or a folder above it that is now a link or a file, since a path below a link
   reads as nothing on both sides. A link committed above a literal entry is therefore reported on
-  every check. Node's glob has no escape, so a name such as `reqs[1]` put into a pattern would
+  every check: every local stop blocks as approval required and `usabl check` exits 2, while the
+  CI policy check reports nothing and `usabl doctor` does not name it, so no approval clears it.
+  Name the real folder the link points at in the entry instead. Node's glob has no escape, so a name such as `reqs[1]` put into a pattern would
   list `reqs1`, and a name past the glob reading bound would list nothing. A file reader that
   cannot list a folder that way, or cannot look a path up, lists a name with no glob syntax
   through the patterns, and throws for a name with glob syntax, so the guard fails closed. An
