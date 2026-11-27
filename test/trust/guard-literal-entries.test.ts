@@ -17,9 +17,12 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeFsGlob } from '../../src/deps/fs.js';
 import { makeGitReader } from '../../src/deps/git.js';
 import { checkGuard, computeSessionPins, expandConfigGuardedSet } from '../../src/trust/guard.js';
+import { folderIgnoresCase } from '../support/case-insensitive-folder.js';
 
 const execFileAsync = promisify(execFile);
 const posixOnly = process.platform === 'win32' ? it.skip : it;
+// On a file system that ignores case, a folder named in another case is the same folder.
+const onCaseKeepingVolume = process.platform === 'win32' || (await folderIgnoresCase(tmpdir())) ? it.skip : it;
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', ['-c', 'user.name=usabl test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args], {
@@ -112,7 +115,7 @@ describe('a requirements folder with glob syntax beside folders whose names diff
     await rm(root, { recursive: true, force: true });
   });
 
-  posixOnly('guards the folder with the exact name, and no other, on a file system that keeps case', async () => {
+  onCaseKeepingVolume('guards the folder with the exact name, and no other, on a file system that keeps case', async () => {
     await expect(checkGuard(realDeps(root))).resolves.toEqual(['reqs[1]/new.yaml']);
     for (const platform of ['linux', 'darwin'] as const) {
       const paths = await expandConfigGuardedSet(realDeps(root, platform), { guardedPaths: [], requirements: 'reqs[1]' });
