@@ -455,9 +455,13 @@
   another branch. Now the lines are read for the form usabl writes only after the first `on:`
   line and before the next line that starts at the left margin, and the whole file is also read
   as YAML with the failsafe schema. The trigger counts only when `on.pull_request.branches` is
-  exactly the one name the lines gave. A parse error, any other shape, or a different name is a
-  trigger usabl cannot read, so the check assumes `main`, exits 2 with "cannot verify", and doctor
-  reads unknown. The CI install and the doctor workflow lines read the lines the same way, without
+  exactly the one name the lines gave. A file that holds U+0085, U+2028 or U+2029 anywhere, even
+  in a comment, is refused, because a YAML 1.1 reader counts each as a line break and js-yaml does
+  not, so a comment could hide a second trigger. So is a file with a top-level `true:`, `yes:`,
+  `y:`, or `on:` in another case such as `On:`, which a YAML 1.1 reader reads as the same key as
+  `on:`. Each of these, a parse error, any other shape, or a different name is a trigger usabl
+  cannot read, so the check assumes `main`, exits 2 with "cannot verify", and doctor reads
+  unknown. The CI install and the doctor workflow lines read the lines the same way, without
   the YAML check. A lone CR now counts as a line break for the line the steps name, and a branch
   name over 255 characters reads as a trigger usabl cannot read, so no long name is printed. Gate
   effect: none.
