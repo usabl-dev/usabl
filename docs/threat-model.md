@@ -341,8 +341,10 @@ re-baseline to green.
   a ref) or in the working tree (a `.gitignore`). No git command holds one of usabl's threads past
   the deadline. The three that find the repository run before the deadline's timer, so each gets
   the time left and is killed when it runs out; the checks' own git commands run in processes the
-  worker waits for without holding its thread. At the deadline usabl kills every process the stop
-  started (git, and a browser that did not close) before it ends, so none waits on after the stop.
+  worker waits for without holding its thread. At the deadline usabl kills every direct child
+  process of the stop (git, and a browser that did not close; the browser's own processes end with
+  it) before it ends, so none of them waits on after the stop. A process one of those children
+  started is not killed, and a process id can be reused between the listing and the kill.
   Such a stop blocks with "NOT verified - usabl ran out of time", which does not name the pipe:
   git does not say which file it waits on. The generated Claude Code hook states `"timeout": 600`, and
   its command passes the same number to the runner in `USABL_STOP_HOOK_TIMEOUT`. The Cursor

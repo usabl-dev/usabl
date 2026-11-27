@@ -4937,8 +4937,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     left before the deadline, is killed when it runs out, and the stop then gives the deadline's
     answer; before, a pipe at `.git/HEAD` gave no answer at all. The command that checks for a last
     commit, and the checks' other git commands, run in processes the worker waits for without
-    holding its thread. At the deadline the hook kills every process the stop started, found with
-    `pgrep -P`, before it ends, so no git waits on after the stop. A pipe at `.git/HEAD`,
+    holding its thread. At the deadline the hook kills every direct child process of the stop,
+    found with `pgrep -P`, before it ends, so no git it ran waits on after the stop. A process one
+    of those children started is not killed. A pipe at `.git/HEAD`,
     `.git/config`, a ref, or `.gitignore` each gave the block "NOT verified - usabl ran out of
     time" at about 15.4 seconds against a 15 second deadline and a 30 second limit, with no git
     left running. The block does not name the pipe, and with the default limit the stop takes the

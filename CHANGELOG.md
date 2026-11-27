@@ -474,7 +474,7 @@
   the files left are gaps. The package now holds `dist/stop-hook-worker.js`.
 - A named pipe in the working tree no longer keeps the Stop hook running. A plain read of a pipe
   waits for a writer, and a process with such a read pending does not exit, so one `mkfifo
-  .usabl/bypass-once`, or a pipe at a source file a changed page imports, kept a stop running past
+.usabl/bypass-once`, or a pipe at a source file a changed page imports, kept a stop running past
   40 seconds against a 30 second limit, after its answer. Every read usabl makes from the working
   tree now refuses a path that is not a regular file at once, never reads it as an empty file, and
   the stop blocks once naming each refused path, with no receipt saved. git waits on a pipe it
@@ -482,8 +482,8 @@
   answer at all, because the git commands that find the repository ran before the deadline with
   no limit. Now no git command holds one of usabl's threads past the deadline, those commands are
   killed when it comes, the stop blocks with the out-of-time answer (which does not name the
-  pipe), and every process the stop started is killed before it ends, so no git waits on after
-  it. Limit: Playwright's own read of the saved session file after usabl checked it is not covered
+  pipe), and every direct child process of the stop is killed before it ends, so no git it ran
+  waits on after it. Limit: Playwright's own read of the saved session file after usabl checked it is not covered
   (threat model, the timeout rule).
 - The local guard lists a literal guarded entry, such as the requirements folder, by its name on
   the working tree. It put the name into `fs.glob` patterns as text, and Node's glob has no
