@@ -310,25 +310,38 @@ describe('honest filters read an unchanged file as unchanged', { timeout: REAL_P
 });
 
 describe('the hash a reader keeps between its own reads', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  // Each test sets a whole second and restores that same second after the edit, so the
+  // modification time is the same to the nanosecond. A time read back with stat() is a Date rounded
+  // to the millisecond, so restoring it could move the time, and the edit would be easier to see
+  // than the case the test means.
+  const sameTime = async (path: string, seconds: number): Promise<void> => {
+    await utimes(path, seconds, seconds);
+    expect((await stat(path, { bigint: true })).mtimeNs).toBe(BigInt(seconds) * 1_000_000_000n);
+  };
+
   it('reads a same-size edit with the same modification time made within two seconds of the last read', async () => {
     const reader = makeGitReader({ cwd: repo });
+    const path = join(repo, 'src/App.tsx');
+    const now = Math.floor(Date.now() / 1000);
     await write('src/App.tsx', APP);
+    await sameTime(path, now);
     const first = await reader.writeTree();
-    const { mtime } = await stat(join(repo, 'src/App.tsx'));
     await write('src/App.tsx', APP_EDITED);
-    await utimes(join(repo, 'src/App.tsx'), mtime, mtime);
+    await sameTime(path, now);
     expect(await reader.writeTree()).not.toBe(first);
     expect((await reader.statusZ()).map((entry) => entry.path)).toEqual(['src/App.tsx']);
   });
 
   it('reads a same-size edit with its modification time restored on a file older than two seconds', async () => {
+    const path = join(repo, 'src/App.tsx');
+    const past = Math.floor(Date.now() / 1000) - 60;
+    await sameTime(path, past);
     await new Promise((resolve) => setTimeout(resolve, 2200));
     const reader = makeGitReader({ cwd: repo });
     const first = await reader.writeTree();
     expect(await reader.writeTree()).toBe(first);
-    const { mtime } = await stat(join(repo, 'src/App.tsx'));
     await write('src/App.tsx', APP_EDITED);
-    await utimes(join(repo, 'src/App.tsx'), mtime, mtime);
+    await sameTime(path, past);
     expect(await reader.writeTree()).not.toBe(first);
     expect((await reader.statusZ()).map((entry) => entry.path)).toEqual(['src/App.tsx']);
   });
