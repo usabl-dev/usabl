@@ -23,7 +23,7 @@ function patternTargetsRoot(pattern: string, root: string): boolean {
 
 export function overlayRequirementsFs(
   fs: FsGlob,
-  git: Pick<GitReader, 'lsFiles' | 'show'> & Partial<Pick<GitReader, 'blobSize'>>,
+  git: Pick<GitReader, 'lsFiles' | 'show'> & Partial<Pick<GitReader, 'blobSize' | 'commitOf'>>,
   config: Pick<UsablConfig, 'requirements'>,
   trustedRef: string | undefined,
 ): FsGlob {
@@ -32,10 +32,22 @@ export function overlayRequirementsFs(
   }
 
   const root = stripTrailingSlashes(config.requirements);
+  // The trusted ref is read as one commit id, found once, for the listing, the sizes and the texts.
+  // A branch name read by name in each git call could move between the size read and the text
+  // read, and then the byte limit would count one file and load another. A ref that names no
+  // commit, or a reader that cannot say, is read by its name, so git gives the same errors as before.
+  let pinnedRefPromise: Promise<string> | null = null;
+  const pinnedRef = (): Promise<string> => {
+    if (pinnedRefPromise === null) {
+      pinnedRefPromise =
+        git.commitOf === undefined ? Promise.resolve(trustedRef) : git.commitOf(trustedRef).then((id) => id ?? trustedRef);
+    }
+    return pinnedRefPromise;
+  };
   let trustedFilesPromise: Promise<string[]> | null = null;
   const trustedFiles = (): Promise<string[]> => {
     if (trustedFilesPromise === null) {
-      trustedFilesPromise = git.lsFiles(trustedRef, root);
+      trustedFilesPromise = pinnedRef().then((ref) => git.lsFiles(ref, root));
     }
     return trustedFilesPromise;
   };
@@ -90,7 +102,7 @@ export function overlayRequirementsFs(
     },
     async readFile(path) {
       if (isWithinRoot(path, root)) {
-        return git.show(trustedRef, path);
+        return git.show(await pinnedRef(), path);
       }
       return fs.readFile(path);
     },
@@ -98,14 +110,15 @@ export function overlayRequirementsFs(
     // counts the same bytes as on disk. A git reader with no size read is sized from its text.
     async readTextUpTo(path, maxBytes) {
       if (isWithinRoot(path, root)) {
-        const size = git.blobSize === undefined ? null : await git.blobSize(trustedRef, path);
+        const ref = await pinnedRef();
+        const size = git.blobSize === undefined ? null : await git.blobSize(ref, path);
         if (size === null) {
-          return textWithin(await git.show(trustedRef, path), maxBytes);
+          return textWithin(await git.show(ref, path), maxBytes);
         }
         if (size > maxBytes) {
           return { kind: 'too-large' };
         }
-        const text = await git.show(trustedRef, path);
+        const text = await git.show(ref, path);
         return text === null ? null : { kind: 'text', text };
       }
       return fs.readTextUpTo !== undefined ? fs.readTextUpTo(path, maxBytes) : textWithin(await fs.readFile(path), maxBytes);

@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { InstallFs } from '../../src/install/index.js';
-import { configOnDefaultBranch, findDefaultBranch, gitRunner, NO_GIT } from '../../src/install/repo-git.js';
+import { gateWorkflowFor } from '../../src/install/ci.js';
+import { configOnDefaultBranch, findDefaultBranch, gitRunner, NO_GIT, workflowTrigger } from '../../src/install/repo-git.js';
 import { fakeGit } from './fake-git.js';
 
 const CONFIG = '{\n  "appBaseUrl": "http://127.0.0.1:9000"\n}\n';
@@ -25,6 +26,48 @@ function fsOf(files: Record<string, string>): InstallFs {
     },
   };
 }
+
+describe('workflowTrigger', () => {
+  it('reads the event line only inside the top-level on: block', () => {
+    // A run-name block scalar above on: holds text shaped like a trigger. GitHub reads it as the
+    // run name. The trigger the gate runs on is the one under on:, and it names main. The draft's
+    // own run-name line is taken out, so the file has one run-name key and stays valid YAML.
+    const draft = gateWorkflowFor('main').replace(/\nrun-name: [^\n]*\n/, '\n');
+    const raw = `run-name: |\n  pull_request:\n    branches: ["trunk"]\n${draft}`;
+    expect(raw.split('\n')[9]).toBe('    branches: ["main"]');
+    expect(workflowTrigger(raw, 'pull_request')).toEqual({ name: 'main', line: 10 });
+  });
+
+  it('names no branch when the event is only outside the on: block', () => {
+    const below = 'name: g\non:\n  workflow_dispatch:\njobs:\n  pull_request:\n    branches: ["trunk"]\n';
+    expect(workflowTrigger(below, 'pull_request')).toBeNull();
+    const noOn = 'name: g\nrun-name: |\n  pull_request:\n    branches: ["trunk"]\n';
+    expect(workflowTrigger(noOn, 'pull_request')).toBeNull();
+    // An on: that is not at the top level is not the trigger.
+    const nested = 'name: g\njobs:\n  on:\n  pull_request:\n    branches: ["trunk"]\n';
+    expect(workflowTrigger(nested, 'pull_request')).toBeNull();
+  });
+
+  it('keeps reading the on: block past a blank line or a comment at the start of a line', () => {
+    const raw = gateWorkflowFor('trunk').replace('on:\n', 'on:\n\n# Pull requests into trunk.\n');
+    expect(workflowTrigger(raw, 'pull_request')).toEqual({ name: 'trunk', line: 10 });
+  });
+
+  it('counts a lone CR as a line break, as an editor shows it', () => {
+    const raw = `# a\r# b\r# c\n${gateWorkflowFor('trunk')}`;
+    expect(workflowTrigger(raw, 'pull_request')).toEqual({ name: 'trunk', line: 11 });
+  });
+
+  it('still names no branch in a file with CR LF line ends', () => {
+    expect(workflowTrigger(gateWorkflowFor('trunk').replace(/\n/g, '\r\n'), 'pull_request')).toBeNull();
+  });
+
+  it('names no branch longer than 255 characters, so a printed name stays short', () => {
+    expect(workflowTrigger(gateWorkflowFor('b'.repeat(255)), 'pull_request')).toEqual({ name: 'b'.repeat(255), line: 8 });
+    expect(workflowTrigger(gateWorkflowFor('b'.repeat(256)), 'pull_request')).toBeNull();
+    expect(workflowTrigger(gateWorkflowFor('b'.repeat(200_000)), 'pull_request')).toBeNull();
+  });
+});
 
 describe('findDefaultBranch', () => {
   it('reads the branch origin names as its default', async () => {

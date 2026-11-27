@@ -447,6 +447,24 @@
 
 ### Fixed
 
+- `usabl install --branch-rule` and `usabl doctor` take the gate's trigger only when two readings
+  agree. They took the first `  pull_request:` line anywhere in the file, so text shaped like a
+  trigger named the branch: in a `run-name: |` block above `on:`, in a quoted value that runs over
+  several lines, behind a U+2028 line break, or under a second `on:` key. With that branch
+  protected and GitHub's default, both said verified, exit 0 and wired, while the gate ran on
+  another branch. Now the lines are read for the form usabl writes only after the first `on:`
+  line and before the next line that starts at the left margin, and the whole file is also read
+  as YAML with the failsafe schema. The trigger counts only when `on.pull_request.branches` is
+  exactly the one name the lines gave. A file that holds U+0085, U+2028 or U+2029 anywhere, even
+  in a comment, is refused, because a YAML 1.1 reader counts each as a line break and js-yaml does
+  not, so a comment could hide a second trigger. So is a file with a top-level `true:`, `yes:`,
+  `y:`, or `on:` in another case such as `On:`, which a YAML 1.1 reader reads as the same key as
+  `on:`. Each of these, a parse error, any other shape, or a different name is a trigger usabl
+  cannot read, so the check assumes `main`, exits 2 with "cannot verify", and doctor reads
+  unknown. The CI install and the doctor workflow lines read the lines the same way, without
+  the YAML check. A lone CR now counts as a line break for the line the steps name, and a branch
+  name over 255 characters reads as a trigger usabl cannot read, so no long name is printed. Gate
+  effect: none.
 - The merge-base diff, the committed part of the changed list for `usabl check --trusted-ref`,
   `usabl check --branch-scope`, and the Stop hook, is now built from commits and trees checked
   against their ids. `git diff <ref>...HEAD` read trees as stored, so an agent that overwrote a
@@ -599,33 +617,38 @@
   limits, one requirement holds at most about 12,500 problems, so with Node's default settings no
   file reaches the schema library's problem limit. With code generation turned off, the library
   checks objects another way and the densest files within the limits do reach it; they are still
-  refused, with the too-many-problems reason. A Figma
-  answer is limited too: 100,000 entries in `components`, `componentSets`, and the
-  `componentProperties` of one node, 100,000 `children` of one node, and 1,000 `annotations` of
-  one node. Its failure names the limit. A file over a limit is never cut short or read in part.
-  A requirement file can also be at most 128 KiB, counted as the bytes it is stored as and checked
-  before it is parsed: the loader reads a file on disk, or at the trusted ref, only when its size
-  is within the limit, so the loader never reads a huge file whole. A file with Latin-1 bytes is
-  counted by those bytes, so one that loads on main still loads. The Figma import checks the UTF-8
-  bytes of the file it drafts, and a draft over the limit is not written: the command says so and
-  says to import fewer frames at a time. One frame that drafts more than about 330 requirements
-  cannot be imported yet. Known limit: in a local run the guard still reads every guarded file
-  whole, requirement files included, before the loader refuses it. A refusal now lists the first 100 problems and
-  then says how many more there are, and an unknown-key message names the first five keys, each
-  with its secrets taken out and cut to 60 characters, and then counts the rest. The worst bad
-  file under 128 KiB holds about 143,000 problems and is refused in about 0.9 seconds with 203 MB
-  of peak memory; before these caps the same file took 1.3 seconds and 266 MB and printed 9 MB of
-  messages. Gate effect: a requirement file over a limit no longer loads, and is
-  `approval_required` with the limit named.
+  refused, with the too-many-problems reason. A Figma answer is limited too: 100,000 entries in
+  `components`, `componentSets`, and the `componentProperties` of one node, 100,000 `children` of
+  one node, and 1,000 `annotations` of one node. Its failure names the limit. A file over a limit
+  is never cut short or read in part. A requirement file can also be at most 128 KiB, counted as
+  the bytes it is stored as and checked before it is parsed: the loader reads a file on disk, or
+  at the trusted ref, only when its size is within the limit, so the loader never reads a huge
+  file whole. The trusted ref is turned into its commit id once, and every requirement file is
+  listed, sized, and read at that id, so a branch that moves during a local run cannot pair one
+  size with another text. A file with Latin-1 bytes is counted by those bytes, so one within
+  128 KiB as stored that loads on main still loads. The Figma import checks the UTF-8 bytes of the
+  file it drafts, and a draft over the limit is not written: the command says so and says to
+  import fewer frames at a time. One frame that drafts more than about 330 requirements cannot be
+  imported yet. Known limit: in a local run the guard still reads every guarded file whole,
+  requirement files included, before the loader refuses it. A refusal now lists the first 100
+  problems and then says how many more there are, and an unknown-key message names the first
+  five keys, each with its secrets taken out and cut to 60 characters, and then counts the rest.
+  The worst bad file under 128 KiB holds about 143,000 problems and is refused in about 0.9
+  seconds with 203 MB of peak memory; before these caps the same file took 1.3 seconds and 266 MB
+  and printed 9 MB of messages. Gate effect: a requirement file over a limit no longer loads, and
+  is `approval_required` with the limit named.
 - `usabl verify sensitivity` no longer writes a catch it did not measure. For the five entries
   reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), a new
   definite finding of a rule that is not expected counted as `caught by another rule` anywhere on
-  the screen. It now counts only on the changed element or inside it. When the edit removed an
-  element (`heading-one-removed`, `page-title-removed`), it counts only on the element that held
-  the removed one, not inside it, because for a heading straight in `main` that is the whole page.
-  Elsewhere it makes the row `unreadable`, because the two page loads differ. An expected rule anywhere on the screen still
-  counts as `caught`. The key and focus edits (`swallow-key` and `ignore-focus-calls`) also read
+  the screen. It now counts only on the changed element itself, not inside it: a live region or a
+  dialog can be a large container, such as a results list, and one more row in the second load is
+  not the change. When the edit removed an element (`heading-one-removed`, `page-title-removed`),
+  the element that held the removed one counts as the changed element, because for a heading
+  straight in `main` the rest of it is the whole page. Anywhere else it makes the row
+  `unreadable`, and the reason says the finding is not on the changed element, because the two
+  page loads can differ. An expected rule anywhere on the screen still counts as
+  `caught`. The key and focus edits (`swallow-key` and `ignore-focus-calls`) also read
   as held when the page replaced the changed element with a new one, so a row could read `missed`
   with a false note. They now read as not held with the reason "an element the edit changed is no
   longer on the page", as the markup edits do, and such a row reads `unreadable`. Measurement
@@ -767,8 +790,8 @@
   toast group around it, is still judged by that live region. A toast group that holds no alert yet,
   which PatternFly renders as soon as a toast AlertGroup mounts, gets the same `unverified` draft
   on the group when the modal hides it the same way. A group that holds an alert the rule gave a
-  draft or a gap gets no draft of its own, and a group that is shown, or hidden in another way,
-  gets nothing. When a modal is open
+  gap, or gave a draft while a toast group sat above that alert, gets no draft of its own, and a
+  group that is shown, or hidden in another way, gets nothing. When a modal is open
   and the rule cannot tell which element is the body's child, an empty group gets the same
   `unverified` draft an alert gets in that state. Gate effect: a screen
   checked with a modal open and a hidden toast group, empty or not, that read `verified` now reads
@@ -780,8 +803,11 @@
   read and passed before the modal hid the group. It also happened when the alert in the group had
   the selector of an alert that passed: the same element moved into the group, or a new toast
   reused an inline alert's id. The screen got no draft and no gap. Now a group is left to the alert
-  check only when it holds an alert the rule gave a draft or a gap, matched by selector. Every
-  other group is checked as an empty group, so behind an open modal it gets the `unverified` draft.
+  check only when it holds an alert the rule gave a gap, or gave a draft while a toast group sat
+  above that alert, matched by selector. Every other group is checked as an empty group, so behind
+  an open modal it gets the `unverified` draft. That includes a group whose new toast takes the id
+  of an inline alert the rule failed outside every toast group: that draft is about the inline
+  alert, and the evidence floor or a waiver can hold it, so the group gets its own draft too.
   Gate effect: such a screen, which read `verified`, now reads `not_covered`, unless the evidence
   floor or a waiver already holds that finding.
 - A screen kept in a test folder is a gap for every way an unresolved import can name it. An
@@ -2647,9 +2673,11 @@
   A file with one list entry that holds more than about 123,000 problems now gets one reason: the
   file has too many problems to check, so it is refused, and the person should shorten or fix its
   longest list. Before, it got one message for each problem. The list size limits in this release
-  now refuse such a file on a list's length first.
-  A Figma file still cannot be read when a map entry named `__proto__` does not match, as before. The deepest chain of nested Figma frames that can be read goes from
-  about 780 levels to about 600. A deeper file is refused as a file usabl cannot read.
+  now refuse such a file on a list's length first. The engine's stack limit message is matched
+  without regard to case and with or without a final period, so a later Node wording still gives
+  this reason. A Figma file still cannot be read when a map entry named `__proto__` does not
+  match, as before. The deepest chain of nested Figma frames that can be read goes from about 780
+  levels to about 600. A deeper file is refused as a file usabl cannot read.
   `npm audit --omit=dev` now reports no advisory. Gate effect: none.
 
 - `usabl enforce policy` counts an approval only from a code owner whose permission on the

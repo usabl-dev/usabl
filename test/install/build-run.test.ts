@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { USABL_DOCS_GATE_WORKFLOW, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 interface Step {
   name?: string;
@@ -164,7 +165,10 @@ async function lookup(body = USABL_GATE_WORKFLOW, event: { headRepo?: string } =
   return { ...outcome, runId };
 }
 
-describe("the review event's build lookup", () => {
+// Most tests run the step through bash and node as child processes, up to about three seconds
+// each when the machine is idle. Under load that passed the default five second limit, so they use
+// the shared budget for tests that wait on a real process.
+describe("the review event's build lookup", { timeout: REAL_PROCESS_BUDGET_MS }, () => {
   it('names every run after its event, pull request, head repository, head, and base', () => {
     for (const [name, body] of [
       ['usabl-gate', USABL_GATE_WORKFLOW],

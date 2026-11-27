@@ -825,16 +825,20 @@ also returns a gap for each alert or toast group it could not check:
    that holds no alert, and whose only hidden element is the body's child while an open
    modal sits outside it (the same modal test the alert check uses), gets one
    `unverified` draft on the group, with the same reason and fix. A group gets no draft of
-   its own only when it holds an alert that the alert check gave a draft or a gap, because
-   that draft or gap already reports the screen. The alerts are matched by selector. Every
-   other group is checked as an empty group is. That includes a group that holds an alert
-   the check never listed, for example a toast the dialog's own save action shows while
-   the check runs. It also includes a group whose alert the check read and passed: the
+   its own only when it holds an alert that the alert check gave a gap, or gave a draft while
+   a toast group sat above that alert, because that gap or draft already reports the toast
+   area. A gap always keeps the screen from `verified`. The alerts are matched by selector.
+   Every other group is checked as an empty group is. That includes a group that holds an
+   alert the check never listed, for example a toast the dialog's own save action shows
+   while the check runs. It also includes a group whose alert the check read and passed: the
    group was hidden only after that read, or the alert's selector belongs to an alert that
    passed, as when the same element moved into the group or a new toast reuses the id of
-   an inline alert. A selector can still match a reported alert outside the group, for
-   example when a new toast takes that alert's id. That group is skipped, and the screen
-   still carries the other alert's draft or gap. A group that is not
+   an inline alert. It also includes a group whose alert takes the id of an alert the check
+   failed outside every toast group. That draft is about the other alert, and the evidence
+   floor or a waiver can hold it, so it does not stand in for the group. A selector can
+   still match an alert reported in another toast group, when a new toast takes its id. That
+   group is skipped, and the screen still carries the other alert's draft or gap, which
+   blocks the screen unless the evidence floor or a waiver holds it. A group that is not
    hidden, or that is hidden in another way, gets nothing. When a modal is open but the
    rule cannot tell which entry of the group's chain is the body's child, the group gets
    the same `unverified` draft an alert gets in that state, whose reason names the open
@@ -5348,54 +5352,68 @@ repository, head SHA, and base SHA, in this repository and workflow file, whose 
 moved, so that review fails closed until the pull request runs again.
 
 What the required check is worth. Any pull request, from a branch or a fork, runs the workflow as
-the pull request changed it, so one that edits `.github/workflows/` can make `usabl-required`
-pass whatever the judge found. The verdict on a pull request that edits the workflow is not
-evidence. The protection is a branch rule or ruleset that requires review from code owners, with
+the pull request changed it, so one that edits `.github/workflows/` can make `usabl-required` pass
+whatever the judge found. The verdict on a pull request that edits the workflow is not evidence. The
+protection is a branch rule or ruleset that requires review from code owners, with
 `.github/workflows/` and the guarded paths owned in `CODEOWNERS`, so such a pull request cannot
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
-`usabl install --branch-rule` verifies the required check, code-owner review, at least one
-required approving review (a count of 0 requires no review at all), and dismissal of stale
-approvals on push, each by classic protection or by an active ruleset, on the branch the gate
-workflow on disk names in its trigger. With no gate workflow, it reads the branch the docs gate
-workflow names, since the docs gate requires the same check, and its advice names
-`install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot read (a folder,
-or no permission), it checks `main` and says it assumed it in each line that names it. An
-assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
+`usabl install --branch-rule` verifies the required check, code-owner review, at least one required
+approving review (a count of 0 requires no review at all), and dismissal of stale approvals on push,
+each by classic protection or by an active ruleset, on the branch the gate workflow on disk names in
+its trigger. The trigger is read two ways, and both must agree. The lines are read for the one form
+usabl writes: after the first line that is exactly `on:` and before the next line that starts with
+text other than a comment, the line `  pull_request:` with `    branches: ["<name>"]` straight below
+it. The whole file is also read as YAML with the failsafe schema, which reads every value as text
+and builds no custom type, and its `on.pull_request.branches` must be exactly that one name. A file
+that holds U+0085, U+2028 or U+2029 anywhere, even in a comment, is a trigger it cannot read: a YAML
+1.1 reader counts each as a line break, js-yaml and the line reader do not, so a comment could hide
+a second trigger from both. So is a file with a top-level key that a YAML 1.1 reader reads as the
+same key as `on` (`true`, `yes`, `y`, or `on` in another case, such as `True:` or `ON:`). So is a
+file YAML cannot read (such as one with a duplicate key, a second `on:`), any other shape, or a
+different name. So text shaped like a trigger in a `run-name: |` block, in a quoted value that runs
+over several lines, in a comment behind one of those characters, or under one of those keys does not
+name the branch. `usabl install --ci` and the doctor lines for each workflow read the lines only. A
+lone CR counts as a line break for the line the steps name, as an editor shows it. A branch name
+over 255 characters is a trigger it cannot read, so no long name is printed. With no gate workflow,
+it reads the branch the docs gate workflow names, since the docs gate requires the same check, and
+its advice names `install --docs-ci`. With neither, a trigger it cannot read, or a file it cannot
+read (a folder, or no permission), it checks `main` and says it assumed it in each line that names
+it. An assumed `main` is verified only when there is no gate file and GitHub reports `main` as the
 default branch. When GitHub reports another default branch, or cannot say which one it is, the
-result is "cannot verify": it names both branches when it can, and the next step. A default
-branch name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
-`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. A branch a
-gate names is verified only when GitHub reports it as the default branch. When GitHub reports
-another default branch, pull requests into it are not gated; when usabl cannot read the default
-branch (the read failed, or its answer named no plain branch), it cannot confirm they are. In
-both cases the result is "cannot verify" (exit 2) whatever the protection on the gate's branch
-reads. Its first line says that, and whether the branch rule on the gate's branch is set; the
-next lines say what that protection reads, the line of the gate file on disk to change, and how
-to gate both branches instead. When the docs gate runs on the default branch and the app gate
-does not, it says the app's pull requests into it are not gated. Otherwise each part that is off
-is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same
-facts and the same next step. It reads the gate path the way `install --branch-rule` does, with
-a reader every caller must pass, so a folder or a file it cannot read there is never a missing
-gate. Its branch protection line is wired only when `install --branch-rule` is verified. When
-the default branch is not the gate's branch, or cannot be read, it is drifted (protected, other
-default branch), unknown (protected, default branch not read), missing (not protected), or
-unknown (protection not read). It also reports `workflow-owners`: wired only when the last
-`CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
-rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
-email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
-reads as unknown. Only an organization-required workflow takes the
-workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
-and "CI trust boundary") for what each job holds. The engine's own repo checks in the generated
-gate, byte for byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor`
-built at the pin reads it as `wired`; a build whose gate template changed after the pin reads it
-as `drifted` until the pin moves. Its judge serves `fixtures/live` (repository variables
-`USABL_APP_BUILD_COMMAND=true` and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one
-screen, `self-gate` (`fixtures/live/self-gate-screen.html`, a page made to pass every check). The pin moves only forward, to a commit on main, by the rule in
-`docs/threat-model.md`. The `engine-pin` job in `usabl.yml` runs `scripts/check-engine-pin.ts`
-from the base commit to hold it there, and reads the head's gate only as data. The required
-status check named in branch protection is `usabl-required` (the workflow *file* is named
-`usabl-gate`), and the protected branch is the one the gate's trigger names (`main` in this
-repository). Both `enforce` commands read Result JSON from stdin and never call the gate.
+result is "cannot verify": it names both branches when it can, and the next step. A default branch
+name from GitHub that is not a plain name is neither trusted nor printed. A ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is that branch. A branch a gate
+names is verified only when GitHub reports it as the default branch. When GitHub reports another
+default branch, pull requests into it are not gated; when usabl cannot read the default branch (the
+read failed, or its answer named no plain branch), it cannot confirm they are. In both cases the
+result is "cannot verify" (exit 2) whatever the protection on the gate's branch reads. Its first
+line says that, and whether the branch rule on the gate's branch is set; the next lines say what
+that protection reads, the line of the gate file on disk to change, and how to gate both branches
+instead. When the docs gate runs on the default branch and the app gate does not, it says the app's
+pull requests into it are not gated. Otherwise each part that is off is "not applied", and each it
+cannot read is "cannot verify". `usabl doctor` reports the same facts and the same next step. It
+reads the gate path the way `install --branch-rule` does, with a reader every caller must pass, so a
+folder or a file it cannot read there is never a missing gate. Its branch protection line is wired
+only when `install --branch-rule` is verified. When the default branch is not the gate's branch, or
+cannot be read, it is drifted (protected, other default branch), unknown (protected, default branch
+not read), missing (not protected), or unknown (protection not read). It also reports
+`workflow-owners`: wired only when the last `CODEOWNERS` rule that matches each `.yml` or `.yaml`
+file in `.github/workflows/`, and the last rule for any such file a pull request could add, names
+valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes ownership away,
+and a pattern usabl cannot evaluate reads as unknown. Only an organization-required workflow takes
+the workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15 and "CI trust
+boundary") for what each job holds. The engine's own repo checks in the generated gate, byte for
+byte as the pinned commit writes it, pinned to a commit on main. `usabl doctor` built at the pin
+reads it as `wired`; a build whose gate template changed after the pin reads it as `drifted` until
+the pin moves. Its judge serves `fixtures/live` (repository variables `USABL_APP_BUILD_COMMAND=true`
+and `USABL_APP_BUILD_DIR=fixtures/live`), and its config names one screen, `self-gate`
+(`fixtures/live/self-gate-screen.html`, a page made to pass every check). The pin moves only
+forward, to a commit on main, by the rule in `docs/threat-model.md`. The `engine-pin` job in
+`usabl.yml` runs `scripts/check-engine-pin.ts` from the base commit to hold it there, and reads the
+head's gate only as data. The required status check named in branch protection is `usabl-required`
+(the workflow *file* is named `usabl-gate`), and the protected branch is the one the gate's trigger
+names (`main` in this repository). Both `enforce` commands read Result JSON from stdin and never
+call the gate.
 
 In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
 the five job results, and the judge's `verdict` output. Every job result is an event-shape
@@ -6128,14 +6146,17 @@ largest in this repository's tests and docs is a few KiB, with at most 5 require
 The byte limit is checked before the file is parsed, and it counts the bytes of the file as stored.
 The loader reads a file on disk only when its size is within the limit, so the loader never reads a
 huge file whole. A file at the trusted ref is sized by git from the stored object first, and read
-only when it is within the limit. A file with bytes that are not valid UTF-8, such as Latin-1
-letters, is counted by those bytes too, as it is stored. The message is `a requirement file can be
-at most 128 KiB; split it into smaller files`. A caller that hands the normalizer text it holds in
-memory, such as `usabl import figma` with the file it drafts, gets the same limit counted as the
-UTF-8 bytes of that text, which are the bytes it writes. Known limit: in a local run the guard
-(section 10) still reads every guarded file whole to compare it, requirement files included, before
-the loader runs. A 512 MiB requirement file costs the guard about 2 seconds and 570 MB, and the
-loader then refuses it. A size check in the guard is a separate change to a guarded path.
+only when it is within the limit. The trusted ref is turned into its commit id once, and every
+listing, size, and text of the requirement files is read at that id, so a branch that moves during
+the run cannot pair one file's size with another file's text. A ref that names no commit is read by
+its name, as before. A file with bytes that are not valid UTF-8, such as Latin-1 letters, is counted
+by those bytes too, as it is stored. The message is `a requirement file can be at most 128 KiB;
+split it into smaller files`. A caller that hands the normalizer text it holds in memory, such as
+`usabl import figma` with the file it drafts, gets the same limit counted as the UTF-8 bytes of that
+text, which are the bytes it writes. Known limit: in a local run the guard (section 10) still reads
+every guarded file whole to compare it, requirement files included, before the loader runs. A 512
+MiB requirement file costs the guard about 2 seconds and 570 MB, and the loader then refuses it. A
+size check in the guard is a separate change to a guarded path.
 
 The limit was picked by measurement: the densest bad file the list limits allow holds about 1.1
 problems for each byte, so a file at 128 KiB holds about 143,000 problems, and refusing it took
@@ -6160,11 +6181,11 @@ the reason `this file has too many problems to check, so it is refused; shorten 
 list` in place of the first 100 problems.
 
 A refusal lists the first 100 problems, in the order the schema reports them, then says how many
-more the file has,
-such as `; and 900 more problems`. An unknown-key message names the first five unknown keys,
-then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd', 'e', and 3
-more`. Each key name is file text, so its secrets are taken out first, and it is then cut to 60
-characters, with `...` after a cut name. A voice step's unknown fields are listed the same way.
+more the file has, such as `; and 900 more problems`. An unknown-key message names the first five
+unknown keys, then says how many more, such as `Unrecognized key(s) in object: 'a', 'b', 'c', 'd',
+'e', and 3 more`. Each key name is file text, so its secrets are taken out first, and it is then
+cut to 60 characters, with `...` after a cut name. A voice step's unknown fields are listed the
+same way.
 
 ### Mapping to checks
 
@@ -7342,18 +7363,20 @@ The outcome, in this order:
   `unverified`. Or no definite new finding is where it can count below: the two loads differ, so
   they prove nothing about the defect. For most entries that means every definite new finding is
   away from the change. For an entry reported on the screen, it means every one is from another
-  rule and away from the changed element (for a removed element, anywhere but the element that
-  held it).
+  rule and not on the changed element itself (for a removed element, not on the element that held
+  it).
 - `caught`: a new gating finding with confidence `fail` from an expected rule, where the entry says
   it reports. For an entry reported on the screen (`heading-one-removed`, `page-title-removed`,
   `dialog-focus-not-moved-in`, `flow-live-region-broken`, and `voice-live-region-broken`), that is
   anywhere on the screen.
 - `caught by another rule`: a new gating finding with confidence `fail` from another rule, where
-  the entry says it reports. For an entry reported on the screen, that is on the changed element
-  or inside it, never elsewhere on the screen. When the edit removed an element
-  (`heading-one-removed`, `page-title-removed`), it is only on the element that held the removed
-  one, never inside it: the rest of that element, such as all of `main` for a heading that sits
-  straight in it, is not the change. Counted apart from caught.
+  the entry says it reports. For an entry reported on the screen, that is only on the changed
+  element itself, never inside it and never elsewhere on the screen. A live region or a dialog
+  (`flow-live-region-broken`, `voice-live-region-broken`, `dialog-focus-not-moved-in`) can be a
+  large container, such as a results list with `aria-live`, and one more row in the second load is
+  not the change. When the edit removed an element (`heading-one-removed`, `page-title-removed`),
+  the element that held the removed one counts as the changed element: the rest of it, such as all
+  of `main` for a heading that sits straight in it, is not the change. Counted apart from caught.
 - `preview only`: nothing new gates, and a preview finding is new.
 - `missed`: nothing new gates. When the edit cancels a key the checks never pressed on the element,
   the reason says so.

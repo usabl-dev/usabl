@@ -229,9 +229,10 @@ async function chainHiding(
  * Empty toast groups that an open modal hides. PatternFly renders the toast group as soon as a
  * toast AlertGroup mounts, before any alert is in it, so a screen checked with a modal open often
  * has an empty group. The alert walk never reaches it. A group that holds an alert the walk gave
- * a draft or a gap is left to the alert walk, so it gets one draft, not two. A group hidden while a
- * modal is open, where the chain cannot name the body's child, gets the same undecided draft an
- * alert gets in that state. A group that is shown, or hidden in another way, gets nothing here.
+ * a gap, or a draft while that alert sat in a toast group, is left to the alert walk, so it gets
+ * one draft, not two. A group hidden while a modal is open, where the chain cannot name the body's
+ * child, gets the same undecided draft an alert gets in that state. A group that is shown, or
+ * hidden in another way, gets nothing here.
  */
 async function checkEmptyToastGroups(
   ctx: ProviderContext,
@@ -250,12 +251,13 @@ async function checkEmptyToastGroups(
     return;
   }
   for (const groupRef of groups) {
-    // The group is left to the alert walk only when the walk gave an alert it holds a draft or a
-    // gap. Otherwise it is checked as an empty group is. The page can change during the check: an
-    // alert can appear in the group after the alert list was read, for example from the dialog's
-    // own save action. Its selector can match an alert the walk listed and passed, when the same
-    // element moved or a new toast reuses that alert's id. The group can also be hidden after its
-    // alert was read and passed. In each case the walk reported nothing for the group.
+    // The group is left to the alert walk only when the walk gave an alert it holds a gap, or a
+    // draft while that alert sat in a toast group. Otherwise it is checked as an empty group is.
+    // The page can change during the check: an alert can appear in the group after the alert list
+    // was read, for example from the dialog's own save action. Its selector can match an alert the
+    // walk listed and passed, when the same element moved or a new toast reuses that alert's id.
+    // The group can also be hidden after its alert was read and passed. In each case the walk
+    // reported nothing for the group.
     const held = await ctx.page.queryAll(`${groupRef.selector} ${SEL.alert}`);
     if (held.some((alertRef) => reportedAlerts.has(alertRef.selector))) {
       continue;
@@ -301,7 +303,11 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
   const drafts: Draft[] = [];
   const gaps: CoverageGap[] = [];
   const reads: ModalReads = { modalOpen: null, bodyChild: null };
-  // The alerts the walk gave a draft or a gap. An alert that passed is not in it.
+  // The alerts whose draft or gap covers a toast group around them. A gap always does, because it
+  // keeps the screen from verified. A draft does only when a toast group was above the alert when
+  // it was read. A draft on an alert outside every toast group is about that alert alone, and the
+  // evidence floor or a waiver can hold it, so it never stands in for a group. An alert that passed
+  // is not in the set.
   const reportedAlerts = new Set<string>();
 
   for (const alertRef of allAlerts) {
@@ -309,9 +315,9 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
       gaps.push(gap);
       reportedAlerts.add(alertRef.selector);
     };
-    const addDraft = (draft: Draft): void => {
+    const addDraft = (draft: Draft, chain: ReadonlyArray<Record<string, string | null>>): void => {
       drafts.push(draft);
-      reportedAlerts.add(alertRef.selector);
+      if (chain.some(isToastGroup)) reportedAlerts.add(alertRef.selector);
     };
     // A CSS selector can only ask whether some live container sits anywhere above the alert. The
     // live value that applies is the one on the nearest element that sets one, so an off wrapper
@@ -363,7 +369,7 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
     // means to hide, so it is reported below as undecided, never passed.
     const hiding = await chainHiding(ctx, read.chain, reads);
     if (hiding.kind === 'modal-unclear') {
-      addDraft(behindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector), 'alert'));
+      addDraft(behindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector), 'alert'), read.chain);
       continue;
     }
     const hidden = hiding.kind === 'hidden';
@@ -381,13 +387,14 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
       if (toastAreaBehindModal) {
         addDraft(
           toastAreaBehindModalDraft(ctx, alertRef.selector, await ctx.page.axAt(alertRef.selector), 'alert'),
+          read.chain,
         );
       }
       continue;
     }
 
     const node = await ctx.page.axAt(alertRef.selector);
-    addDraft({
+    const failed: Draft = {
       rule: 'pf-toast-live-region',
       layer: 'pf',
       severity: 'serious',
@@ -408,7 +415,8 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Toas
         role: { value: node?.role ?? null, source: 'ax-tree', fromTree: true },
       },
       confidence: 'fail',
-    });
+    };
+    addDraft(failed, read.chain);
   }
 
   await checkEmptyToastGroups(ctx, reportedAlerts, reads, drafts, gaps);

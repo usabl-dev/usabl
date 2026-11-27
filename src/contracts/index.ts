@@ -1147,6 +1147,10 @@ export interface GitReader {
   // Null when git names no object there or the size cannot be read; show then says what is there.
   // It is optional: a reader without it is sized from the text show returns.
   blobSize?(ref: string, path: string): Promise<number | null>;
+  // The commit id the ref names, or null when it names no commit. A caller that reads several
+  // files at a ref by name reads them all at this id, so a branch that moves in between cannot mix
+  // two commits. It is optional: a reader without it is read by the ref name.
+  commitOf?(ref: string): Promise<string | null>;
   // The tree entries at the ref for the paths, by path. With recursive, every file, symbolic link,
   // and submodule that is one of the paths or under one, in one listing; an empty path stands for
   // the whole tree. Without it, the entry each path names itself, a folder included. A path that
