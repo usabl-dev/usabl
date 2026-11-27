@@ -4006,6 +4006,20 @@ The two places select from different lists:
   the files in dot-named folders under the folder it guards, which `fs.glob` skips under `**`, so
   such an entry guards them on the working tree as the git listings do. It leaves out `.git/` in
   that dot listing, because git never tracks it.
+- A literal entry, such as the requirements folder, is listed on the working tree by its name,
+  never through a pattern: the files under it with the entry as the walk's start. Its path is also
+  looked up one part at a time from the root with `lstat`, the way the file system opens it, so a
+  volume that ignores case finds a name written in another case. The first part that is a link, a
+  file, or anything but a real folder is listed by its own name: the entry itself when it is a
+  file or a link, or a folder above it that is now a link or a file, since a path below a link
+  reads as nothing on both sides. A link committed above a literal entry is therefore reported on
+  every check: every local stop blocks as approval required and `usabl check` exits 2, while the
+  CI policy check reports nothing and `usabl doctor` does not name it, so no approval clears it.
+  Name the real folder the link points at in the entry instead. Node's glob has no escape, so a name such as `reqs[1]` put into a pattern would
+  list `reqs1`, and a name past the glob reading bound would list nothing. A file reader that
+  cannot list a folder that way, or cannot look a path up, lists a name with no glob syntax
+  through the patterns, and throws for a name with glob syntax, so the guard fails closed. An
+  entry read wide as the whole tree, and every glob entry, keep their patterns.
 
 For each glob form config load accepts (`*`, `**`, `{a,b}`, a comma-less brace read as text, and
 mixes of them), a test shows that the matcher on a git listing selects the same files `fs.glob`
@@ -4974,14 +4988,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     the pattern is not run. Config load refuses that syntax and those patterns in every policy
     glob list, and a `workspaces` pattern past the bound makes the workspace root unreadable, so
     every changed file the workspace check tests is a gap. A folder whose name usabl does not
-    control (a workspace package folder, the requirements folder the loader reads) is listed with
-    the folder as the walk's start, so its name is read as plain text, never as a pattern. Two
-    limits remain, both in guarded paths. The local guard's working-tree patterns still hold the
-    requirements folder as text: a name with a class, a brace group, or an extglob group, such as
-    `reqs[1]`, names another folder or none there until a guarded change fixes it, and a name with
-    only `*` or `?` also matches the folder itself, so it lists more. And when `usabl.routes.json`
-    or `usabl.docs.json` diverged, coverage reads the working tree through a wrapper in
-    `src/run.ts` that cannot list a folder with the folder as the walk's start, so a workspace
+    control (a workspace package folder, the requirements folder the loader reads, and each
+    literal entry the local guard lists on the working tree) is listed with the folder as the
+    walk's start, so its name is read as plain text, never as a pattern. One limit remains, in a
+    guarded path: when `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads the
+    working tree through a wrapper in `src/run.ts` that cannot list a folder with the folder as
+    the walk's start, so a workspace
     package folder named with glob syntax has unknown sources: its test files keep their gaps, but
     another unreached test file that only that package loads can be excluded. That run's verdict
     is `approval_required`, never a pass. Node's own walk can also hold the worker's thread for

@@ -590,6 +590,14 @@ export function trimTrailingSlashes(name: string): string {
 const NODE_GLOB_SYNTAX = /[*?[\]{}()\\]/u;
 
 /**
+ * Whether a name put into a pattern would be read as something other than itself: it holds a
+ * character Node's glob reads as syntax, or `\`, which it reads as `/`.
+ */
+export function holdsNodeGlobSyntax(name: string): boolean {
+  return NODE_GLOB_SYNTAX.test(name);
+}
+
+/**
  * The files the patterns match under one folder, with the folder's name read as plain text, or
  * null when the reader cannot list them that way. A reader with globUnder lists them with the
  * folder as the walk's start. A reader without it, such as a wrapper that passes glob through, is
@@ -600,6 +608,6 @@ export async function globUnderFolder(fs: FsGlob, folder: string, patterns: read
   const under = trimTrailingSlashes(folder);
   if (fs.globUnder !== undefined) return fs.globUnder(under, [...patterns]);
   if (under === '') return fs.glob([...patterns]);
-  if (NODE_GLOB_SYNTAX.test(under)) return null;
+  if (holdsNodeGlobSyntax(under)) return null;
   return fs.glob(patterns.map((pattern) => `${under}/${pattern}`));
 }

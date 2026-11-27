@@ -251,6 +251,12 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           ? { kind: 'other' }
           : { kind: 'file', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.byteLength };
       },
+      // A fake file is a regular file, and a folder is any path a fake file is under. A test that
+      // needs a link or another kind replaces this look.
+      pathKind: async (path) => {
+        if (spec.files[path] !== undefined) return 'file';
+        return Object.keys(spec.files).some((f) => f.startsWith(`${path}/`)) ? 'folder' : null;
+      },
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
       globUnder: async (folder, patterns) => {
         const under = trimTrailingSlashes(folder);

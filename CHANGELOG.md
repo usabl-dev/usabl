@@ -479,6 +479,29 @@
   commit no longer holds the worker's thread, so a pipe in the git folder holds only git and the
   deadline ends the stop. Limits: git run before the deadline starts, and Playwright's own read of
   the saved session file after usabl checked it, are not covered (threat model, the timeout rule).
+- The local guard lists a literal guarded entry, such as the requirements folder, by its name on
+  the working tree. It put the name into `fs.glob` patterns as text, and Node's glob has no
+  escape, so a requirements folder named with a class, a brace group, or an extglob group, such as
+  `reqs[1]`, listed another folder (`reqs1`) or none, and a name past the glob reading bound listed
+  nothing. A new untracked file in that folder was then not seen until it was committed, and the
+  Stop hook said VERIFIED. Now the files under the entry are listed with the entry as the walk's
+  start, and the entry's path is looked up one part at a time with `lstat`, the way the file
+  system opens it. The first part that is a link, a file, or anything but a real folder is listed
+  and compared. So a folder above a literal entry with nothing at `HEAD`, replaced by a link to a
+  folder inside the repository (`a -> stuff` for `a/policy`), is reported; before, every file
+  below it read as nothing on both sides and the stop said VERIFIED. On a volume that ignores
+  case, a link named `POLICY` at the entry `policy` is found as the entry. Gate effect: these stops
+  block for approval. Listing change: a name with only `*` or `?`, such as `reqs*`, no longer adds
+  the files of the other folders its pattern matched, a glob entry keeps what it matched, and a
+  link committed above a literal entry is reported on every check: in a repository that keeps
+  one, every local stop blocks for approval and `usabl check` exits 2, while the CI policy check
+  reports nothing, so name the real folder the link points at in the entry instead. A file reader that cannot list
+  a folder by name or look a path up lists a name with no glob syntax as before and throws for a
+  name with glob syntax, which blocks the stop as a guard failure. Cost: one `lstat` for each part
+  of an entry's path, and no listing of the folder that holds it. On this repository (15 literal
+  entries) the guard took 49 to 69 ms against 68 to 137 ms before, and the pins 161 to 169 ms
+  against 172 to 231 ms, with the same pins. On a repository with 100,000 files at its root, the
+  guard took 66 to 78 ms against 62 to 98 ms before.
 - `usabl install --branch-rule` and `usabl doctor` take the gate's trigger only when two readings
   agree. They took the first `  pull_request:` line anywhere in the file, so text shaped like a
   trigger named the branch: in a `run-name: |` block above `on:`, in a quoted value that runs over
@@ -588,12 +611,10 @@
   to read, and about 14 seconds over a whole coverage run that reads them on the working tree and
   at the trusted ref, with no single block over 2 seconds. A folder name now loses its trailing
   slashes in linear time. Known
-  limits: the local guard still puts the requirements folder into its working-tree patterns as
-  text, so a requirements folder named with a class, a brace group, or an extglob group names
-  another folder there, and a new untracked file in it is not seen until it is committed. When
-  `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper that cannot
-  list a folder that way, so a workspace package folder named with glob syntax has unknown
-  sources in that run, whose verdict is `approval_required`. Both fixes are in guarded paths.
+  limit: when `usabl.routes.json` or `usabl.docs.json` diverged, coverage reads through a wrapper
+  that cannot list a folder that way, so a workspace package folder named with glob syntax has
+  unknown sources in that run, whose verdict is `approval_required`. The fix is in a guarded
+  path.
 - `usabl doctor` reads a folder at `.github/workflows/usabl-gate.yml` the way
   `usabl install --branch-rule` does: the gate file cannot be read, so the branch is not
   confirmed. It used to read the folder as no gate, so its branch protection line checked the
